@@ -1,0 +1,34 @@
+:root {
+  --acc: #2DE0C6;
+  --accB: #34E5D0;
+  --accD: #12A594;
+  --accL: #5CEAD6;
+  --accT: #7DE9D8;
+  --accOn: #04120F;
+  --accRGB: 45,224,198;
+}
+
+html, body, #root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+  background: #05080E;
+  font-family: "Inter Tight", -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--acc); text-decoration: none; }
+a:hover { color: var(--accL); }
+
+.cv-btn-primary:hover { filter: brightness(1.08); }
+.cv-step:hover { border-color: rgba(var(--accRGB), 0.4) !important; }
+.cv-conv:hover { background: #10161F; }
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: rgba(120,150,210,0.2); border-radius: 4px; }

@@ -1,0 +1,23 @@
+# Secrets - never commit
+.env
+.env.*
+*.token
+*.key
+secrets/
+
+# Dependencies & build output
+node_modules/
+dist/
+build/
+.vite/
+
+# Local tari.js reference (if linked here)
+tarijs-reference/
+
+# macOS
+.DS_Store
+
+# Logs & editor
+*.log
+.vscode/
+.idea/

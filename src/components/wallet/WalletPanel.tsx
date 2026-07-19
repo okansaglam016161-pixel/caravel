@@ -1,5 +1,78 @@
 import { useState } from 'react'
 import { useWallet } from '../../context/WalletContext'
+import DecryptPanel from './DecryptPanel'
+
+// ── Balance display ───────────────────────────────────────────────────────────
+
+function BalanceDisplay() {
+  const { scan, rescan } = useWallet()
+
+  const { status, balance, progress, totalScanned, capped } = scan
+
+  let amountNode: React.ReactNode
+  let subNode: React.ReactNode
+
+  if (status === 'idle') {
+    amountNode = <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 30, fontWeight: 600, color: '#EAFBF7', letterSpacing: '0.04em' }}>—</span>
+    subNode = null
+  } else if (status === 'scanning') {
+    const tTARI = balance !== null ? (Number(balance) / 1_000_000).toFixed(6) : null
+    amountNode = tTARI !== null
+      ? <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 30, fontWeight: 600, color: '#EAFBF7', letterSpacing: '0.04em' }}>{tTARI}</span>
+      : <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 30, fontWeight: 600, color: '#55617D', letterSpacing: '0.04em' }}>···</span>
+    subNode = (
+      <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 7, fontSize: 12, color: '#55617D' }}>
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#55617D" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ animation: 'spin 1s linear infinite', flexShrink: 0 }}>
+          <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+        </svg>
+        Scanning… {progress.scanned} UTXOs, {progress.found} found
+      </div>
+    )
+  } else if (status === 'done') {
+    const tTARI = balance !== null ? (Number(balance) / 1_000_000).toFixed(6) : '0.000000'
+    amountNode = <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 30, fontWeight: 600, color: '#EAFBF7', letterSpacing: '0.04em' }}>{tTARI}</span>
+    subNode = (
+      <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <span style={{ fontSize: 12, color: '#55617D' }}>
+          {totalScanned} UTXOs scanned · {scan.utxos.length} owned
+          {capped && <span style={{ color: '#FFB43C', marginLeft: 5 }}>(capped)</span>}
+        </span>
+        <button
+          onClick={rescan}
+          style={{ background: 'none', border: 'none', color: 'var(--acc,#2DE0C6)', fontSize: 12, fontWeight: 600, cursor: 'pointer', padding: 0 }}
+        >
+          Refresh
+        </button>
+      </div>
+    )
+  } else {
+    // error
+    amountNode = <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 30, fontWeight: 600, color: '#55617D', letterSpacing: '0.04em' }}>?</span>
+    subNode = (
+      <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <span style={{ fontSize: 12, color: '#FF6B6B' }}>Scan failed</span>
+        <button
+          onClick={rescan}
+          style={{ background: 'none', border: 'none', color: 'var(--acc,#2DE0C6)', fontSize: 12, fontWeight: 600, cursor: 'pointer', padding: 0 }}
+        >
+          Retry
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <div>
+      <SectionLabel>BALANCE</SectionLabel>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, padding: '18px 20px', borderRadius: 14, background: 'linear-gradient(140deg, rgba(45,224,198,0.08), rgba(18,165,148,0.03))', border: '1px solid rgba(45,224,198,0.2)' }}>
+        {amountNode}
+        <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--acc,#2DE0C6)' }}>TARI</span>
+      </div>
+      {subNode}
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+    </div>
+  )
+}
 
 // ── Copy button ───────────────────────────────────────────────────────────────
 
@@ -47,10 +120,11 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 
 // ── Main panel ────────────────────────────────────────────────────────────────
 
-type PanelView = 'main' | 'phraseAuth' | 'phraseWords'
+type PanelView = 'main' | 'phraseAuth' | 'phraseWords' | 'decrypt'
 
 export default function WalletPanel({ onClose }: { onClose: () => void }) {
   const { address, lock, getMnemonic } = useWallet()
+
 
   const [view, setView] = useState<PanelView>('main')
   const [phrasePass, setPhrasePass] = useState('')
@@ -132,7 +206,7 @@ export default function WalletPanel({ onClose }: { onClose: () => void }) {
               <path d="M8 37 L 36 37 L 32 42 L 12 42 Z" fill="var(--acc,#2DE0C6)" />
             </svg>
             <span style={{ fontSize: 17, fontWeight: 700, color: '#F2F5FB' }}>
-              {view === 'phraseAuth' ? 'Confirm identity' : view === 'phraseWords' ? 'Recovery phrase' : 'Wallet'}
+              {view === 'phraseAuth' ? 'Confirm identity' : view === 'phraseWords' ? 'Recovery phrase' : view === 'decrypt' ? 'Decrypt UTXO' : 'Wallet'}
             </span>
           </div>
           <button
@@ -150,16 +224,7 @@ export default function WalletPanel({ onClose }: { onClose: () => void }) {
           <div style={{ padding: '24px 24px 32px', display: 'flex', flexDirection: 'column', gap: 24 }}>
 
             {/* Balance */}
-            <div>
-              <SectionLabel>BALANCE</SectionLabel>
-              <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, padding: '18px 20px', borderRadius: 14, background: 'linear-gradient(140deg, rgba(45,224,198,0.08), rgba(18,165,148,0.03))', border: '1px solid rgba(45,224,198,0.2)' }}>
-                <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 30, fontWeight: 600, color: '#EAFBF7', letterSpacing: '0.04em' }}>—</span>
-                <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--acc,#2DE0C6)' }}>TARI</span>
-              </div>
-              <div style={{ marginTop: 8, fontSize: 12, color: '#55617D', lineHeight: 1.5 }}>
-                Balance requires querying the Esmeralda indexer substate for this account. See notes below.
-              </div>
-            </div>
+            <BalanceDisplay />
 
             {/* Address */}
             <div>
@@ -207,6 +272,25 @@ export default function WalletPanel({ onClose }: { onClose: () => void }) {
                 <div>
                   <div style={{ fontSize: 14, fontWeight: 600, color: '#E4EAF4' }}>Show recovery phrase</div>
                   <div style={{ fontSize: 12, color: '#55617D', marginTop: 2 }}>Re-enter your password to reveal your 24 words</div>
+                </div>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#55617D" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginLeft: 'auto', flexShrink: 0 }}>
+                  <path d="M9 18l6-6-6-6" />
+                </svg>
+              </button>
+
+              <button
+                onClick={() => setView('decrypt')}
+                style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px', borderRadius: 12, background: 'rgba(120,150,210,0.05)', border: '1px solid rgba(120,150,210,0.14)', cursor: 'pointer', textAlign: 'left', width: '100%' }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 36, height: 36, borderRadius: 10, background: 'rgba(45,224,198,0.08)', flexShrink: 0 }}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--acc,#2DE0C6)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="3" y="11" width="18" height="11" rx="2" />
+                    <path d="M7 11V7a5 5 0 0 1 9.9-1" />
+                  </svg>
+                </div>
+                <div>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: '#E4EAF4' }}>Decrypt UTXO</div>
+                  <div style={{ fontSize: 12, color: '#55617D', marginTop: 2 }}>Paste a UTXO substate ID to reveal amount + memo</div>
                 </div>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#55617D" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginLeft: 'auto', flexShrink: 0 }}>
                   <path d="M9 18l6-6-6-6" />
@@ -285,6 +369,9 @@ export default function WalletPanel({ onClose }: { onClose: () => void }) {
             </button>
           </div>
         )}
+
+        {/* ── Decrypt UTXO view ─────────────────────────────────────────────── */}
+        {view === 'decrypt' && <DecryptPanel />}
 
         {/* ── Phrase words view ─────────────────────────────────────────────── */}
         {view === 'phraseWords' && words && (

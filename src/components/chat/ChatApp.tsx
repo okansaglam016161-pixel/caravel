@@ -48,8 +48,9 @@ const conversations = [
 ]
 
 export default function ChatApp() {
-  const { address } = useWallet()
+  const { address, scan } = useWallet()
   const [walletOpen, setWalletOpen] = useState(false)
+  const [balanceHidden, setBalanceHidden] = useState(false)
 
   // Truncate address for display: otl_esm_1abc…xyz
   const shortAddr = address
@@ -77,23 +78,65 @@ export default function ChatApp() {
             </div>
 
             {/* Balance widget — click to open wallet panel */}
-            <div
-              onClick={() => setWalletOpen(true)}
-              title="Open wallet"
-              style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '13px 15px', borderRadius: 12, background: 'linear-gradient(140deg, rgba(var(--accRGB,45,224,198),0.1), rgba(18,165,148,0.04))', border: '1px solid rgba(var(--accRGB,45,224,198),0.22)', cursor: 'pointer', transition: 'border-color 0.15s' }}
-              onMouseEnter={e => (e.currentTarget.style.borderColor = 'rgba(45,224,198,0.45)')}
-              onMouseLeave={e => (e.currentTarget.style.borderColor = 'rgba(var(--accRGB,45,224,198),0.22)')}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <svg width={17} height={17} viewBox="0 0 24 24" fill="none" stroke="var(--acc,#2DE0C6)" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round"><rect x={2} y={6} width={20} height={13} rx={2.5} /><path d="M2 10h20" /></svg>
-                <span style={{ fontSize: 13, color: '#8FB7B0', fontWeight: 500 }}>Balance</span>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 16, fontWeight: 500, color: '#EAFBF7', letterSpacing: '0.08em' }}>••••</span>
-                <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--acc,#2DE0C6)' }}>TARI</span>
-                <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="#5E8A82" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M9 18l6-6-6-6" /></svg>
-              </div>
-            </div>
+            {(() => {
+              // Derive display value from shared scan state — no second scan
+              const { status, balance } = scan
+              const isScanning = status === 'scanning'
+              const isDone = status === 'done'
+              const tTARI = balance !== null
+                ? (Number(balance) / 1_000_000).toFixed(6)
+                : null
+              const balanceValue = balanceHidden
+                ? '••••'
+                : isScanning && tTARI === null
+                  ? '···'          // first scan in progress, no prior result
+                  : isDone || (isScanning && tTARI !== null)
+                    ? (tTARI ?? '0.000000')
+                    : status === 'error'
+                      ? '?'
+                      : '—'       // idle (locked)
+              const balanceColor = balanceHidden || isDone || (isScanning && tTARI !== null)
+                ? '#EAFBF7'
+                : '#8A97B4'
+              return (
+                <div
+                  onClick={() => setWalletOpen(true)}
+                  title="Open wallet"
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '13px 15px', borderRadius: 12, background: 'linear-gradient(140deg, rgba(var(--accRGB,45,224,198),0.1), rgba(18,165,148,0.04))', border: '1px solid rgba(var(--accRGB,45,224,198),0.22)', cursor: 'pointer', transition: 'border-color 0.15s' }}
+                  onMouseEnter={e => (e.currentTarget.style.borderColor = 'rgba(45,224,198,0.45)')}
+                  onMouseLeave={e => (e.currentTarget.style.borderColor = 'rgba(var(--accRGB,45,224,198),0.22)')}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <svg width={17} height={17} viewBox="0 0 24 24" fill="none" stroke="var(--acc,#2DE0C6)" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round"><rect x={2} y={6} width={20} height={13} rx={2.5} /><path d="M2 10h20" /></svg>
+                    <span style={{ fontSize: 13, color: '#8FB7B0', fontWeight: 500 }}>Balance</span>
+                    {isScanning && (
+                      <svg width={11} height={11} viewBox="0 0 24 24" fill="none" stroke="#55617D" strokeWidth={2.5} strokeLinecap="round" style={{ animation: 'spin 1s linear infinite', flexShrink: 0 }}>
+                        <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                      </svg>
+                    )}
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 16, fontWeight: 500, color: balanceColor, letterSpacing: '0.08em', transition: 'color 0.2s' }}>
+                      {balanceValue}
+                    </span>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--acc,#2DE0C6)' }}>TARI</span>
+                    {/* Eye toggle — stops propagation so the wallet panel doesn't open */}
+                    <button
+                      onClick={e => { e.stopPropagation(); setBalanceHidden(v => !v) }}
+                      title={balanceHidden ? 'Show balance' : 'Hide balance'}
+                      style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'none', border: 'none', cursor: 'pointer', padding: 2, color: '#5E8A82', flexShrink: 0 }}
+                    >
+                      {balanceHidden
+                        ? <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" /><circle cx={12} cy={12} r={3} /><path d="M4 4l16 16" /></svg>
+                        : <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" /><circle cx={12} cy={12} r={3} /></svg>
+                      }
+                    </button>
+                    <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="#5E8A82" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M9 18l6-6-6-6" /></svg>
+                  </div>
+                </div>
+              )
+            })()}
+            <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
             {/* Wallet address chip — also opens panel */}
             {shortAddr && (
               <div

@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import Logo from '../Logo'
 import { useWallet } from '../../context/WalletContext'
-import WalletPanel from '../wallet/WalletPanel'
+import WalletModal from '../wallet/WalletModal'
 
 const conversations = [
   {
@@ -310,7 +310,7 @@ export default function ChatApp() {
       </div>
     </div>
 
-    {walletOpen && <WalletPanel onClose={() => setWalletOpen(false)} />}
+    {walletOpen && <WalletModal onClose={() => setWalletOpen(false)} />}
     </>
   )
 }

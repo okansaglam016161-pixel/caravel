@@ -17,12 +17,13 @@ export default defineConfig({
   optimizeDeps: {
     // Don't pre-bundle these — they contain WASM and TLA that esbuild
     // can't handle in the deps pre-bundling step.
-    exclude: ['@tari-project/ootle-wasm', '@tari-project/ootle', '@tari-project/ootle-secret-key-wallet'],
+    exclude: ['@tari-project/ootle-wasm', '@tari-project/ootle', '@tari-project/ootle-secret-key-wallet', '@tari-project/ootle-indexer'],
   },
   resolve: {
     alias: {
       '@tari-project/ootle': path.join(TARI_REF, 'packages/ootle/dist/index.js'),
       '@tari-project/ootle-secret-key-wallet': path.join(TARI_REF, 'packages/ootle-secret-key-wallet/dist/index.js'),
+      '@tari-project/ootle-indexer': path.join(TARI_REF, 'packages/ootle-indexer/dist/index.js'),
     },
   },
 })

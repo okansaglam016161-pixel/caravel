@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react'
 import { useWallet } from '../../context/WalletContext'
 import DecryptPanel from './DecryptPanel'
 import { sendConfidential, tariToMicrotari, MAX_FEE } from '../../crypto/confidentialSend'
+import type { TxEntry } from '../../crypto/txHistory'
+import { QRCodeSVG } from 'qrcode.react'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -42,53 +44,34 @@ function CopyBtn({ text, label = 'Copy', compact = false }: { text: string; labe
   )
 }
 
-// ── QR placeholder (visual mock — wire qrcode.react when ready) ───────────────
+// ── Transaction history helpers ────────────────────────────────────────────────
 
-function QrPlaceholder({ size = 192 }: { size?: number }) {
-  const c = size / 21   // cell size for 21×21 grid
-  function Finder({ ox, oy }: { ox: number; oy: number }) {
-    return (
-      <>
-        <rect x={ox * c} y={oy * c} width={7 * c} height={7 * c} fill="#2DE0C6" rx={c * 0.35} />
-        <rect x={(ox + 1) * c} y={(oy + 1) * c} width={5 * c} height={5 * c} fill="#0C111B" rx={c * 0.2} />
-        <rect x={(ox + 2) * c} y={(oy + 2) * c} width={3 * c} height={3 * c} fill="#2DE0C6" rx={c * 0.15} />
-      </>
-    )
-  }
-  // Deterministic data cells — skip finder zones + timing row/col
-  const cells: [number, number][] = []
-  for (let r = 0; r < 21; r++) {
-    for (let col = 0; col < 21; col++) {
-      if (r < 8 && col < 8) continue
-      if (r < 8 && col > 12) continue
-      if (r > 12 && col < 8) continue
-      if (r === 6 || col === 6) continue
-      if ((r * 11 + col * 7 + r * col) % 3 === 0) cells.push([col, r])
-    }
-  }
-  return (
-    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ display: 'block', borderRadius: 10 }}>
-      <rect width={size} height={size} fill="#0C111B" />
-      <Finder ox={0} oy={0} />
-      <Finder ox={14} oy={0} />
-      <Finder ox={0} oy={14} />
-      {cells.map(([x, y], i) => (
-        <rect key={i} x={x * c + c * 0.1} y={y * c + c * 0.1} width={c * 0.8} height={c * 0.8} fill="#2DE0C6" opacity="0.6" rx={c * 0.15} />
-      ))}
-    </svg>
-  )
+function formatTxTime(ts: number): string {
+  const d = new Date(ts)
+  const now = new Date()
+  const hm = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  if (d.toDateString() === now.toDateString()) return `Today ${hm}`
+  const yesterday = new Date(now); yesterday.setDate(now.getDate() - 1)
+  if (d.toDateString() === yesterday.toDateString()) return `Yesterday ${hm}`
+  return d.toLocaleDateString([], { day: 'numeric', month: 'short' }) + ' ' + hm
 }
 
-// ── Mock activity ─────────────────────────────────────────────────────────────
+function TxRow({ entry }: { entry: TxEntry }) {
+  const sent = entry.type === 'sent'
+  const amount = (Number(entry.amountMicrotari) / 1_000_000).toFixed(6)
+  const note = entry.note
+  const timeLabel = sent ? formatTxTime(entry.timestamp) : `Discovered ${formatTxTime(entry.discoveredAt)}`
 
-const ACTIVITY = [
-  { id: 1, dir: 'sent' as const,     note: 'Splitting the villa booking', peer: 'JK', time: 'Today 14:32' },
-  { id: 2, dir: 'received' as const, note: 'Dinner last night',           peer: 'MR', time: 'Yesterday 19:15' },
-  { id: 3, dir: 'sent' as const,     note: 'Thanks for covering me',      peer: 'DN', time: 'Mon 11:00' },
-]
+  let statusLabel = 'received'
+  let statusColor = 'var(--acc,#2DE0C6)'
+  if (sent) {
+    if (entry.outcome === 'Commit') { statusLabel = 'confirmed'; statusColor = 'var(--acc,#2DE0C6)' }
+    else if (entry.outcome === 'Reject') { statusLabel = 'rejected'; statusColor = '#FF6B6B' }
+    else { statusLabel = 'unconfirmed'; statusColor = '#FFB43C' }
+  }
 
-function ActivityRow({ item }: { item: typeof ACTIVITY[0] }) {
-  const sent = item.dir === 'sent'
+  const shortRecipient = sent ? entry.recipient.slice(0, 12) + '…' + entry.recipient.slice(-6) : null
+
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '14px 0', borderBottom: '1px solid rgba(120,150,210,0.08)' }}>
       <div style={{
@@ -104,26 +87,31 @@ function ActivityRow({ item }: { item: typeof ACTIVITY[0] }) {
           }
         </svg>
       </div>
+
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 14, fontWeight: 500, color: '#E4EAF4', marginBottom: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {item.note}
+          {note || (sent ? shortRecipient : 'Received')}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12, color: '#55617D' }}>
-          <span>{item.time}</span>
-          <span style={{ width: 3, height: 3, borderRadius: '50%', background: '#383E50', display: 'inline-block' }} />
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#55617D" strokeWidth="2"><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
-            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10 }}>amount hidden</span>
-          </div>
+          <span>{timeLabel}</span>
+          {note && sent && shortRecipient && (
+            <>
+              <span style={{ width: 3, height: 3, borderRadius: '50%', background: '#383E50', display: 'inline-block' }} />
+              <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 120 }}>{shortRecipient}</span>
+            </>
+          )}
         </div>
       </div>
+
       <div style={{ flexShrink: 0, textAlign: 'right' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 4, justifyContent: 'flex-end', marginBottom: 3 }}>
-          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="var(--acc,#2DE0C6)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M18 7l-8 8-4-4" /></svg>
-          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: '#55617D' }}>confirmed</span>
+          {entry.type === 'sent' && entry.outcome !== 'Reject' && (
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke={statusColor} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M18 7l-8 8-4-4" /></svg>
+          )}
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: statusColor }}>{statusLabel}</span>
         </div>
         <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, fontWeight: 700, color: sent ? '#FF8F8F' : 'var(--acc,#2DE0C6)' }}>
-          {sent ? '−' : '+'} ••••
+          {sent ? '−' : '+'}{amount}
         </span>
       </div>
     </div>
@@ -144,7 +132,7 @@ function GearIcon() {
 // ── Main modal ────────────────────────────────────────────────────────────────
 
 export default function WalletModal({ onClose }: { onClose: () => void }) {
-  const { wallet, address, scan, lock, getMnemonic, rescan } = useWallet()
+  const { wallet, address, scan, lock, getMnemonic, rescan, txHistory, recordSent } = useWallet()
 
   const [tab, setTab] = useState<Tab>('overview')
   const [inSettings, setInSettings] = useState(false)
@@ -257,6 +245,13 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
         onProgress: setSendProgress,
       })
       setSendTxId(result.txId)
+      recordSent({
+        recipient: sendRecipient,
+        amountMicrotari: tariToMicrotari(parseFloat(sendAmount)),
+        note: sendNote || '',
+        txHash: result.txId,
+        outcome: result.outcome,
+      })
       if (result.outcome === 'Commit') {
         setSendStep('success')
         rescan()
@@ -824,8 +819,8 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
                 Share your address to receive confidential TARI. Amounts stay hidden on-chain.
               </div>
 
-              <div style={{ padding: 16, borderRadius: 16, background: '#10151F', border: '1px solid rgba(120,150,210,0.18)', display: 'inline-block' }}>
-                <QrPlaceholder size={192} />
+              <div style={{ padding: 14, borderRadius: 16, background: '#FFFFFF', display: 'inline-block' }}>
+                <QRCodeSVG value={address ?? ''} size={192} bgColor="#FFFFFF" fgColor="#0C111B" level="M" />
               </div>
 
               {address && (
@@ -846,14 +841,28 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
 
           {!inSettings && tab === 'activity' && (
             <div>
-              <div style={{ display: 'flex', flexDirection: 'column' }}>
-                {ACTIVITY.map(item => <ActivityRow key={item.id} item={item} />)}
-              </div>
-              <div style={{ marginTop: 24, padding: '13px 16px', borderRadius: 12, background: 'rgba(120,150,210,0.04)', border: '1px solid rgba(120,150,210,0.1)', textAlign: 'center' }}>
-                <div style={{ fontSize: 12, color: '#55617D', lineHeight: 1.6 }}>
-                  Placeholder entries — real activity tracking wired in next step.
+              {txHistory.length === 0 ? (
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, padding: '48px 0 32px' }}>
+                  <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#2D3548" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
+                  </svg>
+                  <div style={{ fontSize: 14, color: '#55617D', textAlign: 'center', lineHeight: 1.6 }}>
+                    No transactions yet.<br />
+                    <span style={{ fontSize: 12 }}>Sends and received UTXOs will appear here.</span>
+                  </div>
                 </div>
-              </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column' }}>
+                  {[...txHistory]
+                    .sort((a, b) => {
+                      const ta = a.type === 'sent' ? a.timestamp : a.discoveredAt
+                      const tb = b.type === 'sent' ? b.timestamp : b.discoveredAt
+                      return tb - ta
+                    })
+                    .map(entry => <TxRow key={entry.id} entry={entry} />)
+                  }
+                </div>
+              )}
             </div>
           )}
 

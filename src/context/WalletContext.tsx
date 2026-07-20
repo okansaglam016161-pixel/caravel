@@ -10,6 +10,7 @@ import {
   saveStoredWallet,
 } from '../crypto/walletCrypto'
 import { scanWallet, type ScannedUtxo, type ScanProgress } from '../crypto/walletScanner'
+import { loadHistory, addSent, mergeReceived, type TxEntry, type NewSentParams } from '../crypto/txHistory'
 
 // ── Scan state ────────────────────────────────────────────────────────────────
 
@@ -40,6 +41,7 @@ export interface WalletCtx {
   wallet: SecretKeyWallet | null
   address: string | null
   scan: ScanState
+  txHistory: TxEntry[]
   /** Generate a fresh BIP-39 mnemonic (sync, call before showing step 2). */
   generateMnemonic: () => string
   /** Encrypt mnemonic with password, save to localStorage, unlock in memory. */
@@ -54,6 +56,8 @@ export interface WalletCtx {
   getMnemonic: (password: string) => Promise<string>
   /** Re-run the UTXO scan (cancels any in-progress scan). */
   rescan: () => void
+  /** Record a sent transaction in persisted history. */
+  recordSent: (params: NewSentParams) => void
 }
 
 // ── Context ───────────────────────────────────────────────────────────────────
@@ -73,11 +77,12 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const [address, setAddress] = useState<string | null>(null)
   const [walletExists, setWalletExists] = useState(() => hasStoredWallet())
   const [scan, setScan] = useState<ScanState>(SCAN_IDLE)
+  const [txHistory, setTxHistory] = useState<TxEntry[]>([])
 
   // Ref holds the AbortController for the active scan — replaced each run
   const scanAbortRef = useRef<AbortController | null>(null)
 
-  const startScan = useCallback((w: SecretKeyWallet) => {
+  const startScan = useCallback((w: SecretKeyWallet, addr: string) => {
     // Cancel any prior scan
     scanAbortRef.current?.abort()
     const ctrl = new AbortController()
@@ -112,6 +117,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         capped: result.capped,
         error: '',
       })
+      setTxHistory(prev => mergeReceived(addr, prev, result.utxos))
     }).catch((err: unknown) => {
       if (ctrl.signal.aborted) return
       setScan(prev => ({
@@ -127,7 +133,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     const addr = await w.getAddress()
     setWallet(w)
     setAddress(addr)
-    startScan(w)
+    setTxHistory(loadHistory(addr))
+    startScan(w, addr)
   }, [startScan])
 
   const generateMnemonic = useCallback(() => createMnemonic(), [])
@@ -162,6 +169,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     setScan(SCAN_IDLE)
     setWallet(null)
     setAddress(null)
+    setTxHistory([])
   }, [])
 
   const getMnemonic = useCallback(async (password: string) => {
@@ -171,11 +179,16 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const rescan = useCallback(() => {
-    if (wallet) startScan(wallet)
-  }, [wallet, startScan])
+    if (wallet && address) startScan(wallet, address)
+  }, [wallet, address, startScan])
+
+  const recordSent = useCallback((params: NewSentParams) => {
+    if (!address) return
+    setTxHistory(prev => addSent(address, prev, params))
+  }, [address])
 
   return (
-    <Ctx.Provider value={{ walletExists, wallet, address, scan, generateMnemonic, createWallet, unlock, restore, lock, getMnemonic, rescan }}>
+    <Ctx.Provider value={{ walletExists, wallet, address, scan, txHistory, generateMnemonic, createWallet, unlock, restore, lock, getMnemonic, rescan, recordSent }}>
       {children}
     </Ctx.Provider>
   )

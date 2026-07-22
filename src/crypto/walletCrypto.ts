@@ -93,10 +93,10 @@ export function isMnemonicValid(phrase: string): boolean {
 }
 
 // ── Mnemonic → Tari SecretKeyWallet ─────────────────────────────────────────
-// BIP-39 seed (64 bytes via PBKDF2-HMAC-SHA512) → first 32 bytes = owner key,
-// next 32 bytes = view-only key. Both halves are domain-separated by BIP-39's
-// own derivation and by their position in the seed, making the derivation
-// deterministic and resistant to key reuse between the two roles.
+// BIP-39 seed (64 bytes via PBKDF2-HMAC-SHA512) → domain-separated into two
+// independent Ristretto255 scalars: SHA-512(seed‖0x01) mod L = ownerSecretKey,
+// SHA-512(seed‖0x02) mod L = viewOnlySecret. The 0x01/0x02 domain bytes ensure
+// the two keys are fully independent even though they share the same seed.
 
 // Ristretto255 scalar field order (little-endian). A secret key must be in [0, L).
 // Raw BIP-39 seed bytes fail ~9% of the time; proper hash-to-scalar (RFC 8032 §5.2.5)
@@ -138,8 +138,12 @@ async function seedToOotleKeys(seed: Uint8Array): Promise<{ ownerSecretKey: Uint
   }
 }
 
+export async function seedFromMnemonic(mnemonic: string): Promise<Uint8Array> {
+  return mnemonicToSeed(mnemonic.trim().toLowerCase())
+}
+
 export async function walletFromMnemonic(mnemonic: string): Promise<SecretKeyWallet> {
-  const seed = await mnemonicToSeed(mnemonic.trim().toLowerCase())
+  const seed = await seedFromMnemonic(mnemonic)
   const { ownerSecretKey, viewOnlySecret } = await seedToOotleKeys(seed)
   return SecretKeyWallet.fromSecretKey(ownerSecretKey, Network.Esmeralda, viewOnlySecret)
 }

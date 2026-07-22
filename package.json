@@ -10,6 +10,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@noble/curves": "^2.2.0",
+    "@scure/bip32": "^2.2.0",
     "@scure/bip39": "^2.2.0",
     "@tari-project/ootle-wasm": "0.35.2",
     "qrcode.react": "^4.2.0",

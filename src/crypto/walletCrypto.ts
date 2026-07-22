@@ -142,10 +142,13 @@ export async function seedFromMnemonic(mnemonic: string): Promise<Uint8Array> {
   return mnemonicToSeed(mnemonic.trim().toLowerCase())
 }
 
-export async function walletFromMnemonic(mnemonic: string): Promise<SecretKeyWallet> {
-  const seed = await seedFromMnemonic(mnemonic)
+export async function walletFromSeed(seed: Uint8Array): Promise<SecretKeyWallet> {
   const { ownerSecretKey, viewOnlySecret } = await seedToOotleKeys(seed)
   return SecretKeyWallet.fromSecretKey(ownerSecretKey, Network.Esmeralda, viewOnlySecret)
+}
+
+export async function walletFromMnemonic(mnemonic: string): Promise<SecretKeyWallet> {
+  return walletFromSeed(await seedFromMnemonic(mnemonic))
 }
 
 // ── localStorage helpers ─────────────────────────────────────────────────────

@@ -1,5 +1,5 @@
 import { HDKey } from '@scure/bip32'
-import { schnorr } from '@noble/curves/secp256k1'
+import { schnorr } from '@noble/curves/secp256k1.js'
 import { bech32 } from '@scure/base'
 
 // NIP-06: https://github.com/nostr-protocol/nips/blob/master/06.md

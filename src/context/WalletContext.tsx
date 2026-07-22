@@ -2,13 +2,15 @@ import { createContext, useContext, useState, useCallback, useRef, type ReactNod
 import { type SecretKeyWallet } from '@tari-project/ootle-secret-key-wallet'
 import {
   createMnemonic,
-  walletFromMnemonic,
+  seedFromMnemonic,
+  walletFromSeed,
   encryptMnemonic,
   decryptMnemonic,
   hasStoredWallet,
   loadStoredWallet,
   saveStoredWallet,
 } from '../crypto/walletCrypto'
+import { deriveNostrKeyFromSeed } from '../crypto/nostrCrypto'
 import { scanWallet, type ScannedUtxo, type ScanProgress } from '../crypto/walletScanner'
 import { loadHistory, addSent, mergeReceived, type TxEntry, type NewSentParams } from '../crypto/txHistory'
 
@@ -40,6 +42,7 @@ export interface WalletCtx {
   walletExists: boolean
   wallet: SecretKeyWallet | null
   address: string | null
+  nostrNpub: string | null
   scan: ScanState
   txHistory: TxEntry[]
   /** Generate a fresh BIP-39 mnemonic (sync, call before showing step 2). */
@@ -75,12 +78,15 @@ export function useWallet(): WalletCtx {
 export function WalletProvider({ children }: { children: ReactNode }) {
   const [wallet, setWallet] = useState<SecretKeyWallet | null>(null)
   const [address, setAddress] = useState<string | null>(null)
+  const [nostrNpub, setNostrNpub] = useState<string | null>(null)
   const [walletExists, setWalletExists] = useState(() => hasStoredWallet())
   const [scan, setScan] = useState<ScanState>(SCAN_IDLE)
   const [txHistory, setTxHistory] = useState<TxEntry[]>([])
 
   // Ref holds the AbortController for the active scan — replaced each run
   const scanAbortRef = useRef<AbortController | null>(null)
+  // Nostr private key: held in a ref, never in state, wiped on lock
+  const nostrSecretKeyRef = useRef<string | null>(null)
 
   const startScan = useCallback((w: SecretKeyWallet, addr: string) => {
     // Cancel any prior scan
@@ -143,7 +149,11 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     const stored = await encryptMnemonic(mnemonic, password)
     saveStoredWallet(stored)
     setWalletExists(true)
-    const w = await walletFromMnemonic(mnemonic)
+    const seed = await seedFromMnemonic(mnemonic)
+    const nostr = deriveNostrKeyFromSeed(seed)
+    nostrSecretKeyRef.current = nostr.privateKeyHex
+    setNostrNpub(nostr.npub)
+    const w = await walletFromSeed(seed)
     await materialize(w)
   }, [materialize])
 
@@ -151,7 +161,11 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     const stored = loadStoredWallet()
     if (!stored) throw new Error('No wallet stored')
     const mnemonic = await decryptMnemonic(stored, password)
-    const w = await walletFromMnemonic(mnemonic)
+    const seed = await seedFromMnemonic(mnemonic)
+    const nostr = deriveNostrKeyFromSeed(seed)
+    nostrSecretKeyRef.current = nostr.privateKeyHex
+    setNostrNpub(nostr.npub)
+    const w = await walletFromSeed(seed)
     await materialize(w)
   }, [materialize])
 
@@ -159,7 +173,11 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     const stored = await encryptMnemonic(mnemonic, password)
     saveStoredWallet(stored)
     setWalletExists(true)
-    const w = await walletFromMnemonic(mnemonic)
+    const seed = await seedFromMnemonic(mnemonic)
+    const nostr = deriveNostrKeyFromSeed(seed)
+    nostrSecretKeyRef.current = nostr.privateKeyHex
+    setNostrNpub(nostr.npub)
+    const w = await walletFromSeed(seed)
     await materialize(w)
   }, [materialize])
 
@@ -170,6 +188,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     setWallet(null)
     setAddress(null)
     setTxHistory([])
+    setNostrNpub(null)
+    nostrSecretKeyRef.current = null
   }, [])
 
   const getMnemonic = useCallback(async (password: string) => {
@@ -188,7 +208,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   }, [address])
 
   return (
-    <Ctx.Provider value={{ walletExists, wallet, address, scan, txHistory, generateMnemonic, createWallet, unlock, restore, lock, getMnemonic, rescan, recordSent }}>
+    <Ctx.Provider value={{ walletExists, wallet, address, nostrNpub, scan, txHistory, generateMnemonic, createWallet, unlock, restore, lock, getMnemonic, rescan, recordSent }}>
       {children}
     </Ctx.Provider>
   )

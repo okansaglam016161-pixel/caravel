@@ -67,7 +67,7 @@ function Field({ label, value }: { label: string; value: string }) {
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function DecryptPanel() {
-  const { wallet } = useWallet()
+  const { wallet, nostrNpub } = useWallet()
   const [utxoId, setUtxoId] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -108,6 +108,24 @@ export default function DecryptPanel() {
 
   return (
     <div style={{ padding: '24px 24px 32px', display: 'flex', flexDirection: 'column', gap: 20 }}>
+
+      {/* TEMPORARY — M6.2 proof, remove before shipping */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '14px 16px', borderRadius: 10, background: 'rgba(255,200,0,0.06)', border: '2px dashed rgba(255,200,0,0.4)' }}>
+        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: '#B89A00', letterSpacing: '0.14em' }}>
+          ⚠ TEMPORARY — M6.2 PROOF · REMOVE BEFORE SHIPPING
+        </div>
+        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: '#55617D', letterSpacing: '0.14em', marginTop: 4 }}>
+          NOSTR NPUB (NIP-06 · m/44&#x27;/1237&#x27;/0&#x27;/0/0)
+        </div>
+        <div style={{
+          padding: '10px 13px', borderRadius: 8, background: '#10151F',
+          border: '1px solid rgba(255,200,0,0.2)',
+          fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: nostrNpub ? '#FFE066' : '#55617D',
+          wordBreak: 'break-all', lineHeight: 1.5,
+        }}>
+          {nostrNpub ?? '(wallet locked)'}
+        </div>
+      </div>
 
       {/* Dev-panel notice */}
       <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', padding: '12px 14px', borderRadius: 10, background: 'rgba(120,150,210,0.06)', border: '1px solid rgba(120,150,210,0.16)' }}>

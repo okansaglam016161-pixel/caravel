@@ -8,6 +8,7 @@ import * as nip19 from 'nostr-tools/nip19'
 // TEMPORARY — M7.1 + M7.2 · REMOVE BEFORE SHIPPING
 import { wrapMessage, unwrapMessage, publishGiftWrap, waitForGiftWrap } from '../../crypto/nostrMessaging'
 import type { PublishResult } from '../../crypto/nostrMessaging'
+import { DEFAULT_RELAYS } from '../../config/relays'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -184,7 +185,7 @@ function runGiftWrapTest(): GiftWrapTestResult {
 }
 
 // TEMPORARY — M7.2 RELAY TEST · REMOVE BEFORE SHIPPING
-const RELAY_URLS = ['wss://relay.damus.io', 'wss://relay.primal.net']
+const RELAY_URLS = DEFAULT_RELAYS
 
 type RelayTestStatus = 'idle' | 'running' | 'done'
 interface RelayTestState {

@@ -5,6 +5,8 @@ import { useWallet } from '../../context/WalletContext'
 // TEMPORARY — M7.0 SMOKE TEST · REMOVE BEFORE SHIPPING
 import { generateSecretKey, getPublicKey } from 'nostr-tools'
 import * as nip19 from 'nostr-tools/nip19'
+// TEMPORARY — M7.1 GIFT WRAP TEST · REMOVE BEFORE SHIPPING
+import { wrapMessage, unwrapMessage } from '../../crypto/nostrMessaging'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -102,6 +104,84 @@ function runSmokeTest(nostrNpub: string | null): SmokeResult {
   }
 }
 
+// TEMPORARY — M7.1 GIFT WRAP TEST · REMOVE BEFORE SHIPPING
+interface GiftWrapCheck {
+  status: 'PASS' | 'FAIL'
+  detail: string
+}
+interface GiftWrapTestResult {
+  check1: GiftWrapCheck  // round-trip: A wraps to B, B reads plaintext + sender
+  check2: GiftWrapCheck  // negative: C cannot unwrap B's gift wrap
+  check3: GiftWrapCheck  // metadata: kind=1059, anon pubkey, randomised past timestamp
+  check4: GiftWrapCheck  // unlinkability: two wraps differ in pubkey and id
+  fatalError: string | null
+}
+
+function runGiftWrapTest(): GiftWrapTestResult {
+  const fail = (detail: string): GiftWrapCheck => ({ status: 'FAIL', detail })
+  const pass = (detail: string): GiftWrapCheck => ({ status: 'PASS', detail })
+  const init: GiftWrapTestResult = {
+    check1: fail('not run'),
+    check2: fail('not run'),
+    check3: fail('not run'),
+    check4: fail('not run'),
+    fatalError: null,
+  }
+  try {
+    const skA = generateSecretKey()
+    const pkA = getPublicKey(skA)
+    const skB = generateSecretKey()
+    const pkB = getPublicKey(skB)
+    const skC = generateSecretKey()
+    const msg = 'NIP-17 M7.1 round-trip test'
+    const wrap1 = wrapMessage(skA, pkB, msg)
+
+    // Check 1 — round-trip
+    try {
+      const { senderPubkeyHex, plaintext } = unwrapMessage(skB, wrap1)
+      const textOk = plaintext === msg
+      const senderOk = senderPubkeyHex === pkA
+      init.check1 = textOk && senderOk
+        ? pass(`plaintext matches · sender ${pkA.slice(0, 8)}… verified`)
+        : fail(`textOk=${textOk} senderOk=${senderOk}`)
+    } catch (e) { init.check1 = fail(String(e)) }
+
+    // Check 2 — negative: third-party C must not decrypt
+    try {
+      unwrapMessage(skC, wrap1)
+      init.check2 = fail('C succeeded — expected throw (wrong key)')
+    } catch {
+      init.check2 = pass('C cannot decrypt — nip44 invalid MAC as expected')
+    }
+
+    // Check 3 — metadata: kind 1059, anonymous pubkey, randomised past timestamp
+    try {
+      const now = Math.round(Date.now() / 1000)
+      const twoDays = 172800
+      const kindOk = wrap1.kind === 1059
+      const pubkeyAnon = wrap1.pubkey !== pkA && wrap1.pubkey !== pkB
+      const tsOk = wrap1.created_at <= now && wrap1.created_at >= now - twoDays
+      init.check3 = kindOk && pubkeyAnon && tsOk
+        ? pass(`kind=${wrap1.kind} · pubkey≠A,B · ts=${wrap1.created_at}≤now`)
+        : fail(`kind=${wrap1.kind} pubkeyAnon=${pubkeyAnon} tsOk=${tsOk}`)
+    } catch (e) { init.check3 = fail(String(e)) }
+
+    // Check 4 — unlinkability: two wraps of the same content differ in pubkey + id
+    try {
+      const wrap2 = wrapMessage(skA, pkB, msg)
+      const pubkeysDiffer = wrap1.pubkey !== wrap2.pubkey
+      const idsDiffer = wrap1.id !== wrap2.id
+      init.check4 = pubkeysDiffer && idsDiffer
+        ? pass('two wraps have distinct random pubkeys and ids')
+        : fail(`pubkeysDiffer=${pubkeysDiffer} idsDiffer=${idsDiffer}`)
+    } catch (e) { init.check4 = fail(String(e)) }
+
+  } catch (e) {
+    init.fatalError = e instanceof Error ? e.message : String(e)
+  }
+  return init
+}
+
 export default function DecryptPanel() {
   const { wallet, nostrNpub } = useWallet()
   const [utxoId, setUtxoId] = useState('')
@@ -110,6 +190,8 @@ export default function DecryptPanel() {
   const [result, setResult] = useState<{ amount: string; memo: DecodedMemo | null } | null>(null)
   // TEMPORARY — M7.0 SMOKE TEST · REMOVE BEFORE SHIPPING
   const [smoke] = useState<SmokeResult>(() => runSmokeTest(nostrNpub))
+  // TEMPORARY — M7.1 GIFT WRAP TEST · REMOVE BEFORE SHIPPING
+  const [giftWrap] = useState<GiftWrapTestResult>(() => runGiftWrapTest())
 
   const canDecrypt = !!wallet && utxoId.trim().startsWith('utxo_') && !loading
 
@@ -209,6 +291,36 @@ export default function DecryptPanel() {
               )}
             </div>
           </>
+        )}
+      </div>
+
+      {/* TEMPORARY — M7.1 GIFT WRAP TEST · REMOVE BEFORE SHIPPING */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '14px 16px', borderRadius: 10, background: 'rgba(100,255,160,0.04)', border: '2px dashed rgba(80,220,130,0.35)' }}>
+        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: '#3A9E6A', letterSpacing: '0.14em' }}>
+          ⚠ TEMPORARY — M7.1 NIP-17 GIFT WRAP TEST · REMOVE BEFORE SHIPPING
+        </div>
+        {giftWrap.fatalError ? (
+          <div style={{ fontSize: 12, color: '#FF6B6B', fontFamily: "'IBM Plex Mono', monospace", wordBreak: 'break-all', lineHeight: 1.5 }}>
+            FATAL — {giftWrap.fatalError}
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {([
+              ['1', 'ROUND-TRIP (A→B decrypt, plaintext + sender verified)', giftWrap.check1],
+              ["2", "NEGATIVE (C cannot decrypt B's gift wrap)", giftWrap.check2],
+              ['3', 'METADATA (kind=1059, anon pubkey, past timestamp)', giftWrap.check3],
+              ['4', 'UNLINKABILITY (two wraps → distinct pubkeys + ids)', giftWrap.check4],
+            ] as [string, string, GiftWrapCheck][]).map(([n, label, chk]) => (
+              <div key={n} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: '#55617D', letterSpacing: '0.12em' }}>
+                  CHECK {n} — {label}
+                </div>
+                <div style={{ fontSize: 11, fontFamily: "'IBM Plex Mono', monospace", color: chk.status === 'PASS' ? '#4EC9A0' : '#FF6B6B', lineHeight: 1.5, wordBreak: 'break-all' }}>
+                  {chk.status} {chk.status === 'PASS' ? '✓' : '✗'} {chk.detail}
+                </div>
+              </div>
+            ))}
+          </div>
         )}
       </div>
 

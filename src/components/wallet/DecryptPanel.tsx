@@ -5,8 +5,9 @@ import { useWallet } from '../../context/WalletContext'
 // TEMPORARY — M7.0 SMOKE TEST · REMOVE BEFORE SHIPPING
 import { generateSecretKey, getPublicKey } from 'nostr-tools'
 import * as nip19 from 'nostr-tools/nip19'
-// TEMPORARY — M7.1 GIFT WRAP TEST · REMOVE BEFORE SHIPPING
-import { wrapMessage, unwrapMessage } from '../../crypto/nostrMessaging'
+// TEMPORARY — M7.1 + M7.2 · REMOVE BEFORE SHIPPING
+import { wrapMessage, unwrapMessage, publishGiftWrap, waitForGiftWrap } from '../../crypto/nostrMessaging'
+import type { PublishResult } from '../../crypto/nostrMessaging'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -182,6 +183,24 @@ function runGiftWrapTest(): GiftWrapTestResult {
   return init
 }
 
+// TEMPORARY — M7.2 RELAY TEST · REMOVE BEFORE SHIPPING
+const RELAY_URLS = ['wss://relay.damus.io', 'wss://relay.primal.net']
+
+type RelayTestStatus = 'idle' | 'running' | 'done'
+interface RelayTestState {
+  status: RelayTestStatus
+  log: string[]
+  publishResults: PublishResult[] | null
+  deliveredByRelay: string | null
+  elapsedMs: number | null
+  pass: boolean | null
+  failReason: string | null
+}
+const RELAY_IDLE: RelayTestState = {
+  status: 'idle', log: [], publishResults: null,
+  deliveredByRelay: null, elapsedMs: null, pass: null, failReason: null,
+}
+
 export default function DecryptPanel() {
   const { wallet, nostrNpub } = useWallet()
   const [utxoId, setUtxoId] = useState('')
@@ -192,6 +211,88 @@ export default function DecryptPanel() {
   const [smoke] = useState<SmokeResult>(() => runSmokeTest(nostrNpub))
   // TEMPORARY — M7.1 GIFT WRAP TEST · REMOVE BEFORE SHIPPING
   const [giftWrap] = useState<GiftWrapTestResult>(() => runGiftWrapTest())
+  // TEMPORARY — M7.2 RELAY TEST · REMOVE BEFORE SHIPPING
+  const [relayTest, setRelayTest] = useState<RelayTestState>(RELAY_IDLE)
+
+  function appendLog(line: string) {
+    setRelayTest(prev => ({ ...prev, log: [...prev.log, line] }))
+  }
+
+  async function runRelayTest() {
+    setRelayTest({ ...RELAY_IDLE, status: 'running', log: ['Generating throwaway keypairs A and B...'] })
+    try {
+      // Step 1: throwaway keys
+      const { generateSecretKey: gen, getPublicKey: pub } = await import('nostr-tools')
+      const skA = gen()
+      const pkA = pub(skA)
+      const skB = gen()
+      const pkB = pub(skB)
+      appendLog(`A: ${pkA.slice(0, 12)}... B: ${pkB.slice(0, 12)}...`)
+
+      // Step 2: wrap
+      const wrapped = wrapMessage(skA, pkB, 'caravel m7.2 relay test')
+      appendLog(`Gift wrap created (kind ${wrapped.kind}, id ${wrapped.id.slice(0, 12)}...)`)
+
+      // Step 3: since — cover full 2-day randomNow() backdate window
+      const since = Math.floor(Date.now() / 1000) - 172800
+
+      // Step 4: start subscription BEFORE publishing (so event is never missed)
+      appendLog('Subscribing on both relays for kind 1059 p-tagged to B...')
+      const recvPromise = waitForGiftWrap(pkB, RELAY_URLS, 20_000, since)
+
+      // Step 5: publish to both relays
+      appendLog('Publishing to wss://relay.damus.io and wss://relay.primal.net...')
+      const publishStart = Date.now()
+      const publishResults = await publishGiftWrap(wrapped, RELAY_URLS, 10_000)
+      setRelayTest(prev => ({ ...prev, publishResults }))
+
+      const okRelays = publishResults.filter(r => r.ok).map(r => r.relay)
+      const failRelays = publishResults.filter(r => !r.ok)
+      if (okRelays.length > 0) appendLog(`Publish accepted by: ${okRelays.join(', ')}`)
+      if (failRelays.length > 0) appendLog(`Publish rejected: ${failRelays.map(r => `${r.relay} (${r.error ?? 'error'})`).join(', ')}`)
+
+      if (okRelays.length === 0) {
+        setRelayTest(prev => ({ ...prev, status: 'done', pass: false, failReason: 'All relay publishes failed — no relay accepted the event' }))
+        return
+      }
+
+      // Step 6: wait for receipt (20s max, started before publish)
+      appendLog('Waiting for receipt (20s max)...')
+      const received = await recvPromise
+      const elapsedMs = Date.now() - publishStart
+
+      if (!received) {
+        setRelayTest(prev => ({ ...prev, status: 'done', elapsedMs, pass: false, failReason: 'TIMEOUT: no event received within 20 seconds' }))
+        return
+      }
+
+      appendLog(`Event received via ${received.relay} (+${elapsedMs}ms from publish start)`)
+      setRelayTest(prev => ({ ...prev, deliveredByRelay: received.relay, elapsedMs }))
+
+      // Step 7: unwrap and verify
+      const { senderPubkeyHex, plaintext } = unwrapMessage(skB, received.event)
+      const plaintextMatch = plaintext === 'caravel m7.2 relay test'
+      const senderMatch = senderPubkeyHex === pkA
+      const pass = plaintextMatch && senderMatch
+
+      appendLog(`Unwrapped: "${plaintext}"`)
+      appendLog(`Sender match: ${senderMatch} · Plaintext match: ${plaintextMatch}`)
+
+      setRelayTest(prev => ({
+        ...prev,
+        status: 'done',
+        pass,
+        failReason: pass ? null : `senderMatch=${senderMatch} plaintextMatch=${plaintextMatch}`,
+      }))
+    } catch (e) {
+      setRelayTest(prev => ({
+        ...prev,
+        status: 'done',
+        pass: false,
+        failReason: e instanceof Error ? e.message : String(e),
+      }))
+    }
+  }
 
   const canDecrypt = !!wallet && utxoId.trim().startsWith('utxo_') && !loading
 
@@ -320,6 +421,71 @@ export default function DecryptPanel() {
                 </div>
               </div>
             ))}
+          </div>
+        )}
+      </div>
+
+      {/* TEMPORARY — M7.2 RELAY TEST · REMOVE BEFORE SHIPPING */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '14px 16px', borderRadius: 10, background: 'rgba(200,160,255,0.04)', border: '2px dashed rgba(160,100,240,0.35)' }}>
+        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: '#9966CC', letterSpacing: '0.14em' }}>
+          ⚠ TEMPORARY — M7.2 NIP-17 RELAY TEST · REMOVE BEFORE SHIPPING
+        </div>
+        <div style={{ fontSize: 11, color: '#8A97B4', fontFamily: "'IBM Plex Mono', monospace", lineHeight: 1.5 }}>
+          Publishes a gift-wrapped message to wss://relay.damus.io + wss://relay.primal.net using throwaway keys. Bounded: 10s connect, 20s receive, ~30s total.
+        </div>
+
+        {/* Run button */}
+        <button
+          onClick={runRelayTest}
+          disabled={relayTest.status === 'running'}
+          style={{
+            padding: '10px 16px', borderRadius: 8, border: 'none',
+            background: relayTest.status === 'running' ? 'rgba(120,150,210,0.15)' : 'rgba(160,100,240,0.2)',
+            color: relayTest.status === 'running' ? '#55617D' : '#CC88FF',
+            fontSize: 12, fontWeight: 700, cursor: relayTest.status === 'running' ? 'default' : 'pointer',
+            fontFamily: "'IBM Plex Mono', monospace", letterSpacing: '0.08em',
+            transition: 'all 0.15s', alignSelf: 'flex-start',
+          }}
+        >
+          {relayTest.status === 'running' ? 'Running...' : 'Run relay test'}
+        </button>
+
+        {/* Live log */}
+        {relayTest.log.length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            {relayTest.log.map((line, i) => (
+              <div key={i} style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: '#8A97B4', lineHeight: 1.4 }}>
+                {`> ${line}`}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Per-relay publish results */}
+        {relayTest.publishResults && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
+            <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: '#55617D', letterSpacing: '0.12em' }}>
+              PUBLISH RESULTS
+            </div>
+            {relayTest.publishResults.map(r => (
+              <div key={r.relay} style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, lineHeight: 1.4, color: r.ok ? '#4EC9A0' : '#FF6B6B' }}>
+                {r.ok ? 'ACCEPTED' : 'REJECTED'} {r.relay}{r.error ? ` — ${r.error}` : ''}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Delivery info */}
+        {relayTest.deliveredByRelay && (
+          <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: '#66BBFF', lineHeight: 1.4 }}>
+            DELIVERED BY {relayTest.deliveredByRelay} in {relayTest.elapsedMs}ms
+          </div>
+        )}
+
+        {/* Final verdict */}
+        {relayTest.status === 'done' && (
+          <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, fontWeight: 700, color: relayTest.pass ? '#4EC9A0' : '#FF6B6B', marginTop: 4 }}>
+            {relayTest.pass ? 'PASS ✓ plaintext + sender verified end-to-end' : `FAIL ✗ ${relayTest.failReason ?? 'unknown error'}`}
           </div>
         )}
       </div>

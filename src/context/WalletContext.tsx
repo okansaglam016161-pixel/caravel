@@ -13,6 +13,9 @@ import {
 import { deriveNostrKeyFromSeed } from '../crypto/nostrCrypto'
 import { scanWallet, type ScannedUtxo, type ScanProgress } from '../crypto/walletScanner'
 import { loadHistory, addSent, mergeReceived, type TxEntry, type NewSentParams } from '../crypto/txHistory'
+import { NostrMessagingProvider } from '../messaging/NostrMessagingProvider'
+import type { MessagingProvider } from '../messaging/types'
+import { DEFAULT_RELAYS } from '../config/relays'
 
 // ── Scan state ────────────────────────────────────────────────────────────────
 
@@ -43,6 +46,9 @@ export interface WalletCtx {
   wallet: SecretKeyWallet | null
   address: string | null
   nostrNpub: string | null
+  /** x-only secp256k1 pubkey hex (32 bytes). Stored alongside nostrNpub for callers that
+   *  need raw hex without re-decoding bech32 — derivation already computes it for free. */
+  nostrPubkeyHex: string | null
   scan: ScanState
   txHistory: TxEntry[]
   /** Generate a fresh BIP-39 mnemonic (sync, call before showing step 2). */
@@ -61,6 +67,10 @@ export interface WalletCtx {
   rescan: () => void
   /** Record a sent transaction in persisted history. */
   recordSent: (params: NewSentParams) => void
+  /** Factory: returns a ready-to-use MessagingProvider backed by the current identity,
+   *  or null if the wallet is locked. The secret key stays inside the closure — callers
+   *  receive a working provider but never see the raw key. */
+  createMessagingProvider: () => MessagingProvider | null
 }
 
 // ── Context ───────────────────────────────────────────────────────────────────
@@ -79,6 +89,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const [wallet, setWallet] = useState<SecretKeyWallet | null>(null)
   const [address, setAddress] = useState<string | null>(null)
   const [nostrNpub, setNostrNpub] = useState<string | null>(null)
+  const [nostrPubkeyHex, setNostrPubkeyHex] = useState<string | null>(null)
   const [walletExists, setWalletExists] = useState(() => hasStoredWallet())
   const [scan, setScan] = useState<ScanState>(SCAN_IDLE)
   const [txHistory, setTxHistory] = useState<TxEntry[]>([])
@@ -153,6 +164,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     const nostr = deriveNostrKeyFromSeed(seed)
     nostrSecretKeyRef.current = nostr.privateKeyHex
     setNostrNpub(nostr.npub)
+    setNostrPubkeyHex(nostr.publicKeyHex)
     const w = await walletFromSeed(seed)
     await materialize(w)
   }, [materialize])
@@ -165,6 +177,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     const nostr = deriveNostrKeyFromSeed(seed)
     nostrSecretKeyRef.current = nostr.privateKeyHex
     setNostrNpub(nostr.npub)
+    setNostrPubkeyHex(nostr.publicKeyHex)
     const w = await walletFromSeed(seed)
     await materialize(w)
   }, [materialize])
@@ -177,6 +190,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     const nostr = deriveNostrKeyFromSeed(seed)
     nostrSecretKeyRef.current = nostr.privateKeyHex
     setNostrNpub(nostr.npub)
+    setNostrPubkeyHex(nostr.publicKeyHex)
     const w = await walletFromSeed(seed)
     await materialize(w)
   }, [materialize])
@@ -189,6 +203,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     setAddress(null)
     setTxHistory([])
     setNostrNpub(null)
+    setNostrPubkeyHex(null)
     nostrSecretKeyRef.current = null
   }, [])
 
@@ -207,8 +222,21 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     setTxHistory(prev => addSent(address, prev, params))
   }, [address])
 
+  // Factory: constructs a MessagingProvider backed by the current Nostr identity.
+  // The secret key is captured from the ref at call time — it never appears on the
+  // context value, and callers receive a working provider without ever seeing the key.
+  const createMessagingProvider = useCallback((): MessagingProvider | null => {
+    const secretHex = nostrSecretKeyRef.current
+    if (!secretHex || !nostrPubkeyHex) return null
+    return new NostrMessagingProvider(secretHex, nostrPubkeyHex, DEFAULT_RELAYS)
+  }, [nostrPubkeyHex])
+
   return (
-    <Ctx.Provider value={{ walletExists, wallet, address, nostrNpub, scan, txHistory, generateMnemonic, createWallet, unlock, restore, lock, getMnemonic, rescan, recordSent }}>
+    <Ctx.Provider value={{
+      walletExists, wallet, address, nostrNpub, nostrPubkeyHex, scan, txHistory,
+      generateMnemonic, createWallet, unlock, restore, lock, getMnemonic, rescan, recordSent,
+      createMessagingProvider,
+    }}>
       {children}
     </Ctx.Provider>
   )

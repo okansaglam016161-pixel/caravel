@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import { decryptOwnedUtxo, WasmStealthCrypto, Network } from '@tari-project/ootle'
 import type { IndexerGetSubstateResponse } from '@tari-project/ootle'
 import { useWallet } from '../../context/WalletContext'
@@ -9,6 +9,8 @@ import * as nip19 from 'nostr-tools/nip19'
 import { wrapMessage, unwrapMessage, publishGiftWrap, waitForGiftWrap } from '../../crypto/nostrMessaging'
 import type { PublishResult } from '../../crypto/nostrMessaging'
 import { DEFAULT_RELAYS } from '../../config/relays'
+// TEMPORARY — M8.1 REAL IDENTITY TEST · REMOVE BEFORE SHIPPING
+import type { MessagingProvider } from '../../messaging/types'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -203,7 +205,7 @@ const RELAY_IDLE: RelayTestState = {
 }
 
 export default function DecryptPanel() {
-  const { wallet, nostrNpub } = useWallet()
+  const { wallet, nostrNpub, createMessagingProvider } = useWallet()
   const [utxoId, setUtxoId] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -292,6 +294,70 @@ export default function DecryptPanel() {
         pass: false,
         failReason: e instanceof Error ? e.message : String(e),
       }))
+    }
+  }
+
+  // TEMPORARY — M8.1 REAL IDENTITY TEST · REMOVE BEFORE SHIPPING
+  const NPUB_A = 'npub1f80mhkkj8hw2ay8xpqwn3c742ptuldvpxlk68k92el5hs22xllpqsknttt'
+  const NPUB_B = 'npub1zc7uw0w0kdczqzhjpsxe7tnh3ewzaz52hwfkx72mv6tkfjgql8pq7zq82h'
+
+  type SubStatus = 'idle' | 'connecting' | 'listening' | 'error'
+  interface ReceivedMsg { id: string; senderNpub: string; plaintext: string; receivedAt: string }
+
+  const activeProviderRef = useRef<MessagingProvider | null>(null)
+  const [subStatus, setSubStatus] = useState<SubStatus>('idle')
+  const [subError, setSubError] = useState<string | null>(null)
+  const [receivedMsgs, setReceivedMsgs] = useState<ReceivedMsg[]>([])
+  const [recipientNpub, setRecipientNpub] = useState('')
+  const [sendText, setSendText] = useState('')
+  const [sendResult, setSendResult] = useState<{ id: string } | null>(null)
+  const [sendError, setSendError] = useState<string | null>(null)
+  const [sending, setSending] = useState(false)
+
+  async function startListening() {
+    const provider = createMessagingProvider()
+    if (!provider) { setSubError('Wallet is locked — unlock first'); return }
+    activeProviderRef.current = provider
+    setSubStatus('connecting')
+    setSubError(null)
+    try {
+      await provider.subscribe((msg) => {
+        const senderNpub = nip19.npubEncode(msg.senderPubkeyHex)
+        const receivedAt = new Date(msg.timestamp).toLocaleTimeString()
+        setReceivedMsgs(prev => [...prev, { id: msg.id, senderNpub, plaintext: msg.plaintext, receivedAt }])
+      })
+      setSubStatus('listening')
+    } catch (e) {
+      setSubError(e instanceof Error ? e.message : String(e))
+      setSubStatus('error')
+      activeProviderRef.current = null
+    }
+  }
+
+  function stopListening() {
+    activeProviderRef.current?.disconnect()
+    activeProviderRef.current = null
+    setSubStatus('idle')
+  }
+
+  async function sendMsg() {
+    if (!recipientNpub.trim() || !sendText.trim()) return
+    setSending(true)
+    setSendResult(null)
+    setSendError(null)
+    try {
+      const decoded = nip19.decode(recipientNpub.trim())
+      if (decoded.type !== 'npub') throw new Error('Recipient must be an npub (npub1...)')
+      const recipientHex = decoded.data as string
+      const provider = createMessagingProvider()
+      if (!provider) throw new Error('Wallet is locked — unlock first')
+      const msg = await provider.sendMessage(recipientHex, sendText)
+      provider.disconnect()
+      setSendResult({ id: msg.id })
+    } catch (e) {
+      setSendError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setSending(false)
     }
   }
 
@@ -489,6 +555,124 @@ export default function DecryptPanel() {
             {relayTest.pass ? 'PASS ✓ plaintext + sender verified end-to-end' : `FAIL ✗ ${relayTest.failReason ?? 'unknown error'}`}
           </div>
         )}
+      </div>
+
+      {/* TEMPORARY — M8.1 REAL IDENTITY TEST · REMOVE BEFORE SHIPPING */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '14px 16px', borderRadius: 10, background: 'rgba(255,200,80,0.04)', border: '2px dashed rgba(220,160,0,0.4)' }}>
+        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: '#AA8800', letterSpacing: '0.14em' }}>
+          ⚠ TEMPORARY — M8.1 REAL IDENTITY · REMOVE BEFORE SHIPPING
+        </div>
+
+        {/* A — Subscribe */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: '#55617D', letterSpacing: '0.12em' }}>
+            A — SUBSCRIBE (listen for incoming kind 1059)
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <button
+              onClick={subStatus === 'idle' || subStatus === 'error' ? startListening : stopListening}
+              disabled={subStatus === 'connecting'}
+              style={{
+                padding: '8px 14px', borderRadius: 8, border: 'none',
+                background: subStatus === 'listening' ? 'rgba(255,80,80,0.18)' : subStatus === 'connecting' ? 'rgba(120,150,210,0.15)' : 'rgba(220,160,0,0.18)',
+                color: subStatus === 'listening' ? '#FF8080' : subStatus === 'connecting' ? '#55617D' : '#DDAA00',
+                fontSize: 12, fontWeight: 700, cursor: subStatus === 'connecting' ? 'default' : 'pointer',
+                fontFamily: "'IBM Plex Mono', monospace",
+              }}
+            >
+              {subStatus === 'listening' ? 'Stop listening' : subStatus === 'connecting' ? 'Connecting...' : 'Start listening'}
+            </button>
+            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: subStatus === 'listening' ? '#4EC9A0' : subStatus === 'connecting' ? '#8A97B4' : '#55617D' }}>
+              {subStatus === 'listening' ? 'Listening on both relays' : subStatus === 'connecting' ? 'Awaiting relay connections (up to 10s)...' : subStatus === 'error' ? 'Error — see below' : 'Idle'}
+            </span>
+          </div>
+          {subError && (
+            <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: '#FF6B6B', wordBreak: 'break-all', lineHeight: 1.4 }}>
+              {subError}
+            </div>
+          )}
+          {receivedMsgs.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
+              <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: '#55617D', letterSpacing: '0.12em' }}>
+                RECEIVED ({receivedMsgs.length})
+              </div>
+              {receivedMsgs.map(m => (
+                <div key={m.id} style={{ padding: '8px 10px', borderRadius: 6, background: '#10151F', border: '1px solid rgba(45,224,198,0.15)', display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: '#55617D' }}>
+                    from {m.senderNpub.slice(0, 20)}... · {m.receivedAt}
+                  </div>
+                  <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: '#EAFBF7', wordBreak: 'break-word', lineHeight: 1.4 }}>
+                    {m.plaintext}
+                  </div>
+                  <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, color: '#3A4A5A' }}>
+                    id {m.id.slice(0, 16)}...
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* B — Send */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: '#55617D', letterSpacing: '0.12em' }}>
+            B — SEND (gift-wrap to recipient)
+          </div>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            <button onClick={() => setRecipientNpub(NPUB_A)}
+              style={{ padding: '5px 10px', borderRadius: 6, border: '1px solid rgba(220,160,0,0.3)', background: 'transparent', color: '#DDAA00', fontSize: 11, cursor: 'pointer', fontFamily: "'IBM Plex Mono', monospace" }}>
+              Fill A
+            </button>
+            <button onClick={() => setRecipientNpub(NPUB_B)}
+              style={{ padding: '5px 10px', borderRadius: 6, border: '1px solid rgba(220,160,0,0.3)', background: 'transparent', color: '#DDAA00', fontSize: 11, cursor: 'pointer', fontFamily: "'IBM Plex Mono', monospace" }}>
+              Fill B
+            </button>
+          </div>
+          <input
+            value={recipientNpub}
+            onChange={e => { setRecipientNpub(e.target.value); setSendResult(null); setSendError(null) }}
+            placeholder="npub1..."
+            style={{
+              background: '#10151F', border: '1px solid rgba(120,150,210,0.25)', borderRadius: 8,
+              padding: '9px 12px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: '#E4EAF4',
+              outline: 'none', width: '100%', boxSizing: 'border-box',
+            }}
+            spellCheck={false}
+          />
+          <input
+            value={sendText}
+            onChange={e => { setSendText(e.target.value); setSendResult(null); setSendError(null) }}
+            placeholder="Message..."
+            style={{
+              background: '#10151F', border: '1px solid rgba(120,150,210,0.25)', borderRadius: 8,
+              padding: '9px 12px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: '#E4EAF4',
+              outline: 'none', width: '100%', boxSizing: 'border-box',
+            }}
+          />
+          <button
+            onClick={sendMsg}
+            disabled={sending || !recipientNpub.trim() || !sendText.trim()}
+            style={{
+              padding: '9px 16px', borderRadius: 8, border: 'none', alignSelf: 'flex-start',
+              background: sending || !recipientNpub.trim() || !sendText.trim() ? 'rgba(120,150,210,0.15)' : 'rgba(220,160,0,0.2)',
+              color: sending || !recipientNpub.trim() || !sendText.trim() ? '#55617D' : '#DDAA00',
+              fontSize: 12, fontWeight: 700, cursor: sending || !recipientNpub.trim() || !sendText.trim() ? 'default' : 'pointer',
+              fontFamily: "'IBM Plex Mono', monospace",
+            }}
+          >
+            {sending ? 'Sending...' : 'Send'}
+          </button>
+          {sendResult && (
+            <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: '#4EC9A0', lineHeight: 1.4, wordBreak: 'break-all' }}>
+              SENT ✓ event id {sendResult.id}
+            </div>
+          )}
+          {sendError && (
+            <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: '#FF6B6B', lineHeight: 1.4, wordBreak: 'break-all' }}>
+              FAIL ✗ {sendError}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Dev-panel notice */}

@@ -2,6 +2,9 @@ import { useState } from 'react'
 import { decryptOwnedUtxo, WasmStealthCrypto, Network } from '@tari-project/ootle'
 import type { IndexerGetSubstateResponse } from '@tari-project/ootle'
 import { useWallet } from '../../context/WalletContext'
+// TEMPORARY — M7.0 SMOKE TEST · REMOVE BEFORE SHIPPING
+import { generateSecretKey, getPublicKey } from 'nostr-tools'
+import * as nip19 from 'nostr-tools/nip19'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -66,12 +69,47 @@ function Field({ label, value }: { label: string; value: string }) {
 
 // ── Main component ────────────────────────────────────────────────────────────
 
+// TEMPORARY — M7.0 SMOKE TEST · REMOVE BEFORE SHIPPING
+// Computed once on mount: generates a fresh random key pair via nostr-tools
+// and round-trips the M6 npub through nip19.decode → nip19.npubEncode.
+interface SmokeResult {
+  randomNpub: string | null
+  roundTripOk: boolean | null
+  roundTripNpub: string | null
+  error: string | null
+}
+
+function runSmokeTest(nostrNpub: string | null): SmokeResult {
+  try {
+    // Test 1: random key generation
+    const sk = generateSecretKey()
+    const pkHex = getPublicKey(sk)
+    const randomNpub = nip19.npubEncode(pkHex)
+
+    // Test 2: round-trip our M6 npub through nostr-tools nip19
+    let roundTripOk: boolean | null = null
+    let roundTripNpub: string | null = null
+    if (nostrNpub) {
+      const decoded = nip19.decode(nostrNpub)
+      if (decoded.type !== 'npub') throw new Error(`nip19.decode returned type "${decoded.type}", expected "npub"`)
+      roundTripNpub = nip19.npubEncode(decoded.data)
+      roundTripOk = roundTripNpub === nostrNpub
+    }
+
+    return { randomNpub, roundTripOk, roundTripNpub, error: null }
+  } catch (e) {
+    return { randomNpub: null, roundTripOk: null, roundTripNpub: null, error: e instanceof Error ? e.message : String(e) }
+  }
+}
+
 export default function DecryptPanel() {
   const { wallet, nostrNpub } = useWallet()
   const [utxoId, setUtxoId] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [result, setResult] = useState<{ amount: string; memo: DecodedMemo | null } | null>(null)
+  // TEMPORARY — M7.0 SMOKE TEST · REMOVE BEFORE SHIPPING
+  const [smoke] = useState<SmokeResult>(() => runSmokeTest(nostrNpub))
 
   const canDecrypt = !!wallet && utxoId.trim().startsWith('utxo_') && !loading
 
@@ -125,6 +163,53 @@ export default function DecryptPanel() {
         }}>
           {nostrNpub ?? '(wallet locked)'}
         </div>
+      </div>
+
+      {/* TEMPORARY — M7.0 SMOKE TEST · REMOVE BEFORE SHIPPING */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '14px 16px', borderRadius: 10, background: 'rgba(100,180,255,0.05)', border: '2px dashed rgba(100,180,255,0.35)' }}>
+        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: '#5599CC', letterSpacing: '0.14em' }}>
+          ⚠ TEMPORARY — M7.0 SMOKE TEST · REMOVE BEFORE SHIPPING
+        </div>
+        {smoke.error ? (
+          <div style={{ fontSize: 12, color: '#FF6B6B', fontFamily: "'IBM Plex Mono', monospace", wordBreak: 'break-all', lineHeight: 1.5 }}>
+            FAIL — {smoke.error}
+          </div>
+        ) : (
+          <>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: '#55617D', letterSpacing: '0.14em' }}>
+                RANDOM KEY GEN (nostr-tools generateSecretKey → npubEncode)
+              </div>
+              <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: smoke.randomNpub ? '#66BBFF' : '#55617D', wordBreak: 'break-all', lineHeight: 1.5, padding: '8px 10px', borderRadius: 6, background: '#10151F' }}>
+                {smoke.randomNpub ?? '—'}
+              </div>
+              <div style={{ fontSize: 11, color: smoke.randomNpub ? '#4EC9A0' : '#FF6B6B', fontFamily: "'IBM Plex Mono', monospace" }}>
+                {smoke.randomNpub ? 'PASS ✓ nostr-tools loaded and generated a valid npub' : 'FAIL ✗'}
+              </div>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: '#55617D', letterSpacing: '0.14em' }}>
+                ROUND-TRIP (M6 npub → nip19.decode → nip19.npubEncode → compare)
+              </div>
+              {nostrNpub == null ? (
+                <div style={{ fontSize: 11, color: '#55617D', fontFamily: "'IBM Plex Mono', monospace" }}>
+                  SKIPPED — wallet locked (unlock to test)
+                </div>
+              ) : (
+                <>
+                  <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: smoke.roundTripOk ? '#66BBFF' : '#FF6B6B', wordBreak: 'break-all', lineHeight: 1.5, padding: '8px 10px', borderRadius: 6, background: '#10151F' }}>
+                    {smoke.roundTripNpub ?? '—'}
+                  </div>
+                  <div style={{ fontSize: 11, color: smoke.roundTripOk ? '#4EC9A0' : '#FF6B6B', fontFamily: "'IBM Plex Mono', monospace" }}>
+                    {smoke.roundTripOk
+                      ? 'PASS ✓ nostr-tools nip19 round-trip matches M6 npub'
+                      : 'FAIL ✗ round-trip mismatch'}
+                  </div>
+                </>
+              )}
+            </div>
+          </>
+        )}
       </div>
 
       {/* Dev-panel notice */}

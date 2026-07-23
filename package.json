@@ -14,6 +14,7 @@
     "@scure/bip32": "^2.2.0",
     "@scure/bip39": "^2.2.0",
     "@tari-project/ootle-wasm": "0.35.2",
+    "nostr-tools": "^2.24.1",
     "qrcode.react": "^4.2.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",

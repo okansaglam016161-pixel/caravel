@@ -16,7 +16,7 @@ import { loadResolvedAmounts, cacheResolvedAmount } from '../../messaging/paymen
 interface Conversation {
   peerHex: string
   messages: CaravelMessage[]   // this peer's messages, oldest first
-  lastMessage: CaravelMessage
+  lastMessage: CaravelMessage | null   // null only for a freshly-composed, message-less thread
   lastActivity: number
 }
 
@@ -302,7 +302,7 @@ function PaymentMessageCard({ message }: { message: CaravelMessage }) {
 // ── Component ────────────────────────────────────────────────────────────────────
 
 export default function ChatApp() {
-  const { wallet, address, scan, messages, nostrPubkeyHex, messagingStatus, createMessagingProvider, recordSentMessage, deleteConversation } = useWallet()
+  const { wallet, address, scan, messages, nostrPubkeyHex, messagingStatus, contacts, acceptContact, createMessagingProvider, recordSentMessage, deleteConversation } = useWallet()
   const [walletOpen, setWalletOpen] = useState(false)
   const [balanceHidden, setBalanceHidden] = useState(false)
 
@@ -312,6 +312,11 @@ export default function ChatApp() {
   // Conversation ⋯ menu + delete confirmation.
   const [menuOpen, setMenuOpen] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
+
+  // Compose-new-conversation modal.
+  const [composeOpen, setComposeOpen] = useState(false)
+  const [composeNpub, setComposeNpub] = useState('')
+  const [composeError, setComposeError] = useState<string | null>(null)
 
   // Composer state.
   const [draft, setDraft] = useState('')
@@ -346,8 +351,30 @@ export default function ChatApp() {
   const [editingNick, setEditingNick] = useState(false)
   const [nickDraft, setNickDraft] = useState('')
 
-  const conversations = useMemo(() => deriveConversations(messages), [messages])
-  const selectedConvo = conversations.find(c => c.peerHex === selectedPeer) ?? conversations[0] ?? null
+  // All peers with messages, split by effective contact state. Lazy migration: no record +
+  // has messages ⇒ 'accepted'. Only accepted peers are shown as conversations; pending peers are
+  // held back for the M9.0c request UI (exposed here as a count).
+  const allConvos = useMemo(() => deriveConversations(messages), [messages])
+  const conversations = useMemo(
+    () => allConvos.filter(c => (contacts[c.peerHex]?.state ?? 'accepted') === 'accepted'),
+    [allConvos, contacts],
+  )
+  const pendingRequests = useMemo(
+    () => allConvos.filter(c => contacts[c.peerHex]?.state === 'pending'),
+    [allConvos, contacts],
+  )
+  // Selected conversation. A composed (accepted) peer may have no messages yet — synthesise an
+  // empty thread for it so the composer can send the first message (it enters the list on send).
+  const selectedConvo: Conversation | null = (() => {
+    if (selectedPeer) {
+      const found = conversations.find(c => c.peerHex === selectedPeer)
+      if (found) return found
+      if (contacts[selectedPeer]?.state === 'accepted') {
+        return { peerHex: selectedPeer, messages: [], lastMessage: null, lastActivity: 0 }
+      }
+    }
+    return conversations[0] ?? null
+  })()
 
   const displayName = (peerHex: string) => nicknames[peerHex] ?? truncNpub(peerHex)
 
@@ -377,6 +404,47 @@ export default function ChatApp() {
     setSelectedPeer(null)   // fall back to most-recent remaining conversation, or the empty state
     setConfirmDelete(false)
     setMenuOpen(false)
+  }
+
+  // ── Compose / requests (M9.0c) ────────────────────────────────────────────────
+
+  // Start (or jump to) a conversation with an npub. Initiating accepts them (M9.0b). Uniform for
+  // brand-new (empty thread), already-accepted (jump), and pending (promote) — acceptContact is
+  // idempotent. Self (my own npub) is allowed: a notes-to-self thread.
+  function startConversation() {
+    const raw = composeNpub.trim()
+    if (!raw) { setComposeError('Enter an npub.'); return }
+    let hex: string
+    try {
+      const decoded = nip19.decode(raw)
+      if (decoded.type !== 'npub') { setComposeError('That is not an npub (expected npub1…).'); return }
+      hex = decoded.data
+    } catch {
+      setComposeError('Invalid npub — could not decode it.')
+      return
+    }
+    acceptContact(hex)      // initiate = accept (creates/promotes/refreshes the accepted record)
+    setSelectedPeer(hex)    // open it (empty thread if brand-new, or the existing conversation)
+    setComposeOpen(false)
+    setComposeNpub('')
+    setComposeError(null)
+  }
+
+  // Accept a pending request → promotes to a normal conversation and opens it. No address exchange
+  // (that is M9.0d) — accept only changes contact state.
+  function acceptRequest(peerHex: string) {
+    acceptContact(peerHex)
+    setSelectedPeer(peerHex)
+  }
+
+  // Decline a pending request → M9.0a delete + tombstone + removeContact (hide-and-forget). A future
+  // message from them creates a fresh request.
+  function declineRequest(peerHex: string) {
+    deleteConversation(peerHex)
+    if (nostrPubkeyHex) {
+      setNicknames(prev => setNickname(nostrPubkeyHex, prev, peerHex, ''))
+      setTariAddresses(prev => setTariAddress(nostrPubkeyHex, prev, peerHex, ''))
+    }
   }
 
   // Send the composer draft to the selected conversation. Same proven path as the dev panel:
@@ -567,9 +635,13 @@ export default function ChatApp() {
                 <Logo size={26} />
                 <span style={{ fontSize: 18, fontWeight: 700, color: '#F2F5FB' }}>Caravel</span>
               </Link>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 34, height: 34, borderRadius: 9, border: '1px solid rgba(120,150,210,0.2)', cursor: 'pointer' }}>
+              <button
+                onClick={() => { setComposeNpub(''); setComposeError(null); setComposeOpen(true) }}
+                title="Start a new conversation"
+                style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 34, height: 34, borderRadius: 9, border: '1px solid rgba(120,150,210,0.2)', background: 'transparent', cursor: 'pointer', padding: 0 }}
+              >
                 <svg width={17} height={17} viewBox="0 0 24 24" fill="none" stroke="#8A97B4" strokeWidth={2} strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>
-              </div>
+              </button>
             </div>
 
             {/* Balance widget — click to open wallet panel */}
@@ -653,6 +725,47 @@ export default function ChatApp() {
             </div>
           </div>
 
+          {/* Requests (M9.0c) — pending peers who messaged first. Distinct from conversations; no
+              reply is possible until accepted. Payment previews here deliberately do NOT resolve the
+              amount: an unaccepted stranger could reference a UTXO, and we must not fire indexer
+              fetches on their behalf before I choose to engage (network work + unsolicited contact).
+              The note always renders as inert, auto-escaped text (M10.0 guarantee, no HTML/markdown). */}
+          {pendingRequests.length > 0 && (
+            <div style={{ padding: '4px 12px 8px', borderBottom: '1px solid rgba(120,150,210,0.08)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '4px 6px 8px' }}>
+                <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="var(--acc,#2DE0C6)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx={12} cy={7} r={4} /></svg>
+                <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.1em', color: 'var(--accT,#7DE9D8)' }}>REQUESTS ({pendingRequests.length})</span>
+              </div>
+              {pendingRequests.map(req => {
+                const av = avatarFor(req.peerHex)
+                const last = req.lastMessage
+                const preview = !last ? '' : last.payment ? 'Confidential payment' : last.plaintext
+                return (
+                  <div key={req.peerHex} style={{ display: 'flex', gap: 11, padding: '10px 6px', borderRadius: 10 }}>
+                    <div style={{ width: 40, height: 40, flexShrink: 0, borderRadius: 12, background: av.grad, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, fontWeight: 700, color: av.color }}>··</div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: '#E8EEF9', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{truncNpub(req.peerHex)}</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12.5, color: '#8A97B4', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 1 }}>
+                        {last?.payment && <svg width={11} height={11} viewBox="0 0 24 24" fill="none" stroke="var(--acc,#2DE0C6)" strokeWidth={2} style={{ flexShrink: 0 }}><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>}
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{preview}</span>
+                      </div>
+                      <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                        <button onClick={() => acceptRequest(req.peerHex)}
+                          style={{ padding: '5px 14px', borderRadius: 8, border: 'none', background: 'linear-gradient(180deg, var(--accB,#34E5D0), var(--accD,#12A594))', color: 'var(--accOn,#04120F)', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
+                          Accept
+                        </button>
+                        <button onClick={() => declineRequest(req.peerHex)}
+                          style={{ padding: '5px 14px', borderRadius: 8, border: '1px solid rgba(120,150,210,0.25)', background: 'transparent', color: '#8A97B4', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
+                          Decline
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+
           {/* Conversation list */}
           <div style={{ flex: 1, overflowY: 'auto', padding: '6px 10px' }}>
             {conversations.length === 0 ? (
@@ -668,9 +781,9 @@ export default function ChatApp() {
                 const active = selectedConvo?.peerHex === c.peerHex
                 const nick = nicknames[c.peerHex]
                 const av = avatarFor(c.peerHex)
-                const preview = c.lastMessage.direction === 'sent'
-                  ? `You: ${c.lastMessage.plaintext}`
-                  : c.lastMessage.plaintext
+                const preview = !c.lastMessage ? ''
+                  : c.lastMessage.direction === 'sent' ? `You: ${c.lastMessage.plaintext}`
+                    : c.lastMessage.plaintext
                 return (
                   <div key={c.peerHex} onClick={() => setSelectedPeer(c.peerHex)} className="cv-conv" style={{ display: 'flex', gap: 13, padding: 13, borderRadius: 12, background: active ? '#10161F' : 'transparent', border: active ? '1px solid rgba(var(--accRGB,45,224,198),0.18)' : '1px solid transparent', cursor: 'pointer', marginBottom: 4 }}>
                     <div style={{ position: 'relative', flexShrink: 0 }}>
@@ -991,6 +1104,59 @@ export default function ChatApp() {
     </div>
 
     {walletOpen && <WalletModal onClose={() => setWalletOpen(false)} />}
+
+    {/* Compose new conversation */}
+    {composeOpen && (
+      <div
+        onClick={() => setComposeOpen(false)}
+        style={{ position: 'fixed', inset: 0, zIndex: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(4,7,12,0.72)', padding: 24 }}
+      >
+        <div
+          onClick={e => e.stopPropagation()}
+          style={{ width: '100%', maxWidth: 440, padding: '24px 24px 20px', borderRadius: 16, background: '#111722', border: '1px solid rgba(var(--accRGB,45,224,198),0.28)', boxShadow: '0 24px 60px rgba(0,0,0,0.6)' }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 14 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 40, height: 40, borderRadius: 11, background: 'rgba(var(--accRGB,45,224,198),0.12)', flexShrink: 0 }}>
+              <svg width={20} height={20} viewBox="0 0 24 24" fill="none" stroke="var(--acc,#2DE0C6)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v14M5 12h14" /></svg>
+            </div>
+            <div style={{ fontSize: 17, fontWeight: 700, color: '#F2F5FB' }}>New conversation</div>
+          </div>
+          <div style={{ fontSize: 13, color: '#8A97B4', lineHeight: 1.55, marginBottom: 12 }}>
+            Enter the recipient's Nostr public key (npub). Starting a conversation accepts them.
+          </div>
+          <input
+            autoFocus
+            value={composeNpub}
+            onChange={e => { setComposeNpub(e.target.value); if (composeError) setComposeError(null) }}
+            onKeyDown={e => { if (e.key === 'Enter') startConversation(); else if (e.key === 'Escape') setComposeOpen(false) }}
+            placeholder="npub1…"
+            spellCheck={false}
+            style={{ width: '100%', boxSizing: 'border-box', background: '#10151F', border: `1px solid ${composeError ? 'rgba(255,107,107,0.5)' : 'rgba(120,150,210,0.25)'}`, borderRadius: 9, padding: '11px 13px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, color: '#E4EAF4', outline: 'none' }}
+          />
+          {composeError && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 9, fontSize: 12, color: '#FF6B6B', fontFamily: "'IBM Plex Mono', monospace" }}>
+              <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="#FF6B6B" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><circle cx={12} cy={12} r={10} /><path d="M12 8v4M12 16h.01" /></svg>
+              {composeError}
+            </div>
+          )}
+          <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 20 }}>
+            <button
+              onClick={() => setComposeOpen(false)}
+              style={{ padding: '10px 18px', borderRadius: 9, border: '1px solid rgba(120,150,210,0.25)', background: 'transparent', color: '#8A97B4', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}
+            >
+              Cancel
+            </button>
+            <button
+              onClick={startConversation}
+              disabled={!composeNpub.trim()}
+              style={{ padding: '10px 18px', borderRadius: 9, border: 'none', background: composeNpub.trim() ? 'linear-gradient(180deg, var(--accB,#34E5D0), var(--accD,#12A594))' : 'rgba(120,150,210,0.15)', color: composeNpub.trim() ? 'var(--accOn,#04120F)' : '#55617D', fontSize: 13, fontWeight: 700, cursor: composeNpub.trim() ? 'pointer' : 'default', fontFamily: 'inherit' }}
+            >
+              Start conversation
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
 
     {/* Delete-conversation confirmation — destructive, localStorage is the only copy */}
     {confirmDelete && selectedConvo && (

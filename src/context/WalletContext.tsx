@@ -18,6 +18,7 @@ import type { MessagingProvider, MessagingConnectionStatus, CaravelMessage } fro
 import { loadMessages, addReceivedMessage, addSentMessage, deletePeerMessages } from '../messaging/messageStore'
 import { loadTombstoneIdSet, recordTombstones } from '../messaging/tombstoneStore'
 import { removeResolvedAmounts } from '../messaging/paymentResolutionStore'
+import { loadContacts, setContactState, removeContact, type ContactMap } from '../messaging/contactStore'
 import { DEFAULT_RELAYS } from '../config/relays'
 
 // ── Scan state ────────────────────────────────────────────────────────────────
@@ -77,8 +78,13 @@ export interface WalletCtx {
   messages: CaravelMessage[]
   /** Persist + surface a message we just sent (the CaravelMessage returned by sendMessage). */
   recordSentMessage: (msg: CaravelMessage) => void
+  /** Per-peer contact state (M9.0b). No record + has messages ⇒ treat as 'accepted' (lazy). */
+  contacts: ContactMap
+  /** Accept a pending peer (M9.0c request UI). */
+  acceptContact: (peerHex: string) => void
   /** Delete a conversation locally: tombstone its message ids (so the relay backfill can't
-   *  resurrect them), then clear its messages + resolved payment amounts. Local-only. */
+   *  resurrect them), then clear its messages + resolved payment amounts + contact record. Also
+   *  the decline path — local-only. */
   deleteConversation: (peerHex: string) => void
   /** Factory: returns a ready-to-use MessagingProvider backed by the current identity,
    *  or null if the wallet is locked. The secret key stays inside the closure — callers
@@ -117,8 +123,12 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   // In-memory tombstone set (deleted gift-wrap event ids) — loaded once per unlock so a backfill
   // burst checks memory, not localStorage per message. Kept in sync on delete.
   const tombstonesRef = useRef<Set<string>>(new Set())
+  // In-memory set of peers we have ANY message with — burst-safe "is this a brand-new peer?" test
+  // for the pending-contact rule (React `messages` state is stale mid-burst). Seeded on unlock.
+  const knownPeersRef = useRef<Set<string>>(new Set())
   const [messagingStatus, setMessagingStatus] = useState<MessagingConnectionStatus>('disconnected')
   const [messages, setMessages] = useState<CaravelMessage[]>([])
+  const [contacts, setContacts] = useState<ContactMap>({})
 
   const startScan = useCallback((w: SecretKeyWallet, addr: string) => {
     // Cancel any prior scan
@@ -184,7 +194,14 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     messagingProviderRef.current?.disconnect()
     // Load persisted history for this identity before subscribing, so it's visible
     // immediately on unlock without waiting for a relay round-trip.
-    setMessages(loadMessages(pubkeyHex))
+    const loaded = loadMessages(pubkeyHex)
+    setMessages(loaded)
+    setContacts(loadContacts(pubkeyHex))
+    // Seed the "known peers" set from persisted history — anyone we already have a message with is
+    // NOT a new peer (so their next inbound never gets mis-flagged as a pending request).
+    knownPeersRef.current = new Set(
+      loaded.map(m => (m.direction === 'received' ? m.senderPubkeyHex : m.recipientPubkeyHex)).filter(Boolean)
+    )
     // Load deleted-message tombstones (pruned) so the relay's 2-day backfill can't resurrect them.
     tombstonesRef.current = loadTombstoneIdSet(pubkeyHex)
     const provider = new NostrMessagingProvider(secretHex, pubkeyHex, DEFAULT_RELAYS)
@@ -196,6 +213,14 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       // Tombstoned ids (deleted conversations) are dropped silently before they hit the store.
       (msg) => {
         if (tombstonesRef.current.has(msg.id)) return
+        const peerHex = msg.senderPubkeyHex
+        // Brand-new peer (no message with them ever) → a PENDING request. Write the pending record
+        // FIRST (before the message is added), so when the list re-derives in the same batched
+        // commit the pending record is already present and the peer can't leak in as lazy-accepted.
+        if (peerHex && !knownPeersRef.current.has(peerHex)) {
+          knownPeersRef.current.add(peerHex)
+          setContacts(prev => (prev[peerHex] ? prev : setContactState(pubkeyHex, prev, peerHex, 'pending')))
+        }
         setMessages(prev => addReceivedMessage(pubkeyHex, prev, msg))
       },
       (status) => {
@@ -254,8 +279,10 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     messagingProviderRef.current?.disconnect()
     messagingProviderRef.current = null
     tombstonesRef.current = new Set()
+    knownPeersRef.current = new Set()
     setMessagingStatus('disconnected')
     setMessages([])
+    setContacts({})
     setScan(SCAN_IDLE)
     setWallet(null)
     setAddress(null)
@@ -284,7 +311,24 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   // persisting it under the current identity. Mirrors recordSent above.
   const recordSentMessage = useCallback((msg: CaravelMessage) => {
     if (!nostrPubkeyHex) return
+    // Initiating (or replying to) a peer accepts them — I chose to message them. Mark accepted
+    // BEFORE adding the message, and record them as known so a later inbound never flips them to
+    // pending. Accepted is never downgraded by a later inbound (the inbound guard skips existing).
+    const peerHex = msg.recipientPubkeyHex
+    if (peerHex) {
+      knownPeersRef.current.add(peerHex)
+      setContacts(prev => setContactState(nostrPubkeyHex, prev, peerHex, 'accepted'))
+    }
     setMessages(prev => addSentMessage(nostrPubkeyHex, prev, msg))
+  }, [nostrPubkeyHex])
+
+  // Accept a peer (M9.0c): the request-UI Accept, and also Compose (initiating a conversation
+  // accepts them). Idempotent. Marking them known means a racing inbound can't re-flag them
+  // pending — belt-and-suspenders on top of the inbound handler's existing "already decided" guard.
+  const acceptContact = useCallback((peerHex: string) => {
+    if (!nostrPubkeyHex || !peerHex) return
+    knownPeersRef.current.add(peerHex)
+    setContacts(prev => setContactState(nostrPubkeyHex, prev, peerHex, 'accepted'))
   }, [nostrPubkeyHex])
 
   // Delete a conversation and everything tied to it (M9.0a), LOCAL-ONLY — nothing is sent to the
@@ -304,8 +348,12 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     recordTombstones(pubkeyHex, ids)
     for (const id of ids) tombstonesRef.current.add(id)
 
-    // 2) THEN clear the stores this context owns.
+    // 2) THEN clear the stores this context owns. Also forget the peer entirely (contact record +
+    //    known-peers set) so a later message from them arrives as a FRESH pending request — this
+    //    unifies delete and decline (hide-and-forget).
     removeResolvedAmounts(pubkeyHex, utxoIds)
+    knownPeersRef.current.delete(peerHex)
+    setContacts(prev => removeContact(pubkeyHex, prev, peerHex))
     setMessages(prev => deletePeerMessages(pubkeyHex, prev, peerHex))
   }, [nostrPubkeyHex, messages])
 
@@ -323,7 +371,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       walletExists, wallet, address, nostrNpub, nostrPubkeyHex, scan, txHistory,
       messagingStatus, messages,
       generateMnemonic, createWallet, unlock, restore, lock, getMnemonic, rescan, recordSent,
-      recordSentMessage, deleteConversation, createMessagingProvider,
+      recordSentMessage, contacts, acceptContact, deleteConversation, createMessagingProvider,
     }}>
       {children}
     </Ctx.Provider>

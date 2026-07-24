@@ -1,7 +1,7 @@
 import type { NostrEvent, Filter } from 'nostr-tools'
 import { Relay, type Subscription } from 'nostr-tools/relay'
 import { wrapMessage, unwrapMessage, publishGiftWrap } from '../crypto/nostrMessaging'
-import type { CaravelMessage, MessagingConnectionStatus, MessagingProvider, RelayState } from './types'
+import type { CaravelMessage, MessagingConnectionStatus, MessagingProvider, PaymentRef, RelayState } from './types'
 
 function hexToBytes(hex: string): Uint8Array {
   const arr = new Uint8Array(hex.length / 2)
@@ -120,8 +120,8 @@ export class NostrMessagingProvider implements MessagingProvider {
     }
   }
 
-  async sendMessage(recipientPubkeyHex: string, plaintext: string): Promise<CaravelMessage> {
-    const wrapped = wrapMessage(this.secretKey, recipientPubkeyHex, plaintext)
+  async sendMessage(recipientPubkeyHex: string, plaintext: string, payment?: PaymentRef): Promise<CaravelMessage> {
+    const wrapped = wrapMessage(this.secretKey, recipientPubkeyHex, plaintext, payment)
     const results = await publishGiftWrap(wrapped, [...this.relayUrls], PUBLISH_TIMEOUT_MS)
 
     const anyOk = results.some(r => r.ok)
@@ -137,6 +137,7 @@ export class NostrMessagingProvider implements MessagingProvider {
       plaintext,
       timestamp: Date.now(),
       direction: 'sent',
+      payment,
     }
   }
 
@@ -366,7 +367,7 @@ export class NostrMessagingProvider implements MessagingProvider {
     if (this.seen.has(event.id)) return
     this.seen.add(event.id)
     try {
-      const { senderPubkeyHex, plaintext } = unwrapMessage(this.secretKey, event)
+      const { senderPubkeyHex, plaintext, payment } = unwrapMessage(this.secretKey, event)
       const msg: CaravelMessage = {
         id: event.id,
         senderPubkeyHex,
@@ -374,6 +375,7 @@ export class NostrMessagingProvider implements MessagingProvider {
         plaintext,
         timestamp: Date.now(),
         direction: 'received',
+        payment,
       }
       this.onMessageCallback?.(msg)
     } catch (e) {

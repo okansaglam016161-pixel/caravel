@@ -2,6 +2,10 @@ import { useState } from 'react'
 import { decryptOwnedUtxo, WasmStealthCrypto, Network } from '@tari-project/ootle'
 import type { IndexerGetSubstateResponse } from '@tari-project/ootle'
 import { useWallet } from '../../context/WalletContext'
+// TEMPORARY — M10.0 PAYMENT-TAG TEST · REMOVE BEFORE SHIPPING
+import { generateSecretKey, getPublicKey } from 'nostr-tools'
+import { getConversationKey, decrypt as nip44Decrypt } from 'nostr-tools/nip44'
+import { wrapMessage, unwrapMessage } from '../../crypto/nostrMessaging'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -64,6 +68,72 @@ function Field({ label, value }: { label: string; value: string }) {
   )
 }
 
+// TEMPORARY — M10.0 PAYMENT-TAG TEST · REMOVE BEFORE SHIPPING
+// Offline proof (no relay) that a message carries a payment reference on the encrypted rumor,
+// round-trips intact, degrades gracefully without one, and never leaks the reference onto the
+// outer gift wrap where relays could see it.
+interface PayTagCheck { status: 'PASS' | 'FAIL'; detail: string }
+interface PayTagTestResult {
+  check1: PayTagCheck  // with-payment round trip: plaintext + payment come back
+  check2: PayTagCheck  // without-payment round trip: plaintext intact, payment undefined
+  check3: PayTagCheck  // raw rumor tags carry ["caravel-payment","v1",<id>]
+  check4: PayTagCheck  // payment reference NOT on the outer gift wrap
+  rumorTags: string    // decrypted rumor tags, shown for inspection
+  wrapTags: string     // outer gift wrap tags, shown for inspection
+  fatalError: string | null
+}
+
+function runPayTagTest(): PayTagTestResult {
+  const fail = (detail: string): PayTagCheck => ({ status: 'FAIL', detail })
+  const pass = (detail: string): PayTagCheck => ({ status: 'PASS', detail })
+  const init: PayTagTestResult = {
+    check1: fail('not run'), check2: fail('not run'), check3: fail('not run'), check4: fail('not run'),
+    rumorTags: '', wrapTags: '', fatalError: null,
+  }
+  try {
+    const skA = generateSecretKey(); const pkA = getPublicKey(skA)
+    const skB = generateSecretKey(); const pkB = getPublicKey(skB)
+    const note = 'Here is my half for lunch — thanks!'
+    const utxoId = 'utxo_0101010101010101010101010101010101010101010101010101010101010101_commitment_deadbeef'
+
+    // WITH payment
+    const wrapWith = wrapMessage(skA, pkB, note, { utxoId })
+    const uWith = unwrapMessage(skB, wrapWith)
+    init.check1 = uWith.plaintext === note && uWith.payment?.utxoId === utxoId
+      ? pass(`plaintext + payment utxoId "${utxoId.slice(0, 18)}…" recovered · sender ${pkA.slice(0, 8)}…`)
+      : fail(`plaintext=${uWith.plaintext === note} payment=${uWith.payment?.utxoId}`)
+
+    // WITHOUT payment
+    const wrapNone = wrapMessage(skA, pkB, note)
+    const uNone = unwrapMessage(skB, wrapNone)
+    init.check2 = uNone.plaintext === note && uNone.payment === undefined
+      ? pass('plaintext intact · payment is undefined (nothing breaks)')
+      : fail(`plaintext=${uNone.plaintext === note} payment=${JSON.stringify(uNone.payment)}`)
+
+    // Raw rumor tags — manually decrypt both layers of wrapWith to inspect the structure
+    const sealKey = getConversationKey(skB, wrapWith.pubkey)
+    const seal = JSON.parse(nip44Decrypt(wrapWith.content, sealKey)) as { pubkey: string; content: string }
+    const rumorKey = getConversationKey(skB, seal.pubkey)
+    const rumor = JSON.parse(nip44Decrypt(seal.content, rumorKey)) as { tags: string[][] }
+    init.rumorTags = JSON.stringify(rumor.tags)
+    const tagOk = rumor.tags.some(t => t[0] === 'caravel-payment' && t[1] === 'v1' && t[2] === utxoId)
+    init.check3 = tagOk
+      ? pass('rumor carries ["caravel-payment","v1",<id>]')
+      : fail(`rumor tags: ${init.rumorTags}`)
+
+    // NOT on the outer gift wrap — tags AND the full serialized event must not contain it
+    init.wrapTags = JSON.stringify(wrapWith.tags)
+    const notInTags = !wrapWith.tags.some(t => t[0] === 'caravel-payment')
+    const notInEvent = !JSON.stringify(wrapWith).includes(utxoId) && !JSON.stringify(wrapWith).includes('caravel-payment')
+    init.check4 = notInTags && notInEvent
+      ? pass('gift wrap exposes only the ["p",…] tag; reference is sealed, invisible to relays')
+      : fail(`notInTags=${notInTags} notInEvent=${notInEvent} wrapTags=${init.wrapTags}`)
+  } catch (e) {
+    init.fatalError = e instanceof Error ? e.message : String(e)
+  }
+  return init
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function DecryptPanel() {
@@ -72,6 +142,8 @@ export default function DecryptPanel() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [result, setResult] = useState<{ amount: string; memo: DecodedMemo | null } | null>(null)
+  // TEMPORARY — M10.0 PAYMENT-TAG TEST · REMOVE BEFORE SHIPPING
+  const [payTest] = useState<PayTagTestResult>(() => runPayTagTest())
 
   const canDecrypt = !!wallet && utxoId.trim().startsWith('utxo_') && !loading
 
@@ -108,6 +180,50 @@ export default function DecryptPanel() {
 
   return (
     <div style={{ padding: '24px 24px 32px', display: 'flex', flexDirection: 'column', gap: 20 }}>
+
+      {/* TEMPORARY — M10.0 PAYMENT-TAG TEST · REMOVE BEFORE SHIPPING */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '14px 16px', borderRadius: 10, background: 'rgba(45,224,198,0.04)', border: '2px dashed rgba(45,224,198,0.35)' }}>
+        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: '#2D9E8C', letterSpacing: '0.14em' }}>
+          ⚠ TEMPORARY — M10.0 PAYMENT-TAG ROUND-TRIP · REMOVE BEFORE SHIPPING
+        </div>
+        {payTest.fatalError ? (
+          <div style={{ fontSize: 12, color: '#FF6B6B', fontFamily: "'IBM Plex Mono', monospace", wordBreak: 'break-all', lineHeight: 1.5 }}>
+            FATAL — {payTest.fatalError}
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {([
+              ['1', 'WITH PAYMENT (wrap → unwrap: plaintext + payment)', payTest.check1],
+              ['2', 'WITHOUT PAYMENT (plaintext intact, payment undefined)', payTest.check2],
+              ['3', 'RUMOR TAG (["caravel-payment","v1",<id>] present)', payTest.check3],
+              ['4', 'NOT ON GIFT WRAP (reference sealed, invisible to relays)', payTest.check4],
+            ] as [string, string, PayTagCheck][]).map(([n, label, chk]) => (
+              <div key={n} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: '#55617D', letterSpacing: '0.12em' }}>
+                  CHECK {n} — {label}
+                </div>
+                <div style={{ fontSize: 11, fontFamily: "'IBM Plex Mono', monospace", color: chk.status === 'PASS' ? '#4EC9A0' : '#FF6B6B', lineHeight: 1.5, wordBreak: 'break-all' }}>
+                  {chk.status} {chk.status === 'PASS' ? '✓' : '✗'} {chk.detail}
+                </div>
+              </div>
+            ))}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: 4 }}>
+              <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: '#55617D', letterSpacing: '0.12em' }}>
+                RUMOR TAGS (decrypted — inside the seal)
+              </div>
+              <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: '#7DE9D8', wordBreak: 'break-all', lineHeight: 1.5, padding: '8px 10px', borderRadius: 6, background: '#10151F' }}>
+                {payTest.rumorTags || '—'}
+              </div>
+              <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: '#55617D', letterSpacing: '0.12em', marginTop: 4 }}>
+                GIFT WRAP TAGS (outer event — what relays see)
+              </div>
+              <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: '#8A97B4', wordBreak: 'break-all', lineHeight: 1.5, padding: '8px 10px', borderRadius: 6, background: '#10151F' }}>
+                {payTest.wrapTags || '—'}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* Dev-panel notice */}
       <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', padding: '12px 14px', borderRadius: 10, background: 'rgba(120,150,210,0.06)', border: '1px solid rgba(120,150,210,0.16)' }}>

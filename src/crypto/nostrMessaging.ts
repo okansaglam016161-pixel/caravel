@@ -1,27 +1,66 @@
 import type { NostrEvent } from 'nostr-tools'
-import { wrapEvent } from 'nostr-tools/nip17'
+import { wrapEvent } from 'nostr-tools/nip59'
 import { getConversationKey, decrypt } from 'nostr-tools/nip44'
 import { Relay } from 'nostr-tools/relay'
+import type { PaymentRef } from '../messaging/types'
 
 // NIP-17 gift-wrap: https://github.com/nostr-protocol/nips/blob/master/17.md
 // Wraps a plaintext message in three layers: rumor (kind 14) → seal (kind 13, NIP-44) →
 // gift wrap (kind 1059, NIP-44 with a fresh random key per wrap).
 
+// Kind 14 = NIP-17 private direct message (the rumor).
+const KIND_PRIVATE_DM = 14
+
+// Caravel payment reference tag (M10.0). Lives on the rumor — inside the encrypted seal — so it
+// is invisible to relays and ignored by non-Caravel clients (which show the note as a plain
+// message). Wire format: ["caravel-payment", "v1", "<utxo-substate-id>"]. Versioned so the tag
+// can be published as a spec; a reader that doesn't recognise the version degrades to plain text.
+const PAYMENT_TAG = 'caravel-payment'
+const PAYMENT_TAG_VERSION = 'v1'
+
+// Pulls a payment reference out of the rumor's tags, or undefined if none/unrecognised.
+// A v1 reader MUST verify the version token and ignore unknown versions, so an unknown-version
+// payment degrades to a plain message rather than being misread at a fixed index.
+function extractPaymentRef(tags: string[][] | undefined): PaymentRef | undefined {
+  if (!tags) return undefined
+  for (const tag of tags) {
+    if (tag[0] !== PAYMENT_TAG) continue
+    if (tag[1] !== PAYMENT_TAG_VERSION) return undefined  // unknown version → degrade to plain
+    const utxoId = tag[2]
+    if (typeof utxoId !== 'string' || utxoId.length === 0) return undefined
+    return { utxoId }
+  }
+  return undefined
+}
+
+// Wraps plaintext (and an optional payment reference) for the recipient. Builds the kind-14
+// rumor ourselves — including the required ["p", recipient] tag and, when present, the
+// caravel-payment tag — then hands it to nip59.wrapEvent, which seals and gift-wraps it with
+// the library's own crypto. A message with no payment produces a rumor identical to before.
 export function wrapMessage(
   senderSecretKey: Uint8Array,
   recipientPubkeyHex: string,
-  plaintext: string
+  plaintext: string,
+  payment?: PaymentRef
 ): NostrEvent {
-  return wrapEvent(senderSecretKey, { publicKey: recipientPubkeyHex }, plaintext)
+  const tags: string[][] = [['p', recipientPubkeyHex]]
+  if (payment) tags.push([PAYMENT_TAG, PAYMENT_TAG_VERSION, payment.utxoId])
+  const rumor = {
+    kind: KIND_PRIVATE_DM,
+    created_at: Math.round(Date.now() / 1000),
+    content: plaintext,
+    tags,
+  }
+  return wrapEvent(rumor, senderSecretKey, recipientPubkeyHex)
 }
 
-// Returns the plaintext and the sender's public key (hex), or throws on decryption failure.
-// Performs a manual two-layer decrypt (rather than nip59.unwrapEvent) so we can access the
-// intermediate seal and enforce the NIP-17 pubkey consistency check below.
+// Returns the plaintext, the sender's public key (hex), and any payment reference — or throws on
+// decryption failure. Performs a manual two-layer decrypt (rather than nip59.unwrapEvent) so we
+// can access the intermediate seal and enforce the NIP-17 pubkey consistency check below.
 export function unwrapMessage(
   recipientSecretKey: Uint8Array,
   giftWrapEvent: NostrEvent
-): { senderPubkeyHex: string; plaintext: string } {
+): { senderPubkeyHex: string; plaintext: string; payment?: PaymentRef } {
   // Layer 1: decrypt gift wrap (kind 1059) → seal (kind 13)
   const sealKey = getConversationKey(recipientSecretKey, giftWrapEvent.pubkey)
   const seal = JSON.parse(decrypt(giftWrapEvent.content, sealKey)) as {
@@ -34,6 +73,7 @@ export function unwrapMessage(
   const rumor = JSON.parse(decrypt(seal.content, rumorKey)) as {
     pubkey: string
     content: string
+    tags?: string[][]
   }
 
   // NIP-17 security invariant: seal.pubkey MUST equal rumor.pubkey.
@@ -45,7 +85,7 @@ export function unwrapMessage(
     )
   }
 
-  return { senderPubkeyHex: seal.pubkey, plaintext: rumor.content }
+  return { senderPubkeyHex: seal.pubkey, plaintext: rumor.content, payment: extractPaymentRef(rumor.tags) }
 }
 
 // ── Network helpers ────────────────────────────────────────────────────────────

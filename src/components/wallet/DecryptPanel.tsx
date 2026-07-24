@@ -54,6 +54,12 @@ function decodeMemo(memoJson: string | undefined): DecodedMemo | null {
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
+// Safe hex → truncated npub for the dev-panel message list. Returns raw hex if encoding fails
+// (e.g. a blank recipient on a cross-device self-copy), never throws.
+function shortNpub(pubkeyHex: string): string {
+  try { return nip19.npubEncode(pubkeyHex).slice(0, 20) } catch { return pubkeyHex.slice(0, 12) }
+}
+
 function Field({ label, value }: { label: string; value: string }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -204,7 +210,7 @@ const RELAY_IDLE: RelayTestState = {
 }
 
 export default function DecryptPanel() {
-  const { wallet, nostrNpub, createMessagingProvider, messagingStatus, messages, relayStates } = useWallet()
+  const { wallet, nostrNpub, createMessagingProvider, messagingStatus, messages, relayStates, recordSentMessage } = useWallet()
   const [utxoId, setUtxoId] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -326,6 +332,7 @@ export default function DecryptPanel() {
       if (!provider) throw new Error('Wallet is locked — unlock first')
       const msg = await provider.sendMessage(recipientHex, sendText)
       provider.disconnect()
+      recordSentMessage(msg)
       setSendResult({ id: msg.id })
     } catch (e) {
       setSendError(e instanceof Error ? e.message : String(e))
@@ -587,25 +594,30 @@ export default function DecryptPanel() {
           )}
         </div>
 
-        {/* B — Received messages */}
+        {/* B — Messages (persisted; sent + received, oldest first) */}
         {messages.length > 0 && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: '#55617D', letterSpacing: '0.12em' }}>
-              B — RECEIVED ({messages.length})
+              B — MESSAGES ({messages.length}) · persisted
             </div>
-            {messages.map(m => (
-              <div key={m.id} style={{ padding: '8px 10px', borderRadius: 6, background: '#10151F', border: '1px solid rgba(45,224,198,0.15)', display: 'flex', flexDirection: 'column', gap: 2 }}>
-                <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: '#55617D' }}>
-                  from {nip19.npubEncode(m.senderPubkeyHex).slice(0, 20)}... · {new Date(m.timestamp).toLocaleTimeString()}
+            {[...messages].sort((a, b) => a.timestamp - b.timestamp).map(m => {
+              const sent = m.direction === 'sent'
+              const peerHex = sent ? m.recipientPubkeyHex : m.senderPubkeyHex
+              const peer = peerHex ? `${shortNpub(peerHex)}...` : '(unknown)'
+              return (
+                <div key={m.id} style={{ padding: '8px 10px', borderRadius: 6, background: '#10151F', border: `1px solid ${sent ? 'rgba(220,160,0,0.18)' : 'rgba(45,224,198,0.15)'}`, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: sent ? '#DDAA00' : '#4EC9A0' }}>
+                    {sent ? 'SENT →' : 'RECV ←'} {peer} · {new Date(m.timestamp).toLocaleString()}
+                  </div>
+                  <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: '#EAFBF7', wordBreak: 'break-word', lineHeight: 1.4 }}>
+                    {m.plaintext}
+                  </div>
+                  <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, color: '#3A4A5A' }}>
+                    id {m.id.slice(0, 16)}...
+                  </div>
                 </div>
-                <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: '#EAFBF7', wordBreak: 'break-word', lineHeight: 1.4 }}>
-                  {m.plaintext}
-                </div>
-                <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, color: '#3A4A5A' }}>
-                  id {m.id.slice(0, 16)}...
-                </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
         )}
 

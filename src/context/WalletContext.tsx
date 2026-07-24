@@ -15,6 +15,7 @@ import { scanWallet, type ScannedUtxo, type ScanProgress } from '../crypto/walle
 import { loadHistory, addSent, mergeReceived, type TxEntry, type NewSentParams } from '../crypto/txHistory'
 import { NostrMessagingProvider } from '../messaging/NostrMessagingProvider'
 import type { MessagingProvider, MessagingConnectionStatus, CaravelMessage, RelayState } from '../messaging/types'
+import { loadMessages, addReceivedMessage, addSentMessage } from '../messaging/messageStore'
 import { DEFAULT_RELAYS } from '../config/relays'
 
 // ── Scan state ────────────────────────────────────────────────────────────────
@@ -71,8 +72,11 @@ export interface WalletCtx {
   messagingStatus: MessagingConnectionStatus
   /** Per-relay connection state for dev/debug display. */
   relayStates: RelayState[]
-  /** In-memory received messages, cleared on lock. */
+  /** Sent + received messages for the current identity, persisted per-pubkey in localStorage
+   *  and reloaded on unlock. React state is cleared on lock; the stored copy survives. */
   messages: CaravelMessage[]
+  /** Persist + surface a message we just sent (the CaravelMessage returned by sendMessage). */
+  recordSentMessage: (msg: CaravelMessage) => void
   /** Factory: returns a ready-to-use MessagingProvider backed by the current identity,
    *  or null if the wallet is locked. The secret key stays inside the closure — callers
    *  receive a working provider but never see the raw key. */
@@ -173,11 +177,16 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   // connections happen in the background so unlock never waits for the network.
   const startMessaging = useCallback((secretHex: string, pubkeyHex: string) => {
     messagingProviderRef.current?.disconnect()
+    // Load persisted history for this identity before subscribing, so it's visible
+    // immediately on unlock without waiting for a relay round-trip.
+    setMessages(loadMessages(pubkeyHex))
     const provider = new NostrMessagingProvider(secretHex, pubkeyHex, DEFAULT_RELAYS)
     messagingProviderRef.current = provider
     setMessagingStatus('connecting')
     provider.subscribe(
-      (msg) => setMessages(prev => [...prev, msg]),
+      // Merge-and-persist each arrival. Mirrors txHistory's setTxHistory(prev => addSent(...))
+      // pattern: the store helper dedups, writes localStorage, and returns the next array.
+      (msg) => setMessages(prev => addReceivedMessage(pubkeyHex, prev, msg)),
       (status) => {
         // Guard against stale callbacks firing after lock() replaces or clears the provider
         if (messagingProviderRef.current !== provider) return
@@ -263,6 +272,13 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     setTxHistory(prev => addSent(address, prev, params))
   }, [address])
 
+  // Record a message we just sent (the CaravelMessage returned by provider.sendMessage),
+  // persisting it under the current identity. Mirrors recordSent above.
+  const recordSentMessage = useCallback((msg: CaravelMessage) => {
+    if (!nostrPubkeyHex) return
+    setMessages(prev => addSentMessage(nostrPubkeyHex, prev, msg))
+  }, [nostrPubkeyHex])
+
   // Factory: constructs a MessagingProvider backed by the current Nostr identity.
   // The secret key is captured from the ref at call time — it never appears on the
   // context value, and callers receive a working provider without ever seeing the key.
@@ -277,7 +293,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       walletExists, wallet, address, nostrNpub, nostrPubkeyHex, scan, txHistory,
       messagingStatus, messages, relayStates,
       generateMnemonic, createWallet, unlock, restore, lock, getMnemonic, rescan, recordSent,
-      createMessagingProvider,
+      recordSentMessage, createMessagingProvider,
     }}>
       {children}
     </Ctx.Provider>

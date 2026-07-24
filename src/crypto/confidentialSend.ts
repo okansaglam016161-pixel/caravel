@@ -39,7 +39,14 @@ export const MAX_FEE = 10_000n   // 0.01 tTARI ceiling; actual ~1 006 µtTARI
 const MICROTARI_PER_TARI = 1_000_000n
 
 export type SendOutcome = 'Commit' | 'Reject' | 'Timeout'
-export interface SendResult { txId: string; outcome: SendOutcome }
+export interface SendResult {
+  txId: string
+  outcome: SendOutcome
+  // Substate id of the RECIPIENT's output UTXO (specs[0]), derived from the outputs statement.
+  // Used by M10.1 payment-linked messages to reference this exact output. Undefined only if the
+  // commitment could not be read from the statement.
+  recipientUtxoId?: string
+}
 
 export interface SendParams {
   recipient: string
@@ -189,6 +196,16 @@ export async function sendConfidential(
     MAX_FEE,
   )
 
+  // Recipient's output is specs[0]; read its on-wire Pedersen commitment from the outputs
+  // statement and build the substate id in the same format scanUtxos/decryptOwnedUtxo use.
+  // (Shape confirmed by the library's own wasm-crypto tests: outputs[i].output.commitment.)
+  let recipientUtxoId: string | undefined
+  try {
+    const parsedOuts = outsStmt.parsed() as { outputs?: { output?: { commitment?: string } }[] }
+    const commitmentHex = parsedOuts.outputs?.[0]?.output?.commitment
+    if (commitmentHex) recipientUtxoId = `utxo_${RESOURCE_HEX}_${commitmentHex}`
+  } catch { /* leave undefined — caller treats a missing id as "cannot announce this payment" */ }
+
   const insStmt = await crypto.buildInputsStatement([new StealthInput(utxo.commitment)], 0n)
   const proof   = await signBalanceProof(crypto, utxo.mask, outputMask, insStmt, outsStmt)
   const stmt    = new StealthTransferStatement(insStmt, outsStmt, proof)
@@ -224,7 +241,7 @@ export async function sendConfidential(
   const outcome = await pollOutcome(txId)
   provider.stopWatcher?.()
 
-  return { txId, outcome }
+  return { txId, outcome, recipientUtxoId }
 }
 
 export function tariToMicrotari(tari: number): bigint {

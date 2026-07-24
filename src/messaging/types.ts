@@ -20,6 +20,15 @@ export interface PaymentRef {
   utxoId: string           // Tari UTXO substate id, e.g. "utxo_0101…_<commitment>"
 }
 
+// LOCAL-ONLY sender-side cache. NEVER travels on the wire (wrapMessage tags only PaymentRef.utxoId)
+// and is never set on received messages. Lets our own thread render the amount we sent — which is
+// confidential and deliberately absent from the wire — without decrypting the recipient's UTXO.
+// amountMicrotari is a decimal µTari STRING so it JSON-serialises without bigint (messageStore).
+export interface LocalPaymentMeta {
+  amountMicrotari: string
+  txId: string
+}
+
 export interface CaravelMessage {
   id: string               // unique per message — use the gift wrap event id
   senderPubkeyHex: string
@@ -32,6 +41,8 @@ export interface CaravelMessage {
   direction: 'sent' | 'received'
   // Present only when the message carried a caravel-payment tag on its rumor.
   payment?: PaymentRef
+  // LOCAL-ONLY (see LocalPaymentMeta): cached amount/txId for a payment WE sent. Never on the wire.
+  localPayment?: LocalPaymentMeta
 }
 
 export interface MessagingProvider {

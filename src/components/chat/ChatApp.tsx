@@ -6,6 +6,8 @@ import { useWallet } from '../../context/WalletContext'
 import WalletModal from '../wallet/WalletModal'
 import type { CaravelMessage } from '../../messaging/types'
 import { loadNicknames, setNickname, MAX_NICKNAME_LEN, type NicknameMap } from '../../messaging/nicknameStore'
+import { loadTariAddresses, setTariAddress, type TariAddressMap } from '../../messaging/tariAddressStore'
+import { sendConfidential, tariToMicrotari } from '../../crypto/confidentialSend'
 
 // ── Conversation derivation ─────────────────────────────────────────────────────
 
@@ -97,10 +99,73 @@ const MAX_MESSAGE_LEN = 2000
 // Composer grows with content up to this height (~5-6 lines), then scrolls internally.
 const COMPOSER_MAX_H = 120
 
+// Fee ceiling shown in the confirm step (matches confidentialSend.MAX_FEE = 10_000 µtTARI).
+const MAX_FEE_TARI = 0.01
+
+// Decimal µTari string → TARI display string. Defensive; never throws.
+function microToTari(micro: string): string {
+  try { return (Number(BigInt(micro)) / 1_000_000).toFixed(6) } catch { return '—' }
+}
+
+// Confidential-payment card in the thread (design recovered from git history, driven by real data).
+// Sender side shows the amount from the local cache (never on the wire). Recipient side shows the
+// note + "Confidential payment" only — amount resolution from the UTXO is deferred to M10.2. The
+// note ALWAYS renders regardless (M10.0 graceful-degradation guarantee).
+function PaymentMessageCard({ message }: { message: CaravelMessage }) {
+  const sent = message.direction === 'sent'
+  const amountTari = sent && message.localPayment ? microToTari(message.localPayment.amountMicrotari) : null
+  return (
+    <div style={{ alignSelf: sent ? 'flex-end' : 'flex-start', maxWidth: '68%', width: 400 }}>
+      <div style={{ borderRadius: sent ? '18px 6px 18px 18px' : '6px 18px 18px 18px', overflow: 'hidden', border: '1px solid rgba(var(--accRGB,45,224,198),0.4)', background: 'linear-gradient(165deg, #0E2A28, #0A1A1C)', boxShadow: '0 0 34px rgba(var(--accRGB,45,224,198),0.16)' }}>
+        {/* Header */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '13px 18px', background: 'linear-gradient(180deg, rgba(var(--accRGB,45,224,198),0.16), rgba(var(--accRGB,45,224,198),0.05))', borderBottom: '1px solid rgba(var(--accRGB,45,224,198),0.22)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 26, height: 26, borderRadius: 8, background: 'rgba(var(--accRGB,45,224,198),0.18)' }}>
+              <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="var(--acc,#2DE0C6)" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>
+            </div>
+            <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--accT,#7DE9D8)', letterSpacing: '0.06em' }}>CONFIDENTIAL PAYMENT</span>
+          </div>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--acc,#2DE0C6)' }}>
+            <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="var(--acc,#2DE0C6)" strokeWidth={2.2}><rect x={3} y={11} width={18} height={11} rx={2} /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
+            {sent ? 'Sent' : 'Received'}
+          </span>
+        </div>
+        {/* Amount */}
+        <div style={{ padding: '20px 18px 8px', textAlign: 'center' }}>
+          {amountTari !== null ? (
+            <div style={{ fontSize: 34, fontWeight: 800, color: '#EAFBF7', letterSpacing: '0.02em', display: 'flex', alignItems: 'baseline', justifyContent: 'center', gap: 8 }}>
+              <span>{amountTari}</span>
+              <span style={{ fontSize: 17, fontWeight: 600, color: 'var(--acc,#2DE0C6)' }}>TARI</span>
+            </div>
+          ) : (
+            <div style={{ fontSize: 18, fontWeight: 700, color: '#C7E4DD' }}>Confidential payment</div>
+          )}
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 6, padding: '4px 11px', borderRadius: 100, background: 'rgba(120,150,210,0.08)' }}>
+            <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="#8FB7B0" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" /><circle cx={12} cy={12} r={3} /><path d="M4 4l16 16" /></svg>
+            <span style={{ fontSize: 11, color: '#8FB7B0', fontFamily: "'IBM Plex Mono', monospace" }}>amount hidden on-chain</span>
+          </div>
+        </div>
+        {/* Private note */}
+        <div style={{ margin: '12px 14px 16px', padding: '13px 15px', borderRadius: 12, background: 'rgba(10,14,23,0.6)', border: '1px dashed rgba(var(--accRGB,45,224,198),0.28)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 7 }}>
+            <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="#5E8A82" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V4s-1 1-4 1-5-2-8-2-4 1-4 1z" /><path d="M4 22v-7" /></svg>
+            <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.1em', color: '#5E8A82' }}>PRIVATE NOTE</span>
+          </div>
+          <div style={{ fontSize: 14, color: '#C7E4DD', lineHeight: 1.45, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{message.plaintext}</div>
+        </div>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: '#55617D', marginTop: 6, marginRight: sent ? 4 : 0, marginLeft: sent ? 0 : 4, justifyContent: sent ? 'flex-end' : 'flex-start' }}>
+        {bubbleTime(message.timestamp)}
+        {sent && <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="var(--acc,#2DE0C6)" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round"><path d="M18 7l-8 8-4-4" /></svg>}
+      </div>
+    </div>
+  )
+}
+
 // ── Component ────────────────────────────────────────────────────────────────────
 
 export default function ChatApp() {
-  const { address, scan, messages, nostrPubkeyHex, createMessagingProvider, recordSentMessage } = useWallet()
+  const { wallet, address, scan, messages, nostrPubkeyHex, messagingStatus, createMessagingProvider, recordSentMessage } = useWallet()
   const [walletOpen, setWalletOpen] = useState(false)
   const [balanceHidden, setBalanceHidden] = useState(false)
 
@@ -111,6 +176,24 @@ export default function ChatApp() {
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
   const [sendError, setSendError] = useState<string | null>(null)
+
+  // Payment (TARI) composer state.
+  const [paymentMode, setPaymentMode] = useState(false)
+  const [payAmount, setPayAmount] = useState('')       // tTARI, as typed
+  const [payAddress, setPayAddress] = useState('')     // recipient otl_esm_ (manual — see caveat)
+  const [confirming, setConfirming] = useState(false)  // inline confirm panel shown
+  const [payBusy, setPayBusy] = useState(false)        // payment/message in flight
+  const [payProgress, setPayProgress] = useState<string | null>(null)
+  const [payError, setPayError] = useState<string | null>(null)
+  // Persistent, must-acknowledge banner for the two dangerous outcomes: a payment that went
+  // through but whose message failed (orphan), or a payment left unconfirmed (timeout).
+  const [payAlert, setPayAlert] = useState<{ kind: 'orphan' | 'timeout'; txId: string; amountTari: string } | null>(null)
+
+  // Remembered recipient Tari addresses for the current identity (temporary bridge — see store).
+  const [tariAddresses, setTariAddresses] = useState<TariAddressMap>({})
+  useEffect(() => {
+    setTariAddresses(nostrPubkeyHex ? loadTariAddresses(nostrPubkeyHex) : {})
+  }, [nostrPubkeyHex])
 
   // Nicknames for the current identity, loaded from localStorage and re-derived on save.
   const [nicknames, setNicknames] = useState<NicknameMap>({})
@@ -163,6 +246,121 @@ export default function ChatApp() {
     }
   }
 
+  // ── Payment (TARI) flow ──────────────────────────────────────────────────────
+
+  function toggleTari() {
+    if (payBusy) return
+    setPaymentMode(prev => {
+      const next = !prev
+      if (next) {
+        // Entering payment mode: prefill the remembered address for this peer, if any.
+        if (selectedConvo) setPayAddress(tariAddresses[selectedConvo.peerHex] ?? '')
+        setPayError(null)
+      } else {
+        setConfirming(false)
+      }
+      return next
+    })
+  }
+
+  function validatePayment(): string | null {
+    const amt = Number(payAmount)
+    if (!payAmount.trim() || !isFinite(amt) || amt <= 0) return 'Enter an amount greater than 0.'
+    if (!payAddress.trim().startsWith('otl_esm_')) return 'Enter a valid recipient Tari address (otl_esm_…).'
+    return null
+  }
+
+  // Send button: in payment mode this validates and opens the confirm gate; otherwise plain send.
+  function onComposerSend() {
+    if (paymentMode) {
+      const err = validatePayment()
+      if (err) { setPayError(err); return }
+      setPayError(null)
+      setConfirming(true)
+    } else {
+      handleSend()
+    }
+  }
+
+  // Runs only after the user confirms. Sequencing (decided): pre-flight connection check → real
+  // confidential payment → only on Commit send the message carrying the recipient UTXO id.
+  async function submitPayment() {
+    if (!selectedConvo) return
+    setConfirming(false)
+    setPayError(null)
+
+    // PRE-FLIGHT: never spend money we cannot announce.
+    if (messagingStatus !== 'connected' && messagingStatus !== 'degraded') {
+      setPayError('Not connected to relays — cannot announce the payment. Try again once connected.')
+      return
+    }
+    if (!wallet || !address) { setPayError('Wallet is locked — unlock to send.'); return }
+
+    const amountMicro = tariToMicrotari(Number(payAmount))
+    const recipientAddr = payAddress.trim()
+    const note = draft.trim() || '💸 Payment'   // NIP-44 needs ≥1 byte; empty note gets a caption
+    const peerHex = selectedConvo.peerHex
+    const amountShown = payAmount
+
+    setPayBusy(true)
+    setPayProgress('Starting payment…')
+    try {
+      const result = await sendConfidential(wallet, address, {
+        recipient: recipientAddr,
+        amountMicrotari: amountMicro,
+        onProgress: (m) => setPayProgress(m),
+      })
+
+      if (result.outcome === 'Reject') {
+        // Nothing happened — keep payment mode + fields so the user can adjust and retry.
+        setPayError('Payment was rejected on-chain — nothing was sent.')
+        return
+      }
+      if (result.outcome === 'Timeout') {
+        // Unconfirmed: do NOT announce. Missing beats broken. Exit payment mode to avoid a re-pay.
+        setPayAlert({ kind: 'timeout', txId: result.txId, amountTari: amountShown })
+        setPaymentMode(false)
+        return
+      }
+      // Commit — need the recipient UTXO id to reference the payment.
+      if (!result.recipientUtxoId) {
+        setPayAlert({ kind: 'orphan', txId: result.txId, amountTari: amountShown })
+        setPaymentMode(false)
+        return
+      }
+
+      // Announce: send the message carrying the payment reference.
+      setPayProgress('Payment confirmed — sending the message…')
+      const provider = createMessagingProvider()
+      if (!provider) {
+        setPayAlert({ kind: 'orphan', txId: result.txId, amountTari: amountShown })
+        setPaymentMode(false)
+        return
+      }
+      try {
+        const msg = await provider.sendMessage(peerHex, note, { utxoId: result.recipientUtxoId })
+        provider.disconnect()
+        // Cache the amount + txId LOCALLY (never on the wire) so our thread renders the amount.
+        const withLocal: CaravelMessage = { ...msg, localPayment: { amountMicrotari: amountMicro.toString(), txId: result.txId } }
+        recordSentMessage(withLocal)
+        // Success: remember the address for next time, clear the composer + payment mode.
+        if (nostrPubkeyHex) setTariAddresses(prev => setTariAddress(nostrPubkeyHex, prev, peerHex, recipientAddr))
+        setDraft('')
+        setPayAmount('')
+        setPaymentMode(false)
+      } catch {
+        // The dangerous case: the payment went through but the message did not.
+        setPayAlert({ kind: 'orphan', txId: result.txId, amountTari: amountShown })
+        setPaymentMode(false)
+      }
+    } catch (e) {
+      setPayError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setPayBusy(false)
+      setPayProgress(null)
+    }
+  }
+
   // Auto-scroll to newest: on conversation open and whenever this thread gains a message.
   const bottomRef = useRef<HTMLDivElement>(null)
   const selectedPeerHex = selectedConvo?.peerHex ?? null
@@ -170,6 +368,15 @@ export default function ChatApp() {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ block: 'end' })
   }, [selectedPeerHex, selectedCount])
+
+  // Reset the payment composer when switching conversations so a half-filled payment can't carry
+  // across to a different peer. The must-acknowledge alert banner is intentionally NOT reset here.
+  useEffect(() => {
+    setPaymentMode(false)
+    setConfirming(false)
+    setPayError(null)
+    setPayAmount('')
+  }, [selectedPeerHex])
 
   // Auto-grow the composer with its content: reset to 'auto' to measure, then set to the
   // content height capped at COMPOSER_MAX_H (beyond which it scrolls internally). Keyed on the
@@ -396,7 +603,10 @@ export default function ChatApp() {
             </div>
 
             {selectedConvo.messages.map((m) => (
-              m.direction === 'received' ? (
+              m.payment ? (
+                /* Confidential payment */
+                <PaymentMessageCard key={m.id} message={m} />
+              ) : m.direction === 'received' ? (
                 /* Incoming */
                 <div key={m.id} style={{ alignSelf: 'flex-start', maxWidth: '62%' }}>
                   <div style={{ padding: '13px 17px', borderRadius: '4px 16px 16px 16px', background: '#161C28', color: '#E4EAF4', fontSize: 15, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.plaintext}</div>
@@ -419,22 +629,129 @@ export default function ChatApp() {
 
           {/* Composer */}
           {(() => {
-            const canSend = !!draft.trim() && !sending
+            const paymentValid = validatePayment() === null
+            const canSend = payBusy || confirming
+              ? false
+              : paymentMode ? paymentValid : (!!draft.trim() && !sending)
             const showCounter = draft.length >= MAX_MESSAGE_LEN - 200
+            const inputsDisabled = sending || payBusy || confirming
             return (
             <div style={{ padding: '16px 24px 20px', borderTop: '1px solid rgba(120,150,210,0.1)' }}>
-              {/* Send failure — inline, draft preserved */}
+
+              {/* PERSISTENT alert — payment succeeded but message failed, or payment left unconfirmed.
+                  Must be acknowledged explicitly; typing does not clear it. */}
+              {payAlert && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12, padding: '13px 15px', borderRadius: 12, background: 'rgba(255,140,40,0.10)', border: '1.5px solid rgba(255,150,50,0.55)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="#FFB067" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><path d="M12 9v4M12 17h.01" /></svg>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: '#FFB067' }}>
+                      {payAlert.kind === 'orphan' ? 'Payment sent — but the message did NOT' : 'Payment submitted — but not confirmed'}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 12.5, color: '#E8D3B8', lineHeight: 1.5 }}>
+                    {payAlert.kind === 'orphan'
+                      ? <>The confidential payment of <b>{payAlert.amountTari} tTARI</b> went through, but the note could not be delivered. The recipient has the funds but no message or notification — follow up out-of-band.</>
+                      : <>The confidential payment of <b>{payAlert.amountTari} tTARI</b> was submitted but is not yet confirmed, so no message was sent. Verify the transaction; if it commits, their background scan will find the funds.</>}
+                  </div>
+                  <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: '#B79B7A', wordBreak: 'break-all' }}>tx {payAlert.txId}</div>
+                  <button
+                    onClick={() => setPayAlert(null)}
+                    style={{ alignSelf: 'flex-start', marginTop: 2, padding: '6px 14px', borderRadius: 8, border: '1px solid rgba(255,150,50,0.5)', background: 'transparent', color: '#FFB067', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}
+                  >
+                    I have noted this
+                  </button>
+                </div>
+              )}
+
+              {/* Plain-message send failure — inline, draft preserved */}
               {sendError && (
                 <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7, marginBottom: 10, fontSize: 12, color: '#FF6B6B', fontFamily: "'IBM Plex Mono', monospace", lineHeight: 1.45 }}>
                   <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="#FF6B6B" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 1 }}><circle cx={12} cy={12} r={10} /><path d="M12 8v4M12 16h.01" /></svg>
                   <span style={{ wordBreak: 'break-word' }}>Couldn't send — {sendError}</span>
                 </div>
               )}
-              <div style={{ display: 'flex', alignItems: 'flex-end', gap: 12 }}>
-                {/* TARI button (inert — M10) */}
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 48, height: 48, flexShrink: 0, borderRadius: 13, background: 'linear-gradient(180deg, var(--accB,#34E5D0), var(--accD,#12A594))', cursor: 'pointer', boxShadow: '0 0 18px rgba(var(--accRGB,45,224,198),0.28)' }} title="Attach confidential payment">
-                  <svg width={22} height={22} viewBox="0 0 24 24" fill="none" stroke="var(--accOn,#04120F)" strokeWidth={2.3} strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>
+
+              {/* Payment error (validation / reject / pre-flight) — draft + fields preserved */}
+              {payError && (
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7, marginBottom: 10, fontSize: 12, color: '#FF6B6B', fontFamily: "'IBM Plex Mono', monospace", lineHeight: 1.45 }}>
+                  <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="#FF6B6B" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 1 }}><circle cx={12} cy={12} r={10} /><path d="M12 8v4M12 16h.01" /></svg>
+                  <span style={{ wordBreak: 'break-word' }}>{payError}</span>
                 </div>
+              )}
+
+              {/* Payment in flight — progress */}
+              {payBusy && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, fontSize: 12.5, color: 'var(--accT,#7DE9D8)', fontFamily: "'IBM Plex Mono', monospace" }}>
+                  <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="var(--acc,#2DE0C6)" strokeWidth={2.5} strokeLinecap="round" style={{ animation: 'spin 1s linear infinite', flexShrink: 0 }}><path d="M21 12a9 9 0 1 1-6.219-8.56" /></svg>
+                  <span>{payProgress ?? 'Working…'}</span>
+                </div>
+              )}
+
+              {/* Payment fields — shown in payment mode, before the confirm gate */}
+              {paymentMode && !confirming && !payBusy && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 12, padding: '13px 15px', borderRadius: 12, background: 'rgba(var(--accRGB,45,224,198),0.05)', border: '1px solid rgba(var(--accRGB,45,224,198),0.25)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', color: 'var(--accT,#7DE9D8)' }}>CONFIDENTIAL PAYMENT</span>
+                    <button onClick={toggleTari} title="Cancel payment" style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#8A97B4', display: 'flex', padding: 2 }}>
+                      <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12" /></svg>
+                    </button>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <input
+                      value={payAmount}
+                      onChange={e => { setPayAmount(e.target.value); if (payError) setPayError(null) }}
+                      placeholder="0.000000"
+                      inputMode="decimal"
+                      style={{ width: 140, background: '#10151F', border: '1px solid rgba(120,150,210,0.25)', borderRadius: 8, padding: '9px 12px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 14, color: '#EAFBF7', outline: 'none' }}
+                    />
+                    <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--acc,#2DE0C6)' }}>tTARI</span>
+                  </div>
+                  <input
+                    value={payAddress}
+                    onChange={e => { setPayAddress(e.target.value); if (payError) setPayError(null) }}
+                    placeholder="Recipient Tari address (otl_esm_…)"
+                    spellCheck={false}
+                    style={{ background: '#10151F', border: '1px solid rgba(120,150,210,0.25)', borderRadius: 8, padding: '9px 12px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: '#E4EAF4', outline: 'none', width: '100%', boxSizing: 'border-box' }}
+                  />
+                  {/* Honest caveat — a pasted address is NOT bound to this contact's Nostr identity */}
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6, fontSize: 11, color: '#C79A5B', lineHeight: 1.45 }}>
+                    <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="#C79A5B" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 1 }}><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><path d="M12 9v4M12 17h.01" /></svg>
+                    <span>Address entered manually — not verified against this contact's identity.</span>
+                  </div>
+                </div>
+              )}
+
+              {/* Confirm gate — spending real testnet funds */}
+              {confirming && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 12, padding: '14px 16px', borderRadius: 12, background: 'rgba(var(--accRGB,45,224,198),0.06)', border: '1.5px solid rgba(var(--accRGB,45,224,198),0.45)' }}>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--accT,#7DE9D8)' }}>Confirm confidential payment</span>
+                  <div style={{ fontSize: 13, color: '#D7E4E0', lineHeight: 1.6 }}>
+                    Send <b style={{ color: '#EAFBF7' }}>{payAmount} tTARI</b> (plus up to {MAX_FEE_TARI} fee) to<br />
+                    <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11.5, color: '#8FB7B0', wordBreak: 'break-all' }}>{payAddress.trim()}</span>
+                    <br />with note “<span style={{ color: '#C7E4DD' }}>{draft.trim() || '💸 Payment'}</span>”.
+                  </div>
+                  <div style={{ fontSize: 11.5, color: '#C79A5B' }}>This is a real, irreversible testnet payment.</div>
+                  <div style={{ display: 'flex', gap: 10, marginTop: 2 }}>
+                    <button onClick={submitPayment} style={{ padding: '9px 18px', borderRadius: 9, border: 'none', background: 'linear-gradient(180deg, var(--accB,#34E5D0), var(--accD,#12A594))', color: 'var(--accOn,#04120F)', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>
+                      Confirm &amp; send
+                    </button>
+                    <button onClick={() => setConfirming(false)} style={{ padding: '9px 18px', borderRadius: 9, border: '1px solid rgba(120,150,210,0.25)', background: 'transparent', color: '#8A97B4', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <div style={{ display: 'flex', alignItems: 'flex-end', gap: 12 }}>
+                {/* TARI button — toggles payment mode */}
+                <button
+                  onClick={toggleTari}
+                  disabled={payBusy}
+                  title={paymentMode ? 'Cancel confidential payment' : 'Attach confidential payment'}
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 48, height: 48, flexShrink: 0, borderRadius: 13, border: paymentMode ? '2px solid var(--acc,#2DE0C6)' : 'none', background: paymentMode ? 'rgba(var(--accRGB,45,224,198),0.14)' : 'linear-gradient(180deg, var(--accB,#34E5D0), var(--accD,#12A594))', cursor: payBusy ? 'default' : 'pointer', boxShadow: paymentMode ? 'none' : '0 0 18px rgba(var(--accRGB,45,224,198),0.28)', padding: 0 }}
+                >
+                  <svg width={22} height={22} viewBox="0 0 24 24" fill="none" stroke={paymentMode ? 'var(--acc,#2DE0C6)' : 'var(--accOn,#04120F)'} strokeWidth={2.3} strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>
+                </button>
                 {/* Text input */}
                 <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 12, padding: '13px 18px', borderRadius: 14, background: '#10151F', border: '1px solid rgba(120,150,210,0.14)' }}>
                   <textarea
@@ -442,23 +759,23 @@ export default function ChatApp() {
                     className="cv-composer"
                     value={draft}
                     onChange={e => { setDraft(e.target.value); if (sendError) setSendError(null) }}
-                    onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() } }}
-                    placeholder="Write an encrypted message…"
+                    onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onComposerSend() } }}
+                    placeholder={paymentMode ? 'Add a note (optional)…' : 'Write an encrypted message…'}
                     rows={1}
                     maxLength={MAX_MESSAGE_LEN}
-                    disabled={sending}
+                    disabled={inputsDisabled}
                     style={{ flex: 1, resize: 'none', background: 'transparent', border: 'none', outline: 'none', color: '#E4EAF4', fontSize: 15, fontFamily: 'inherit', lineHeight: 1.4, maxHeight: COMPOSER_MAX_H, overflowY: 'auto', padding: 0, display: 'block' }}
                   />
                   <svg width={19} height={19} viewBox="0 0 24 24" fill="none" stroke="#55617D" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><circle cx={12} cy={12} r={10} /><path d="M8 14s1.5 2 4 2 4-2 4-2M9 9h.01M15 9h.01" /></svg>
                 </div>
                 {/* Send button */}
                 <button
-                  onClick={handleSend}
+                  onClick={onComposerSend}
                   disabled={!canSend}
-                  title="Send message"
-                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 48, height: 48, flexShrink: 0, borderRadius: 13, background: '#161C28', border: '1px solid rgba(120,150,210,0.16)', cursor: canSend ? 'pointer' : 'default', opacity: canSend || sending ? 1 : 0.5, padding: 0 }}
+                  title={paymentMode ? 'Review payment' : 'Send message'}
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 48, height: 48, flexShrink: 0, borderRadius: 13, background: '#161C28', border: '1px solid rgba(120,150,210,0.16)', cursor: canSend ? 'pointer' : 'default', opacity: canSend ? 1 : 0.5, padding: 0 }}
                 >
-                  {sending ? (
+                  {(sending || payBusy) ? (
                     <svg width={20} height={20} viewBox="0 0 24 24" fill="none" stroke="#8A97B4" strokeWidth={2.5} strokeLinecap="round" style={{ animation: 'spin 1s linear infinite' }}><path d="M21 12a9 9 0 1 1-6.219-8.56" /></svg>
                   ) : (
                     <svg width={20} height={20} viewBox="0 0 24 24" fill="none" stroke={canSend ? 'var(--acc,#2DE0C6)' : '#8A97B4'} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" /></svg>
@@ -468,7 +785,11 @@ export default function ChatApp() {
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginTop: 11, paddingLeft: 4 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
                   <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="var(--acc,#2DE0C6)" strokeWidth={2} strokeLinecap="round"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>
-                  <span style={{ fontSize: 12, color: '#5E8A82' }}>Tap the <span style={{ color: 'var(--acc,#2DE0C6)', fontWeight: 600 }}>TARI</span> button to attach a confidential payment to your message</span>
+                  <span style={{ fontSize: 12, color: '#5E8A82' }}>
+                    {paymentMode
+                      ? <>Enter an amount and recipient address, then review before sending real funds</>
+                      : <>Tap the <span style={{ color: 'var(--acc,#2DE0C6)', fontWeight: 600 }}>TARI</span> button to attach a confidential payment to your message</>}
+                  </span>
                 </div>
                 {showCounter && (
                   <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: draft.length >= MAX_MESSAGE_LEN ? '#FF6B6B' : '#8A97B4', flexShrink: 0 }}>

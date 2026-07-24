@@ -14,7 +14,7 @@ import { deriveNostrKeyFromSeed } from '../crypto/nostrCrypto'
 import { scanWallet, type ScannedUtxo, type ScanProgress } from '../crypto/walletScanner'
 import { loadHistory, addSent, mergeReceived, type TxEntry, type NewSentParams } from '../crypto/txHistory'
 import { NostrMessagingProvider } from '../messaging/NostrMessagingProvider'
-import type { MessagingProvider, MessagingConnectionStatus, CaravelMessage, RelayState } from '../messaging/types'
+import type { MessagingProvider, MessagingConnectionStatus, CaravelMessage } from '../messaging/types'
 import { loadMessages, addReceivedMessage, addSentMessage } from '../messaging/messageStore'
 import { DEFAULT_RELAYS } from '../config/relays'
 
@@ -70,8 +70,6 @@ export interface WalletCtx {
   recordSent: (params: NewSentParams) => void
   /** Auto-managed messaging status, updated as relay connections change. */
   messagingStatus: MessagingConnectionStatus
-  /** Per-relay connection state for dev/debug display. */
-  relayStates: RelayState[]
   /** Sent + received messages for the current identity, persisted per-pubkey in localStorage
    *  and reloaded on unlock. React state is cleared on lock; the stored copy survives. */
   messages: CaravelMessage[]
@@ -113,7 +111,6 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const messagingProviderRef = useRef<NostrMessagingProvider | null>(null)
   const [messagingStatus, setMessagingStatus] = useState<MessagingConnectionStatus>('disconnected')
   const [messages, setMessages] = useState<CaravelMessage[]>([])
-  const [relayStates, setRelayStates] = useState<RelayState[]>([])
 
   const startScan = useCallback((w: SecretKeyWallet, addr: string) => {
     // Cancel any prior scan
@@ -191,11 +188,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         // Guard against stale callbacks firing after lock() replaces or clears the provider
         if (messagingProviderRef.current !== provider) return
         setMessagingStatus(status)
-        setRelayStates(provider.getRelayStates())
       }
     )
-    // Set initial relay states synchronously — subscribe() already set status to 'connecting'
-    setRelayStates(provider.getRelayStates())
   }, [])
 
   const createWallet = useCallback(async (mnemonic: string, password: string) => {
@@ -247,7 +241,6 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     messagingProviderRef.current = null
     setMessagingStatus('disconnected')
     setMessages([])
-    setRelayStates([])
     setScan(SCAN_IDLE)
     setWallet(null)
     setAddress(null)
@@ -291,7 +284,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   return (
     <Ctx.Provider value={{
       walletExists, wallet, address, nostrNpub, nostrPubkeyHex, scan, txHistory,
-      messagingStatus, messages, relayStates,
+      messagingStatus, messages,
       generateMnemonic, createWallet, unlock, restore, lock, getMnemonic, rescan, recordSent,
       recordSentMessage, createMessagingProvider,
     }}>

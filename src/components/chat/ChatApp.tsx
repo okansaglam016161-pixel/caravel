@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from 'react'
+import { useState, useEffect, useMemo, useRef, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import * as nip19 from 'nostr-tools/nip19'
 import Logo from '../Logo'
@@ -8,6 +8,8 @@ import type { CaravelMessage } from '../../messaging/types'
 import { loadNicknames, setNickname, MAX_NICKNAME_LEN, type NicknameMap } from '../../messaging/nicknameStore'
 import { loadTariAddresses, setTariAddress, type TariAddressMap } from '../../messaging/tariAddressStore'
 import { sendConfidential, tariToMicrotari } from '../../crypto/confidentialSend'
+import { resolvePayment, type PaymentResolution } from '../../crypto/paymentResolver'
+import { loadResolvedAmounts, cacheResolvedAmount } from '../../messaging/paymentResolutionStore'
 
 // ── Conversation derivation ─────────────────────────────────────────────────────
 
@@ -107,13 +109,136 @@ function microToTari(micro: string): string {
   try { return (Number(BigInt(micro)) / 1_000_000).toFixed(6) } catch { return '—' }
 }
 
+// ── Payment resolution (M10.2) ────────────────────────────────────────────────
+
+// In-flight dedup: one fetch per (identity, utxoId) even if several cards mount at once, or React
+// StrictMode double-invokes the effect. Keyed by pubkey too so it can't leak across identities.
+const inflightResolve = new Map<string, Promise<PaymentResolution>>()
+function dedupResolve(myPubkeyHex: string, utxoId: string, viewSecret: Uint8Array): Promise<PaymentResolution> {
+  const k = `${myPubkeyHex}:${utxoId}`
+  const existing = inflightResolve.get(k)
+  if (existing) return existing
+  const p = resolvePayment(utxoId, viewSecret).finally(() => { inflightResolve.delete(k) })
+  inflightResolve.set(k, p)
+  return p
+}
+
+type ResolveState =
+  | { kind: 'loading' }
+  | { kind: 'retrying'; reason: 'not_found' | 'network_error' }
+  | { kind: 'resolved'; amountMicrotari: string }
+  | { kind: 'failed'; reason: 'not_found' | 'network_error' | 'spent' | 'unreadable' }
+
+// Three bounded auto-retries after the first attempt, for transient failures only. No polling.
+const RESOLVE_BACKOFFS_MS = [2_000, 4_000, 8_000]
+
+// Lazily resolve a received payment's amount. Cache-first (persisted successes), then a single
+// fetch with bounded backoff for transient failures (not_found = indexer lag, network_error).
+// Terminal failures (spent, unreadable) never auto-retry. Timers are cleared on unmount; manual
+// retry() re-runs the whole sequence.
+function usePaymentResolution(utxoId: string): { state: ResolveState; retry: () => void } {
+  const { wallet, nostrPubkeyHex } = useWallet()
+  const [nonce, setNonce] = useState(0)
+  const [state, setState] = useState<ResolveState>(() => {
+    if (nostrPubkeyHex) {
+      const cached = loadResolvedAmounts(nostrPubkeyHex)[utxoId]
+      if (cached) return { kind: 'resolved', amountMicrotari: cached }
+    }
+    return { kind: 'loading' }
+  })
+
+  useEffect(() => {
+    if (!wallet || !nostrPubkeyHex) return
+    const cached = loadResolvedAmounts(nostrPubkeyHex)[utxoId]
+    if (cached) { setState({ kind: 'resolved', amountMicrotari: cached }); return }
+    const viewSecret = wallet.getViewOnlySecret()
+    if (!viewSecret) return
+
+    let cancelled = false
+    const timers: ReturnType<typeof setTimeout>[] = []
+    if (nonce > 0) setState({ kind: 'loading' })  // manual retry resets the visible state
+
+    async function attempt(i: number) {
+      const res = await dedupResolve(nostrPubkeyHex!, utxoId, viewSecret!)
+      if (cancelled) return
+      if (res.status === 'resolved') {
+        cacheResolvedAmount(nostrPubkeyHex!, utxoId, res.amountMicrotari)
+        setState({ kind: 'resolved', amountMicrotari: res.amountMicrotari })
+        return
+      }
+      if (res.status === 'spent' || res.status === 'unreadable') {
+        setState({ kind: 'failed', reason: res.status })   // terminal — never auto-retry
+        return
+      }
+      // transient: not_found (spent-or-not-yet-indexed) or network_error
+      if (i < RESOLVE_BACKOFFS_MS.length) {
+        setState({ kind: 'retrying', reason: res.status })
+        timers.push(setTimeout(() => attempt(i + 1), RESOLVE_BACKOFFS_MS[i]))
+      } else {
+        setState({ kind: 'failed', reason: res.status })   // retries exhausted
+      }
+    }
+    attempt(0)
+    return () => { cancelled = true; timers.forEach(clearTimeout) }
+  }, [utxoId, wallet, nostrPubkeyHex, nonce])
+
+  return { state, retry: () => setNonce(n => n + 1) }
+}
+
+// ── Payment card ──────────────────────────────────────────────────────────────
+
 // Confidential-payment card in the thread (design recovered from git history, driven by real data).
-// Sender side shows the amount from the local cache (never on the wire). Recipient side shows the
-// note + "Confidential payment" only — amount resolution from the UTXO is deferred to M10.2. The
-// note ALWAYS renders regardless (M10.0 graceful-degradation guarantee).
-function PaymentMessageCard({ message }: { message: CaravelMessage }) {
-  const sent = message.direction === 'sent'
-  const amountTari = sent && message.localPayment ? microToTari(message.localPayment.amountMicrotari) : null
+// Sender shows the amount from its local cache (never on the wire). Recipient resolves the true
+// amount from the referenced UTXO with its own view key. The note ALWAYS renders (M10.0 guarantee).
+
+function BigAmount({ tari }: { tari: string }) {
+  return (
+    <div style={{ fontSize: 34, fontWeight: 800, color: '#EAFBF7', letterSpacing: '0.02em', display: 'flex', alignItems: 'baseline', justifyContent: 'center', gap: 8 }}>
+      <span>{tari}</span>
+      <span style={{ fontSize: 17, fontWeight: 600, color: 'var(--acc,#2DE0C6)' }}>TARI</span>
+    </div>
+  )
+}
+
+// Recipient-side amount area: renders the resolution state. String literals avoid apostrophes.
+function ResolvedAmount({ state, retry }: { state: ResolveState; retry: () => void }) {
+  if (state.kind === 'resolved') return <BigAmount tari={microToTari(state.amountMicrotari)} />
+
+  if (state.kind === 'loading' || state.kind === 'retrying') {
+    const msg = state.kind === 'retrying' && state.reason === 'not_found'
+      ? 'Waiting for the payment to be indexed…'
+      : state.kind === 'retrying' && state.reason === 'network_error'
+        ? 'Reaching the indexer…'
+        : 'Resolving amount…'
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, fontSize: 13, color: '#8FB7B0', fontFamily: "'IBM Plex Mono', monospace" }}>
+        <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="#8FB7B0" strokeWidth={2.5} strokeLinecap="round" style={{ animation: 'spin 1s linear infinite', flexShrink: 0 }}><path d="M21 12a9 9 0 1 1-6.219-8.56" /></svg>
+        {msg}
+      </div>
+    )
+  }
+
+  // failed
+  const canRetry = state.reason === 'not_found' || state.reason === 'network_error'
+  const label =
+    state.reason === 'spent' ? 'Payment output has been spent'
+      : state.reason === 'unreadable' ? 'Not addressed to this wallet — cannot read the amount'
+        : state.reason === 'not_found' ? 'Payment output not found — it may be spent, or not yet indexed'
+          : 'Could not reach the indexer'
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+      <div style={{ fontSize: 13, color: '#C79A5B', textAlign: 'center', lineHeight: 1.4 }}>{label}</div>
+      {canRetry && (
+        <button onClick={retry} style={{ padding: '5px 14px', borderRadius: 8, border: '1px solid rgba(var(--accRGB,45,224,198),0.4)', background: 'transparent', color: 'var(--acc,#2DE0C6)', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
+          Retry
+        </button>
+      )}
+    </div>
+  )
+}
+
+// Shared card chrome; the amount area is a slot supplied by the sender/recipient variant.
+function PaymentCardShell({ sent, timestamp, plaintext, amountSlot }: { sent: boolean; timestamp: number; plaintext: string; amountSlot: ReactNode }) {
   return (
     <div style={{ alignSelf: sent ? 'flex-end' : 'flex-start', maxWidth: '68%', width: 400 }}>
       <div style={{ borderRadius: sent ? '18px 6px 18px 18px' : '6px 18px 18px 18px', overflow: 'hidden', border: '1px solid rgba(var(--accRGB,45,224,198),0.4)', background: 'linear-gradient(165deg, #0E2A28, #0A1A1C)', boxShadow: '0 0 34px rgba(var(--accRGB,45,224,198),0.16)' }}>
@@ -130,36 +255,48 @@ function PaymentMessageCard({ message }: { message: CaravelMessage }) {
             {sent ? 'Sent' : 'Received'}
           </span>
         </div>
-        {/* Amount */}
+        {/* Amount (slot) */}
         <div style={{ padding: '20px 18px 8px', textAlign: 'center' }}>
-          {amountTari !== null ? (
-            <div style={{ fontSize: 34, fontWeight: 800, color: '#EAFBF7', letterSpacing: '0.02em', display: 'flex', alignItems: 'baseline', justifyContent: 'center', gap: 8 }}>
-              <span>{amountTari}</span>
-              <span style={{ fontSize: 17, fontWeight: 600, color: 'var(--acc,#2DE0C6)' }}>TARI</span>
-            </div>
-          ) : (
-            <div style={{ fontSize: 18, fontWeight: 700, color: '#C7E4DD' }}>Confidential payment</div>
-          )}
+          {amountSlot}
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 6, padding: '4px 11px', borderRadius: 100, background: 'rgba(120,150,210,0.08)' }}>
             <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="#8FB7B0" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" /><circle cx={12} cy={12} r={3} /><path d="M4 4l16 16" /></svg>
             <span style={{ fontSize: 11, color: '#8FB7B0', fontFamily: "'IBM Plex Mono', monospace" }}>amount hidden on-chain</span>
           </div>
         </div>
-        {/* Private note */}
+        {/* Private note — always rendered */}
         <div style={{ margin: '12px 14px 16px', padding: '13px 15px', borderRadius: 12, background: 'rgba(10,14,23,0.6)', border: '1px dashed rgba(var(--accRGB,45,224,198),0.28)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 7 }}>
             <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="#5E8A82" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V4s-1 1-4 1-5-2-8-2-4 1-4 1z" /><path d="M4 22v-7" /></svg>
             <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.1em', color: '#5E8A82' }}>PRIVATE NOTE</span>
           </div>
-          <div style={{ fontSize: 14, color: '#C7E4DD', lineHeight: 1.45, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{message.plaintext}</div>
+          <div style={{ fontSize: 14, color: '#C7E4DD', lineHeight: 1.45, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{plaintext}</div>
         </div>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: '#55617D', marginTop: 6, marginRight: sent ? 4 : 0, marginLeft: sent ? 0 : 4, justifyContent: sent ? 'flex-end' : 'flex-start' }}>
-        {bubbleTime(message.timestamp)}
+        {bubbleTime(timestamp)}
         {sent && <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="var(--acc,#2DE0C6)" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round"><path d="M18 7l-8 8-4-4" /></svg>}
       </div>
     </div>
   )
+}
+
+function SentPaymentCard({ message }: { message: CaravelMessage }) {
+  const amount = message.localPayment ? microToTari(message.localPayment.amountMicrotari) : null
+  const amountSlot = amount !== null
+    ? <BigAmount tari={amount} />
+    : <div style={{ fontSize: 18, fontWeight: 700, color: '#C7E4DD' }}>Confidential payment</div>
+  return <PaymentCardShell sent timestamp={message.timestamp} plaintext={message.plaintext} amountSlot={amountSlot} />
+}
+
+function ReceivedPaymentCard({ message }: { message: CaravelMessage }) {
+  const { state, retry } = usePaymentResolution(message.payment!.utxoId)
+  return <PaymentCardShell sent={false} timestamp={message.timestamp} plaintext={message.plaintext} amountSlot={<ResolvedAmount state={state} retry={retry} />} />
+}
+
+function PaymentMessageCard({ message }: { message: CaravelMessage }) {
+  return message.direction === 'sent'
+    ? <SentPaymentCard message={message} />
+    : <ReceivedPaymentCard message={message} />
 }
 
 // ── Component ────────────────────────────────────────────────────────────────────

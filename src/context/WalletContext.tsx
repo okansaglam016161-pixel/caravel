@@ -14,7 +14,7 @@ import { deriveNostrKeyFromSeed } from '../crypto/nostrCrypto'
 import { scanWallet, type ScannedUtxo, type ScanProgress } from '../crypto/walletScanner'
 import { loadHistory, addSent, mergeReceived, type TxEntry, type NewSentParams } from '../crypto/txHistory'
 import { NostrMessagingProvider } from '../messaging/NostrMessagingProvider'
-import type { MessagingProvider } from '../messaging/types'
+import type { MessagingProvider, MessagingConnectionStatus, CaravelMessage, RelayState } from '../messaging/types'
 import { DEFAULT_RELAYS } from '../config/relays'
 
 // ── Scan state ────────────────────────────────────────────────────────────────
@@ -67,6 +67,12 @@ export interface WalletCtx {
   rescan: () => void
   /** Record a sent transaction in persisted history. */
   recordSent: (params: NewSentParams) => void
+  /** Auto-managed messaging status, updated as relay connections change. */
+  messagingStatus: MessagingConnectionStatus
+  /** Per-relay connection state for dev/debug display. */
+  relayStates: RelayState[]
+  /** In-memory received messages, cleared on lock. */
+  messages: CaravelMessage[]
   /** Factory: returns a ready-to-use MessagingProvider backed by the current identity,
    *  or null if the wallet is locked. The secret key stays inside the closure — callers
    *  receive a working provider but never see the raw key. */
@@ -98,6 +104,12 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const scanAbortRef = useRef<AbortController | null>(null)
   // Nostr private key: held in a ref, never in state, wiped on lock
   const nostrSecretKeyRef = useRef<string | null>(null)
+  // Persistent messaging provider — held in a ref so it survives re-renders without
+  // triggering them; state below is what actually drives UI updates.
+  const messagingProviderRef = useRef<NostrMessagingProvider | null>(null)
+  const [messagingStatus, setMessagingStatus] = useState<MessagingConnectionStatus>('disconnected')
+  const [messages, setMessages] = useState<CaravelMessage[]>([])
+  const [relayStates, setRelayStates] = useState<RelayState[]>([])
 
   const startScan = useCallback((w: SecretKeyWallet, addr: string) => {
     // Cancel any prior scan
@@ -156,6 +168,27 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
   const generateMnemonic = useCallback(() => createMnemonic(), [])
 
+  // Tears down any existing provider, starts a new one with the given identity, and
+  // wires status + message callbacks into React state. Returns immediately — relay
+  // connections happen in the background so unlock never waits for the network.
+  const startMessaging = useCallback((secretHex: string, pubkeyHex: string) => {
+    messagingProviderRef.current?.disconnect()
+    const provider = new NostrMessagingProvider(secretHex, pubkeyHex, DEFAULT_RELAYS)
+    messagingProviderRef.current = provider
+    setMessagingStatus('connecting')
+    provider.subscribe(
+      (msg) => setMessages(prev => [...prev, msg]),
+      (status) => {
+        // Guard against stale callbacks firing after lock() replaces or clears the provider
+        if (messagingProviderRef.current !== provider) return
+        setMessagingStatus(status)
+        setRelayStates(provider.getRelayStates())
+      }
+    )
+    // Set initial relay states synchronously — subscribe() already set status to 'connecting'
+    setRelayStates(provider.getRelayStates())
+  }, [])
+
   const createWallet = useCallback(async (mnemonic: string, password: string) => {
     const stored = await encryptMnemonic(mnemonic, password)
     saveStoredWallet(stored)
@@ -167,7 +200,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     setNostrPubkeyHex(nostr.publicKeyHex)
     const w = await walletFromSeed(seed)
     await materialize(w)
-  }, [materialize])
+    startMessaging(nostr.privateKeyHex, nostr.publicKeyHex)
+  }, [materialize, startMessaging])
 
   const unlock = useCallback(async (password: string) => {
     const stored = loadStoredWallet()
@@ -180,7 +214,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     setNostrPubkeyHex(nostr.publicKeyHex)
     const w = await walletFromSeed(seed)
     await materialize(w)
-  }, [materialize])
+    startMessaging(nostr.privateKeyHex, nostr.publicKeyHex)
+  }, [materialize, startMessaging])
 
   const restore = useCallback(async (mnemonic: string, password: string) => {
     const stored = await encryptMnemonic(mnemonic, password)
@@ -193,11 +228,17 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     setNostrPubkeyHex(nostr.publicKeyHex)
     const w = await walletFromSeed(seed)
     await materialize(w)
-  }, [materialize])
+    startMessaging(nostr.privateKeyHex, nostr.publicKeyHex)
+  }, [materialize, startMessaging])
 
   const lock = useCallback(() => {
     scanAbortRef.current?.abort()
     scanAbortRef.current = null
+    messagingProviderRef.current?.disconnect()
+    messagingProviderRef.current = null
+    setMessagingStatus('disconnected')
+    setMessages([])
+    setRelayStates([])
     setScan(SCAN_IDLE)
     setWallet(null)
     setAddress(null)
@@ -234,6 +275,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   return (
     <Ctx.Provider value={{
       walletExists, wallet, address, nostrNpub, nostrPubkeyHex, scan, txHistory,
+      messagingStatus, messages, relayStates,
       generateMnemonic, createWallet, unlock, restore, lock, getMnemonic, rescan, recordSent,
       createMessagingProvider,
     }}>

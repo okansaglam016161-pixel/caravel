@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { decryptOwnedUtxo, WasmStealthCrypto, Network } from '@tari-project/ootle'
 import type { IndexerGetSubstateResponse } from '@tari-project/ootle'
 import { useWallet } from '../../context/WalletContext'
@@ -9,8 +9,7 @@ import * as nip19 from 'nostr-tools/nip19'
 import { wrapMessage, unwrapMessage, publishGiftWrap, waitForGiftWrap } from '../../crypto/nostrMessaging'
 import type { PublishResult } from '../../crypto/nostrMessaging'
 import { DEFAULT_RELAYS } from '../../config/relays'
-// TEMPORARY — M8.1 REAL IDENTITY TEST · REMOVE BEFORE SHIPPING
-import type { MessagingProvider } from '../../messaging/types'
+// TEMPORARY — M8.2 MESSAGING LIFECYCLE · REMOVE BEFORE SHIPPING
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -205,7 +204,7 @@ const RELAY_IDLE: RelayTestState = {
 }
 
 export default function DecryptPanel() {
-  const { wallet, nostrNpub, createMessagingProvider } = useWallet()
+  const { wallet, nostrNpub, createMessagingProvider, messagingStatus, messages, relayStates } = useWallet()
   const [utxoId, setUtxoId] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -297,48 +296,22 @@ export default function DecryptPanel() {
     }
   }
 
-  // TEMPORARY — M8.1 REAL IDENTITY TEST · REMOVE BEFORE SHIPPING
+  // TEMPORARY — M8.2 MESSAGING LIFECYCLE · REMOVE BEFORE SHIPPING
   const NPUB_A = 'npub1f80mhkkj8hw2ay8xpqwn3c742ptuldvpxlk68k92el5hs22xllpqsknttt'
   const NPUB_B = 'npub1zc7uw0w0kdczqzhjpsxe7tnh3ewzaz52hwfkx72mv6tkfjgql8pq7zq82h'
 
-  type SubStatus = 'idle' | 'connecting' | 'listening' | 'error'
-  interface ReceivedMsg { id: string; senderNpub: string; plaintext: string; receivedAt: string }
-
-  const activeProviderRef = useRef<MessagingProvider | null>(null)
-  const [subStatus, setSubStatus] = useState<SubStatus>('idle')
-  const [subError, setSubError] = useState<string | null>(null)
-  const [receivedMsgs, setReceivedMsgs] = useState<ReceivedMsg[]>([])
   const [recipientNpub, setRecipientNpub] = useState('')
   const [sendText, setSendText] = useState('')
   const [sendResult, setSendResult] = useState<{ id: string } | null>(null)
   const [sendError, setSendError] = useState<string | null>(null)
   const [sending, setSending] = useState(false)
 
-  async function startListening() {
-    const provider = createMessagingProvider()
-    if (!provider) { setSubError('Wallet is locked — unlock first'); return }
-    activeProviderRef.current = provider
-    setSubStatus('connecting')
-    setSubError(null)
-    try {
-      await provider.subscribe((msg) => {
-        const senderNpub = nip19.npubEncode(msg.senderPubkeyHex)
-        const receivedAt = new Date(msg.timestamp).toLocaleTimeString()
-        setReceivedMsgs(prev => [...prev, { id: msg.id, senderNpub, plaintext: msg.plaintext, receivedAt }])
-      })
-      setSubStatus('listening')
-    } catch (e) {
-      setSubError(e instanceof Error ? e.message : String(e))
-      setSubStatus('error')
-      activeProviderRef.current = null
-    }
-  }
-
-  function stopListening() {
-    activeProviderRef.current?.disconnect()
-    activeProviderRef.current = null
-    setSubStatus('idle')
-  }
+  // 1s ticker so "heartbeat Xs ago" counts up live between status pushes (dev-panel only).
+  const [nowTick, setNowTick] = useState(Date.now())
+  useEffect(() => {
+    const h = setInterval(() => setNowTick(Date.now()), 1000)
+    return () => clearInterval(h)
+  }, [])
 
   async function sendMsg() {
     if (!recipientNpub.trim() || !sendText.trim()) return
@@ -557,66 +530,89 @@ export default function DecryptPanel() {
         )}
       </div>
 
-      {/* TEMPORARY — M8.1 REAL IDENTITY TEST · REMOVE BEFORE SHIPPING */}
+      {/* TEMPORARY — M8.2 MESSAGING LIFECYCLE · REMOVE BEFORE SHIPPING */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '14px 16px', borderRadius: 10, background: 'rgba(255,200,80,0.04)', border: '2px dashed rgba(220,160,0,0.4)' }}>
         <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: '#AA8800', letterSpacing: '0.14em' }}>
-          ⚠ TEMPORARY — M8.1 REAL IDENTITY · REMOVE BEFORE SHIPPING
+          ⚠ TEMPORARY — M8.2 MESSAGING LIFECYCLE · REMOVE BEFORE SHIPPING
         </div>
 
-        {/* A — Subscribe */}
+        {/* A — Connection status */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: '#55617D', letterSpacing: '0.12em' }}>
-            A — SUBSCRIBE (listen for incoming kind 1059)
+            A — MESSAGING STATUS
           </div>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            <button
-              onClick={subStatus === 'idle' || subStatus === 'error' ? startListening : stopListening}
-              disabled={subStatus === 'connecting'}
-              style={{
-                padding: '8px 14px', borderRadius: 8, border: 'none',
-                background: subStatus === 'listening' ? 'rgba(255,80,80,0.18)' : subStatus === 'connecting' ? 'rgba(120,150,210,0.15)' : 'rgba(220,160,0,0.18)',
-                color: subStatus === 'listening' ? '#FF8080' : subStatus === 'connecting' ? '#55617D' : '#DDAA00',
-                fontSize: 12, fontWeight: 700, cursor: subStatus === 'connecting' ? 'default' : 'pointer',
-                fontFamily: "'IBM Plex Mono', monospace",
-              }}
-            >
-              {subStatus === 'listening' ? 'Stop listening' : subStatus === 'connecting' ? 'Connecting...' : 'Start listening'}
-            </button>
-            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: subStatus === 'listening' ? '#4EC9A0' : subStatus === 'connecting' ? '#8A97B4' : '#55617D' }}>
-              {subStatus === 'listening' ? 'Listening on both relays' : subStatus === 'connecting' ? 'Awaiting relay connections (up to 10s)...' : subStatus === 'error' ? 'Error — see below' : 'Idle'}
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <div style={{
+              width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
+              background: messagingStatus === 'connected' ? '#4EC9A0' :
+                          messagingStatus === 'connecting' ? '#DDAA00' :
+                          messagingStatus === 'degraded' ? '#FF9944' : '#55617D',
+            }} />
+            <span style={{
+              fontFamily: "'IBM Plex Mono', monospace", fontSize: 11,
+              color: messagingStatus === 'connected' ? '#4EC9A0' :
+                     messagingStatus === 'connecting' ? '#DDAA00' :
+                     messagingStatus === 'degraded' ? '#FF9944' : '#55617D',
+            }}>
+              {messagingStatus.toUpperCase()}
             </span>
           </div>
-          {subError && (
-            <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: '#FF6B6B', wordBreak: 'break-all', lineHeight: 1.4 }}>
-              {subError}
-            </div>
-          )}
-          {receivedMsgs.length > 0 && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
-              <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: '#55617D', letterSpacing: '0.12em' }}>
-                RECEIVED ({receivedMsgs.length})
-              </div>
-              {receivedMsgs.map(m => (
-                <div key={m.id} style={{ padding: '8px 10px', borderRadius: 6, background: '#10151F', border: '1px solid rgba(45,224,198,0.15)', display: 'flex', flexDirection: 'column', gap: 2 }}>
-                  <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: '#55617D' }}>
-                    from {m.senderNpub.slice(0, 20)}... · {m.receivedAt}
-                  </div>
-                  <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: '#EAFBF7', wordBreak: 'break-word', lineHeight: 1.4 }}>
-                    {m.plaintext}
-                  </div>
-                  <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, color: '#3A4A5A' }}>
-                    id {m.id.slice(0, 16)}...
-                  </div>
+          {relayStates.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginLeft: 2 }}>
+              {relayStates.map(rs => (
+                <div key={rs.url} style={{ display: 'flex', gap: 8, alignItems: 'center', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10 }}>
+                  <div style={{
+                    width: 6, height: 6, borderRadius: '50%', flexShrink: 0,
+                    background: rs.status === 'connected' ? '#4EC9A0' :
+                                rs.status === 'connecting' ? '#DDAA00' :
+                                rs.status === 'failed' ? '#FF6B6B' : '#55617D',
+                  }} />
+                  <span style={{ color: '#8A97B4' }}>{rs.url.replace('wss://', '')}</span>
+                  <span style={{
+                    color: rs.status === 'connected' ? '#4EC9A0' :
+                           rs.status === 'connecting' ? '#DDAA00' :
+                           rs.status === 'failed' ? '#FF6B6B' : '#8A97B4',
+                  }}>{rs.status}</span>
+                  {rs.retries > 0 && (
+                    <span style={{ color: '#55617D' }}>({rs.retries} retries)</span>
+                  )}
+                  <span style={{ color: rs.lastHeartbeatOk !== null && (nowTick - rs.lastHeartbeatOk) < 45_000 ? '#3A9E6A' : '#55617D' }}>
+                    {rs.lastHeartbeatOk === null
+                      ? '♥ never'
+                      : `♥ ${Math.max(0, Math.round((nowTick - rs.lastHeartbeatOk) / 1000))}s ago`}
+                  </span>
                 </div>
               ))}
             </div>
           )}
         </div>
 
-        {/* B — Send */}
+        {/* B — Received messages */}
+        {messages.length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: '#55617D', letterSpacing: '0.12em' }}>
+              B — RECEIVED ({messages.length})
+            </div>
+            {messages.map(m => (
+              <div key={m.id} style={{ padding: '8px 10px', borderRadius: 6, background: '#10151F', border: '1px solid rgba(45,224,198,0.15)', display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: '#55617D' }}>
+                  from {nip19.npubEncode(m.senderPubkeyHex).slice(0, 20)}... · {new Date(m.timestamp).toLocaleTimeString()}
+                </div>
+                <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: '#EAFBF7', wordBreak: 'break-word', lineHeight: 1.4 }}>
+                  {m.plaintext}
+                </div>
+                <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 9, color: '#3A4A5A' }}>
+                  id {m.id.slice(0, 16)}...
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* C — Send */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: '#55617D', letterSpacing: '0.12em' }}>
-            B — SEND (gift-wrap to recipient)
+            C — SEND (gift-wrap to recipient)
           </div>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             <button onClick={() => setRecipientNpub(NPUB_A)}

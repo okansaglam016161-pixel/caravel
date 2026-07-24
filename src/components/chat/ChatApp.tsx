@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import * as nip19 from 'nostr-tools/nip19'
 import Logo from '../Logo'
@@ -90,15 +90,27 @@ function avatarFor(peerHex: string) {
   return AVATARS[h % AVATARS.length]
 }
 
+// Cap on a single message. A longer paste would just be rejected by relays and surface as a
+// confusing "all relays rejected" error rather than a clear reason, so stop it at the input.
+const MAX_MESSAGE_LEN = 2000
+
+// Composer grows with content up to this height (~5-6 lines), then scrolls internally.
+const COMPOSER_MAX_H = 120
+
 // ── Component ────────────────────────────────────────────────────────────────────
 
 export default function ChatApp() {
-  const { address, scan, messages, nostrPubkeyHex } = useWallet()
+  const { address, scan, messages, nostrPubkeyHex, createMessagingProvider, recordSentMessage } = useWallet()
   const [walletOpen, setWalletOpen] = useState(false)
   const [balanceHidden, setBalanceHidden] = useState(false)
 
   // Selected conversation (peer hex). UI state only — falls back to most-recent when unset.
   const [selectedPeer, setSelectedPeer] = useState<string | null>(null)
+
+  // Composer state.
+  const [draft, setDraft] = useState('')
+  const [sending, setSending] = useState(false)
+  const [sendError, setSendError] = useState<string | null>(null)
 
   // Nicknames for the current identity, loaded from localStorage and re-derived on save.
   const [nicknames, setNicknames] = useState<NicknameMap>({})
@@ -126,6 +138,49 @@ export default function ChatApp() {
     }
     setEditingNick(false)
   }
+
+  // Send the composer draft to the selected conversation. Same proven path as the dev panel:
+  // a throwaway provider per send (a separate NostrMessagingProvider instance — it does NOT
+  // disturb the long-lived subscription in WalletContext), then record the returned message so
+  // it appears in the thread immediately without waiting for a relay round-trip.
+  async function handleSend() {
+    const text = draft.trim()
+    if (!text || !selectedConvo || sending) return
+    setSending(true)
+    setSendError(null)
+    try {
+      const provider = createMessagingProvider()
+      // Locked wallet → null. Surface a clear reason rather than leaking a null-reference error.
+      if (!provider) throw new Error('Wallet is locked — unlock to send')
+      const msg = await provider.sendMessage(selectedConvo.peerHex, text)
+      provider.disconnect()
+      recordSentMessage(msg)
+      setDraft('')  // clear only on success — a failed send keeps the text
+    } catch (e) {
+      setSendError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setSending(false)
+    }
+  }
+
+  // Auto-scroll to newest: on conversation open and whenever this thread gains a message.
+  const bottomRef = useRef<HTMLDivElement>(null)
+  const selectedPeerHex = selectedConvo?.peerHex ?? null
+  const selectedCount = selectedConvo?.messages.length ?? 0
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ block: 'end' })
+  }, [selectedPeerHex, selectedCount])
+
+  // Auto-grow the composer with its content: reset to 'auto' to measure, then set to the
+  // content height capped at COMPOSER_MAX_H (beyond which it scrolls internally). Keyed on the
+  // draft, so it grows on Shift+Enter/wrap, shrinks on delete, and resets to one line on send.
+  const composerRef = useRef<HTMLTextAreaElement>(null)
+  useEffect(() => {
+    const el = composerRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = Math.min(el.scrollHeight, COMPOSER_MAX_H) + 'px'
+  }, [draft])
 
   // Truncate address for display: otl_esm_1abc…xyz
   const shortAddr = address
@@ -358,30 +413,73 @@ export default function ChatApp() {
                 </div>
               )
             ))}
+            {/* Auto-scroll anchor */}
+            <div ref={bottomRef} />
           </div>
 
-          {/* Composer (visually present, not yet wired — M8.5) */}
-          <div style={{ padding: '16px 24px 20px', borderTop: '1px solid rgba(120,150,210,0.1)' }}>
-            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 12 }}>
-              {/* TARI button */}
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 48, height: 48, flexShrink: 0, borderRadius: 13, background: 'linear-gradient(180deg, var(--accB,#34E5D0), var(--accD,#12A594))', cursor: 'pointer', boxShadow: '0 0 18px rgba(var(--accRGB,45,224,198),0.28)' }} title="Attach confidential payment">
-                <svg width={22} height={22} viewBox="0 0 24 24" fill="none" stroke="var(--accOn,#04120F)" strokeWidth={2.3} strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>
+          {/* Composer */}
+          {(() => {
+            const canSend = !!draft.trim() && !sending
+            const showCounter = draft.length >= MAX_MESSAGE_LEN - 200
+            return (
+            <div style={{ padding: '16px 24px 20px', borderTop: '1px solid rgba(120,150,210,0.1)' }}>
+              {/* Send failure — inline, draft preserved */}
+              {sendError && (
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7, marginBottom: 10, fontSize: 12, color: '#FF6B6B', fontFamily: "'IBM Plex Mono', monospace", lineHeight: 1.45 }}>
+                  <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="#FF6B6B" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 1 }}><circle cx={12} cy={12} r={10} /><path d="M12 8v4M12 16h.01" /></svg>
+                  <span style={{ wordBreak: 'break-word' }}>Couldn't send — {sendError}</span>
+                </div>
+              )}
+              <div style={{ display: 'flex', alignItems: 'flex-end', gap: 12 }}>
+                {/* TARI button (inert — M10) */}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 48, height: 48, flexShrink: 0, borderRadius: 13, background: 'linear-gradient(180deg, var(--accB,#34E5D0), var(--accD,#12A594))', cursor: 'pointer', boxShadow: '0 0 18px rgba(var(--accRGB,45,224,198),0.28)' }} title="Attach confidential payment">
+                  <svg width={22} height={22} viewBox="0 0 24 24" fill="none" stroke="var(--accOn,#04120F)" strokeWidth={2.3} strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>
+                </div>
+                {/* Text input */}
+                <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 12, padding: '13px 18px', borderRadius: 14, background: '#10151F', border: '1px solid rgba(120,150,210,0.14)' }}>
+                  <textarea
+                    ref={composerRef}
+                    className="cv-composer"
+                    value={draft}
+                    onChange={e => { setDraft(e.target.value); if (sendError) setSendError(null) }}
+                    onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() } }}
+                    placeholder="Write an encrypted message…"
+                    rows={1}
+                    maxLength={MAX_MESSAGE_LEN}
+                    disabled={sending}
+                    style={{ flex: 1, resize: 'none', background: 'transparent', border: 'none', outline: 'none', color: '#E4EAF4', fontSize: 15, fontFamily: 'inherit', lineHeight: 1.4, maxHeight: COMPOSER_MAX_H, overflowY: 'auto', padding: 0, display: 'block' }}
+                  />
+                  <svg width={19} height={19} viewBox="0 0 24 24" fill="none" stroke="#55617D" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><circle cx={12} cy={12} r={10} /><path d="M8 14s1.5 2 4 2 4-2 4-2M9 9h.01M15 9h.01" /></svg>
+                </div>
+                {/* Send button */}
+                <button
+                  onClick={handleSend}
+                  disabled={!canSend}
+                  title="Send message"
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 48, height: 48, flexShrink: 0, borderRadius: 13, background: '#161C28', border: '1px solid rgba(120,150,210,0.16)', cursor: canSend ? 'pointer' : 'default', opacity: canSend || sending ? 1 : 0.5, padding: 0 }}
+                >
+                  {sending ? (
+                    <svg width={20} height={20} viewBox="0 0 24 24" fill="none" stroke="#8A97B4" strokeWidth={2.5} strokeLinecap="round" style={{ animation: 'spin 1s linear infinite' }}><path d="M21 12a9 9 0 1 1-6.219-8.56" /></svg>
+                  ) : (
+                    <svg width={20} height={20} viewBox="0 0 24 24" fill="none" stroke={canSend ? 'var(--acc,#2DE0C6)' : '#8A97B4'} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" /></svg>
+                  )}
+                </button>
               </div>
-              {/* Text input */}
-              <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 12, padding: '13px 18px', borderRadius: 14, background: '#10151F', border: '1px solid rgba(120,150,210,0.14)' }}>
-                <span style={{ flex: 1, fontSize: 15, color: '#55617D' }}>Write an encrypted message…</span>
-                <svg width={19} height={19} viewBox="0 0 24 24" fill="none" stroke="#55617D" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round"><circle cx={12} cy={12} r={10} /><path d="M8 14s1.5 2 4 2 4-2 4-2M9 9h.01M15 9h.01" /></svg>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginTop: 11, paddingLeft: 4 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                  <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="var(--acc,#2DE0C6)" strokeWidth={2} strokeLinecap="round"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>
+                  <span style={{ fontSize: 12, color: '#5E8A82' }}>Tap the <span style={{ color: 'var(--acc,#2DE0C6)', fontWeight: 600 }}>TARI</span> button to attach a confidential payment to your message</span>
+                </div>
+                {showCounter && (
+                  <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: draft.length >= MAX_MESSAGE_LEN ? '#FF6B6B' : '#8A97B4', flexShrink: 0 }}>
+                    {draft.length}/{MAX_MESSAGE_LEN}
+                  </span>
+                )}
               </div>
-              {/* Send button */}
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 48, height: 48, flexShrink: 0, borderRadius: 13, background: '#161C28', border: '1px solid rgba(120,150,210,0.16)', cursor: 'pointer' }}>
-                <svg width={20} height={20} viewBox="0 0 24 24" fill="none" stroke="#8A97B4" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" /></svg>
-              </div>
+              <style>{`.cv-composer::placeholder { color: #55617D; }`}</style>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 11, paddingLeft: 4 }}>
-              <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="var(--acc,#2DE0C6)" strokeWidth={2} strokeLinecap="round"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>
-              <span style={{ fontSize: 12, color: '#5E8A82' }}>Tap the <span style={{ color: 'var(--acc,#2DE0C6)', fontWeight: 600 }}>TARI</span> button to attach a confidential payment to your message</span>
-            </div>
-          </div>
+            )
+          })()}
           </>
           )}
         </div>

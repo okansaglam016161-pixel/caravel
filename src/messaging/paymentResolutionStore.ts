@@ -30,3 +30,14 @@ export function cacheResolvedAmount(myPubkeyHex: string, utxoId: string, amountM
     localStorage.setItem(key(myPubkeyHex), JSON.stringify(map))
   } catch { /* quota / private mode */ }
 }
+
+// Drop cached amounts for the given utxo ids (M9.0a conversation delete).
+export function removeResolvedAmounts(myPubkeyHex: string, utxoIds: string[]): void {
+  if (utxoIds.length === 0) return
+  try {
+    const map = loadResolvedAmounts(myPubkeyHex)
+    let changed = false
+    for (const id of utxoIds) { if (id in map) { delete map[id]; changed = true } }
+    if (changed) localStorage.setItem(key(myPubkeyHex), JSON.stringify(map))
+  } catch { /* quota / private mode */ }
+}

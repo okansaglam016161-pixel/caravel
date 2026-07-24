@@ -15,7 +15,9 @@ import { scanWallet, type ScannedUtxo, type ScanProgress } from '../crypto/walle
 import { loadHistory, addSent, mergeReceived, type TxEntry, type NewSentParams } from '../crypto/txHistory'
 import { NostrMessagingProvider } from '../messaging/NostrMessagingProvider'
 import type { MessagingProvider, MessagingConnectionStatus, CaravelMessage } from '../messaging/types'
-import { loadMessages, addReceivedMessage, addSentMessage } from '../messaging/messageStore'
+import { loadMessages, addReceivedMessage, addSentMessage, deletePeerMessages } from '../messaging/messageStore'
+import { loadTombstoneIdSet, recordTombstones } from '../messaging/tombstoneStore'
+import { removeResolvedAmounts } from '../messaging/paymentResolutionStore'
 import { DEFAULT_RELAYS } from '../config/relays'
 
 // ── Scan state ────────────────────────────────────────────────────────────────
@@ -75,6 +77,9 @@ export interface WalletCtx {
   messages: CaravelMessage[]
   /** Persist + surface a message we just sent (the CaravelMessage returned by sendMessage). */
   recordSentMessage: (msg: CaravelMessage) => void
+  /** Delete a conversation locally: tombstone its message ids (so the relay backfill can't
+   *  resurrect them), then clear its messages + resolved payment amounts. Local-only. */
+  deleteConversation: (peerHex: string) => void
   /** Factory: returns a ready-to-use MessagingProvider backed by the current identity,
    *  or null if the wallet is locked. The secret key stays inside the closure — callers
    *  receive a working provider but never see the raw key. */
@@ -109,6 +114,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   // Persistent messaging provider — held in a ref so it survives re-renders without
   // triggering them; state below is what actually drives UI updates.
   const messagingProviderRef = useRef<NostrMessagingProvider | null>(null)
+  // In-memory tombstone set (deleted gift-wrap event ids) — loaded once per unlock so a backfill
+  // burst checks memory, not localStorage per message. Kept in sync on delete.
+  const tombstonesRef = useRef<Set<string>>(new Set())
   const [messagingStatus, setMessagingStatus] = useState<MessagingConnectionStatus>('disconnected')
   const [messages, setMessages] = useState<CaravelMessage[]>([])
 
@@ -177,13 +185,19 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     // Load persisted history for this identity before subscribing, so it's visible
     // immediately on unlock without waiting for a relay round-trip.
     setMessages(loadMessages(pubkeyHex))
+    // Load deleted-message tombstones (pruned) so the relay's 2-day backfill can't resurrect them.
+    tombstonesRef.current = loadTombstoneIdSet(pubkeyHex)
     const provider = new NostrMessagingProvider(secretHex, pubkeyHex, DEFAULT_RELAYS)
     messagingProviderRef.current = provider
     setMessagingStatus('connecting')
     provider.subscribe(
       // Merge-and-persist each arrival. Mirrors txHistory's setTxHistory(prev => addSent(...))
       // pattern: the store helper dedups, writes localStorage, and returns the next array.
-      (msg) => setMessages(prev => addReceivedMessage(pubkeyHex, prev, msg)),
+      // Tombstoned ids (deleted conversations) are dropped silently before they hit the store.
+      (msg) => {
+        if (tombstonesRef.current.has(msg.id)) return
+        setMessages(prev => addReceivedMessage(pubkeyHex, prev, msg))
+      },
       (status) => {
         // Guard against stale callbacks firing after lock() replaces or clears the provider
         if (messagingProviderRef.current !== provider) return
@@ -239,6 +253,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     scanAbortRef.current = null
     messagingProviderRef.current?.disconnect()
     messagingProviderRef.current = null
+    tombstonesRef.current = new Set()
     setMessagingStatus('disconnected')
     setMessages([])
     setScan(SCAN_IDLE)
@@ -272,6 +287,28 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     setMessages(prev => addSentMessage(nostrPubkeyHex, prev, msg))
   }, [nostrPubkeyHex])
 
+  // Delete a conversation and everything tied to it (M9.0a), LOCAL-ONLY — nothing is sent to the
+  // relays or the peer. ORDER MATTERS: tombstone the deleted ids FIRST (and update the in-memory
+  // set) so a relay backfill arriving in the gap can't repopulate the conversation, THEN clear the
+  // stores. Nickname + Tari address are cleared by ChatApp (which owns their React state).
+  const deleteConversation = useCallback((peerHex: string) => {
+    const pubkeyHex = nostrPubkeyHex
+    if (!pubkeyHex) return
+    const inConvo = messages.filter(m =>
+      (m.direction === 'received' ? m.senderPubkeyHex : m.recipientPubkeyHex) === peerHex
+    )
+    const ids = inConvo.map(m => m.id)
+    const utxoIds = inConvo.map(m => m.payment?.utxoId).filter((x): x is string => !!x)
+
+    // 1) Tombstone FIRST — persist + block the live subscription immediately.
+    recordTombstones(pubkeyHex, ids)
+    for (const id of ids) tombstonesRef.current.add(id)
+
+    // 2) THEN clear the stores this context owns.
+    removeResolvedAmounts(pubkeyHex, utxoIds)
+    setMessages(prev => deletePeerMessages(pubkeyHex, prev, peerHex))
+  }, [nostrPubkeyHex, messages])
+
   // Factory: constructs a MessagingProvider backed by the current Nostr identity.
   // The secret key is captured from the ref at call time — it never appears on the
   // context value, and callers receive a working provider without ever seeing the key.
@@ -286,7 +323,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       walletExists, wallet, address, nostrNpub, nostrPubkeyHex, scan, txHistory,
       messagingStatus, messages,
       generateMnemonic, createWallet, unlock, restore, lock, getMnemonic, rescan, recordSent,
-      recordSentMessage, createMessagingProvider,
+      recordSentMessage, deleteConversation, createMessagingProvider,
     }}>
       {children}
     </Ctx.Provider>

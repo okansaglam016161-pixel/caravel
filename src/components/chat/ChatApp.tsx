@@ -302,12 +302,16 @@ function PaymentMessageCard({ message }: { message: CaravelMessage }) {
 // ── Component ────────────────────────────────────────────────────────────────────
 
 export default function ChatApp() {
-  const { wallet, address, scan, messages, nostrPubkeyHex, messagingStatus, createMessagingProvider, recordSentMessage } = useWallet()
+  const { wallet, address, scan, messages, nostrPubkeyHex, messagingStatus, createMessagingProvider, recordSentMessage, deleteConversation } = useWallet()
   const [walletOpen, setWalletOpen] = useState(false)
   const [balanceHidden, setBalanceHidden] = useState(false)
 
   // Selected conversation (peer hex). UI state only — falls back to most-recent when unset.
   const [selectedPeer, setSelectedPeer] = useState<string | null>(null)
+
+  // Conversation ⋯ menu + delete confirmation.
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
 
   // Composer state.
   const [draft, setDraft] = useState('')
@@ -357,6 +361,22 @@ export default function ChatApp() {
       setNicknames(prev => setNickname(nostrPubkeyHex, prev, selectedConvo.peerHex, nickDraft))
     }
     setEditingNick(false)
+  }
+
+  // Delete the selected conversation and everything tied to it (local-only). Context tombstones
+  // the message ids FIRST then clears messages + resolved amounts; here we clear the nickname and
+  // Tari address (whose React state ChatApp owns), then fall back to another conversation / empty.
+  function performDelete() {
+    if (!selectedConvo) return
+    const peer = selectedConvo.peerHex
+    deleteConversation(peer)
+    if (nostrPubkeyHex) {
+      setNicknames(prev => setNickname(nostrPubkeyHex, prev, peer, ''))
+      setTariAddresses(prev => setTariAddress(nostrPubkeyHex, prev, peer, ''))
+    }
+    setSelectedPeer(null)   // fall back to most-recent remaining conversation, or the empty state
+    setConfirmDelete(false)
+    setMenuOpen(false)
   }
 
   // Send the composer draft to the selected conversation. Same proven path as the dev panel:
@@ -513,6 +533,7 @@ export default function ChatApp() {
     setConfirming(false)
     setPayError(null)
     setPayAmount('')
+    setMenuOpen(false)
   }, [selectedPeerHex])
 
   // Auto-grow the composer with its content: reset to 'auto' to measure, then set to the
@@ -724,8 +745,32 @@ export default function ChatApp() {
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 36, height: 36, borderRadius: 10, border: '1px solid rgba(120,150,210,0.16)', cursor: 'pointer' }}>
                 <svg width={17} height={17} viewBox="0 0 24 24" fill="none" stroke="#8A97B4" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round"><path d="M23 7l-7 5 7 5V7z" /><rect x={1} y={5} width={15} height={14} rx={2} /></svg>
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 36, height: 36, borderRadius: 10, border: '1px solid rgba(120,150,210,0.16)', cursor: 'pointer' }}>
-                <svg width={17} height={17} viewBox="0 0 24 24" fill="none" stroke="#8A97B4" strokeWidth={1.9} strokeLinecap="round"><circle cx={12} cy={12} r={1.6} /><circle cx={19} cy={12} r={1.6} /><circle cx={5} cy={12} r={1.6} /></svg>
+              {/* ⋯ menu */}
+              <div style={{ position: 'relative' }}>
+                <button
+                  onClick={() => setMenuOpen(o => !o)}
+                  title="Conversation options"
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 36, height: 36, borderRadius: 10, border: '1px solid rgba(120,150,210,0.16)', background: menuOpen ? 'rgba(120,150,210,0.1)' : 'transparent', cursor: 'pointer', padding: 0 }}
+                >
+                  <svg width={17} height={17} viewBox="0 0 24 24" fill="none" stroke="#8A97B4" strokeWidth={1.9} strokeLinecap="round"><circle cx={12} cy={12} r={1.6} /><circle cx={19} cy={12} r={1.6} /><circle cx={5} cy={12} r={1.6} /></svg>
+                </button>
+                {menuOpen && (
+                  <>
+                    {/* Invisible backdrop to close on outside click */}
+                    <div onClick={() => setMenuOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+                    <div style={{ position: 'absolute', top: 42, right: 0, zIndex: 41, minWidth: 190, padding: 6, borderRadius: 10, background: '#141A24', border: '1px solid rgba(120,150,210,0.18)', boxShadow: '0 10px 30px rgba(0,0,0,0.5)' }}>
+                      <button
+                        onClick={() => { setMenuOpen(false); setConfirmDelete(true) }}
+                        style={{ display: 'flex', alignItems: 'center', gap: 9, width: '100%', padding: '9px 11px', borderRadius: 7, border: 'none', background: 'transparent', color: '#FF6B6B', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}
+                        onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,107,107,0.1)')}
+                        onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                      >
+                        <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="#FF6B6B" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /><path d="M10 11v6M14 11v6" /></svg>
+                        Delete conversation
+                      </button>
+                    </div>
+                  </>
+                )}
               </div>
             </div>
           </div>
@@ -946,6 +991,43 @@ export default function ChatApp() {
     </div>
 
     {walletOpen && <WalletModal onClose={() => setWalletOpen(false)} />}
+
+    {/* Delete-conversation confirmation — destructive, localStorage is the only copy */}
+    {confirmDelete && selectedConvo && (
+      <div
+        onClick={() => setConfirmDelete(false)}
+        style={{ position: 'fixed', inset: 0, zIndex: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(4,7,12,0.72)', padding: 24 }}
+      >
+        <div
+          onClick={e => e.stopPropagation()}
+          style={{ width: '100%', maxWidth: 420, padding: '24px 24px 20px', borderRadius: 16, background: '#111722', border: '1px solid rgba(255,107,107,0.3)', boxShadow: '0 24px 60px rgba(0,0,0,0.6)' }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 14 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 40, height: 40, borderRadius: 11, background: 'rgba(255,107,107,0.12)', flexShrink: 0 }}>
+              <svg width={20} height={20} viewBox="0 0 24 24" fill="none" stroke="#FF6B6B" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /><path d="M10 11v6M14 11v6" /></svg>
+            </div>
+            <div style={{ fontSize: 17, fontWeight: 700, color: '#F2F5FB' }}>Delete conversation?</div>
+          </div>
+          <div style={{ fontSize: 14, color: '#B4C0D4', lineHeight: 1.6, marginBottom: 20 }}>
+            All messages, the nickname, and payment history with <b style={{ color: '#E8EEF9' }}>{displayName(selectedConvo.peerHex)}</b> will be permanently removed from this device and <b style={{ color: '#FF8A8A' }}>cannot be recovered</b>. The other person keeps their copy.
+          </div>
+          <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+            <button
+              onClick={() => setConfirmDelete(false)}
+              style={{ padding: '10px 18px', borderRadius: 9, border: '1px solid rgba(120,150,210,0.25)', background: 'transparent', color: '#8A97B4', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}
+            >
+              Cancel
+            </button>
+            <button
+              onClick={performDelete}
+              style={{ padding: '10px 18px', borderRadius: 9, border: 'none', background: '#E5484D', color: '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}
+            >
+              Delete
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
     </>
   )
 }

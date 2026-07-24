@@ -69,3 +69,17 @@ export function addReceivedMessage(pubkeyHex: string, current: CaravelMessage[],
   save(pubkeyHex, next)
   return next
 }
+
+// Delete every message belonging to one peer conversation (M9.0a). Membership matches
+// ChatApp's deriveConversations: the "other party" is senderPubkeyHex for received, recipientPubkeyHex
+// for sent. Returns the remaining messages (also persisted). Caller must tombstone the deleted ids
+// FIRST so a relay backfill can't repopulate them in the gap.
+export function deletePeerMessages(pubkeyHex: string, current: CaravelMessage[], peerHex: string): CaravelMessage[] {
+  const next = current.filter(m => {
+    const other = m.direction === 'received' ? m.senderPubkeyHex : m.recipientPubkeyHex
+    return other !== peerHex
+  })
+  if (next.length === current.length) return current
+  save(pubkeyHex, next)
+  return next
+}

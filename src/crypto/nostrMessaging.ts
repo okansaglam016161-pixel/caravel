@@ -18,6 +18,12 @@ const KIND_PRIVATE_DM = 14
 const PAYMENT_TAG = 'caravel-payment'
 const PAYMENT_TAG_VERSION = 'v1'
 
+// Caravel Tari-address tag (M9.0d) — same seal-protected, versioned pattern as the payment tag.
+// Wire format: ["caravel-tari-address", "v1", "<otl_esm_...>"]. Carries a contact's Tari address,
+// authenticated by the seal.pubkey === rumor.pubkey check so it is bound to the sender's identity.
+const ADDRESS_TAG = 'caravel-tari-address'
+const ADDRESS_TAG_VERSION = 'v1'
+
 // Pulls a payment reference out of the rumor's tags, or undefined if none/unrecognised.
 // A v1 reader MUST verify the version token and ignore unknown versions, so an unknown-version
 // payment degrades to a plain message rather than being misread at a fixed index.
@@ -33,6 +39,19 @@ function extractPaymentRef(tags: string[][] | undefined): PaymentRef | undefined
   return undefined
 }
 
+// Pulls a Tari address out of the rumor's tags (same version discipline as extractPaymentRef).
+function extractTariAddress(tags: string[][] | undefined): string | undefined {
+  if (!tags) return undefined
+  for (const tag of tags) {
+    if (tag[0] !== ADDRESS_TAG) continue
+    if (tag[1] !== ADDRESS_TAG_VERSION) return undefined  // unknown version → ignore
+    const addr = tag[2]
+    if (typeof addr !== 'string' || addr.length === 0) return undefined
+    return addr
+  }
+  return undefined
+}
+
 // Wraps plaintext (and an optional payment reference) for the recipient. Builds the kind-14
 // rumor ourselves — including the required ["p", recipient] tag and, when present, the
 // caravel-payment tag — then hands it to nip59.wrapEvent, which seals and gift-wraps it with
@@ -41,10 +60,12 @@ export function wrapMessage(
   senderSecretKey: Uint8Array,
   recipientPubkeyHex: string,
   plaintext: string,
-  payment?: PaymentRef
+  payment?: PaymentRef,
+  tariAddress?: string
 ): NostrEvent {
   const tags: string[][] = [['p', recipientPubkeyHex]]
   if (payment) tags.push([PAYMENT_TAG, PAYMENT_TAG_VERSION, payment.utxoId])
+  if (tariAddress) tags.push([ADDRESS_TAG, ADDRESS_TAG_VERSION, tariAddress])
   const rumor = {
     kind: KIND_PRIVATE_DM,
     created_at: Math.round(Date.now() / 1000),
@@ -60,7 +81,7 @@ export function wrapMessage(
 export function unwrapMessage(
   recipientSecretKey: Uint8Array,
   giftWrapEvent: NostrEvent
-): { senderPubkeyHex: string; plaintext: string; payment?: PaymentRef } {
+): { senderPubkeyHex: string; plaintext: string; payment?: PaymentRef; tariAddress?: string } {
   // Layer 1: decrypt gift wrap (kind 1059) → seal (kind 13)
   const sealKey = getConversationKey(recipientSecretKey, giftWrapEvent.pubkey)
   const seal = JSON.parse(decrypt(giftWrapEvent.content, sealKey)) as {
@@ -85,7 +106,12 @@ export function unwrapMessage(
     )
   }
 
-  return { senderPubkeyHex: seal.pubkey, plaintext: rumor.content, payment: extractPaymentRef(rumor.tags) }
+  return {
+    senderPubkeyHex: seal.pubkey,
+    plaintext: rumor.content,
+    payment: extractPaymentRef(rumor.tags),
+    tariAddress: extractTariAddress(rumor.tags),
+  }
 }
 
 // ── Network helpers ────────────────────────────────────────────────────────────

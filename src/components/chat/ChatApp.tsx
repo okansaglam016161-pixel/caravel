@@ -6,7 +6,7 @@ import { useWallet } from '../../context/WalletContext'
 import WalletModal from '../wallet/WalletModal'
 import type { CaravelMessage } from '../../messaging/types'
 import { loadNicknames, setNickname, MAX_NICKNAME_LEN, type NicknameMap } from '../../messaging/nicknameStore'
-import { loadTariAddresses, setTariAddress, type TariAddressMap } from '../../messaging/tariAddressStore'
+import { loadAddressSent, markAddressSent, clearAddressSent, type AddressSentMap } from '../../messaging/addressSentStore'
 import { sendConfidential, tariToMicrotari } from '../../crypto/confidentialSend'
 import { resolvePayment, type PaymentResolution } from '../../crypto/paymentResolver'
 import { loadResolvedAmounts, cacheResolvedAmount } from '../../messaging/paymentResolutionStore'
@@ -302,7 +302,7 @@ function PaymentMessageCard({ message }: { message: CaravelMessage }) {
 // ── Component ────────────────────────────────────────────────────────────────────
 
 export default function ChatApp() {
-  const { wallet, address, scan, messages, nostrPubkeyHex, messagingStatus, contacts, acceptContact, createMessagingProvider, recordSentMessage, deleteConversation } = useWallet()
+  const { wallet, address, scan, messages, nostrPubkeyHex, messagingStatus, contacts, acceptContact, contactAddresses, setManualTariAddress, createMessagingProvider, recordSentMessage, deleteConversation } = useWallet()
   const [walletOpen, setWalletOpen] = useState(false)
   const [balanceHidden, setBalanceHidden] = useState(false)
 
@@ -335,11 +335,29 @@ export default function ChatApp() {
   // through but whose message failed (orphan), or a payment left unconfirmed (timeout).
   const [payAlert, setPayAlert] = useState<{ kind: 'orphan' | 'timeout'; txId: string; amountTari: string } | null>(null)
 
-  // Remembered recipient Tari addresses for the current identity (temporary bridge — see store).
-  const [tariAddresses, setTariAddresses] = useState<TariAddressMap>({})
+  // "Have I delivered my Tari address to this peer?" — drives the self-healing piggyback (M9.0d).
+  const [addressSent, setAddressSent] = useState<AddressSentMap>({})
   useEffect(() => {
-    setTariAddresses(nostrPubkeyHex ? loadTariAddresses(nostrPubkeyHex) : {})
+    setAddressSent(nostrPubkeyHex ? loadAddressSent(nostrPubkeyHex) : {})
   }, [nostrPubkeyHex])
+  function markSent(peerHex: string) {
+    if (nostrPubkeyHex) setAddressSent(prev => markAddressSent(nostrPubkeyHex, prev, peerHex))
+  }
+  // My address to attach to an outbound message, or undefined once the peer already has it.
+  function outboundAddressFor(peerHex: string): string | undefined {
+    return address && !addressSent[peerHex] ? address : undefined
+  }
+  // Send my address as a dedicated silent control message (initiate/accept); mark delivered on
+  // relay-accept. Fire-and-forget — failures self-heal via the next message's piggyback.
+  function sendAddressControl(peerHex: string) {
+    if (!address) return
+    const provider = createMessagingProvider()
+    if (!provider) return
+    provider.sendContactAddress(peerHex, address)
+      .then(ok => { if (ok) markSent(peerHex) })
+      .catch(() => { /* self-heals via piggyback on the next normal message */ })
+      .finally(() => provider.disconnect())
+  }
 
   // Nicknames for the current identity, loaded from localStorage and re-derived on save.
   const [nicknames, setNicknames] = useState<NicknameMap>({})
@@ -396,10 +414,10 @@ export default function ChatApp() {
   function performDelete() {
     if (!selectedConvo) return
     const peer = selectedConvo.peerHex
-    deleteConversation(peer)
+    deleteConversation(peer)   // clears messages + contact record + Tari address + payment cache
     if (nostrPubkeyHex) {
       setNicknames(prev => setNickname(nostrPubkeyHex, prev, peer, ''))
-      setTariAddresses(prev => setTariAddress(nostrPubkeyHex, prev, peer, ''))
+      setAddressSent(prev => clearAddressSent(nostrPubkeyHex, prev, peer))  // re-exchange if re-added
     }
     setSelectedPeer(null)   // fall back to most-recent remaining conversation, or the empty state
     setConfirmDelete(false)
@@ -424,26 +442,28 @@ export default function ChatApp() {
       return
     }
     acceptContact(hex)      // initiate = accept (creates/promotes/refreshes the accepted record)
+    sendAddressControl(hex) // M9.0d: exchange my Tari address (silent) — I initiated
     setSelectedPeer(hex)    // open it (empty thread if brand-new, or the existing conversation)
     setComposeOpen(false)
     setComposeNpub('')
     setComposeError(null)
   }
 
-  // Accept a pending request → promotes to a normal conversation and opens it. No address exchange
-  // (that is M9.0d) — accept only changes contact state.
+  // Accept a pending request → promotes to a normal conversation and opens it. Sends my Tari
+  // address (M9.0d); accept still does NOT do anything else (no auto-reply).
   function acceptRequest(peerHex: string) {
     acceptContact(peerHex)
+    sendAddressControl(peerHex)
     setSelectedPeer(peerHex)
   }
 
   // Decline a pending request → M9.0a delete + tombstone + removeContact (hide-and-forget). A future
   // message from them creates a fresh request.
   function declineRequest(peerHex: string) {
-    deleteConversation(peerHex)
+    deleteConversation(peerHex)   // also clears their Tari address
     if (nostrPubkeyHex) {
       setNicknames(prev => setNickname(nostrPubkeyHex, prev, peerHex, ''))
-      setTariAddresses(prev => setTariAddress(nostrPubkeyHex, prev, peerHex, ''))
+      setAddressSent(prev => clearAddressSent(nostrPubkeyHex, prev, peerHex))
     }
   }
 
@@ -460,9 +480,13 @@ export default function ChatApp() {
       const provider = createMessagingProvider()
       // Locked wallet → null. Surface a clear reason rather than leaking a null-reference error.
       if (!provider) throw new Error('Wallet is locked — unlock to send')
-      const msg = await provider.sendMessage(selectedConvo.peerHex, text)
+      const peer = selectedConvo.peerHex
+      // Self-healing address exchange (M9.0d): piggyback my address until the peer has it.
+      const addr = outboundAddressFor(peer)
+      const msg = await provider.sendMessage(peer, text, undefined, addr)
       provider.disconnect()
       recordSentMessage(msg)
+      if (addr) markSent(peer)
       setDraft('')  // clear only on success — a failed send keeps the text
     } catch (e) {
       setSendError(e instanceof Error ? e.message : String(e))
@@ -478,8 +502,8 @@ export default function ChatApp() {
     setPaymentMode(prev => {
       const next = !prev
       if (next) {
-        // Entering payment mode: prefill the remembered address for this peer, if any.
-        if (selectedConvo) setPayAddress(tariAddresses[selectedConvo.peerHex] ?? '')
+        // Entering payment mode: prefill the known address for this peer (exchanged or manual).
+        if (selectedConvo) setPayAddress(contactAddresses[selectedConvo.peerHex]?.address ?? '')
         setPayError(null)
       } else {
         setConfirming(false)
@@ -563,13 +587,16 @@ export default function ChatApp() {
         return
       }
       try {
-        const msg = await provider.sendMessage(peerHex, note, { utxoId: result.recipientUtxoId })
+        // Piggyback my address (M9.0d self-healing) on this payment message too, if not yet sent.
+        const addr = outboundAddressFor(peerHex)
+        const msg = await provider.sendMessage(peerHex, note, { utxoId: result.recipientUtxoId }, addr)
         provider.disconnect()
+        if (addr) markSent(peerHex)
         // Cache the amount + txId LOCALLY (never on the wire) so our thread renders the amount.
         const withLocal: CaravelMessage = { ...msg, localPayment: { amountMicrotari: amountMicro.toString(), txId: result.txId } }
         recordSentMessage(withLocal)
-        // Success: remember the address for next time, clear the composer + payment mode.
-        if (nostrPubkeyHex) setTariAddresses(prev => setTariAddress(nostrPubkeyHex, prev, peerHex, recipientAddr))
+        // Success: remember the manually-entered address for next time, clear the composer + mode.
+        setManualTariAddress(peerHex, recipientAddr)
         setDraft('')
         setPayAmount('')
         setPaymentMode(false)

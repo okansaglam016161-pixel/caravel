@@ -19,6 +19,7 @@ import { loadMessages, addReceivedMessage, addSentMessage, deletePeerMessages } 
 import { loadTombstoneIdSet, recordTombstones } from '../messaging/tombstoneStore'
 import { removeResolvedAmounts } from '../messaging/paymentResolutionStore'
 import { loadContacts, setContactState, removeContact, type ContactMap } from '../messaging/contactStore'
+import { loadTariAddresses, setTariAddress, type TariAddressMap } from '../messaging/tariAddressStore'
 import { DEFAULT_RELAYS } from '../config/relays'
 
 // ── Scan state ────────────────────────────────────────────────────────────────
@@ -82,6 +83,10 @@ export interface WalletCtx {
   contacts: ContactMap
   /** Accept a pending peer (M9.0c request UI). */
   acceptContact: (peerHex: string) => void
+  /** Per-contact Tari addresses (M9.0d), each tagged 'manual' or verified 'exchanged'. */
+  contactAddresses: TariAddressMap
+  /** Set/clear a manually-entered Tari address for a peer (won't overwrite a verified one). */
+  setManualTariAddress: (peerHex: string, addr: string) => void
   /** Delete a conversation locally: tombstone its message ids (so the relay backfill can't
    *  resurrect them), then clear its messages + resolved payment amounts + contact record. Also
    *  the decline path — local-only. */
@@ -129,6 +134,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const [messagingStatus, setMessagingStatus] = useState<MessagingConnectionStatus>('disconnected')
   const [messages, setMessages] = useState<CaravelMessage[]>([])
   const [contacts, setContacts] = useState<ContactMap>({})
+  // Per-contact Tari addresses (manual or verified-exchanged). Owned here because the inbound
+  // exchanged address arrives in the subscription callback (M9.0d).
+  const [contactAddresses, setContactAddresses] = useState<TariAddressMap>({})
 
   const startScan = useCallback((w: SecretKeyWallet, addr: string) => {
     // Cancel any prior scan
@@ -197,6 +205,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     const loaded = loadMessages(pubkeyHex)
     setMessages(loaded)
     setContacts(loadContacts(pubkeyHex))
+    setContactAddresses(loadTariAddresses(pubkeyHex))
     // Seed the "known peers" set from persisted history — anyone we already have a message with is
     // NOT a new peer (so their next inbound never gets mis-flagged as a pending request).
     knownPeersRef.current = new Set(
@@ -227,6 +236,13 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         // Guard against stale callbacks firing after lock() replaces or clears the provider
         if (messagingProviderRef.current !== provider) return
         setMessagingStatus(status)
+      },
+      // Inbound Tari address (M9.0d): authenticated (seal.pubkey === rumor.pubkey enforced in
+      // unwrapMessage), so it is bound to senderPubkeyHex. Store as 'exchanged' (verified). A
+      // basic otl_ shape check guards against a malformed tag. Exchanged beats manual in the store.
+      (senderPubkeyHex, tariAddress) => {
+        if (!senderPubkeyHex || !tariAddress.startsWith('otl_')) return
+        setContactAddresses(prev => setTariAddress(pubkeyHex, prev, senderPubkeyHex, tariAddress, 'exchanged'))
       }
     )
   }, [])
@@ -283,6 +299,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     setMessagingStatus('disconnected')
     setMessages([])
     setContacts({})
+    setContactAddresses({})
     setScan(SCAN_IDLE)
     setWallet(null)
     setAddress(null)
@@ -331,10 +348,17 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     setContacts(prev => setContactState(nostrPubkeyHex, prev, peerHex, 'accepted'))
   }, [nostrPubkeyHex])
 
+  // Set (or clear, when addr is blank) a MANUALLY-entered Tari address for a peer (M10.1 composer).
+  // A verified 'exchanged' address is not overwritten by a manual one (guarded in the store).
+  const setManualTariAddress = useCallback((peerHex: string, addr: string) => {
+    if (!nostrPubkeyHex || !peerHex) return
+    setContactAddresses(prev => setTariAddress(nostrPubkeyHex, prev, peerHex, addr, 'manual'))
+  }, [nostrPubkeyHex])
+
   // Delete a conversation and everything tied to it (M9.0a), LOCAL-ONLY — nothing is sent to the
   // relays or the peer. ORDER MATTERS: tombstone the deleted ids FIRST (and update the in-memory
   // set) so a relay backfill arriving in the gap can't repopulate the conversation, THEN clear the
-  // stores. Nickname + Tari address are cleared by ChatApp (which owns their React state).
+  // stores. The nickname is cleared by ChatApp (which owns its React state).
   const deleteConversation = useCallback((peerHex: string) => {
     const pubkeyHex = nostrPubkeyHex
     if (!pubkeyHex) return
@@ -354,6 +378,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     removeResolvedAmounts(pubkeyHex, utxoIds)
     knownPeersRef.current.delete(peerHex)
     setContacts(prev => removeContact(pubkeyHex, prev, peerHex))
+    setContactAddresses(prev => setTariAddress(pubkeyHex, prev, peerHex, '', 'manual'))  // blank → clear
     setMessages(prev => deletePeerMessages(pubkeyHex, prev, peerHex))
   }, [nostrPubkeyHex, messages])
 
@@ -371,7 +396,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       walletExists, wallet, address, nostrNpub, nostrPubkeyHex, scan, txHistory,
       messagingStatus, messages,
       generateMnemonic, createWallet, unlock, restore, lock, getMnemonic, rescan, recordSent,
-      recordSentMessage, contacts, acceptContact, deleteConversation, createMessagingProvider,
+      recordSentMessage, contacts, acceptContact, contactAddresses, setManualTariAddress,
+      deleteConversation, createMessagingProvider,
     }}>
       {children}
     </Ctx.Provider>

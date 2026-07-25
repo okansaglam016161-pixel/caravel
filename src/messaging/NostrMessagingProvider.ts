@@ -55,6 +55,7 @@ export class NostrMessagingProvider implements MessagingProvider {
   private filter: Filter | null
   private onMessageCallback: ((msg: CaravelMessage) => void) | null
   private onStatusCallback: ((status: MessagingConnectionStatus) => void) | null
+  private onContactAddressCallback: ((senderPubkeyHex: string, tariAddress: string) => void) | null
   private disconnecting: boolean
   // Bound window listeners — stored so removeEventListener can find them in disconnect().
   private onlineHandler: (() => void) | null
@@ -77,6 +78,7 @@ export class NostrMessagingProvider implements MessagingProvider {
     this.filter = null
     this.onMessageCallback = null
     this.onStatusCallback = null
+    this.onContactAddressCallback = null
     this.disconnecting = false
     this.onlineHandler = null
     this.offlineHandler = null
@@ -97,10 +99,12 @@ export class NostrMessagingProvider implements MessagingProvider {
 
   subscribe(
     onMessage: (msg: CaravelMessage) => void,
-    onStatusChange?: (status: MessagingConnectionStatus) => void
+    onStatusChange?: (status: MessagingConnectionStatus) => void,
+    onContactAddress?: (senderPubkeyHex: string, tariAddress: string) => void
   ): void {
     this.onMessageCallback = onMessage
     this.onStatusCallback = onStatusChange ?? null
+    this.onContactAddressCallback = onContactAddress ?? null
     const since = Math.floor(Date.now() / 1000) - SINCE_WINDOW_S
     this.filter = { kinds: [1059], '#p': [this.pubkeyHex], since }
 
@@ -120,8 +124,8 @@ export class NostrMessagingProvider implements MessagingProvider {
     }
   }
 
-  async sendMessage(recipientPubkeyHex: string, plaintext: string, payment?: PaymentRef): Promise<CaravelMessage> {
-    const wrapped = wrapMessage(this.secretKey, recipientPubkeyHex, plaintext, payment)
+  async sendMessage(recipientPubkeyHex: string, plaintext: string, payment?: PaymentRef, tariAddress?: string): Promise<CaravelMessage> {
+    const wrapped = wrapMessage(this.secretKey, recipientPubkeyHex, plaintext, payment, tariAddress)
     const results = await publishGiftWrap(wrapped, [...this.relayUrls], PUBLISH_TIMEOUT_MS)
 
     const anyOk = results.some(r => r.ok)
@@ -139,6 +143,16 @@ export class NostrMessagingProvider implements MessagingProvider {
       direction: 'sent',
       payment,
     }
+  }
+
+  // Send a dedicated silent Tari-address control message (M9.0d): only the address tag, over a
+  // single-space content (NIP-44 requires >= 1 byte, so it can't be truly empty). It carries no
+  // payment and no note; the recipient extracts + stores the address and renders nothing. Returns
+  // true if at least one relay accepted, so the caller can mark the address as delivered.
+  async sendContactAddress(recipientPubkeyHex: string, tariAddress: string): Promise<boolean> {
+    const wrapped = wrapMessage(this.secretKey, recipientPubkeyHex, ' ', undefined, tariAddress)
+    const results = await publishGiftWrap(wrapped, [...this.relayUrls], PUBLISH_TIMEOUT_MS)
+    return results.some(r => r.ok)
   }
 
   disconnect(): void {
@@ -367,7 +381,18 @@ export class NostrMessagingProvider implements MessagingProvider {
     if (this.seen.has(event.id)) return
     this.seen.add(event.id)
     try {
-      const { senderPubkeyHex, plaintext, payment } = unwrapMessage(this.secretKey, event)
+      const { senderPubkeyHex, plaintext, payment, tariAddress } = unwrapMessage(this.secretKey, event)
+
+      // Extract + store any received Tari address FIRST, before any content-based suppression or
+      // message handling. A dedicated address-exchange control message is empty; if suppression ran
+      // before extraction the address would be silently discarded and payments could never find it.
+      if (tariAddress) {
+        this.onContactAddressCallback?.(senderPubkeyHex, tariAddress)
+        // Dedicated silent control message: address tag over empty content → no bubble.
+        // A piggybacked address (address tag on a real message) has content and renders below.
+        if (plaintext.trim() === '') return
+      }
+
       const msg: CaravelMessage = {
         id: event.id,
         senderPubkeyHex,

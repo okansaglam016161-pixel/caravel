@@ -48,14 +48,22 @@ export interface CaravelMessage {
 export interface MessagingProvider {
   // Send a message to the given recipient. Returns the CaravelMessage so the caller
   // can record it immediately without waiting for an echo from the relay.
-  // An optional payment reference is carried as a tag on the rumor (see PaymentRef).
-  sendMessage(recipientPubkeyHex: string, plaintext: string, payment?: PaymentRef): Promise<CaravelMessage>
+  // Optional tags ride on the rumor: a payment reference (PaymentRef) and/or MY Tari address
+  // (piggybacked for self-healing address exchange — see M9.0d).
+  sendMessage(recipientPubkeyHex: string, plaintext: string, payment?: PaymentRef, tariAddress?: string): Promise<CaravelMessage>
+
+  // Send a dedicated, silent Tari-address control message (M9.0d). Carries only the address tag
+  // over an empty-content rumor, so the recipient stores the address without a chat bubble.
+  // Resolves true if at least one relay accepted it (so the caller can mark it delivered).
+  sendContactAddress(recipientPubkeyHex: string, tariAddress: string): Promise<boolean>
 
   // Open a persistent subscription. Fire-and-forget — returns void immediately.
   // Relay connections happen in the background; onStatusChange fires as relay states change.
+  // onContactAddress fires for a received (authenticated) Tari address — see M9.0d.
   subscribe(
     onMessage: (msg: CaravelMessage) => void,
-    onStatusChange?: (status: MessagingConnectionStatus) => void
+    onStatusChange?: (status: MessagingConnectionStatus) => void,
+    onContactAddress?: (senderPubkeyHex: string, tariAddress: string) => void
   ): void
 
   // Close all relay connections and subscriptions. Idempotent — safe to call more than once.

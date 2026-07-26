@@ -512,10 +512,18 @@ export default function ChatApp() {
     })
   }
 
+  // M9.0e: recipient address state. If the peer has an EXCHANGED (identity-bound) address, use it
+  // silently — no field, no warning. Computed live from contactAddresses so an address arriving
+  // while the composer is open upgrades the UI without re-opening. Manual/no-address fall through
+  // to the M10.1 field + warning unchanged.
+  const peerAddrRec = selectedConvo ? contactAddresses[selectedConvo.peerHex] : undefined
+  const addressVerified = peerAddrRec?.source === 'exchanged'
+  const effectivePayAddress = addressVerified ? peerAddrRec!.address : payAddress.trim()
+
   function validatePayment(): string | null {
     const amt = Number(payAmount)
     if (!payAmount.trim() || !isFinite(amt) || amt <= 0) return 'Enter an amount greater than 0.'
-    if (!payAddress.trim().startsWith('otl_esm_')) return 'Enter a valid recipient Tari address (otl_esm_…).'
+    if (!effectivePayAddress.startsWith('otl_esm_')) return 'Enter a valid recipient Tari address (otl_esm_…).'
     return null
   }
 
@@ -546,7 +554,7 @@ export default function ChatApp() {
     if (!wallet || !address) { setPayError('Wallet is locked — unlock to send.'); return }
 
     const amountMicro = tariToMicrotari(Number(payAmount))
-    const recipientAddr = payAddress.trim()
+    const recipientAddr = effectivePayAddress   // exchanged address, or the manually-entered one
     const note = draft.trim() || '💸 Payment'   // NIP-44 needs ≥1 byte; empty note gets a caption
     const peerHex = selectedConvo.peerHex
     const amountShown = payAmount
@@ -595,8 +603,9 @@ export default function ChatApp() {
         // Cache the amount + txId LOCALLY (never on the wire) so our thread renders the amount.
         const withLocal: CaravelMessage = { ...msg, localPayment: { amountMicrotari: amountMicro.toString(), txId: result.txId } }
         recordSentMessage(withLocal)
-        // Success: remember the manually-entered address for next time, clear the composer + mode.
-        setManualTariAddress(peerHex, recipientAddr)
+        // Success: remember a MANUALLY-entered address for next time (an exchanged one is already
+        // stored + authoritative, so don't re-store it as manual). Clear the composer + mode.
+        if (!addressVerified) setManualTariAddress(peerHex, recipientAddr)
         setDraft('')
         setPayAmount('')
         setPaymentMode(false)
@@ -1028,18 +1037,29 @@ export default function ChatApp() {
                     />
                     <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--acc,#2DE0C6)' }}>tTARI</span>
                   </div>
-                  <input
-                    value={payAddress}
-                    onChange={e => { setPayAddress(e.target.value); if (payError) setPayError(null) }}
-                    placeholder="Recipient Tari address (otl_esm_…)"
-                    spellCheck={false}
-                    style={{ background: '#10151F', border: '1px solid rgba(120,150,210,0.25)', borderRadius: 8, padding: '9px 12px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: '#E4EAF4', outline: 'none', width: '100%', boxSizing: 'border-box' }}
-                  />
-                  {/* Honest caveat — a pasted address is NOT bound to this contact's Nostr identity */}
-                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6, fontSize: 11, color: '#C79A5B', lineHeight: 1.45 }}>
-                    <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="#C79A5B" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 1 }}><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><path d="M12 9v4M12 17h.01" /></svg>
-                    <span>Address entered manually — not verified against this contact's identity.</span>
-                  </div>
+                  {addressVerified ? (
+                    /* M9.0e: identity-bound address exchanged over the encrypted channel — no field,
+                       no warning. Copy describes the SOURCE, not assurance about the person. */
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: 'var(--accT,#7DE9D8)', lineHeight: 1.45 }}>
+                      <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="var(--acc,#2DE0C6)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><path d="M12 2l7 4v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6l7-4z" /></svg>
+                      <span>Paying {selectedConvo ? displayName(selectedConvo.peerHex) : ''} · address shared by them</span>
+                    </div>
+                  ) : (
+                    <>
+                      <input
+                        value={payAddress}
+                        onChange={e => { setPayAddress(e.target.value); if (payError) setPayError(null) }}
+                        placeholder="Recipient Tari address (otl_esm_…)"
+                        spellCheck={false}
+                        style={{ background: '#10151F', border: '1px solid rgba(120,150,210,0.25)', borderRadius: 8, padding: '9px 12px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: '#E4EAF4', outline: 'none', width: '100%', boxSizing: 'border-box' }}
+                      />
+                      {/* Honest caveat — a pasted address is NOT bound to this contact's Nostr identity */}
+                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6, fontSize: 11, color: '#C79A5B', lineHeight: 1.45 }}>
+                        <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="#C79A5B" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 1 }}><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><path d="M12 9v4M12 17h.01" /></svg>
+                        <span>Address entered manually — not verified against this contact's identity.</span>
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
 
@@ -1049,7 +1069,7 @@ export default function ChatApp() {
                   <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--accT,#7DE9D8)' }}>Confirm confidential payment</span>
                   <div style={{ fontSize: 13, color: '#D7E4E0', lineHeight: 1.6 }}>
                     Send <b style={{ color: '#EAFBF7' }}>{payAmount} tTARI</b> (plus up to {MAX_FEE_TARI} fee) to<br />
-                    <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11.5, color: '#8FB7B0', wordBreak: 'break-all' }}>{payAddress.trim()}</span>
+                    <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11.5, color: '#8FB7B0', wordBreak: 'break-all' }}>{effectivePayAddress}</span>
                     <br />with note “<span style={{ color: '#C7E4DD' }}>{draft.trim() || '💸 Payment'}</span>”.
                   </div>
                   <div style={{ fontSize: 11.5, color: '#C79A5B' }}>This is a real, irreversible testnet payment.</div>

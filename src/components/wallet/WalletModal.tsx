@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useWallet } from '../../context/WalletContext'
 import DecryptPanel from './DecryptPanel'
+import OnsRegisterPanel from './OnsRegisterPanel'
 import { sendConfidential, tariToMicrotari, MAX_FEE } from '../../crypto/confidentialSend'
 import type { TxEntry } from '../../crypto/txHistory'
 import { QRCodeSVG } from 'qrcode.react'
@@ -592,6 +593,9 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
                   Receive
                 </button>
               </div>
+
+              {/* Optional: claim an ONS @name that resolves to your Nostr key. */}
+              <OnsRegisterPanel />
             </div>
           )}
 

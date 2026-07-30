@@ -9,6 +9,7 @@ import { loadNicknames, setNickname, MAX_NICKNAME_LEN, type NicknameMap } from '
 import { loadAddressSent, markAddressSent, clearAddressSent, type AddressSentMap } from '../../messaging/addressSentStore'
 import { sendConfidential, tariToMicrotari } from '../../crypto/confidentialSend'
 import { resolvePayment, type PaymentResolution } from '../../crypto/paymentResolver'
+import { resolveOnsNameToHex } from '../../crypto/ons'
 import { loadResolvedAmounts, cacheResolvedAmount } from '../../messaging/paymentResolutionStore'
 
 // ── Conversation derivation ─────────────────────────────────────────────────────
@@ -317,6 +318,7 @@ export default function ChatApp() {
   const [composeOpen, setComposeOpen] = useState(false)
   const [composeNpub, setComposeNpub] = useState('')
   const [composeError, setComposeError] = useState<string | null>(null)
+  const [composeResolving, setComposeResolving] = useState(false)
 
   // Composer state.
   const [draft, setDraft] = useState('')
@@ -429,17 +431,29 @@ export default function ChatApp() {
   // Start (or jump to) a conversation with an npub. Initiating accepts them (M9.0b). Uniform for
   // brand-new (empty thread), already-accepted (jump), and pending (promote) — acceptContact is
   // idempotent. Self (my own npub) is allowed: a notes-to-self thread.
-  function startConversation() {
+  async function startConversation() {
     const raw = composeNpub.trim()
-    if (!raw) { setComposeError('Enter an npub.'); return }
+    if (!raw) { setComposeError('Enter an npub or @name.'); return }
     let hex: string
-    try {
-      const decoded = nip19.decode(raw)
-      if (decoded.type !== 'npub') { setComposeError('That is not an npub (expected npub1…).'); return }
-      hex = decoded.data
-    } catch {
-      setComposeError('Invalid npub — could not decode it.')
-      return
+    if (raw.startsWith('npub1')) {
+      // Existing npub path — unchanged.
+      try {
+        const decoded = nip19.decode(raw)
+        if (decoded.type !== 'npub') { setComposeError('That is not an npub (expected npub1…).'); return }
+        hex = decoded.data
+      } catch {
+        setComposeError('Invalid npub — could not decode it.')
+        return
+      }
+    } else {
+      // ONS name path (@name or a bare name) — resolve via the indexer, keyless. Additive: the
+      // npub path above is untouched; downstream (accept/address/open) is identical either way.
+      setComposeError(null)
+      setComposeResolving(true)
+      const res = await resolveOnsNameToHex(raw)
+      setComposeResolving(false)
+      if (!res.ok || !res.hex) { setComposeError(res.error ?? 'Could not resolve that name.'); return }
+      hex = res.hex
     }
     acceptContact(hex)      // initiate = accept (creates/promotes/refreshes the accepted record)
     sendAddressControl(hex) // M9.0d: exchange my Tari address (silent) — I initiated
@@ -1169,14 +1183,15 @@ export default function ChatApp() {
             <div style={{ fontSize: 17, fontWeight: 700, color: '#F2F5FB' }}>New conversation</div>
           </div>
           <div style={{ fontSize: 13, color: '#8A97B4', lineHeight: 1.55, marginBottom: 12 }}>
-            Enter the recipient's Nostr public key (npub). Starting a conversation accepts them.
+            Enter the recipient's Nostr public key (npub), or an <strong style={{ color: '#B9C4DC' }}>@name</strong> registered
+            on ONS. Starting a conversation accepts them.
           </div>
           <input
             autoFocus
             value={composeNpub}
             onChange={e => { setComposeNpub(e.target.value); if (composeError) setComposeError(null) }}
-            onKeyDown={e => { if (e.key === 'Enter') startConversation(); else if (e.key === 'Escape') setComposeOpen(false) }}
-            placeholder="npub1…"
+            onKeyDown={e => { if (e.key === 'Enter') void startConversation(); else if (e.key === 'Escape') setComposeOpen(false) }}
+            placeholder="npub1… or @name"
             spellCheck={false}
             style={{ width: '100%', boxSizing: 'border-box', background: '#10151F', border: `1px solid ${composeError ? 'rgba(255,107,107,0.5)' : 'rgba(120,150,210,0.25)'}`, borderRadius: 9, padding: '11px 13px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, color: '#E4EAF4', outline: 'none' }}
           />
@@ -1194,11 +1209,11 @@ export default function ChatApp() {
               Cancel
             </button>
             <button
-              onClick={startConversation}
-              disabled={!composeNpub.trim()}
-              style={{ padding: '10px 18px', borderRadius: 9, border: 'none', background: composeNpub.trim() ? 'linear-gradient(180deg, var(--accB,#34E5D0), var(--accD,#12A594))' : 'rgba(120,150,210,0.15)', color: composeNpub.trim() ? 'var(--accOn,#04120F)' : '#55617D', fontSize: 13, fontWeight: 700, cursor: composeNpub.trim() ? 'pointer' : 'default', fontFamily: 'inherit' }}
+              onClick={() => void startConversation()}
+              disabled={!composeNpub.trim() || composeResolving}
+              style={{ padding: '10px 18px', borderRadius: 9, border: 'none', background: composeNpub.trim() && !composeResolving ? 'linear-gradient(180deg, var(--accB,#34E5D0), var(--accD,#12A594))' : 'rgba(120,150,210,0.15)', color: composeNpub.trim() && !composeResolving ? 'var(--accOn,#04120F)' : '#55617D', fontSize: 13, fontWeight: 700, cursor: composeNpub.trim() && !composeResolving ? 'pointer' : 'default', fontFamily: 'inherit' }}
             >
-              Start conversation
+              {composeResolving ? 'Resolving…' : 'Start conversation'}
             </button>
           </div>
         </div>

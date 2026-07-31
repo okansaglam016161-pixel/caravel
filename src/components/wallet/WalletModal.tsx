@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useWallet } from '../../context/WalletContext'
 import DecryptPanel from './DecryptPanel'
 import OnsRegisterPanel from './OnsRegisterPanel'
+import FaucetClaimPanel from './FaucetClaimPanel'
 import { sendConfidential, tariToMicrotari, MAX_FEE } from '../../crypto/confidentialSend'
 import type { TxEntry } from '../../crypto/txHistory'
 import { QRCodeSVG } from 'qrcode.react'
@@ -564,6 +565,9 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
                 <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--acc,#2DE0C6)', display: 'inline-block', flexShrink: 0 }} />
                 <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: '#8A97B4' }}>Esmeralda testnet</span>
               </div>
+
+              {/* Claim testnet tokens (new-user funding) */}
+              <FaucetClaimPanel />
 
               {/* Send / Receive */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>

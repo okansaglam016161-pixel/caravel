@@ -7,7 +7,7 @@ import WalletModal from '../wallet/WalletModal'
 import type { CaravelMessage } from '../../messaging/types'
 import { loadNicknames, setNickname, MAX_NICKNAME_LEN, type NicknameMap } from '../../messaging/nicknameStore'
 import { loadAddressSent, markAddressSent, clearAddressSent, type AddressSentMap } from '../../messaging/addressSentStore'
-import { sendConfidential, tariToMicrotari } from '../../crypto/confidentialSend'
+import { sendConfidential, tariToMicrotari, MAX_FEE } from '../../crypto/confidentialSend'
 import { resolvePayment, type PaymentResolution } from '../../crypto/paymentResolver'
 import { resolveOnsNameToHex } from '../../crypto/ons'
 import { ConnectionIndicator, RelayHealthPanel } from './ConnectionStatus'
@@ -105,8 +105,10 @@ const MAX_MESSAGE_LEN = 2000
 // Composer grows with content up to this height (~5-6 lines), then scrolls internally.
 const COMPOSER_MAX_H = 120
 
-// Fee ceiling shown in the confirm step (matches confidentialSend.MAX_FEE = 10_000 µtTARI).
-const MAX_FEE_TARI = 0.01
+// Fee ceiling shown in the confirm step. Reuses confidentialSend.MAX_FEE and the wallet's trimmed
+// format so both surfaces render the identical "≤ 0.01 TARI".
+const FEE_CEIL_TARI = (Number(MAX_FEE) / 1_000_000).toString()
+const MONO = "'IBM Plex Mono', monospace"
 
 // Decimal µTari string → TARI display string. Defensive; never throws.
 function microToTari(micro: string): string {
@@ -195,106 +197,101 @@ function usePaymentResolution(utxoId: string): { state: ResolveState; retry: () 
 // Sender shows the amount from its local cache (never on the wire). Recipient resolves the true
 // amount from the referenced UTXO with its own view key. The note ALWAYS renders (M10.0 guarantee).
 
+type CardTone = 'teal' | 'neutral' | 'danger'
+
 function BigAmount({ tari }: { tari: string }) {
   return (
-    <div style={{ fontSize: 34, fontWeight: 800, color: '#EAFBF7', letterSpacing: '0.02em', display: 'flex', alignItems: 'baseline', justifyContent: 'center', gap: 8 }}>
-      <span>{tari}</span>
-      <span style={{ fontSize: 17, fontWeight: 600, color: 'var(--acc,#2DE0C6)' }}>TARI</span>
+    <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'center', gap: 8, marginBottom: 8 }}>
+      <span style={{ fontFamily: MONO, fontSize: 34, fontWeight: 700, color: 'var(--text-bright)', letterSpacing: '0.02em' }}>{tari}</span>
+      <span style={{ fontSize: 17, fontWeight: 600, color: 'var(--teal-500)' }}>TARI</span>
     </div>
   )
 }
 
-// Recipient-side amount area: renders the resolution state. String literals avoid apostrophes.
-function ResolvedAmount({ state, retry }: { state: ResolveState; retry: () => void }) {
-  if (state.kind === 'resolved') return <BigAmount tari={microToTari(state.amountMicrotari)} />
-
-  if (state.kind === 'loading' || state.kind === 'retrying') {
-    const msg = state.kind === 'retrying' && state.reason === 'not_found'
-      ? 'Waiting for the payment to be indexed…'
-      : state.kind === 'retrying' && state.reason === 'network_error'
-        ? 'Reaching the indexer…'
-        : 'Resolving amount…'
-    return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, fontSize: 13, color: '#8FB7B0', fontFamily: "'IBM Plex Mono', monospace" }}>
-        <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="#8FB7B0" strokeWidth={2.5} strokeLinecap="round" style={{ animation: 'spin 1s linear infinite', flexShrink: 0 }}><path d="M21 12a9 9 0 1 1-6.219-8.56" /></svg>
-        {msg}
-      </div>
-    )
-  }
-
-  // failed
-  const canRetry = state.reason === 'not_found' || state.reason === 'network_error'
-  const label =
-    state.reason === 'spent' ? 'Payment output has been spent'
-      : state.reason === 'unreadable' ? 'Not addressed to this wallet — cannot read the amount'
-        : state.reason === 'not_found' ? 'Payment output not found — it may be spent, or not yet indexed'
-          : 'Could not reach the indexer'
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
-      <div style={{ fontSize: 13, color: '#C79A5B', textAlign: 'center', lineHeight: 1.4 }}>{label}</div>
-      {canRetry && (
-        <button onClick={retry} style={{ padding: '5px 14px', borderRadius: 8, border: '1px solid rgba(var(--accRGB,45,224,198),0.4)', background: 'transparent', color: 'var(--acc,#2DE0C6)', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
-          Retry
-        </button>
-      )}
-    </div>
-  )
+const cardChrome: Record<CardTone, { border: string; bg: string; headerBg: string; headerBorder: string; title: string }> = {
+  teal: { border: 'rgba(var(--teal-500-rgb),0.24)', bg: 'var(--card-payment)', headerBg: 'linear-gradient(180deg, rgba(var(--teal-500-rgb),0.12), rgba(var(--teal-500-rgb),0.04))', headerBorder: 'rgba(var(--teal-500-rgb),0.2)', title: 'var(--teal-300)' },
+  neutral: { border: 'rgba(var(--border-rgb),0.18)', bg: 'var(--card-neutral)', headerBg: 'rgba(var(--border-rgb),0.04)', headerBorder: 'rgba(var(--border-rgb),0.1)', title: 'var(--text-muted-dim)' },
+  danger: { border: 'rgba(var(--danger-rgb),0.28)', bg: 'var(--card-danger)', headerBg: 'rgba(var(--danger-rgb),0.06)', headerBorder: 'rgba(var(--danger-rgb),0.2)', title: 'var(--danger-300)' },
 }
 
-// Shared card chrome; the amount area is a slot supplied by the sender/recipient variant.
-function PaymentCardShell({ sent, timestamp, plaintext, amountSlot }: { sent: boolean; timestamp: number; plaintext: string; amountSlot: ReactNode }) {
+// Card chrome per resolution tone. The private note ALWAYS renders (M10.0) below the amount area.
+function PaymentCard({ sent, tone, chip, timestamp, plaintext, body }: { sent: boolean; tone: CardTone; chip: string; timestamp: number; plaintext: string; body: ReactNode }) {
+  const c = cardChrome[tone]
+  const chipColor = tone === 'danger' ? 'var(--danger-300)' : (sent && tone === 'teal') ? 'var(--teal-500)' : 'var(--text-muted-dim)'
+  const noteBorder = tone === 'teal' ? 'rgba(var(--teal-500-rgb),0.28)' : 'rgba(var(--border-rgb),0.2)'
   return (
-    <div style={{ alignSelf: sent ? 'flex-end' : 'flex-start', maxWidth: '68%', width: 400 }}>
-      <div style={{ borderRadius: sent ? '18px 6px 18px 18px' : '6px 18px 18px 18px', overflow: 'hidden', border: '1px solid rgba(var(--accRGB,45,224,198),0.4)', background: 'linear-gradient(165deg, #0E2A28, #0A1A1C)', boxShadow: '0 0 34px rgba(var(--accRGB,45,224,198),0.16)' }}>
-        {/* Header */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '13px 18px', background: 'linear-gradient(180deg, rgba(var(--accRGB,45,224,198),0.16), rgba(var(--accRGB,45,224,198),0.05))', borderBottom: '1px solid rgba(var(--accRGB,45,224,198),0.22)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 26, height: 26, borderRadius: 8, background: 'rgba(var(--accRGB,45,224,198),0.18)' }}>
-              <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="var(--acc,#2DE0C6)" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>
-            </div>
-            <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--accT,#7DE9D8)', letterSpacing: '0.06em' }}>CONFIDENTIAL PAYMENT</span>
-          </div>
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--acc,#2DE0C6)' }}>
-            <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="var(--acc,#2DE0C6)" strokeWidth={2.2}><rect x={3} y={11} width={18} height={11} rx={2} /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
-            {sent ? 'Sent' : 'Received'}
-          </span>
+    <div style={{ alignSelf: sent ? 'flex-end' : 'flex-start', maxWidth: '68%', width: 440 }}>
+      <div style={{ borderRadius: sent ? '16px 6px 16px 16px' : '6px 16px 16px 16px', overflow: 'hidden', border: `1px solid ${c.border}`, background: c.bg }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 17px', background: c.headerBg, borderBottom: `1px solid ${c.headerBorder}` }}>
+          <span style={{ fontSize: 12, fontWeight: 700, color: c.title, letterSpacing: '0.06em' }}>CONFIDENTIAL PAYMENT</span>
+          <span style={{ fontFamily: MONO, fontSize: 11, color: chipColor }}>{chip}</span>
         </div>
-        {/* Amount (slot) */}
-        <div style={{ padding: '20px 18px 8px', textAlign: 'center' }}>
-          {amountSlot}
-          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 6, padding: '4px 11px', borderRadius: 100, background: 'rgba(120,150,210,0.08)' }}>
-            <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="#8FB7B0" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" /><circle cx={12} cy={12} r={3} /><path d="M4 4l16 16" /></svg>
-            <span style={{ fontSize: 11, color: '#8FB7B0', fontFamily: "'IBM Plex Mono', monospace" }}>amount hidden on-chain</span>
-          </div>
-        </div>
-        {/* Private note — always rendered */}
-        <div style={{ margin: '12px 14px 16px', padding: '13px 15px', borderRadius: 12, background: 'rgba(10,14,23,0.6)', border: '1px dashed rgba(var(--accRGB,45,224,198),0.28)' }}>
+        <div style={{ padding: '20px 17px 8px', textAlign: 'center' }}>{body}</div>
+        <div style={{ margin: '10px 14px 16px', padding: '13px 15px', borderRadius: 12, background: 'rgba(10,14,23,0.6)', border: `1px dashed ${noteBorder}` }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 7 }}>
-            <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="#5E8A82" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V4s-1 1-4 1-5-2-8-2-4 1-4 1z" /><path d="M4 22v-7" /></svg>
-            <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.1em', color: '#5E8A82' }}>PRIVATE NOTE</span>
+            <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="var(--text-teal-dim)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V4s-1 1-4 1-5-2-8-2-4 1-4 1z" /><path d="M4 22v-7" /></svg>
+            <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.1em', color: 'var(--text-teal-dim)' }}>PRIVATE NOTE</span>
           </div>
-          <div style={{ fontSize: 14, color: '#C7E4DD', lineHeight: 1.45, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{plaintext}</div>
+          <div style={{ fontSize: 14, color: 'var(--text-note)', lineHeight: 1.45, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{plaintext}</div>
         </div>
       </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: '#55617D', marginTop: 6, marginRight: sent ? 4 : 0, marginLeft: sent ? 0 : 4, justifyContent: sent ? 'flex-end' : 'flex-start' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontFamily: MONO, fontSize: 11, color: 'var(--text-faint-dim)', marginTop: 6, marginRight: sent ? 4 : 0, marginLeft: sent ? 0 : 4, justifyContent: sent ? 'flex-end' : 'flex-start' }}>
         {bubbleTime(timestamp)}
-        {sent && <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="var(--acc,#2DE0C6)" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round"><path d="M18 7l-8 8-4-4" /></svg>}
+        {sent && <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="var(--teal-500)" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round"><path d="M18 7l-8 8-4-4" /></svg>}
       </div>
     </div>
   )
 }
+
+const hiddenPill = (
+  <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 2, padding: '4px 11px', borderRadius: 100, background: 'rgba(var(--border-rgb),0.08)' }}>
+    <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="var(--text-teal-label)" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" /><circle cx={12} cy={12} r={3} /><path d="M4 4l16 16" /></svg>
+    <span style={{ fontSize: 11, color: 'var(--text-teal-label)', fontFamily: MONO }}>amount hidden on chain</span>
+  </div>
+)
+const spinner18 = <span style={{ width: 18, height: 18, borderRadius: '50%', border: '2px solid rgba(var(--teal-500-rgb),0.2)', borderTopColor: 'var(--teal-500)', animation: 'cv-spin 0.9s linear infinite', flexShrink: 0 }} />
+const retryBtn = (retry: () => void) => (
+  <span onClick={retry} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '8px 16px', borderRadius: 10, background: 'rgba(var(--danger-rgb),0.08)', border: '1px solid rgba(var(--danger-rgb),0.3)', fontSize: 13, fontWeight: 700, color: 'var(--danger-300)', cursor: 'pointer' }}>
+    <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="var(--danger-300)" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v5h-5" /></svg>Retry
+  </span>
+)
 
 function SentPaymentCard({ message }: { message: CaravelMessage }) {
   const amount = message.localPayment ? microToTari(message.localPayment.amountMicrotari) : null
-  const amountSlot = amount !== null
-    ? <BigAmount tari={amount} />
-    : <div style={{ fontSize: 18, fontWeight: 700, color: '#C7E4DD' }}>Confidential payment</div>
-  return <PaymentCardShell sent timestamp={message.timestamp} plaintext={message.plaintext} amountSlot={amountSlot} />
+  const body = amount !== null
+    ? <>{<BigAmount tari={amount} />}{hiddenPill}</>
+    : <>
+        <div style={{ fontFamily: MONO, fontSize: 26, fontWeight: 700, color: 'var(--text-teal-label)', letterSpacing: '0.08em', marginBottom: 10 }}>••••</div>
+        <div style={{ fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.5, maxWidth: 320, margin: '0 auto' }}>Sent from another device, so the amount isn’t cached here. The recipient can still see it.</div>
+      </>
+  return <PaymentCard sent tone="teal" chip="Sent" timestamp={message.timestamp} plaintext={message.plaintext} body={body} />
 }
 
 function ReceivedPaymentCard({ message }: { message: CaravelMessage }) {
   const { state, retry } = usePaymentResolution(message.payment!.utxoId)
-  return <PaymentCardShell sent={false} timestamp={message.timestamp} plaintext={message.plaintext} amountSlot={<ResolvedAmount state={state} retry={retry} />} />
+  let tone: CardTone = 'teal', chip = 'Received', body: ReactNode
+  if (state.kind === 'resolved') {
+    body = <>{<BigAmount tari={microToTari(state.amountMicrotari)} />}{hiddenPill}</>
+  } else if (state.kind === 'loading') {
+    body = <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 11, padding: '2px 0 12px' }}>{spinner18}<span style={{ fontSize: 14, color: 'var(--text-teal-label)' }}>Resolving amount…</span></div>
+  } else if (state.kind === 'retrying' && state.reason === 'not_found') {
+    body = <><div style={{ fontSize: 14, fontWeight: 600, color: 'var(--teal-300)', marginBottom: 6 }}>Waiting for the payment to be indexed</div><div style={{ fontSize: 13, color: 'var(--text-teal-label)', lineHeight: 1.5 }}>The payment arrived. The amount will appear once the indexer catches up.</div></>
+  } else if (state.kind === 'retrying') {
+    body = <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 11, padding: '2px 0 12px' }}>{spinner18}<span style={{ fontSize: 14, color: 'var(--text-teal-label)' }}>Reaching the indexer…</span></div>
+  } else if (state.reason === 'spent') {
+    tone = 'neutral'; chip = 'Spent'
+    body = <><div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, marginBottom: 8 }}><svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg><span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-muted)' }}>Payment output has been spent</span></div><div style={{ fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.5 }}>You already used these funds. Nothing to claim here.</div></>
+  } else if (state.reason === 'unreadable') {
+    tone = 'neutral'; chip = 'Unreadable'
+    body = <><div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 6 }}>Not addressed to this wallet</div><div style={{ fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.5 }}>This wallet can’t decrypt it. It may belong to another of your devices.</div></>
+  } else if (state.reason === 'not_found') {
+    tone = 'danger'; chip = 'Not found'
+    body = <><div style={{ fontSize: 14, fontWeight: 600, color: 'var(--danger-300)', marginBottom: 6 }}>No matching output on chain</div><div style={{ fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.5, marginBottom: 14 }}>The note referenced a payment we can’t locate.</div>{retryBtn(retry)}</>
+  } else {
+    tone = 'danger'; chip = 'Error'
+    body = <><div style={{ fontSize: 14, fontWeight: 600, color: 'var(--danger-300)', marginBottom: 6 }}>Couldn’t reach the network</div><div style={{ fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.5, marginBottom: 14 }}>The payment is fine. We just can’t read it right now.</div>{retryBtn(retry)}</>
+  }
+  return <PaymentCard sent={false} tone={tone} chip={chip} timestamp={message.timestamp} plaintext={message.plaintext} body={body} />
 }
 
 function PaymentMessageCard({ message }: { message: CaravelMessage }) {
@@ -328,6 +325,10 @@ export default function ChatApp() {
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
   const [sendError, setSendError] = useState<string | null>(null)
+  // Per-message send overlay (design lifecycle): provisional bubbles rendered while a plain-text
+  // send is in flight, then removed once the real persisted message appears (or marked 'failed').
+  // ChatApp-local only — never persisted, never on the wire; the send path itself is unchanged.
+  const [pendingSends, setPendingSends] = useState<{ id: string; peerHex: string; text: string; status: 'sending' | 'failed' }[]>([])
 
   // Payment (TARI) composer state.
   const [paymentMode, setPaymentMode] = useState(false)
@@ -501,11 +502,15 @@ export default function ChatApp() {
     if (!text || !selectedConvo || sending) return
     setSending(true)
     setSendError(null)
+    const peer = selectedConvo.peerHex
+    // Overlay (flag 1): show a provisional "sending" bubble immediately. Additive — the send path
+    // below is unchanged.
+    const tempId = `pending-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+    setPendingSends(p => [...p, { id: tempId, peerHex: peer, text, status: 'sending' }])
     try {
       const provider = createMessagingProvider()
       // Locked wallet → null. Surface a clear reason rather than leaking a null-reference error.
       if (!provider) throw new Error('Wallet is locked — unlock to send')
-      const peer = selectedConvo.peerHex
       // Self-healing address exchange (M9.0d): piggyback my address until the peer has it.
       const addr = outboundAddressFor(peer)
       const msg = await provider.sendMessage(peer, text, undefined, addr)
@@ -513,11 +518,23 @@ export default function ChatApp() {
       recordSentMessage(msg)
       if (addr) markSent(peer)
       setDraft('')  // clear only on success — a failed send keeps the text
+      setPendingSends(p => p.filter(x => x.id !== tempId))  // real persisted bubble now shows
     } catch (e) {
+      // The design's failed bubble shows only "Couldn't send" + Retry (no raw string), so log the
+      // underlying relay error here — a systematic failure stays diagnosable in the console.
+      console.warn('[Caravel] message send failed:', e)
       setSendError(e instanceof Error ? e.message : String(e))
+      setPendingSends(p => p.map(x => x.id === tempId ? { ...x, status: 'failed' } : x))  // failed bubble + Retry; draft kept
     } finally {
       setSending(false)
     }
+  }
+
+  // Retry a failed provisional send: drop the failed bubble and re-run the send (the draft still
+  // holds the text, since a failed send never clears it).
+  function retrySend(id: string) {
+    setPendingSends(p => p.filter(x => x.id !== id))
+    handleSend()
   }
 
   // ── Payment (TARI) flow ──────────────────────────────────────────────────────
@@ -545,10 +562,18 @@ export default function ChatApp() {
   const addressVerified = peerAddrRec?.source === 'exchanged'
   const effectivePayAddress = addressVerified ? peerAddrRec!.address : payAddress.trim()
 
+  // Insufficient-balance pre-check (flag 3b): same rule as the wallet's validateSendForm —
+  // amount + MAX_FEE must not exceed the confidential balance. Additive guard; never blocks a
+  // valid send. `payInsufficient` drives the design's inline pre-check state in the composer.
+  const payAmountNum = Number(payAmount)
+  const payInsufficient = !!payAmount.trim() && isFinite(payAmountNum) && payAmountNum > 0
+    && scan.balance !== null && tariToMicrotari(payAmountNum) + MAX_FEE > scan.balance
+
   function validatePayment(): string | null {
     const amt = Number(payAmount)
     if (!payAmount.trim() || !isFinite(amt) || amt <= 0) return 'Enter an amount greater than 0.'
     if (!effectivePayAddress.startsWith('otl_esm_')) return 'Enter a valid recipient Tari address (otl_esm_…).'
+    if (payInsufficient) return 'Insufficient balance.'
     return null
   }
 
@@ -915,8 +940,8 @@ export default function ChatApp() {
             </div>
           ) : (
           <>
-          {/* Chat header */}
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '18px 26px', borderBottom: '1px solid rgba(120,150,210,0.1)' }}>
+          {/* Chat header (design: avatar, nickname + @handle inline, E2E badge, ⋯ only) */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 24px', borderBottom: '1px solid rgba(var(--border-rgb),0.1)', flexShrink: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 13, minWidth: 0 }}>
               {(() => { const av = avatarFor(selectedConvo.peerHex); return (
                 <div style={{ width: 42, height: 42, borderRadius: 12, background: av.grad, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, fontWeight: 700, color: av.color, flexShrink: 0 }}>{initialsFor(nicknames[selectedConvo.peerHex])}</div>
@@ -934,91 +959,151 @@ export default function ChatApp() {
                       else if (e.key === 'Escape') setEditingNick(false)
                     }}
                     placeholder="Add a nickname…"
-                    style={{ fontSize: 16, fontWeight: 600, color: '#F2F5FB', background: '#10151F', border: '1px solid rgba(var(--accRGB,45,224,198),0.35)', borderRadius: 8, padding: '3px 8px', outline: 'none', width: 240 }}
+                    style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-bright)', background: 'var(--surface-raised)', border: '1px solid rgba(var(--teal-500-rgb),0.45)', boxShadow: '0 0 0 3px rgba(var(--teal-500-rgb),0.09)', borderRadius: 9, padding: '7px 11px', outline: 'none', width: 240 }}
                   />
                 ) : (
-                  <div
-                    onClick={beginEditNick}
-                    title="Click to set a nickname"
-                    style={{ display: 'flex', alignItems: 'center', gap: 7, cursor: 'pointer' }}
-                  >
-                    <span style={{ fontSize: 16, fontWeight: 600, color: '#F2F5FB', fontFamily: nicknames[selectedConvo.peerHex] ? undefined : "'IBM Plex Mono', monospace", overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{displayName(selectedConvo.peerHex)}</span>
-                    <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="#55617D" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><path d="M12 20h9" /><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z" /></svg>
+                  <div onClick={beginEditNick} title="Click to set a nickname" style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                    <span style={{ fontSize: 16, fontWeight: 600, color: 'var(--text-primary)', fontFamily: nicknames[selectedConvo.peerHex] ? undefined : MONO, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{displayName(selectedConvo.peerHex)}</span>
+                    <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" /></svg>
+                    {nicknames[selectedConvo.peerHex] && <span style={{ fontFamily: MONO, fontSize: 13, color: 'var(--text-teal-dim)', flexShrink: 0 }}>{truncNpub(selectedConvo.peerHex)}</span>}
                   </div>
                 )}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
-                  <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="var(--acc,#2DE0C6)" strokeWidth={2.2}><rect x={3} y={11} width={18} height={11} rx={2} /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
-                  <span style={{ fontSize: 12, color: 'var(--accT,#7DE9D8)', fontWeight: 500 }}>End-to-end encrypted</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 3 }}>
+                  <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="var(--teal-500)" strokeWidth={2.2}><rect x={3} y={11} width={18} height={11} rx={2} /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
+                  <span style={{ fontSize: 12, color: 'var(--teal-300)', fontWeight: 500 }}>End to end encrypted</span>
                 </div>
               </div>
             </div>
-            <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 36, height: 36, borderRadius: 10, border: '1px solid rgba(120,150,210,0.16)', cursor: 'pointer' }}>
-                <svg width={17} height={17} viewBox="0 0 24 24" fill="none" stroke="#8A97B4" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round"><path d="M23 7l-7 5 7 5V7z" /><rect x={1} y={5} width={15} height={14} rx={2} /></svg>
-              </div>
-              {/* ⋯ menu */}
-              <div style={{ position: 'relative' }}>
-                <button
-                  onClick={() => setMenuOpen(o => !o)}
-                  title="Conversation options"
-                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 36, height: 36, borderRadius: 10, border: '1px solid rgba(120,150,210,0.16)', background: menuOpen ? 'rgba(120,150,210,0.1)' : 'transparent', cursor: 'pointer', padding: 0 }}
-                >
-                  <svg width={17} height={17} viewBox="0 0 24 24" fill="none" stroke="#8A97B4" strokeWidth={1.9} strokeLinecap="round"><circle cx={12} cy={12} r={1.6} /><circle cx={19} cy={12} r={1.6} /><circle cx={5} cy={12} r={1.6} /></svg>
-                </button>
-                {menuOpen && (
-                  <>
-                    {/* Invisible backdrop to close on outside click */}
-                    <div onClick={() => setMenuOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
-                    <div style={{ position: 'absolute', top: 42, right: 0, zIndex: 41, minWidth: 190, padding: 6, borderRadius: 10, background: '#141A24', border: '1px solid rgba(120,150,210,0.18)', boxShadow: '0 10px 30px rgba(0,0,0,0.5)' }}>
-                      <button
-                        onClick={() => { setMenuOpen(false); setConfirmDelete(true) }}
-                        style={{ display: 'flex', alignItems: 'center', gap: 9, width: '100%', padding: '9px 11px', borderRadius: 7, border: 'none', background: 'transparent', color: '#FF6B6B', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}
-                        onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,107,107,0.1)')}
-                        onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-                      >
-                        <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="#FF6B6B" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /><path d="M10 11v6M14 11v6" /></svg>
-                        Delete conversation
-                      </button>
-                    </div>
-                  </>
-                )}
-              </div>
+            {/* ⋯ menu (design drops the call/video icon) */}
+            <div style={{ position: 'relative', flexShrink: 0 }}>
+              <button
+                onClick={() => setMenuOpen(o => !o)}
+                title="Conversation options"
+                style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 36, height: 36, borderRadius: 10, border: '1px solid rgba(var(--border-rgb),0.16)', background: menuOpen ? 'rgba(var(--border-rgb),0.1)' : 'transparent', cursor: 'pointer', padding: 0 }}
+              >
+                <svg width={17} height={17} viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth={1.9} strokeLinecap="round"><circle cx={12} cy={12} r={1.6} /><circle cx={19} cy={12} r={1.6} /><circle cx={5} cy={12} r={1.6} /></svg>
+              </button>
+              {menuOpen && (
+                <>
+                  <div onClick={() => setMenuOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+                  <div style={{ position: 'absolute', top: 42, right: 0, zIndex: 41, minWidth: 200, padding: 6, borderRadius: 11, background: 'var(--surface-raised)', border: '1px solid rgba(var(--border-rgb),0.18)', boxShadow: '0 10px 30px rgba(0,0,0,0.5)' }}>
+                    <button
+                      onClick={() => { setMenuOpen(false); setConfirmDelete(true) }}
+                      style={{ display: 'flex', alignItems: 'center', gap: 11, width: '100%', padding: '9px 11px', borderRadius: 8, border: 'none', background: 'transparent', color: 'var(--danger-300)', fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}
+                    >
+                      <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="var(--danger-300)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14" /></svg>
+                      Delete conversation
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           </div>
 
           {/* Messages */}
+          {(() => {
+            const isSelf = selectedConvo.peerHex === nostrPubkeyHex
+            const pendingForPeer = pendingSends.filter(p => p.peerHex === selectedConvo.peerHex)
+            const isEmpty = selectedConvo.messages.length === 0 && pendingForPeer.length === 0
+            return (
           <div style={{ flex: 1, overflowY: 'auto', padding: '28px 32px', display: 'flex', flexDirection: 'column', gap: 16 }}>
 
-            {/* Encryption notice */}
-            <div style={{ alignSelf: 'center', display: 'inline-flex', alignItems: 'center', gap: 8, padding: '6px 14px', borderRadius: 100, background: 'rgba(120,150,210,0.06)', marginBottom: 4 }}>
-              <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="#6B7793" strokeWidth={2}><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>
-              <span style={{ fontSize: 12, color: '#6B7793' }}>Messages and payments in this chat are end-to-end encrypted</span>
-            </div>
+            {/* Notes-to-self banner (self thread) */}
+            {isSelf && (
+              <div style={{ alignSelf: 'center', display: 'inline-flex', alignItems: 'center', gap: 8, padding: '6px 14px', borderRadius: 100, background: 'rgba(var(--border-rgb),0.06)', border: '1px solid rgba(var(--border-rgb),0.18)' }}>
+                <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V4s-1 1-4 1-5-2-8-2-4 1-4 1z" /><path d="M4 22v-7" /></svg>
+                <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Notes to self. Only you can read this thread.</span>
+              </div>
+            )}
+
+            {/* Encryption pill (design) — teal */}
+            {!isSelf && !isEmpty && (
+              <div style={{ alignSelf: 'center', display: 'inline-flex', alignItems: 'center', gap: 8, padding: '6px 14px', borderRadius: 100, background: 'rgba(var(--teal-500-rgb),0.05)', border: '1px solid rgba(var(--teal-500-rgb),0.18)', marginBottom: 4 }}>
+                <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="var(--teal-500)" strokeWidth={2.2}><rect x={3} y={11} width={18} height={11} rx={2} /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
+                <span style={{ fontSize: 12, color: 'var(--teal-300)' }}>Messages and payments here are end to end encrypted</span>
+              </div>
+            )}
+
+            {/* Address-provenance banner (design) — wired to real state: exchanged (teal) / manual (amber) */}
+            {!isSelf && peerAddrRec && (
+              addressVerified ? (
+                <div style={{ alignSelf: 'center', display: 'flex', alignItems: 'center', gap: 9, padding: '9px 15px', borderRadius: 11, background: 'rgba(var(--teal-500-rgb),0.05)', border: '1px solid rgba(var(--teal-500-rgb),0.24)', maxWidth: 560 }}>
+                  <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="var(--teal-500)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /><path d="M9 12l2 2 4-4" /></svg>
+                  <span style={{ fontSize: 12, color: 'var(--teal-300)', lineHeight: 1.45 }}>Payment address shared by {displayName(selectedConvo.peerHex)} in this conversation</span>
+                </div>
+              ) : (
+                <div style={{ alignSelf: 'center', display: 'flex', alignItems: 'center', gap: 9, padding: '9px 15px', borderRadius: 11, background: 'rgba(var(--warn-rgb),0.05)', border: '1px solid rgba(var(--warn-rgb),0.28)', maxWidth: 560 }}>
+                  <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="var(--warn)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><path d="M12 9v4M12 17h.01" /></svg>
+                  <span style={{ fontSize: 12, color: 'var(--warn-300)', lineHeight: 1.45 }}>Address entered manually. Not verified against this contact’s identity.</span>
+                </div>
+              )
+            )}
+
+            {/* Empty accepted thread (first-message state) */}
+            {isEmpty && !isSelf && (
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14 }}>
+                <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '6px 14px', borderRadius: 100, background: 'rgba(var(--teal-500-rgb),0.05)', border: '1px solid rgba(var(--teal-500-rgb),0.18)' }}>
+                  <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="var(--teal-500)" strokeWidth={2.2}><rect x={3} y={11} width={18} height={11} rx={2} /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
+                  <span style={{ fontSize: 12, color: 'var(--teal-300)' }}>End to end encrypted</span>
+                </div>
+                <div style={{ textAlign: 'center', maxWidth: 300 }}>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-body-dim)', marginBottom: 6 }}>This is the start of your conversation with {displayName(selectedConvo.peerHex)}</div>
+                  <div style={{ fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.55 }}>Say hello, or send a confidential payment with a note attached.</div>
+                </div>
+              </div>
+            )}
 
             {selectedConvo.messages.map((m) => (
               m.payment ? (
-                /* Confidential payment */
                 <PaymentMessageCard key={m.id} message={m} />
-              ) : m.direction === 'received' ? (
-                /* Incoming */
-                <div key={m.id} style={{ alignSelf: 'flex-start', maxWidth: '62%' }}>
-                  <div style={{ padding: '13px 17px', borderRadius: '4px 16px 16px 16px', background: '#161C28', color: '#E4EAF4', fontSize: 15, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.plaintext}</div>
-                  <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: '#55617D', marginTop: 5, marginLeft: 4 }}>{bubbleTime(m.timestamp)}</div>
+              ) : (isSelf || m.direction === 'received') ? (
+                /* Incoming / notes-to-self */
+                <div key={m.id} style={{ alignSelf: isSelf ? 'flex-end' : 'flex-start', maxWidth: '62%' }}>
+                  <div style={{ padding: '13px 17px', borderRadius: isSelf ? 14 : '4px 16px 16px 16px', background: 'var(--surface-inset)', border: isSelf ? '1px solid rgba(var(--border-rgb),0.14)' : 'none', color: 'var(--text-body)', fontSize: 15, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.plaintext}</div>
+                  {!isSelf && <div style={{ fontFamily: MONO, fontSize: 11, color: 'var(--text-faint-dim)', marginTop: 5, marginLeft: 4 }}>{bubbleTime(m.timestamp)}</div>}
                 </div>
               ) : (
                 /* Outgoing */
                 <div key={m.id} style={{ alignSelf: 'flex-end', maxWidth: '62%', display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
-                  <div style={{ padding: '13px 17px', borderRadius: '16px 4px 16px 16px', background: 'linear-gradient(160deg, #1C7A6E, #12655A)', color: '#EAFBF7', fontSize: 15, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.plaintext}</div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: '#55617D', marginTop: 5, marginRight: 4 }}>
+                  <div style={{ padding: '13px 17px', borderRadius: '16px 4px 16px 16px', background: 'var(--msg-sent)', color: 'var(--text-bright)', fontSize: 15, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.plaintext}</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontFamily: MONO, fontSize: 11, color: 'var(--text-muted-dim)', marginTop: 6, marginRight: 4 }}>
                     {bubbleTime(m.timestamp)}
-                    <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="var(--acc,#2DE0C6)" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round"><path d="M18 7l-8 8-4-4" /></svg>
+                    <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="var(--teal-500)" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round"><path d="M18 7l-8 8-4-4" /></svg>
                   </div>
                 </div>
               )
             ))}
+
+            {/* Pending-send overlay (design lifecycle: sending → failed + Retry) */}
+            {pendingForPeer.map((p) => (
+              <div key={p.id} style={{ alignSelf: 'flex-end', maxWidth: '62%', display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
+                {p.status === 'sending' ? (
+                  <>
+                    <div style={{ padding: '13px 17px', borderRadius: '16px 4px 16px 16px', background: 'linear-gradient(160deg, rgba(28,122,110,0.55), rgba(18,101,90,0.55))', color: 'var(--text-note)', fontSize: 15, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{p.text}</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontFamily: MONO, fontSize: 11, color: 'var(--text-muted-dim)', marginTop: 6, marginRight: 4 }}>
+                      <span style={{ width: 11, height: 11, borderRadius: '50%', border: '2px solid rgba(var(--border-rgb),0.2)', borderTopColor: 'var(--text-muted-dim)', animation: 'cv-spin 0.8s linear infinite' }} />Sending
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div style={{ padding: '13px 17px', borderRadius: '16px 4px 16px 16px', background: 'rgba(var(--danger-rgb),0.06)', border: '1px solid rgba(var(--danger-rgb),0.34)', color: 'var(--text-body)', fontSize: 15, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{p.text}</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 7, marginRight: 4 }}>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'var(--danger-300)' }}>
+                        <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="var(--danger-500)" strokeWidth={2.4} strokeLinecap="round"><circle cx={12} cy={12} r={9} /><path d="M12 8v5M12 16h.01" /></svg>Couldn’t send
+                      </span>
+                      <span onClick={() => retrySend(p.id)} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '4px 10px', borderRadius: 8, background: 'rgba(var(--danger-rgb),0.08)', border: '1px solid rgba(var(--danger-rgb),0.3)', fontSize: 11, fontWeight: 700, color: 'var(--danger-300)', cursor: 'pointer' }}>
+                        <svg width={11} height={11} viewBox="0 0 24 24" fill="none" stroke="var(--danger-300)" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v5h-5" /></svg>Retry
+                      </span>
+                    </div>
+                    <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6, marginRight: 4 }}>Your text is kept in the composer.</div>
+                  </>
+                )}
+              </div>
+            ))}
             {/* Auto-scroll anchor */}
             <div ref={bottomRef} />
           </div>
+            ) })()}
 
           {/* Composer */}
           {(() => {
@@ -1029,179 +1114,160 @@ export default function ChatApp() {
             const showCounter = draft.length >= MAX_MESSAGE_LEN - 200
             const inputsDisabled = sending || payBusy || confirming
             return (
-            <div style={{ padding: '16px 24px 20px', borderTop: '1px solid rgba(120,150,210,0.1)' }}>
+            <div style={{ padding: '16px 24px 20px', borderTop: '1px solid rgba(var(--border-rgb),0.1)' }}>
 
-              {/* PERSISTENT alert — payment succeeded but message failed, or payment left unconfirmed.
-                  Must be acknowledged explicitly; typing does not clear it. */}
+              {/* PERSISTENT must-acknowledge alert (orphan / timeout) — logic unchanged, reskinned */}
               {payAlert && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12, padding: '13px 15px', borderRadius: 12, background: 'rgba(255,140,40,0.10)', border: '1.5px solid rgba(255,150,50,0.55)' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12, padding: '13px 15px', borderRadius: 12, background: 'rgba(var(--warn-rgb),0.08)', border: '1.5px solid rgba(var(--warn-rgb),0.4)' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="#FFB067" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><path d="M12 9v4M12 17h.01" /></svg>
-                    <span style={{ fontSize: 13, fontWeight: 700, color: '#FFB067' }}>
-                      {payAlert.kind === 'orphan' ? 'Payment sent — but the message did NOT' : 'Payment submitted — but not confirmed'}
+                    <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="var(--warn)" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><path d="M12 9v4M12 17h.01" /></svg>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--warn-300)' }}>
+                      {payAlert.kind === 'orphan' ? 'Payment sent, but the message did not' : 'Payment submitted, but not confirmed'}
                     </span>
                   </div>
-                  <div style={{ fontSize: 12.5, color: '#E8D3B8', lineHeight: 1.5 }}>
+                  <div style={{ fontSize: 12.5, color: 'var(--text-body-dim)', lineHeight: 1.5 }}>
                     {payAlert.kind === 'orphan'
-                      ? <>The confidential payment of <b>{payAlert.amountTari} tTARI</b> went through, but the note could not be delivered. The recipient has the funds but no message or notification — follow up out-of-band.</>
-                      : <>The confidential payment of <b>{payAlert.amountTari} tTARI</b> was submitted but is not yet confirmed, so no message was sent. Verify the transaction; if it commits, their background scan will find the funds.</>}
+                      ? <>The funds ({<b>{payAlert.amountTari} tTARI</b>}) left your wallet. {displayName(selectedConvo.peerHex)} has the money but no note explaining it, so tell them separately.</>
+                      : <>Broadcast to the network, no confirmation yet ({<b>{payAlert.amountTari} tTARI</b>}). Do not resend. Check Activity before trying again.</>}
                   </div>
-                  <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: '#B79B7A', wordBreak: 'break-all' }}>tx {payAlert.txId}</div>
-                  <button
-                    onClick={() => setPayAlert(null)}
-                    style={{ alignSelf: 'flex-start', marginTop: 2, padding: '6px 14px', borderRadius: 8, border: '1px solid rgba(255,150,50,0.5)', background: 'transparent', color: '#FFB067', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}
-                  >
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '9px 12px', borderRadius: 9, background: 'rgba(10,14,23,0.5)' }}>
+                    <span style={{ fontFamily: MONO, fontSize: 11, color: 'var(--text-teal-label)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{payAlert.txId.slice(0, 8)}…{payAlert.txId.slice(-4)}</span>
+                    <span onClick={() => navigator.clipboard.writeText(payAlert.txId).catch(() => {})} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 600, color: 'var(--warn-300)', cursor: 'pointer', flexShrink: 0 }}>
+                      <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="var(--warn-300)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><rect x={9} y={9} width={13} height={13} rx={2} /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>Copy
+                    </span>
+                  </div>
+                  <button onClick={() => setPayAlert(null)} style={{ alignSelf: 'flex-start', marginTop: 2, padding: '6px 14px', borderRadius: 8, border: '1px solid rgba(var(--warn-rgb),0.5)', background: 'transparent', color: 'var(--warn-300)', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
                     I have noted this
                   </button>
                 </div>
               )}
 
-              {/* Plain-message send failure — inline, draft preserved */}
-              {sendError && (
-                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7, marginBottom: 10, fontSize: 12, color: '#FF6B6B', fontFamily: "'IBM Plex Mono', monospace", lineHeight: 1.45 }}>
-                  <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="#FF6B6B" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 1 }}><circle cx={12} cy={12} r={10} /><path d="M12 8v4M12 16h.01" /></svg>
-                  <span style={{ wordBreak: 'break-word' }}>Couldn't send — {sendError}</span>
-                </div>
-              )}
-
               {/* Payment error (validation / reject / pre-flight) — draft + fields preserved */}
               {payError && (
-                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7, marginBottom: 10, fontSize: 12, color: '#FF6B6B', fontFamily: "'IBM Plex Mono', monospace", lineHeight: 1.45 }}>
-                  <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="#FF6B6B" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 1 }}><circle cx={12} cy={12} r={10} /><path d="M12 8v4M12 16h.01" /></svg>
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7, marginBottom: 10, fontSize: 12, color: 'var(--danger-300)', fontFamily: MONO, lineHeight: 1.45 }}>
+                  <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="var(--danger-500)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 1 }}><circle cx={12} cy={12} r={10} /><path d="M12 8v4M12 16h.01" /></svg>
                   <span style={{ wordBreak: 'break-word' }}>{payError}</span>
                 </div>
               )}
 
               {/* Payment in flight — progress */}
               {payBusy && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, fontSize: 12.5, color: 'var(--accT,#7DE9D8)', fontFamily: "'IBM Plex Mono', monospace" }}>
-                  <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="var(--acc,#2DE0C6)" strokeWidth={2.5} strokeLinecap="round" style={{ animation: 'spin 1s linear infinite', flexShrink: 0 }}><path d="M21 12a9 9 0 1 1-6.219-8.56" /></svg>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, fontSize: 12.5, color: 'var(--teal-300)', fontFamily: MONO }}>
+                  <span style={{ width: 13, height: 13, borderRadius: '50%', border: '2px solid rgba(var(--teal-500-rgb),0.2)', borderTopColor: 'var(--teal-500)', animation: 'cv-spin 0.8s linear infinite', flexShrink: 0 }} />
                   <span>{payProgress ?? 'Working…'}</span>
                 </div>
               )}
 
-              {/* Payment fields — shown in payment mode, before the confirm gate */}
+              {/* Payment composer card (transcribed from design source: contained card, amount+address
+                  row, dashed note, Cancel/Review; danger-toned when the balance pre-check fails) */}
               {paymentMode && !confirming && !payBusy && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 12, padding: '13px 15px', borderRadius: 12, background: 'rgba(var(--accRGB,45,224,198),0.05)', border: '1px solid rgba(var(--accRGB,45,224,198),0.25)' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', color: 'var(--accT,#7DE9D8)' }}>CONFIDENTIAL PAYMENT</span>
-                    <button onClick={toggleTari} title="Cancel payment" style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#8A97B4', display: 'flex', padding: 2 }}>
+                <div style={{ padding: 18, borderRadius: 16, background: 'var(--surface-base)', border: `1px solid ${payInsufficient ? 'rgba(var(--danger-rgb),0.3)' : 'rgba(var(--teal-500-rgb),0.24)'}`, marginBottom: 12 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--teal-300)', letterSpacing: '0.06em' }}>CONFIDENTIAL PAYMENT</span>
+                    <button onClick={toggleTari} title="Cancel payment" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted-dim)', display: 'flex', padding: 2 }}>
                       <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12" /></svg>
                     </button>
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    <input
-                      value={payAmount}
-                      onChange={e => { setPayAmount(e.target.value); if (payError) setPayError(null) }}
-                      placeholder="0.000000"
-                      inputMode="decimal"
-                      style={{ width: 140, background: '#10151F', border: '1px solid rgba(120,150,210,0.25)', borderRadius: 8, padding: '9px 12px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 14, color: '#EAFBF7', outline: 'none' }}
-                    />
-                    <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--acc,#2DE0C6)' }}>tTARI</span>
-                  </div>
-                  {addressVerified ? (
-                    /* M9.0e: identity-bound address exchanged over the encrypted channel — no field,
-                       no warning. Copy describes the SOURCE, not assurance about the person. */
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: 'var(--accT,#7DE9D8)', lineHeight: 1.45 }}>
-                      <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="var(--acc,#2DE0C6)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><path d="M12 2l7 4v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6l7-4z" /></svg>
-                      <span>Paying {selectedConvo ? displayName(selectedConvo.peerHex) : ''} · address shared by them</span>
+                  {/* amount + address row */}
+                  <div style={{ display: 'flex', gap: 10, marginBottom: payInsufficient ? 8 : 10 }}>
+                    <div style={{ flex: '0 0 150px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 14px', borderRadius: 11, background: 'var(--surface-raised)', border: `1px solid ${payInsufficient ? 'rgba(var(--danger-rgb),0.5)' : 'rgba(var(--teal-500-rgb),0.45)'}`, boxShadow: payInsufficient ? 'none' : '0 0 0 3px rgba(var(--teal-500-rgb),0.09)' }}>
+                      <input value={payAmount} onChange={e => { setPayAmount(e.target.value); if (payError) setPayError(null) }} placeholder="0.00" inputMode="decimal" style={{ flex: 1, minWidth: 0, background: 'transparent', border: 'none', outline: 'none', fontFamily: MONO, fontSize: 15, color: 'var(--text-body)' }} />
+                      <span style={{ fontSize: 11, fontWeight: 700, color: payInsufficient ? 'var(--danger-300)' : 'var(--teal-500)' }}>TARI</span>
                     </div>
-                  ) : (
-                    <>
-                      <input
-                        value={payAddress}
-                        onChange={e => { setPayAddress(e.target.value); if (payError) setPayError(null) }}
-                        placeholder="Recipient Tari address (otl_esm_…)"
-                        spellCheck={false}
-                        style={{ background: '#10151F', border: '1px solid rgba(120,150,210,0.25)', borderRadius: 8, padding: '9px 12px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: '#E4EAF4', outline: 'none', width: '100%', boxSizing: 'border-box' }}
-                      />
-                      {/* Honest caveat — a pasted address is NOT bound to this contact's Nostr identity */}
-                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6, fontSize: 11, color: '#C79A5B', lineHeight: 1.45 }}>
-                        <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="#C79A5B" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 1 }}><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><path d="M12 9v4M12 17h.01" /></svg>
-                        <span>Address entered manually — not verified against this contact's identity.</span>
-                      </div>
-                    </>
+                    {addressVerified ? (
+                      <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', padding: '12px 14px', borderRadius: 11, background: 'var(--surface-raised)', border: '1px solid rgba(var(--border-rgb),0.14)', fontFamily: MONO, fontSize: 13, color: 'var(--text-body-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{peerAddrRec!.address.slice(0, 14)}…{peerAddrRec!.address.slice(-4)}</div>
+                    ) : (
+                      <input value={payAddress} onChange={e => { setPayAddress(e.target.value); if (payError) setPayError(null) }} placeholder="otl_esm_…" spellCheck={false} style={{ flex: 1, minWidth: 0, padding: '12px 14px', borderRadius: 11, background: 'var(--surface-raised)', border: '1px solid rgba(var(--border-rgb),0.14)', fontFamily: MONO, fontSize: 13, color: 'var(--text-body-dim)', outline: 'none' }} />
+                    )}
+                  </div>
+                  {/* insufficient-balance row */}
+                  {payInsufficient && (
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 12, marginBottom: 14 }}>
+                      <span style={{ color: 'var(--danger-300)' }}>Exceeds your balance</span>
+                      {scan.balance !== null && <span style={{ fontFamily: MONO, color: 'var(--text-muted-dim)' }}>available {(Number(scan.balance) / 1_000_000).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>}
+                    </div>
                   )}
+                  {/* note (dashed) */}
+                  <textarea value={draft} onChange={e => { setDraft(e.target.value); if (sendError) setSendError(null) }} placeholder="Add a note (optional)…" rows={1} maxLength={MAX_MESSAGE_LEN} style={{ display: 'block', width: '100%', boxSizing: 'border-box', padding: '12px 14px', borderRadius: 11, background: 'var(--surface-raised)', border: '1px dashed rgba(var(--teal-500-rgb),0.24)', fontSize: 13, color: 'var(--text-note)', fontStyle: draft ? 'normal' : 'italic', outline: 'none', resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.4, marginBottom: 14 }} />
+                  {/* buttons */}
+                  <div style={{ display: 'flex', gap: 10 }}>
+                    <button onClick={toggleTari} style={{ flex: '0 0 120px', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 12, borderRadius: 11, border: '1px solid rgba(var(--border-rgb),0.2)', background: 'transparent', color: 'var(--text-muted)', fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
+                    {(() => { const ok = validatePayment() === null; return (
+                      <button onClick={onComposerSend} disabled={!ok} style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 12, borderRadius: 11, border: ok ? 'none' : '1px solid rgba(var(--border-rgb),0.12)', background: ok ? 'var(--teal-grad)' : 'rgba(16,21,31,0.6)', color: ok ? 'var(--ink-on-accent)' : 'var(--text-disabled)', fontSize: 14, fontWeight: 700, cursor: ok ? 'pointer' : 'default', fontFamily: 'inherit' }}>Review payment</button>
+                    ) })()}
+                  </div>
                 </div>
               )}
 
-              {/* Confirm gate — spending real testnet funds */}
+              {/* In-thread confirm gate (transcribed from design source: --surface card, Amount /
+                  Network fee ≤ 0.01 TARI / To rows, dashed note, warn callout, Cancel / Send payment) */}
               {confirming && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 12, padding: '14px 16px', borderRadius: 12, background: 'rgba(var(--accRGB,45,224,198),0.06)', border: '1.5px solid rgba(var(--accRGB,45,224,198),0.45)' }}>
-                  <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--accT,#7DE9D8)' }}>Confirm confidential payment</span>
-                  <div style={{ fontSize: 13, color: '#D7E4E0', lineHeight: 1.6 }}>
-                    Send <b style={{ color: '#EAFBF7' }}>{payAmount} tTARI</b> (plus up to {MAX_FEE_TARI} fee) to<br />
-                    <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11.5, color: '#8FB7B0', wordBreak: 'break-all' }}>{effectivePayAddress}</span>
-                    <br />with note “<span style={{ color: '#C7E4DD' }}>{draft.trim() || '💸 Payment'}</span>”.
+                <div style={{ padding: 20, borderRadius: 16, background: 'var(--surface)', border: '1px solid rgba(var(--teal-500-rgb),0.28)', marginBottom: 12 }}>
+                  <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 16 }}>Confirm payment to {displayName(selectedConvo.peerHex)}</div>
+                  <div style={{ borderRadius: 12, background: 'var(--surface-raised)', border: '1px solid rgba(var(--border-rgb),0.12)', overflow: 'hidden', marginBottom: 14 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '13px 15px', borderBottom: '1px solid rgba(var(--border-rgb),0.08)' }}><span style={{ fontSize: 13, color: 'var(--text-muted-dim)' }}>Amount</span><span style={{ fontFamily: MONO, fontSize: 15, fontWeight: 600, color: 'var(--text-bright)' }}>{payAmount} TARI</span></div>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '13px 15px', borderBottom: '1px solid rgba(var(--border-rgb),0.08)' }}><span style={{ fontSize: 13, color: 'var(--text-muted-dim)' }}>Network fee</span><span style={{ fontFamily: MONO, fontSize: 13, color: 'var(--text-muted)' }}>≤ {FEE_CEIL_TARI} TARI</span></div>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '13px 15px' }}><span style={{ fontSize: 13, color: 'var(--text-muted-dim)', flexShrink: 0 }}>To</span><span style={{ fontFamily: MONO, fontSize: 12, color: 'var(--text-body-dim)' }}>{effectivePayAddress.slice(0, 12)}…{effectivePayAddress.slice(-4)}</span></div>
                   </div>
-                  <div style={{ fontSize: 11.5, color: '#C79A5B' }}>This is a real, irreversible testnet payment.</div>
-                  <div style={{ display: 'flex', gap: 10, marginTop: 2 }}>
-                    <button onClick={submitPayment} style={{ padding: '9px 18px', borderRadius: 9, border: 'none', background: 'linear-gradient(180deg, var(--accB,#34E5D0), var(--accD,#12A594))', color: 'var(--accOn,#04120F)', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>
-                      Confirm &amp; send
-                    </button>
-                    <button onClick={() => setConfirming(false)} style={{ padding: '9px 18px', borderRadius: 9, border: '1px solid rgba(120,150,210,0.25)', background: 'transparent', color: '#8A97B4', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
-                      Cancel
-                    </button>
+                  <div style={{ padding: '12px 14px', borderRadius: 11, background: 'rgba(10,14,23,0.6)', border: '1px dashed rgba(var(--teal-500-rgb),0.26)', marginBottom: 14 }}>
+                    <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.12em', color: 'var(--text-teal-dim)', marginBottom: 6 }}>PRIVATE NOTE</div>
+                    <div style={{ fontSize: 13, color: 'var(--text-note)', fontStyle: 'italic' }}>“{draft.trim() || '💸 Payment'}”</div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 10, padding: '12px 14px', borderRadius: 11, background: 'rgba(var(--warn-rgb),0.05)', border: '1px solid rgba(var(--warn-rgb),0.28)', marginBottom: 16 }}>
+                    <span style={{ fontSize: 12, color: 'var(--warn-300)', lineHeight: 1.5 }}>This is a real, irreversible testnet payment. It cannot be recalled once sent.</span>
+                  </div>
+                  <div style={{ display: 'flex', gap: 10 }}>
+                    <button onClick={() => setConfirming(false)} style={{ flex: '0 0 120px', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 13, borderRadius: 12, border: '1px solid rgba(var(--border-rgb),0.2)', background: 'transparent', color: 'var(--text-muted)', fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
+                    <button onClick={submitPayment} style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 13, borderRadius: 12, border: 'none', background: 'var(--teal-grad)', color: 'var(--ink-on-accent)', fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>Send payment</button>
                   </div>
                 </div>
               )}
 
-              <div style={{ display: 'flex', alignItems: 'flex-end', gap: 12 }}>
-                {/* TARI button — toggles payment mode */}
-                <button
-                  onClick={toggleTari}
-                  disabled={payBusy}
-                  title={paymentMode ? 'Cancel confidential payment' : 'Attach confidential payment'}
-                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 48, height: 48, flexShrink: 0, borderRadius: 13, border: paymentMode ? '2px solid var(--acc,#2DE0C6)' : 'none', background: paymentMode ? 'rgba(var(--accRGB,45,224,198),0.14)' : 'linear-gradient(180deg, var(--accB,#34E5D0), var(--accD,#12A594))', cursor: payBusy ? 'default' : 'pointer', boxShadow: paymentMode ? 'none' : '0 0 18px rgba(var(--accRGB,45,224,198),0.28)', padding: 0 }}
-                >
-                  <svg width={22} height={22} viewBox="0 0 24 24" fill="none" stroke={paymentMode ? 'var(--acc,#2DE0C6)' : 'var(--accOn,#04120F)'} strokeWidth={2.3} strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>
-                </button>
-                {/* Text input */}
-                <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 12, padding: '13px 18px', borderRadius: 14, background: '#10151F', border: '1px solid rgba(120,150,210,0.14)' }}>
-                  <textarea
-                    ref={composerRef}
-                    className="cv-composer"
-                    value={draft}
-                    onChange={e => { setDraft(e.target.value); if (sendError) setSendError(null) }}
-                    onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onComposerSend() } }}
-                    placeholder={paymentMode ? 'Add a note (optional)…' : 'Write an encrypted message…'}
-                    rows={1}
-                    maxLength={MAX_MESSAGE_LEN}
-                    disabled={inputsDisabled}
-                    style={{ flex: 1, resize: 'none', background: 'transparent', border: 'none', outline: 'none', color: '#E4EAF4', fontSize: 15, fontFamily: 'inherit', lineHeight: 1.4, maxHeight: COMPOSER_MAX_H, overflowY: 'auto', padding: 0, display: 'block' }}
-                  />
-                  <svg width={19} height={19} viewBox="0 0 24 24" fill="none" stroke="#55617D" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><circle cx={12} cy={12} r={10} /><path d="M8 14s1.5 2 4 2 4-2 4-2M9 9h.01M15 9h.01" /></svg>
+              {/* Text composer row (design) — TARI toggle + input + send. Emoji button removed. */}
+              {!paymentMode && !confirming && (
+                <div style={{ display: 'flex', alignItems: 'flex-end', gap: 12 }}>
+                  <button
+                    onClick={toggleTari}
+                    disabled={payBusy}
+                    title="Attach confidential payment"
+                    style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 46, height: 46, flexShrink: 0, borderRadius: 12, border: 'none', background: 'var(--teal-grad)', cursor: payBusy ? 'default' : 'pointer', boxShadow: '0 0 18px rgba(var(--teal-500-rgb),0.28)', padding: 0 }}
+                  >
+                    <svg width={22} height={22} viewBox="0 0 24 24" fill="none" stroke="var(--ink-on-accent)" strokeWidth={2.3} strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>
+                  </button>
+                  <div style={{ flex: 1, display: 'flex', alignItems: 'center', padding: '13px 17px', borderRadius: 13, background: 'var(--surface-raised)', border: '1px solid rgba(var(--border-rgb),0.14)' }}>
+                    <textarea
+                      ref={composerRef}
+                      className="cv-composer"
+                      value={draft}
+                      onChange={e => { setDraft(e.target.value); if (sendError) setSendError(null) }}
+                      onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onComposerSend() } }}
+                      placeholder="Write an encrypted message…"
+                      rows={1}
+                      maxLength={MAX_MESSAGE_LEN}
+                      disabled={inputsDisabled}
+                      style={{ flex: 1, resize: 'none', background: 'transparent', border: 'none', outline: 'none', color: 'var(--text-body)', fontSize: 15, fontFamily: 'inherit', lineHeight: 1.4, maxHeight: COMPOSER_MAX_H, overflowY: 'auto', padding: 0, display: 'block' }}
+                    />
+                  </div>
+                  <button
+                    onClick={onComposerSend}
+                    disabled={!canSend}
+                    title="Send message"
+                    style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 46, height: 46, flexShrink: 0, borderRadius: 12, background: 'var(--surface-inset)', border: '1px solid rgba(var(--border-rgb),0.16)', cursor: canSend ? 'pointer' : 'default', opacity: canSend ? 1 : 0.5, padding: 0 }}
+                  >
+                    {sending ? (
+                      <span style={{ width: 20, height: 20, borderRadius: '50%', border: '2.5px solid rgba(var(--border-rgb),0.25)', borderTopColor: 'var(--text-muted-dim)', animation: 'cv-spin 0.8s linear infinite' }} />
+                    ) : (
+                      <svg width={20} height={20} viewBox="0 0 24 24" fill="none" stroke={canSend ? 'var(--teal-500)' : 'var(--text-muted-dim)'} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" /></svg>
+                    )}
+                  </button>
                 </div>
-                {/* Send button */}
-                <button
-                  onClick={onComposerSend}
-                  disabled={!canSend}
-                  title={paymentMode ? 'Review payment' : 'Send message'}
-                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 48, height: 48, flexShrink: 0, borderRadius: 13, background: '#161C28', border: '1px solid rgba(120,150,210,0.16)', cursor: canSend ? 'pointer' : 'default', opacity: canSend ? 1 : 0.5, padding: 0 }}
-                >
-                  {(sending || payBusy) ? (
-                    <svg width={20} height={20} viewBox="0 0 24 24" fill="none" stroke="#8A97B4" strokeWidth={2.5} strokeLinecap="round" style={{ animation: 'spin 1s linear infinite' }}><path d="M21 12a9 9 0 1 1-6.219-8.56" /></svg>
-                  ) : (
-                    <svg width={20} height={20} viewBox="0 0 24 24" fill="none" stroke={canSend ? 'var(--acc,#2DE0C6)' : '#8A97B4'} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" /></svg>
-                  )}
-                </button>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginTop: 11, paddingLeft: 4 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-                  <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="var(--acc,#2DE0C6)" strokeWidth={2} strokeLinecap="round"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>
-                  <span style={{ fontSize: 12, color: '#5E8A82' }}>
-                    {paymentMode
-                      ? <>Enter an amount and recipient address, then review before sending real funds</>
-                      : <>Tap the <span style={{ color: 'var(--acc,#2DE0C6)', fontWeight: 600 }}>TARI</span> button to attach a confidential payment to your message</>}
-                  </span>
+              )}
+              {!paymentMode && !confirming && showCounter && (
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
+                  <span style={{ fontFamily: MONO, fontSize: 11, color: draft.length >= MAX_MESSAGE_LEN ? 'var(--danger-500)' : 'var(--text-muted-dim)' }}>{draft.length}/{MAX_MESSAGE_LEN}</span>
                 </div>
-                {showCounter && (
-                  <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: draft.length >= MAX_MESSAGE_LEN ? '#FF6B6B' : '#8A97B4', flexShrink: 0 }}>
-                    {draft.length}/{MAX_MESSAGE_LEN}
-                  </span>
-                )}
-              </div>
-              <style>{`.cv-composer::placeholder { color: #55617D; }`}</style>
+              )}
+              <style>{`.cv-composer::placeholder { color: var(--text-faint-dim); }`}</style>
             </div>
             )
           })()}

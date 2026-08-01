@@ -46,6 +46,9 @@ export interface SendResult {
   // Used by M10.1 payment-linked messages to reference this exact output. Undefined only if the
   // commitment could not be read from the statement.
   recipientUtxoId?: string
+  // Actual fee paid (µtTARI), read from the committed tx's fee receipt. Undefined if the poll
+  // timed out or the receipt didn't carry it; callers fall back to the estimate.
+  feeMicrotari?: bigint
 }
 
 export interface SendParams {
@@ -125,19 +128,25 @@ async function scanUtxos(crypto: WasmStealthCrypto, viewSecret: Uint8Array): Pro
   return owned
 }
 
-async function pollOutcome(txId: string): Promise<SendOutcome> {
+async function pollOutcome(txId: string): Promise<{ outcome: SendOutcome; feeMicrotari?: bigint }> {
   for (let i = 0; i < 6; i++) {
     await new Promise<void>(r => setTimeout(r, 5_000))
     try {
       const res = await fetch(`${INDEXER_URL}/transactions/${txId}/result`)
       if (!res.ok) continue
-      const json = await res.json() as { result?: { Finalized?: { final_decision?: string } } }
-      const decision = json.result?.Finalized?.final_decision
-      if (decision === 'Commit') return 'Commit'
-      if (decision) return 'Reject'
+      const json = await res.json() as {
+        result?: { Finalized?: { final_decision?: string; finalize?: { fee_receipt?: { total_fees_paid?: number | string } } } }
+      }
+      const fin = json.result?.Finalized
+      const decision = fin?.final_decision
+      // Actual fee lives on the committed receipt (same field the faucet reads).
+      const feePaid = fin?.finalize?.fee_receipt?.total_fees_paid
+      const feeMicrotari = feePaid != null ? BigInt(feePaid) : undefined
+      if (decision === 'Commit') return { outcome: 'Commit', feeMicrotari }
+      if (decision) return { outcome: 'Reject', feeMicrotari }
     } catch { /* transient */ }
   }
-  return 'Timeout'
+  return { outcome: 'Timeout' }
 }
 
 // ── main export ───────────────────────────────────────────────────────────────
@@ -238,10 +247,10 @@ export async function sendConfidential(
   const txId = sub.transaction_id as string
   log(`Submitted — waiting for confirmation (up to 30s)…`)
 
-  const outcome = await pollOutcome(txId)
+  const { outcome, feeMicrotari } = await pollOutcome(txId)
   provider.stopWatcher?.()
 
-  return { txId, outcome, recipientUtxoId }
+  return { txId, outcome, recipientUtxoId, feeMicrotari }
 }
 
 export function tariToMicrotari(tari: number): bigint {

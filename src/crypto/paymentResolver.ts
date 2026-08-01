@@ -11,7 +11,7 @@ import type { IndexerGetSubstateResponse } from '@tari-project/ootle'
 
 const INDEXER = 'https://ootle-indexer-a.tari.com'
 
-// One shared WASM instance — stateless per call, same pattern as walletScanner / DecryptPanel.
+// One shared WASM instance — stateless per call, same pattern as walletScanner.
 const stealthCrypto = new WasmStealthCrypto(Network.Esmeralda)
 
 export type PaymentResolution =

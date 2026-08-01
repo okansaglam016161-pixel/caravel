@@ -1,8 +1,6 @@
-//   "Claim testnet tokens" action. Lets a new (empty) self-custodial wallet fund itself from the
-//   public esmeralda faucet — self-signed in-browser, no daemon. Never shows success until the
-//   balance actually rises (poll tx → Commit, then rescan and confirm the real increase). Light
-//   anti-spam guardrails: brief cooldown after a claim, and a soft note when the balance is already
-//   high. Testnet-only framing — these tokens have no value.
+//   "Claim testnet tokens" — presentation transcribed element-for-element from the design file's
+//   "Overview · faucet panel" (8 states). All logic (phase, claim, verify-effect, cooldown,
+//   deadline, HIGH_BALANCE, refs) is preserved verbatim; only the JSX mirrors the design markup.
 
 import { useState, useEffect, useRef } from 'react'
 import { useWallet } from '../../context/WalletContext'
@@ -11,8 +9,14 @@ import { claimFaucet, type ClaimResult } from '../../crypto/faucet'
 type Phase = 'idle' | 'claiming' | 'verifying' | 'done' | 'lagging' | 'error'
 
 const HIGH_BALANCE = 100_000_000n // 100 tTARI — "you already have plenty"
-const fmt = (µt: bigint) => (Number(µt) / 1_000_000).toFixed(2)
+const fmt = (µt: bigint) => (Number(µt) / 1_000_000).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 const shortTx = (t: string | null) => (t ? `${t.slice(0, 8)}…${t.slice(-6)}` : '')
+
+// Design tokens (hex → var) used across the states.
+const CARD = { padding: 18, borderRadius: 14 } as const
+const TITLE = { fontSize: 14, fontWeight: 700 } as const
+const DESC = { fontSize: 13, color: 'var(--text-muted-dim)', marginBottom: 14, lineHeight: 1.5 } as const
+const BTN = { display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 12, borderRadius: 11, fontSize: 14, fontWeight: 700 } as const
 
 export default function FaucetClaimPanel() {
   const { wallet, address, scan, rescan } = useWallet()
@@ -75,57 +79,111 @@ export default function FaucetClaimPanel() {
     rescan()
   }
 
-  const msgColor = phase === 'error' ? '#FF6B6B' : phase === 'done' ? '#34E5D0' : '#8A97B4'
+  const spinner = (dur: string) => (
+    <span style={{ width: 15, height: 15, borderRadius: '50%', border: '2px solid rgba(var(--teal-500-rgb),0.2)', borderTopColor: 'var(--teal-500)', animation: `cv-spin ${dur} linear infinite` }} />
+  )
+  // Design "+1,000 TARI" header amount; real claim grants ~1,000 tTARI.
+  const grant = '+1,000 TARI'
 
+  // ── DONE (design DONE card: check circle + "…received" + updated + disabled Claimed ✓) ──
+  if (phase === 'done') {
+    return (
+      <div style={{ ...CARD, background: 'rgba(var(--teal-500-rgb),0.05)', border: '1px solid rgba(var(--teal-500-rgb),0.3)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+          <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 22, height: 22, borderRadius: '50%', background: 'rgba(var(--teal-500-rgb),0.16)' }}>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--teal-500)" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
+          </span>
+          <span style={{ ...TITLE, color: 'var(--text-bright)' }}>Tokens received</span>
+        </div>
+        <div style={{ ...DESC, color: 'var(--text-teal-label)' }}>{msg ?? 'Your balance has been updated.'}</div>
+        <div style={{ ...BTN, background: 'rgba(16,21,31,0.6)', border: '1px solid rgba(var(--border-rgb),0.12)', color: 'var(--text-faint-dim)' }}>Claimed ✓</div>
+      </div>
+    )
+  }
+
+  // ── LAGGING (amber pulse dot + refresh) ──
+  if (phase === 'lagging') {
+    return (
+      <div style={{ ...CARD, background: 'var(--surface-raised)', border: '1px solid rgba(var(--warn-rgb),0.28)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+          <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--warn)', animation: 'cv-pulse 1.6s ease-in-out infinite' }} />
+          <span style={{ ...TITLE, color: 'var(--text-primary)' }}>Funds sent, not visible yet</span>
+        </div>
+        <div style={DESC}>The faucet confirmed, but your scan has not picked it up. This can take a minute.</div>
+        <div onClick={() => rescan()} style={{ ...BTN, gap: 8, background: 'var(--surface-inset)', border: '1px solid rgba(var(--teal-500-rgb),0.26)', color: 'var(--text-bright)', cursor: 'pointer' }}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--teal-500)" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v5h-5" /></svg>Refresh balance
+        </div>
+      </div>
+    )
+  }
+
+  // ── ERROR (red circle-alert) ──
+  if (phase === 'error') {
+    return (
+      <div style={{ ...CARD, background: 'rgba(var(--danger-rgb),0.04)', border: '1px solid rgba(var(--danger-rgb),0.28)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--danger-500)" strokeWidth="2.2" strokeLinecap="round"><circle cx="12" cy="12" r="9" /><path d="M12 8v5M12 16h.01" /></svg>
+          <span style={{ ...TITLE, color: 'var(--danger-300)' }}>Faucet unavailable</span>
+        </div>
+        <div style={DESC}>{msg ?? 'The faucet did not respond. Nothing was claimed.'}</div>
+        <div onClick={claim} style={{ ...BTN, background: 'rgba(var(--danger-rgb),0.08)', border: '1px solid rgba(var(--danger-rgb),0.3)', color: 'var(--danger-300)', cursor: 'pointer' }}>Try again</div>
+      </div>
+    )
+  }
+
+  // ── COOLDOWN (grey, "Claimed ✓" disabled) ──
+  if (cooldown) {
+    return (
+      <div style={{ ...CARD, background: 'var(--surface-raised)', border: '1px solid rgba(var(--border-rgb),0.12)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+          <span style={{ ...TITLE, color: 'var(--text-muted)' }}>Testnet faucet</span>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-faint-dim)' }}>just claimed</span>
+        </div>
+        <div style={{ ...DESC, color: 'var(--text-faint)' }}>{msg ?? 'You have already claimed. Try again shortly.'}</div>
+        <div style={{ ...BTN, background: 'rgba(16,21,31,0.6)', border: '1px solid rgba(var(--border-rgb),0.12)', color: 'var(--text-disabled)' }}>Claimed ✓</div>
+      </div>
+    )
+  }
+
+  // ── CLAIMING / VERIFYING (teal border, spinner button) ──
+  if (busy) {
+    return (
+      <div style={{ ...CARD, background: 'var(--surface-raised)', border: '1px solid rgba(var(--teal-500-rgb),0.22)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+          <span style={{ ...TITLE, color: 'var(--text-primary)' }}>Testnet faucet</span>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--teal-300)' }}>{grant}</span>
+        </div>
+        <div style={DESC}>{phase === 'claiming' ? 'Requesting funds from the faucet.' : 'Waiting for the output to appear on chain.'}</div>
+        <div style={{ ...BTN, gap: 9, background: 'var(--surface-inset)', border: '1px solid rgba(var(--teal-500-rgb),0.2)', color: 'var(--teal-300)' }}>
+          {spinner(phase === 'claiming' ? '0.8s' : '1.1s')}{phase === 'claiming' ? 'Claiming…' : 'Verifying…'}
+        </div>
+      </div>
+    )
+  }
+
+  // ── HIGH BALANCE (grey, "balance X") ──
+  if (highBalance) {
+    return (
+      <div style={{ ...CARD, background: 'var(--surface-raised)', border: '1px solid rgba(var(--border-rgb),0.12)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+          <span style={{ ...TITLE, color: 'var(--text-muted)' }}>Testnet faucet</span>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-faint-dim)' }}>balance {fmt(balance!)}</span>
+        </div>
+        <div style={{ ...DESC, color: 'var(--text-faint)' }}>You already have plenty. Leave the rest for other testers.</div>
+        <div onClick={canClaim ? claim : undefined} style={{ ...BTN, background: 'rgba(16,21,31,0.6)', border: '1px solid rgba(var(--border-rgb),0.12)', color: 'var(--text-disabled)', cursor: canClaim ? 'pointer' : 'default' }}>Claim funds</div>
+      </div>
+    )
+  }
+
+  // ── IDLE (default) ──
   return (
-    <div style={{ border: '1px solid rgba(120,150,210,0.18)', borderRadius: 12, padding: 16, background: '#10151F' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-        <div style={{ fontSize: 14, fontWeight: 700, color: '#F2F5FB' }}>Claim testnet tokens</div>
-        <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.5, color: '#F5B301', background: 'rgba(245,179,1,0.12)', border: '1px solid rgba(245,179,1,0.35)', borderRadius: 5, padding: '2px 6px' }}>TESTNET</span>
+    <div style={{ ...CARD, background: 'var(--surface-raised)', border: '1px solid rgba(var(--border-rgb),0.14)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+        <span style={{ ...TITLE, color: 'var(--text-primary)' }}>Testnet faucet</span>
+        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--teal-300)' }}>{grant}</span>
       </div>
-      <div style={{ fontSize: 12.5, color: '#8A97B4', lineHeight: 1.5, marginBottom: 12 }}>
-        Get free test tTARI so you can send payments and register an ONS name. These are testnet tokens
-        with <strong style={{ color: '#B9C4DC' }}>no real value</strong>. Signed in your browser — no daemon needed.
-      </div>
-
-      {highBalance && phase === 'idle' && (
-        <div style={{ fontSize: 12, color: '#8A97B4', marginBottom: 10, fontFamily: "'IBM Plex Mono', monospace" }}>
-          You already have plenty of test tokens ({fmt(balance!)} tTARI).
-        </div>
-      )}
-
-      {msg && (
-        <div style={{ marginBottom: 12, fontSize: 12, color: msgColor, fontFamily: "'IBM Plex Mono', monospace", lineHeight: 1.5, wordBreak: 'break-word' }}>
-          {msg}
-        </div>
-      )}
-
-      <div style={{ display: 'flex', gap: 8 }}>
-        <button
-          onClick={claim}
-          disabled={!canClaim}
-          style={{
-            padding: '10px 18px', borderRadius: 9, border: 'none',
-            background: !canClaim ? 'rgba(120,150,210,0.12)' : highBalance ? 'rgba(45,224,198,0.14)' : 'linear-gradient(180deg, var(--accB,#34E5D0), var(--accD,#12A594))',
-            color: !canClaim ? '#55617D' : highBalance ? 'var(--acc,#2DE0C6)' : 'var(--accOn,#04120F)',
-            fontSize: 13, fontWeight: 700, cursor: canClaim ? 'pointer' : 'default', fontFamily: 'inherit',
-          }}
-        >
-          {phase === 'claiming' ? 'Claiming…' : phase === 'verifying' ? 'Verifying…' : cooldown ? 'Claimed ✓' : 'Claim test tokens'}
-        </button>
-        {phase === 'lagging' && (
-          <button
-            onClick={() => rescan()}
-            style={{ padding: '10px 16px', borderRadius: 9, border: '1px solid rgba(120,150,210,0.25)', background: 'transparent', color: '#B9C4DC', fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}
-          >
-            Refresh
-          </button>
-        )}
-      </div>
-
-      {!wallet && (
-        <div style={{ marginTop: 10, fontSize: 11.5, color: '#55617D' }}>Unlock your wallet to claim.</div>
-      )}
+      <div style={DESC}>Free Esmeralda funds, signed in your browser. {!wallet && 'Unlock your wallet to claim.'}</div>
+      <div onClick={canClaim ? claim : undefined} style={{ ...BTN, background: canClaim ? 'var(--teal-grad)' : 'rgba(16,21,31,0.6)', border: canClaim ? 'none' : '1px solid rgba(var(--border-rgb),0.12)', color: canClaim ? 'var(--ink-on-accent)' : 'var(--text-disabled)', cursor: canClaim ? 'pointer' : 'default' }}>Claim funds</div>
     </div>
   )
 }

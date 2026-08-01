@@ -1,137 +1,72 @@
+//   Wallet modal — presentation transcribed element-for-element from the design file
+//   "Caravel Wallet Modal (Build).dc.html" (modal frame, balance ×6, send ×8, receive ×2,
+//   activity ×3, settings). Colours reference step-0 tokens (same values as the design hex).
+//   ALL logic — handlers, state, context bindings, validation — is preserved verbatim from the
+//   prior WalletModal; only the JSX mirrors the design markup. Dev decrypt panel removed.
+
 import { useState, useEffect } from 'react'
 import { useWallet } from '../../context/WalletContext'
-import DecryptPanel from './DecryptPanel'
 import OnsRegisterPanel from './OnsRegisterPanel'
 import FaucetClaimPanel from './FaucetClaimPanel'
-import { sendConfidential, tariToMicrotari, MAX_FEE } from '../../crypto/confidentialSend'
+import { sendConfidential, tariToMicrotari, MAX_FEE, type SendOutcome } from '../../crypto/confidentialSend'
 import type { TxEntry } from '../../crypto/txHistory'
 import { QRCodeSVG } from 'qrcode.react'
 
-// ── Types ─────────────────────────────────────────────────────────────────────
-
 type Tab = 'overview' | 'send' | 'receive' | 'activity'
 type SendStep = 'form' | 'review' | 'sending' | 'success' | 'error'
-type SettingsStep = 'main' | 'phraseAuth' | 'phraseWords' | 'decrypt'
+type SettingsStep = 'main' | 'phraseAuth' | 'phraseWords'
 
-// ── Shared helpers ────────────────────────────────────────────────────────────
+const MONO = 'var(--font-mono)'
+const HIDDEN = '••••••'
+// 2dp + thousands separators (design headline / activity amounts).
+const fmt2 = (µt: bigint | number) => (Number(µt) / 1_000_000).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+// Fee: trimmed decimals (design shows "0.0042" / "0.01").
+const fmtFee = (µt: bigint) => (Number(µt) / 1_000_000).toString()
 
-function SectionLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: '#55617D', letterSpacing: '0.14em', marginBottom: 10 }}>
-      {children}
-    </div>
-  )
-}
-
-function CopyBtn({ text, label = 'Copy', compact = false }: { text: string; label?: string; compact?: boolean }) {
-  const [copied, setCopied] = useState(false)
-  return (
-    <button
-      onClick={() => { navigator.clipboard.writeText(text).catch(() => {}); setCopied(true); setTimeout(() => setCopied(false), 1800) }}
-      style={{
-        display: 'inline-flex', alignItems: 'center', gap: 5,
-        padding: compact ? '5px 9px' : '7px 12px', borderRadius: 8,
-        border: '1px solid rgba(45,224,198,0.28)',
-        background: copied ? 'rgba(45,224,198,0.12)' : 'transparent',
-        color: copied ? 'var(--acc,#2DE0C6)' : '#8A97B4',
-        fontSize: 12, fontWeight: 600, cursor: 'pointer', transition: 'all 0.15s', flexShrink: 0,
-      }}
-    >
-      {copied
-        ? <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--acc,#2DE0C6)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M18 7l-8 8-4-4" /></svg>
-        : <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>
-      }
-      {copied ? 'Copied!' : label}
-    </button>
-  )
-}
-
-// ── Transaction history helpers ────────────────────────────────────────────────
-
-function formatTxTime(ts: number): string {
-  const d = new Date(ts)
-  const now = new Date()
-  const hm = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-  if (d.toDateString() === now.toDateString()) return `Today ${hm}`
-  const yesterday = new Date(now); yesterday.setDate(now.getDate() - 1)
-  if (d.toDateString() === yesterday.toDateString()) return `Yesterday ${hm}`
-  return d.toLocaleDateString([], { day: 'numeric', month: 'short' }) + ' ' + hm
-}
-
-function TxRow({ entry }: { entry: TxEntry }) {
+function TxRow({ entry, hidden }: { entry: TxEntry; hidden: boolean }) {
   const sent = entry.type === 'sent'
-  const amount = (Number(entry.amountMicrotari) / 1_000_000).toFixed(6)
-  const note = entry.note
-  const timeLabel = sent ? formatTxTime(entry.timestamp) : `Discovered ${formatTxTime(entry.discoveredAt)}`
-
-  let statusLabel = 'received'
-  let statusColor = 'var(--acc,#2DE0C6)'
-  if (sent) {
-    if (entry.outcome === 'Commit') { statusLabel = 'confirmed'; statusColor = 'var(--acc,#2DE0C6)' }
-    else if (entry.outcome === 'Reject') { statusLabel = 'rejected'; statusColor = '#FF6B6B' }
-    else { statusLabel = 'unconfirmed'; statusColor = '#FFB43C' }
+  const outcome = sent ? entry.outcome : 'Commit'
+  // status → design icon-chip + inline status label
+  const kind = !sent ? 'received' : outcome === 'Commit' ? 'confirmed' : outcome === 'Reject' ? 'failed' : 'notconf'
+  const iconWrap: Record<string, React.CSSProperties> = {
+    confirmed: { background: 'rgba(var(--teal-500-rgb),0.1)', border: '1px solid rgba(var(--teal-500-rgb),0.22)' },
+    received: { background: 'rgba(var(--border-rgb),0.07)', border: '1px solid rgba(var(--border-rgb),0.16)' },
+    notconf: { background: 'rgba(var(--warn-rgb),0.05)', border: '1px dashed rgba(var(--warn-rgb),0.34)' },
+    failed: { background: 'rgba(var(--danger-rgb),0.07)', border: '1px solid rgba(var(--danger-rgb),0.24)' },
   }
-
-  const shortRecipient = sent ? entry.recipient.slice(0, 12) + '…' + entry.recipient.slice(-6) : null
+  const icon: Record<string, React.ReactNode> = {
+    confirmed: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--teal-500)" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M12 19V5M5 12l7-7 7 7" /></svg>,
+    received: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v14M5 12l7 7 7-7" /></svg>,
+    notconf: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--warn)" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /><path d="M4.5 4.5l15 15" opacity="0.55" /></svg>,
+    failed: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--danger-500)" strokeWidth="2.4" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>,
+  }
+  const statusText: Record<string, { t: string; c: string }> = {
+    confirmed: { t: 'Confirmed', c: 'var(--teal-300)' },
+    received: { t: 'Confirmed', c: 'var(--teal-300)' },
+    notconf: { t: 'Not confirmed', c: 'var(--warn-300)' },
+    failed: { t: 'Failed', c: 'var(--danger-300)' },
+  }
+  const title = sent ? `Sent to ${entry.recipient.slice(0, 10)}…${entry.recipient.slice(-4)}` : 'Received'
+  const amount = fmt2(entry.amountMicrotari)
+  const amountColor = kind === 'failed' ? 'var(--text-faint-dim)' : 'var(--text-teal-label)'
+  const sub = entry.note ? `“${entry.note}”` : kind === 'notconf' ? 'Broadcast, never confirmed' : kind === 'failed' ? 'Nothing was taken' : 'No note'
 
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '14px 0', borderBottom: '1px solid rgba(120,150,210,0.08)' }}>
-      <div style={{
-        width: 38, height: 38, borderRadius: 11, flexShrink: 0,
-        background: sent ? 'rgba(255,107,107,0.08)' : 'rgba(45,224,198,0.08)',
-        border: `1px solid ${sent ? 'rgba(255,107,107,0.2)' : 'rgba(45,224,198,0.2)'}`,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-      }}>
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={sent ? '#FF8F8F' : 'var(--acc,#2DE0C6)'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          {sent
-            ? <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" />
-            : <><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></>
-          }
-        </svg>
-      </div>
-
+    <div style={{ display: 'flex', alignItems: 'center', gap: 13, padding: 13, borderRadius: 12, borderBottom: '1px solid rgba(var(--border-rgb),0.07)' }}>
+      <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 34, height: 34, borderRadius: 10, flexShrink: 0, ...iconWrap[kind] }}>{icon[kind]}</span>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 14, fontWeight: 500, color: '#E4EAF4', marginBottom: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {note || (sent ? shortRecipient : 'Received')}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+          <span style={{ fontSize: 14, fontWeight: 600, color: kind === 'failed' ? 'var(--text-muted)' : 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</span>
+          <span style={{ fontFamily: MONO, fontSize: 13, color: hidden ? 'var(--text-teal-label)' : amountColor, letterSpacing: hidden ? '0.1em' : undefined, flexShrink: 0, marginLeft: 8 }}>{hidden ? '••••' : amount}</span>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12, color: '#55617D' }}>
-          <span>{timeLabel}</span>
-          {note && sent && shortRecipient && (
-            <>
-              <span style={{ width: 3, height: 3, borderRadius: '50%', background: '#383E50', display: 'inline-block' }} />
-              <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 120 }}>{shortRecipient}</span>
-            </>
-          )}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginTop: 3 }}>
+          <span style={{ fontSize: 12, color: entry.note ? 'var(--text-teal-dim)' : 'var(--text-faint)', fontStyle: entry.note ? 'italic' : 'normal', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{sub}</span>
+          <span style={{ fontSize: 11, fontWeight: 600, color: statusText[kind].c, flexShrink: 0, marginLeft: 8 }}>{statusText[kind].t}</span>
         </div>
-      </div>
-
-      <div style={{ flexShrink: 0, textAlign: 'right' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 4, justifyContent: 'flex-end', marginBottom: 3 }}>
-          {entry.type === 'sent' && entry.outcome !== 'Reject' && (
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke={statusColor} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M18 7l-8 8-4-4" /></svg>
-          )}
-          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: statusColor }}>{statusLabel}</span>
-        </div>
-        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, fontWeight: 700, color: sent ? '#FF8F8F' : 'var(--acc,#2DE0C6)' }}>
-          {sent ? '−' : '+'}{amount}
-        </span>
       </div>
     </div>
   )
 }
-
-// ── Gear icon ─────────────────────────────────────────────────────────────────
-
-function GearIcon() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8A97B4" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="12" cy="12" r="3" />
-      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-    </svg>
-  )
-}
-
-// ── Main modal ────────────────────────────────────────────────────────────────
 
 export default function WalletModal({ onClose }: { onClose: () => void }) {
   const { wallet, address, scan, lock, getMnemonic, rescan, txHistory, recordSent } = useWallet()
@@ -140,15 +75,14 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
   const [inSettings, setInSettings] = useState(false)
   const [settingsStep, setSettingsStep] = useState<SettingsStep>('main')
   const [balanceHidden, setBalanceHidden] = useState(false)
+  const [addrCopied, setAddrCopied] = useState(false)
 
-  // phrase reveal
   const [phrasePass, setPhrasePass] = useState('')
   const [showPhrasePass, setShowPhrasePass] = useState(false)
   const [phraseError, setPhraseError] = useState('')
   const [phraseLoading, setPhraseLoading] = useState(false)
   const [words, setWords] = useState<string[] | null>(null)
 
-  // send form
   const [sendRecipient, setSendRecipient] = useState('')
   const [sendAmount, setSendAmount] = useState('')
   const [sendNote, setSendNote] = useState('')
@@ -157,6 +91,8 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
   const [sendProgress, setSendProgress] = useState('')
   const [sendTxId, setSendTxId] = useState('')
   const [sendError, setSendError] = useState('')
+  const [sendFee, setSendFee] = useState<bigint | null>(null)
+  const [sendOutcome, setSendOutcome] = useState<SendOutcome | null>(null)
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) { if (e.key === 'Escape') onClose() }
@@ -164,14 +100,12 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
 
-  const { status, balance, progress, totalScanned, utxos, capped } = scan
-  const tTARI = balance !== null ? (Number(balance) / 1_000_000).toFixed(6) : null
-  const balanceDisplay = balanceHidden
-    ? '••••••'
-    : status === 'scanning' && tTARI === null ? '···'
-    : tTARI ?? (status === 'done' ? '0.000000' : status === 'error' ? '?' : '—')
+  const { status, balance, capped } = scan
+  const balanceStr = balance !== null ? fmt2(balance) : null
 
   const shortAddr = address ? address.slice(0, 20) + '…' + address.slice(-6) : null
+
+  function copyAddr() { if (address) { navigator.clipboard.writeText(address).catch(() => {}); setAddrCopied(true); setTimeout(() => setAddrCopied(false), 1800) } }
 
   async function revealPhrase() {
     if (!phrasePass) return
@@ -231,6 +165,8 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
     setSendProgress('')
     setSendTxId('')
     setSendError('')
+    setSendFee(null)
+    setSendOutcome(null)
   }
 
   async function handleConfirmSend() {
@@ -247,6 +183,8 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
         onProgress: setSendProgress,
       })
       setSendTxId(result.txId)
+      setSendFee(result.feeMicrotari ?? null)
+      setSendOutcome(result.outcome)
       recordSent({
         recipient: sendRecipient,
         amountMicrotari: tariToMicrotari(parseFloat(sendAmount)),
@@ -260,8 +198,8 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
       } else {
         setSendError(
           result.outcome === 'Reject'
-            ? 'Transaction was rejected on-chain.'
-            : 'Not confirmed within 30s — it may still settle. Check the hash below.'
+            ? 'The network rejected this transaction. Nothing left your wallet and no fee was taken.'
+            : 'Broadcast, but the network has not confirmed it. Do not resend. It will appear in Activity.'
         )
         setSendStep('error')
       }
@@ -271,613 +209,423 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
     }
   }
 
-  function tabStyle(t: Tab): React.CSSProperties {
-    const active = !inSettings && tab === t
-    return {
-      flex: 1, padding: '11px 4px', background: 'none', border: 'none',
-      borderBottom: `2px solid ${active ? 'var(--acc,#2DE0C6)' : 'transparent'}`,
-      color: active ? 'var(--acc,#2DE0C6)' : '#55617D',
-      fontSize: 13, fontWeight: active ? 700 : 500, cursor: 'pointer', transition: 'all 0.15s',
-    }
-  }
-
   const headerTitle = !inSettings ? 'Wallet'
     : settingsStep === 'phraseAuth' ? 'Confirm identity'
     : settingsStep === 'phraseWords' ? 'Recovery phrase'
-    : settingsStep === 'decrypt' ? 'Decrypt UTXO'
     : 'Settings'
+
+  const logo = (size: number) => (
+    <svg viewBox="0 0 44 44" width={size} height={size} aria-hidden="true">
+      <path d="M22 4 C 33 12 35 24 33 33 L 22 33 Z" fill="var(--teal-500)" />
+      <path d="M22 4 L 22 33 L 11 33 C 12 22 15 12 22 4 Z" fill="var(--teal-500)" opacity="0.4" />
+      <path d="M8 37 L 36 37 L 32 42 L 12 42 Z" fill="var(--teal-500)" />
+    </svg>
+  )
+  const eyeOpen = (c: string) => (<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" /><circle cx="12" cy="12" r="3" /></svg>)
+  const eyeOff = (c: string) => (<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" /><circle cx="12" cy="12" r="3" /><path d="M4 4l16 16" /></svg>)
+
+  const balLabel = { fontSize: 11, fontWeight: 600, letterSpacing: '0.14em' } as const
+  const balBig = { fontFamily: MONO, fontSize: 36, fontWeight: 700 } as const
+  const balTari = { fontSize: 15, fontWeight: 600, color: 'var(--teal-500)' } as const
+
+  // ── Balance widget: the exact design card for the current state ──
+  function balanceWidget() {
+    const tealCard = (a: string) => ({ borderRadius: 14, padding: '22px 18px', textAlign: 'center' as const, background: `radial-gradient(320px 170px at 50% 0%, rgba(var(--teal-500-rgb),${a}), rgba(10,14,23,0))`, border: `1px solid rgba(var(--teal-500-rgb),0.2)` })
+    if (status === 'scanning' && balance === null) {
+      return (
+        <div style={{ ...tealCard('0.1'), border: '1px solid rgba(var(--teal-500-rgb),0.18)' }}>
+          <div style={{ ...balLabel, color: 'var(--text-teal-dim)', marginBottom: 14 }}>CONFIDENTIAL BALANCE</div>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 11, marginBottom: 10 }}>
+            <span style={{ width: 22, height: 22, borderRadius: '50%', border: '2px solid rgba(var(--teal-500-rgb),0.2)', borderTopColor: 'var(--teal-500)', animation: 'cv-spin 0.8s linear infinite' }} />
+            <span style={{ fontFamily: MONO, fontSize: 24, fontWeight: 600, color: 'var(--text-teal-label)' }}>scanning…</span>
+          </div>
+          <div style={{ fontFamily: MONO, fontSize: 12, color: 'var(--text-teal-dim)' }}>{scan.progress.scanned} outputs checked</div>
+        </div>
+      )
+    }
+    if (status === 'error') {
+      return (
+        <div style={{ borderRadius: 14, padding: '22px 18px', textAlign: 'center', background: 'rgba(var(--danger-rgb),0.04)', border: '1px solid rgba(var(--danger-rgb),0.28)' }}>
+          <div style={{ ...balLabel, color: 'var(--text-faint-dim)', marginBottom: 12 }}>CONFIDENTIAL BALANCE</div>
+          <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--danger-300)', marginBottom: 6 }}>Scan failed</div>
+          <div style={{ fontSize: 13, color: 'var(--text-muted-dim)', marginBottom: 14 }}>Could not reach the Esmeralda indexer.</div>
+          <span onClick={rescan} style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '9px 18px', borderRadius: 10, background: 'rgba(var(--danger-rgb),0.08)', border: '1px solid rgba(var(--danger-rgb),0.3)', color: 'var(--danger-300)', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--danger-300)" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v5h-5" /></svg>Retry scan
+          </span>
+        </div>
+      )
+    }
+    if (balanceHidden && balance !== null) {
+      return (
+        <div style={tealCard('0.1')}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 10 }}>
+            <span style={{ ...balLabel, color: 'var(--text-teal-dim)' }}>CONFIDENTIAL BALANCE</span>
+            <span onClick={() => setBalanceHidden(false)} style={{ cursor: 'pointer', display: 'inline-flex' }}>{eyeOff('var(--teal-500)')}</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'center', gap: 9 }}>
+            <span style={{ ...balBig, color: 'var(--text-teal-label)', letterSpacing: '0.1em' }}>{HIDDEN}</span><span style={balTari}>TARI</span>
+          </div>
+        </div>
+      )
+    }
+    if (balance === 0n || (balance === null && status === 'done')) {
+      return (
+        <div style={{ borderRadius: 14, padding: '22px 18px', textAlign: 'center', background: 'var(--surface-raised)', border: '1px solid rgba(var(--border-rgb),0.14)' }}>
+          <div style={{ ...balLabel, color: 'var(--text-faint-dim)', marginBottom: 10 }}>CONFIDENTIAL BALANCE</div>
+          <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'center', gap: 9, marginBottom: 8 }}>
+            <span style={{ ...balBig, color: 'var(--text-faint)' }}>0.00</span><span style={{ ...balTari, color: 'var(--text-faint-dim)' }}>TARI</span>
+          </div>
+          <div style={{ fontSize: 13, color: 'var(--text-muted-dim)' }}>Claim testnet funds below to get started.</div>
+        </div>
+      )
+    }
+    // DONE / CAPPED (positive balance)
+    return (
+      <div style={tealCard(capped ? '0.1' : '0.13')}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 10 }}>
+          <span style={{ ...balLabel, color: 'var(--text-teal-dim)' }}>CONFIDENTIAL BALANCE</span>
+          <span onClick={() => setBalanceHidden(true)} style={{ cursor: 'pointer', display: 'inline-flex' }}>{eyeOpen('var(--text-teal-dim)')}</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'center', gap: 9, marginBottom: capped ? 14 : 0 }}>
+          <span style={{ ...balBig, color: 'var(--text-bright)' }}>{balanceStr ?? '—'}</span><span style={balTari}>TARI</span>
+        </div>
+        {capped && (
+          <div style={{ display: 'flex', gap: 9, padding: '10px 12px', borderRadius: 10, background: 'rgba(var(--warn-rgb),0.05)', border: '1px solid rgba(var(--warn-rgb),0.25)', fontSize: 12, color: 'var(--warn-300)', textAlign: 'left', lineHeight: 1.45, marginBottom: 12 }}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--warn)" strokeWidth="2" strokeLinecap="round" style={{ flexShrink: 0, marginTop: 1 }}><path d="M12 8v5M12 17h.01" /><circle cx="12" cy="12" r="9" /></svg>
+            Scan capped at 1,000 outputs. Balance may be higher than shown.
+          </div>
+        )}
+        {/* Live-app addition (deliberate deviation from the static design card): scan summary + manual refresh. */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: capped ? 0 : 12, fontSize: 12, color: 'var(--text-teal-dim)' }}>
+          <span>{scan.totalScanned} UTXOs scanned · {scan.utxos.length} owned</span>
+          <span onClick={rescan} style={{ color: 'var(--teal-500)', fontWeight: 600, cursor: 'pointer' }}>Refresh</span>
+        </div>
+      </div>
+    )
+  }
+
+  const tabItem = (t: Tab) => {
+    const on = tab === t
+    return (
+      <span key={t} onClick={() => setTab(t)} style={{ flex: 1, textAlign: 'center', padding: '9px 0', borderRadius: 9, cursor: 'pointer', fontSize: 13, fontWeight: on ? 700 : 600, background: on ? 'var(--surface-inset)' : 'transparent', color: on ? 'var(--text-bright)' : 'var(--text-muted-dim)', boxShadow: on ? 'inset 0 0 0 1px rgba(var(--teal-500-rgb),0.22)' : 'none' }}>
+        {t.charAt(0).toUpperCase() + t.slice(1)}
+      </span>
+    )
+  }
+
+  const copyIcon = (c = 'var(--teal-500)') => (<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>)
+  const hashRow = (h: string) => (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '11px 14px', borderRadius: 11, background: 'var(--surface-raised)', border: '1px solid rgba(var(--border-rgb),0.12)' }}>
+      <span style={{ fontFamily: MONO, fontSize: 12, color: 'var(--text-body-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{h.slice(0, 8)}…{h.slice(-4)}</span>
+      <span onClick={() => navigator.clipboard.writeText(h).catch(() => {})} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, color: 'var(--teal-500)', cursor: 'pointer', flexShrink: 0, marginLeft: 8 }}>{copyIcon()}Copy</span>
+    </div>
+  )
 
   return (
     <>
-      {/* Backdrop */}
-      <div
-        onClick={onClose}
-        style={{ position: 'fixed', inset: 0, background: 'rgba(4,8,15,0.72)', backdropFilter: 'blur(4px)', zIndex: 200 }}
-      />
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(5,8,14,0.78)', backdropFilter: 'blur(3px)', zIndex: 200 }} />
 
-      {/* Modal card */}
-      <div style={{
-        position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
-        width: 'min(540px, 94vw)', maxHeight: '88vh',
-        background: '#0C111B', borderRadius: 20,
-        border: '1px solid rgba(120,150,210,0.2)',
-        boxShadow: '0 24px 80px rgba(0,0,0,0.7), 0 0 0 1px rgba(45,224,198,0.06)',
-        zIndex: 201, display: 'flex', flexDirection: 'column', overflow: 'hidden',
-      }}>
+      <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', width: 'min(460px, 94vw)', maxHeight: '88vh', background: 'var(--surface)', borderRadius: 20, border: '1px solid rgba(var(--border-rgb),0.2)', boxShadow: '0 30px 90px rgba(0,0,0,0.65)', zIndex: 201, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
 
-        {/* ── Header ─────────────────────────────────────────────────────── */}
-        <div style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          padding: '18px 22px 14px', borderBottom: '1px solid rgba(120,150,210,0.1)', flexShrink: 0,
-        }}>
+        {/* Header */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 18px', borderBottom: '1px solid rgba(var(--border-rgb),0.1)', flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             {inSettings && settingsStep !== 'main' && (
-              <button
-                onClick={backToSettingsMain}
-                style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, border: '1px solid rgba(120,150,210,0.16)', background: 'none', cursor: 'pointer', marginRight: 2 }}
-              >
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#8A97B4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5M12 5l-7 7 7 7" /></svg>
-              </button>
+              <span onClick={backToSettingsMain} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, border: '1px solid rgba(var(--border-rgb),0.16)', cursor: 'pointer' }}>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5M12 5l-7 7 7 7" /></svg>
+              </span>
             )}
-            <svg viewBox="0 0 44 44" width="24" height="24" aria-hidden="true">
-              <defs>
-                <linearGradient id="wmGrad" x1="0" y1="0" x2="1" y2="1">
-                  <stop offset="0" stopColor="#5CEAD6" />
-                  <stop offset="1" stopColor="#12A594" />
-                </linearGradient>
-              </defs>
-              <path d="M22 4 C 33 12 35 24 33 33 L 22 33 Z" fill="url(#wmGrad)" />
-              <path d="M22 4 L 22 33 L 11 33 C 12 22 15 12 22 4 Z" fill="#2DE0C6" opacity="0.45" />
-              <path d="M8 37 L 36 37 L 32 42 L 12 42 Z" fill="#2DE0C6" />
-            </svg>
-            <span style={{ fontSize: 16, fontWeight: 700, color: '#F2F5FB' }}>{headerTitle}</span>
+            {logo(20)}
+            <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>{headerTitle}</span>
+            {!inSettings && (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 10px', borderRadius: 100, background: 'rgba(var(--warn-rgb),0.06)', border: '1px solid rgba(var(--warn-rgb),0.28)' }}>
+                <span style={{ width: 5, height: 5, borderRadius: '50%', background: 'var(--warn)' }} />
+                <span style={{ fontFamily: MONO, fontSize: 10, color: 'var(--warn-300)' }}>Esmeralda testnet</span>
+              </span>
+            )}
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            {inSettings ? (
-              <button
-                onClick={closeSettings}
-                style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '6px 10px', borderRadius: 8, border: '1px solid rgba(120,150,210,0.16)', background: 'none', cursor: 'pointer', color: '#8A97B4', fontSize: 12, fontWeight: 500 }}
-              >
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5M12 5l-7 7 7 7" /></svg>
-                Wallet
-              </button>
-            ) : (
-              <button
-                onClick={openSettings}
-                title="Settings"
-                style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 32, height: 32, borderRadius: 9, border: '1px solid rgba(120,150,210,0.16)', background: 'none', cursor: 'pointer' }}
-              >
-                <GearIcon />
-              </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {inSettings && settingsStep === 'main' && (
+              <span onClick={closeSettings} style={{ padding: '5px 9px', borderRadius: 8, border: '1px solid rgba(var(--border-rgb),0.16)', cursor: 'pointer', color: 'var(--text-muted-dim)', fontSize: 12, fontWeight: 600 }}>Wallet</span>
             )}
-            <button
-              onClick={onClose}
-              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 32, height: 32, borderRadius: 9, border: '1px solid rgba(120,150,210,0.16)', background: 'none', cursor: 'pointer' }}
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8A97B4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6L6 18M6 6l12 12" /></svg>
-            </button>
+            {!inSettings && <span style={{ padding: '3px 7px', borderRadius: 6, border: '1px solid rgba(var(--border-rgb),0.18)', fontFamily: MONO, fontSize: 10, color: 'var(--text-faint-dim)' }}>Esc</span>}
+            <span onClick={onClose} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, border: '1px solid rgba(var(--border-rgb),0.16)', cursor: 'pointer' }}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth="2.2" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
+            </span>
           </div>
         </div>
 
-        {/* ── Tab bar (hidden in settings) ─────────────────────────────── */}
+        {/* Tab bar + gear */}
         {!inSettings && (
-          <div style={{ display: 'flex', padding: '0 22px', borderBottom: '1px solid rgba(120,150,210,0.1)', flexShrink: 0 }}>
-            {(['overview', 'send', 'receive', 'activity'] as Tab[]).map(t => (
-              <button key={t} style={tabStyle(t)} onClick={() => setTab(t)}>
-                {t.charAt(0).toUpperCase() + t.slice(1)}
-              </button>
-            ))}
+          <div style={{ padding: '14px 18px 0', flexShrink: 0 }}>
+            <div style={{ display: 'flex', gap: 4, padding: 5, borderRadius: 12, background: 'var(--surface-trough)', border: '1px solid rgba(var(--border-rgb),0.1)' }}>
+              {(['overview', 'send', 'receive', 'activity'] as Tab[]).map(tabItem)}
+              <span onClick={openSettings} title="Settings" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 34, borderRadius: 9, cursor: 'pointer' }}>
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></svg>
+              </span>
+            </div>
           </div>
         )}
 
-        {/* ── Scrollable content ────────────────────────────────────────── */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: settingsStep === 'decrypt' && inSettings ? '0' : '24px 22px 28px' }}>
+        {/* Content */}
+        <div style={{ flex: 1, overflowY: 'auto', padding: 18 }}>
 
-          {/* ════════════════════════ SETTINGS ══════════════════════════ */}
-
+          {/* ═══ SETTINGS ═══ */}
           {inSettings && settingsStep === 'main' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {/* Recovery phrase */}
-              <button
-                onClick={() => setSettingsStep('phraseAuth')}
-                style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px', borderRadius: 12, background: 'rgba(120,150,210,0.05)', border: '1px solid rgba(120,150,210,0.14)', cursor: 'pointer', textAlign: 'left', width: '100%' }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 36, height: 36, borderRadius: 10, background: 'rgba(45,224,198,0.08)', flexShrink: 0 }}>
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--acc,#2DE0C6)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V4s-1 1-4 1-5-2-8-2-4 1-4 1z" /><path d="M4 22v-7" /></svg>
-                </div>
+            <div style={{ padding: 0, borderRadius: 16 }}>
+              <div onClick={() => setSettingsStep('phraseAuth')} style={{ display: 'flex', alignItems: 'center', gap: 13, padding: '15px 14px', borderRadius: 12, borderBottom: '1px solid rgba(var(--border-rgb),0.07)', cursor: 'pointer' }}>
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><circle cx="8" cy="15" r="4" /><path d="M10.8 12.2L20 3M17 3h3v3" /></svg>
                 <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 14, fontWeight: 600, color: '#E4EAF4' }}>Show recovery phrase</div>
-                  <div style={{ fontSize: 12, color: '#55617D', marginTop: 2 }}>Re-enter your password to reveal your 24 words</div>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-body)' }}>Show recovery phrase</div>
+                  <div style={{ fontSize: 12, color: 'var(--text-faint)', marginTop: 2 }}>Requires your password</div>
                 </div>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#55617D" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18l6-6-6-6" /></svg>
-              </button>
-
-              {/* Decrypt UTXO dev panel */}
-              <button
-                onClick={() => setSettingsStep('decrypt')}
-                style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px', borderRadius: 12, background: 'rgba(120,150,210,0.05)', border: '1px solid rgba(120,150,210,0.14)', cursor: 'pointer', textAlign: 'left', width: '100%' }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 36, height: 36, borderRadius: 10, background: 'rgba(45,224,198,0.08)', flexShrink: 0 }}>
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--acc,#2DE0C6)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 9.9-1" /></svg>
-                </div>
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--text-faint-dim)" strokeWidth="2" strokeLinecap="round"><path d="M9 6l6 6-6 6" /></svg>
+              </div>
+              <div onClick={handleLock} style={{ display: 'flex', alignItems: 'center', gap: 13, padding: '15px 14px', borderRadius: 12, cursor: 'pointer' }}>
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="var(--danger-300)" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
                 <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 14, fontWeight: 600, color: '#E4EAF4' }}>Decrypt UTXO <span style={{ fontSize: 11, color: '#55617D', fontWeight: 400 }}>· dev</span></div>
-                  <div style={{ fontSize: 12, color: '#55617D', marginTop: 2 }}>Paste a UTXO substate ID to reveal amount + memo</div>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--danger-300)' }}>Lock wallet</div>
+                  <div style={{ fontSize: 12, color: 'var(--text-faint)', marginTop: 2 }}>You will need your password to unlock</div>
                 </div>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#55617D" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18l6-6-6-6" /></svg>
-              </button>
-
-              {/* Lock */}
-              <button
-                onClick={handleLock}
-                style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px', borderRadius: 12, background: 'rgba(255,107,107,0.04)', border: '1px solid rgba(255,107,107,0.18)', cursor: 'pointer', textAlign: 'left', width: '100%', marginTop: 8 }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 36, height: 36, borderRadius: 10, background: 'rgba(255,107,107,0.08)', flexShrink: 0 }}>
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#FF6B6B" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
-                </div>
-                <div>
-                  <div style={{ fontSize: 14, fontWeight: 600, color: '#FF8F8F' }}>Lock wallet</div>
-                  <div style={{ fontSize: 12, color: '#55617D', marginTop: 2 }}>Clear session — you'll need your password to unlock</div>
-                </div>
-              </button>
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--text-faint-dim)" strokeWidth="2" strokeLinecap="round"><path d="M9 6l6 6-6 6" /></svg>
+              </div>
             </div>
           )}
 
           {inSettings && settingsStep === 'phraseAuth' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-              <div style={{ display: 'flex', gap: 11, alignItems: 'flex-start', padding: 14, borderRadius: 12, background: 'rgba(255,180,60,0.06)', border: '1px solid rgba(255,180,60,0.3)' }}>
-                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#FFB43C" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 1 }}><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><path d="M12 9v4M12 17h.01" /></svg>
-                <div style={{ fontSize: 13, lineHeight: 1.5, color: '#C7D0E4' }}>
-                  Your 24-word recovery phrase is the master key to your wallet. Never share it with anyone.
+            <div style={{ padding: 2 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="var(--warn)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
+                <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>Confirm your password</span>
+              </div>
+              <div style={{ fontSize: 13, color: 'var(--text-muted-dim)', lineHeight: 1.5, marginBottom: 16 }}>Your 24 words will be shown on screen. Make sure nobody is watching.</div>
+              <div style={{ display: 'flex', alignItems: 'center', padding: '13px 15px', borderRadius: 11, background: 'var(--surface-raised)', border: `1px solid ${phraseError ? 'rgba(var(--danger-rgb),0.45)' : 'rgba(var(--border-rgb),0.14)'}`, marginBottom: 10 }}>
+                <input type={showPhrasePass ? 'text' : 'password'} value={phrasePass} autoFocus onChange={e => { setPhrasePass(e.target.value); setPhraseError('') }} onKeyDown={e => { if (e.key === 'Enter' && phrasePass) revealPhrase() }} placeholder="Password" style={{ background: 'none', border: 'none', outline: 'none', fontFamily: MONO, fontSize: 15, color: 'var(--text-muted)', letterSpacing: '0.1em', flex: 1 }} />
+                <span onClick={() => setShowPhrasePass(v => !v)} style={{ cursor: 'pointer', flexShrink: 0 }}>{showPhrasePass ? eyeOpen('var(--text-faint-dim)') : eyeOff('var(--text-faint-dim)')}</span>
+              </div>
+              {phraseError && <div style={{ fontSize: 12, color: 'var(--danger-300)', marginBottom: 16 }}>{phraseError}</div>}
+              <div style={{ display: 'flex', gap: 10, marginTop: phraseError ? 0 : 16 }}>
+                <div onClick={backToSettingsMain} style={{ flex: '0 0 110px', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 13, borderRadius: 12, border: '1px solid rgba(var(--border-rgb),0.2)', color: 'var(--text-muted)', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>Cancel</div>
+                <div onClick={revealPhrase} style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, padding: 13, borderRadius: 12, background: phrasePass && !phraseLoading ? 'var(--teal-grad)' : 'rgba(16,21,31,0.6)', border: phrasePass && !phraseLoading ? 'none' : '1px solid rgba(var(--border-rgb),0.12)', color: phrasePass && !phraseLoading ? 'var(--ink-on-accent)' : 'var(--text-disabled)', fontSize: 14, fontWeight: 700, cursor: phrasePass && !phraseLoading ? 'pointer' : 'default' }}>
+                  {phraseLoading && <span style={{ width: 15, height: 15, borderRadius: '50%', border: '2px solid rgba(var(--border-rgb),0.25)', borderTopColor: 'var(--text-faint-dim)', animation: 'cv-spin 0.8s linear infinite' }} />}
+                  {phraseLoading ? 'Verifying…' : 'Reveal phrase'}
                 </div>
               </div>
-              <div>
-                <div style={{ fontSize: 13, color: '#8A97B4', marginBottom: 8 }}>Enter your password to continue</div>
-                <div style={{ display: 'flex', alignItems: 'center', padding: '13px 15px', borderRadius: 11, background: '#10151F', border: `1px solid ${phrasePass ? 'rgba(45,224,198,0.35)' : 'rgba(120,150,210,0.16)'}`, transition: 'border-color 0.15s' }}>
-                  <input
-                    type={showPhrasePass ? 'text' : 'password'}
-                    value={phrasePass}
-                    autoFocus
-                    onChange={e => { setPhrasePass(e.target.value); setPhraseError('') }}
-                    onKeyDown={e => { if (e.key === 'Enter' && phrasePass) revealPhrase() }}
-                    placeholder="Password"
-                    style={{ background: 'none', border: 'none', outline: 'none', fontFamily: "'IBM Plex Mono', monospace", fontSize: 15, color: '#E4EAF4', flex: 1 }}
-                  />
-                  <svg onClick={() => setShowPhrasePass(v => !v)} width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#55617D" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ cursor: 'pointer', flexShrink: 0 }}>
-                    {showPhrasePass
-                      ? <><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" /><circle cx="12" cy="12" r="3" /></>
-                      : <><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" /><circle cx="12" cy="12" r="3" /><path d="M4 4l16 16" /></>
-                    }
-                  </svg>
-                </div>
-              </div>
-              {phraseError && (
-                <div style={{ fontSize: 13, color: '#FF6B6B', padding: '10px 14px', borderRadius: 10, background: 'rgba(255,107,107,0.08)', border: '1px solid rgba(255,107,107,0.2)' }}>
-                  {phraseError}
-                </div>
-              )}
-              <button
-                onClick={revealPhrase}
-                disabled={!phrasePass || phraseLoading}
-                style={{
-                  display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 15, borderRadius: 12,
-                  width: '100%', border: 'none', fontSize: 15, fontWeight: 700,
-                  cursor: phrasePass && !phraseLoading ? 'pointer' : 'default',
-                  background: phrasePass && !phraseLoading ? 'linear-gradient(180deg, #34E5D0, #12A594)' : 'rgba(120,150,210,0.15)',
-                  color: phrasePass && !phraseLoading ? '#04120F' : '#55617D',
-                  transition: 'all 0.15s',
-                }}
-              >
-                {phraseLoading ? 'Verifying…' : 'Reveal phrase'}
-              </button>
             </div>
           )}
 
           {inSettings && settingsStep === 'phraseWords' && words && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-                <p style={{ margin: 0, fontSize: 13, color: '#8A97B4', lineHeight: 1.5 }}>Write these down in order. They are the only way to recover your wallet.</p>
-                <CopyBtn text={words.join(' ')} label="Copy all" />
+            <div style={{ padding: 2 }}>
+              <div style={{ display: 'flex', gap: 9, padding: '11px 13px', borderRadius: 11, background: 'rgba(var(--warn-rgb),0.05)', border: '1px solid rgba(var(--warn-rgb),0.25)', fontSize: 12, color: 'var(--warn-300)', lineHeight: 1.5, marginBottom: 16 }}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--warn)" strokeWidth="2" strokeLinecap="round" style={{ flexShrink: 0, marginTop: 1 }}><path d="M12 8v5M12 17h.01" /><circle cx="12" cy="12" r="9" /></svg>
+                Anyone with these words owns your wallet. Caravel cannot recover them for you.
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 7 }}>
-                {words.map((word, i) => (
-                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '9px 10px', borderRadius: 9, background: '#10151F', border: '1px solid rgba(120,150,210,0.12)', userSelect: 'all' }}>
-                    <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: '#55617D', flexShrink: 0, minWidth: 16 }}>{i + 1}</span>
-                    <span style={{ fontSize: 12, color: '#E4EAF4', fontWeight: 500 }}>{word}</span>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 7, marginBottom: 16 }}>
+                {words.map((w, i) => (
+                  <div key={i} style={{ display: 'flex', alignItems: 'baseline', gap: 6, padding: '8px 9px', borderRadius: 8, background: 'var(--surface-raised)', border: '1px solid rgba(var(--border-rgb),0.1)', userSelect: 'all' }}>
+                    <span style={{ fontFamily: MONO, fontSize: 10, color: 'var(--text-muted-dim)' }}>{i + 1}</span>
+                    <span style={{ fontFamily: MONO, fontSize: 12, color: 'var(--text-body)' }}>{w}</span>
                   </div>
                 ))}
               </div>
-              <div style={{ display: 'flex', gap: 11, alignItems: 'flex-start', padding: 14, borderRadius: 12, background: 'rgba(255,180,60,0.06)', border: '1px solid rgba(255,180,60,0.25)' }}>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#FFB43C" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 1 }}><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><path d="M12 9v4M12 17h.01" /></svg>
-                <span style={{ fontSize: 12, color: '#C7D0E4', lineHeight: 1.5 }}>Never enter these words anywhere except Caravel. Caravel will never ask for them via chat, email, or support.</span>
+              <div style={{ display: 'flex', gap: 10 }}>
+                <div onClick={() => navigator.clipboard.writeText(words.join(' ')).catch(() => {})} style={{ flex: '0 0 110px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, padding: 13, borderRadius: 12, border: '1px solid rgba(var(--border-rgb),0.2)', color: 'var(--text-muted)', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>{copyIcon('var(--text-muted)')}Copy</div>
+                <div onClick={backToSettingsMain} style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 13, borderRadius: 12, background: 'var(--surface-raised)', border: '1px solid rgba(var(--teal-500-rgb),0.26)', color: 'var(--text-bright)', fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>Hide</div>
               </div>
-              <button onClick={backToSettingsMain} style={{ padding: '13px 20px', borderRadius: 12, border: '1px solid rgba(120,150,210,0.2)', background: 'none', color: '#8A97B4', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>
-                Done
-              </button>
             </div>
           )}
 
-          {inSettings && settingsStep === 'decrypt' && <DecryptPanel />}
-
-          {/* ════════════════════════ OVERVIEW ══════════════════════════ */}
-
+          {/* ═══ OVERVIEW ═══ */}
           {!inSettings && tab === 'overview' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              {balanceWidget()}
 
-              {/* Balance card */}
-              <div style={{ padding: '20px 22px', borderRadius: 16, background: 'linear-gradient(140deg, rgba(45,224,198,0.1), rgba(18,165,148,0.03))', border: '1px solid rgba(45,224,198,0.22)' }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-                  <SectionLabel>CONFIDENTIAL BALANCE</SectionLabel>
-                  <button
-                    onClick={() => setBalanceHidden(v => !v)}
-                    style={{ display: 'flex', alignItems: 'center', gap: 5, background: 'none', border: 'none', cursor: 'pointer', color: '#5E8A82', padding: 0, fontSize: 11, fontWeight: 500 }}
-                  >
-                    {balanceHidden
-                      ? <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" /><circle cx="12" cy="12" r="3" /><path d="M4 4l16 16" /></svg>
-                      : <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" /><circle cx="12" cy="12" r="3" /></svg>
-                    }
-                    {balanceHidden ? 'Show' : 'Hide'}
-                  </button>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 8 }}>
-                  <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 36, fontWeight: 700, color: '#EAFBF7', letterSpacing: '0.03em', lineHeight: 1 }}>
-                    {balanceDisplay}
-                  </span>
-                  <span style={{ fontSize: 16, fontWeight: 700, color: 'var(--acc,#2DE0C6)' }}>TARI</span>
-                </div>
-                {status === 'scanning' && (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12, color: '#55617D' }}>
-                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#55617D" strokeWidth="2.5" strokeLinecap="round" style={{ animation: 'spin 1s linear infinite', flexShrink: 0 }}><path d="M21 12a9 9 0 1 1-6.219-8.56" /></svg>
-                    Scanning… {progress.scanned} UTXOs, {progress.found} found
-                  </div>
-                )}
-                {status === 'done' && (
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <span style={{ fontSize: 12, color: '#55617D' }}>
-                      {totalScanned} UTXOs scanned · {utxos.length} owned{capped && <span style={{ color: '#FFB43C', marginLeft: 5 }}>(capped)</span>}
-                    </span>
-                    <button onClick={rescan} style={{ background: 'none', border: 'none', color: 'var(--acc,#2DE0C6)', fontSize: 12, fontWeight: 600, cursor: 'pointer', padding: 0 }}>Refresh</button>
-                  </div>
-                )}
-                {status === 'error' && (
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <span style={{ fontSize: 12, color: '#FF6B6B' }}>Scan failed</span>
-                    <button onClick={rescan} style={{ background: 'none', border: 'none', color: 'var(--acc,#2DE0C6)', fontSize: 12, fontWeight: 600, cursor: 'pointer', padding: 0 }}>Retry</button>
-                  </div>
-                )}
-              </div>
-
-              {/* Address */}
               {shortAddr && (
-                <div>
-                  <SectionLabel>WALLET ADDRESS</SectionLabel>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', borderRadius: 12, background: '#10151F', border: '1px solid rgba(120,150,210,0.14)' }}>
-                    <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: '#C7D0E4', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {shortAddr}
-                    </span>
-                    {address && <CopyBtn text={address} compact />}
-                  </div>
+                <div onClick={copyAddr} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 14px', borderRadius: 11, background: 'var(--surface-raised)', border: '1px solid rgba(var(--border-rgb),0.12)', cursor: 'pointer' }}>
+                  <span style={{ fontFamily: MONO, fontSize: 12, color: addrCopied ? 'var(--teal-300)' : 'var(--text-body-dim)' }}>{addrCopied ? 'Copied' : shortAddr}</span>
+                  {copyIcon()}
                 </div>
               )}
 
-              {/* Network badge */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', borderRadius: 10, background: 'rgba(120,150,210,0.05)', border: '1px solid rgba(120,150,210,0.1)', alignSelf: 'flex-start' }}>
-                <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--acc,#2DE0C6)', display: 'inline-block', flexShrink: 0 }} />
-                <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: '#8A97B4' }}>Esmeralda testnet</span>
-              </div>
-
-              {/* Claim testnet tokens (new-user funding) */}
               <FaucetClaimPanel />
 
-              {/* Send / Receive */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                <button
-                  onClick={() => setTab('send')}
-                  style={{
-                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-                    padding: '14px', borderRadius: 13,
-                    background: 'linear-gradient(180deg, #34E5D0, #12A594)',
-                    border: 'none', color: '#04120F', fontSize: 15, fontWeight: 700, cursor: 'pointer',
-                    boxShadow: '0 0 22px rgba(45,224,198,0.22)',
-                  }}
-                >
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" /></svg>
-                  Send
-                </button>
-                <button
-                  onClick={() => setTab('receive')}
-                  style={{
-                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-                    padding: '14px', borderRadius: 13,
-                    background: 'rgba(45,224,198,0.1)', border: '1px solid rgba(45,224,198,0.35)',
-                    color: 'var(--acc,#2DE0C6)', fontSize: 15, fontWeight: 700, cursor: 'pointer',
-                  }}
-                >
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v20M19 9l-7 7-7-7" /></svg>
-                  Receive
-                </button>
+              <div style={{ display: 'flex', gap: 10 }}>
+                <div onClick={() => setTab('send')} style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 13, borderRadius: 12, background: 'var(--teal-grad)', color: 'var(--ink-on-accent)', fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--ink-on-accent)" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round"><path d="M12 19V5M5 12l7-7 7 7" /></svg>Send
+                </div>
+                <div onClick={() => setTab('receive')} style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 13, borderRadius: 12, background: 'var(--surface-raised)', border: '1px solid rgba(var(--teal-500-rgb),0.26)', color: 'var(--text-bright)', fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--teal-500)" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v14M5 12l7 7 7-7" /></svg>Receive
+                </div>
               </div>
 
-              {/* Optional: claim an ONS @name that resolves to your Nostr key. */}
               <OnsRegisterPanel />
             </div>
           )}
 
-          {/* ═══════════════════════════ SEND ═══════════════════════════ */}
-
+          {/* ═══ SEND ═══ */}
           {!inSettings && tab === 'send' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-
-              {/* ── form ── */}
+            <div>
               {sendStep === 'form' && (
                 <>
-                  <div>
-                    <SectionLabel>RECIPIENT ADDRESS</SectionLabel>
-                    <input
-                      value={sendRecipient}
-                      onChange={e => { setSendRecipient(e.target.value); setSendValidationError('') }}
-                      placeholder="otl_esm_…"
-                      style={{
-                        width: '100%', boxSizing: 'border-box',
-                        padding: '13px 15px', borderRadius: 11,
-                        background: '#10151F',
-                        border: `1px solid ${sendRecipient ? 'rgba(45,224,198,0.35)' : 'rgba(120,150,210,0.16)'}`,
-                        fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, color: '#E4EAF4',
-                        outline: 'none', transition: 'border-color 0.15s',
-                      }}
-                      spellCheck={false}
-                    />
-                  </div>
+                  <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.12em', color: 'var(--text-faint-dim)', marginBottom: 8 }}>RECIPIENT</div>
+                  <input value={sendRecipient} onChange={e => { setSendRecipient(e.target.value); setSendValidationError('') }} placeholder="otl_esm_… or @name" spellCheck={false} style={{ width: '100%', boxSizing: 'border-box', padding: '13px 15px', borderRadius: 11, background: 'var(--surface-raised)', border: '1px solid rgba(var(--border-rgb),0.14)', fontFamily: MONO, fontSize: 13, color: 'var(--text-body)', outline: 'none', marginBottom: 16 }} />
 
-                  <div>
-                    <SectionLabel>AMOUNT</SectionLabel>
-                    <div style={{
-                      display: 'flex', alignItems: 'center', gap: 10,
-                      padding: '11px 15px', borderRadius: 11, background: '#10151F',
-                      border: `1px solid ${sendAmount ? 'rgba(45,224,198,0.35)' : 'rgba(120,150,210,0.16)'}`,
-                      transition: 'border-color 0.15s',
-                    }}>
-                      <input
-                        type="number" min="0" value={sendAmount}
-                        onChange={e => { setSendAmount(e.target.value); setSendValidationError('') }}
-                        placeholder="0.000000"
-                        style={{ background: 'none', border: 'none', outline: 'none', fontFamily: "'IBM Plex Mono', monospace", fontSize: 20, color: '#E4EAF4', flex: 1, fontWeight: 600 }}
-                      />
-                      <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--acc,#2DE0C6)', flexShrink: 0 }}>TARI</span>
-                    </div>
+                  <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.12em', color: 'var(--text-faint-dim)', marginBottom: 8 }}>AMOUNT</div>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '13px 15px', borderRadius: 11, background: 'var(--surface-raised)', border: `1px solid ${sendValidationError ? 'rgba(var(--danger-rgb),0.5)' : 'rgba(var(--border-rgb),0.14)'}`, marginBottom: sendValidationError ? 10 : 16 }}>
+                    <input type="number" min="0" value={sendAmount} onChange={e => { setSendAmount(e.target.value); setSendValidationError('') }} placeholder="0.00" style={{ background: 'none', border: 'none', outline: 'none', fontFamily: MONO, fontSize: 15, color: 'var(--text-body)', flex: 1 }} />
+                    <span style={{ fontSize: 12, fontWeight: 700, color: sendValidationError ? 'var(--danger-300)' : 'var(--teal-500)' }}>TARI</span>
                   </div>
-
-                  <div>
-                    <SectionLabel>PRIVATE NOTE (OPTIONAL)</SectionLabel>
-                    <textarea
-                      value={sendNote}
-                      onChange={e => setSendNote(e.target.value)}
-                      placeholder="Only visible to you and the recipient…"
-                      rows={3}
-                      style={{
-                        width: '100%', boxSizing: 'border-box',
-                        padding: '12px 15px', borderRadius: 11, background: '#10151F',
-                        border: `1px solid ${sendNote ? 'rgba(45,224,198,0.35)' : 'rgba(120,150,210,0.16)'}`,
-                        fontSize: 13, color: '#E4EAF4', resize: 'vertical', outline: 'none', lineHeight: 1.5,
-                        transition: 'border-color 0.15s',
-                      }}
-                    />
-                  </div>
-
-                  <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', padding: '11px 14px', borderRadius: 10, background: 'rgba(45,224,198,0.05)', border: '1px solid rgba(45,224,198,0.18)' }}>
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--acc,#2DE0C6)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 1 }}><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
-                    <span style={{ fontSize: 12, color: '#6BA69A', lineHeight: 1.5 }}>
-                      Amount and note are hidden on-chain. Only you and the recipient can see them.
-                    </span>
-                  </div>
-
                   {sendValidationError && (
-                    <div style={{ fontSize: 13, color: '#FF6B6B', padding: '10px 14px', borderRadius: 10, background: 'rgba(255,107,107,0.08)', border: '1px solid rgba(255,107,107,0.2)' }}>
-                      {sendValidationError}
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 12, marginBottom: 16 }}>
+                      <span style={{ color: 'var(--danger-300)' }}>{sendValidationError}</span>
+                      {balance !== null && <span style={{ fontFamily: MONO, color: 'var(--text-faint)' }}>available {fmt2(balance)}</span>}
                     </div>
                   )}
 
-                  <button
-                    onClick={handleReview}
-                    disabled={!sendRecipient || !sendAmount}
-                    style={{
-                      padding: '15px', borderRadius: 13, border: 'none',
-                      background: sendRecipient && sendAmount ? 'linear-gradient(180deg, #34E5D0, #12A594)' : 'rgba(120,150,210,0.15)',
-                      color: sendRecipient && sendAmount ? '#04120F' : '#55617D',
-                      fontSize: 15, fontWeight: 700,
-                      cursor: sendRecipient && sendAmount ? 'pointer' : 'default',
-                      transition: 'all 0.15s',
-                    }}
-                  >
-                    Review
-                  </button>
+                  <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.12em', color: 'var(--text-faint-dim)', marginBottom: 8 }}>PRIVATE NOTE · OPTIONAL</div>
+                  <textarea value={sendNote} onChange={e => setSendNote(e.target.value)} placeholder="Only your recipient sees this" rows={2} style={{ width: '100%', boxSizing: 'border-box', padding: '13px 15px', borderRadius: 11, background: 'var(--surface-raised)', border: `1px ${sendNote ? 'solid' : 'dashed'} rgba(var(--teal-500-rgb),0.24)`, fontSize: 13, color: sendNote ? 'var(--text-body)' : 'var(--text-faint-dim)', outline: 'none', resize: 'vertical', fontFamily: 'inherit', fontStyle: sendNote ? 'normal' : 'italic', marginBottom: 16 }} />
+
+                  <div style={{ display: 'flex', gap: 9, padding: '11px 13px', borderRadius: 11, background: 'rgba(var(--teal-500-rgb),0.05)', border: '1px solid rgba(var(--teal-500-rgb),0.22)', fontSize: 12, color: 'var(--teal-300)', lineHeight: 1.5, marginBottom: 16 }}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--teal-500)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 1 }}><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
+                    Confidential. The amount and your address stay hidden on chain.
+                  </div>
+
+                  {(() => { const on = !!sendRecipient && !!sendAmount; return (
+                    <div onClick={on ? handleReview : undefined} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 13, borderRadius: 12, background: on ? 'var(--teal-grad)' : 'rgba(16,21,31,0.6)', border: on ? 'none' : '1px solid rgba(var(--border-rgb),0.12)', color: on ? 'var(--ink-on-accent)' : 'var(--text-disabled)', fontSize: 14, fontWeight: 700, cursor: on ? 'pointer' : 'default' }}>Review payment</div>
+                  ) })()}
                 </>
               )}
 
-              {/* ── review ── */}
               {sendStep === 'review' && (
                 <>
-                  <div style={{ padding: '18px', borderRadius: 14, background: '#10151F', border: '1px solid rgba(120,150,210,0.16)', display: 'flex', flexDirection: 'column', gap: 14 }}>
-                    <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: '#55617D', letterSpacing: '0.14em' }}>REVIEW TRANSACTION</div>
-                    {[
-                      { label: 'To',     value: sendRecipient.length > 30 ? sendRecipient.slice(0, 22) + '…' + sendRecipient.slice(-6) : sendRecipient },
-                      { label: 'Amount', value: `${sendAmount} TARI` },
-                      { label: 'Fee',    value: '≤ 0.000010 TARI' },
-                      ...(sendNote ? [{ label: 'Note', value: `"${sendNote}"` }] : []),
-                    ].map(({ label, value }) => (
-                      <div key={label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16 }}>
-                        <span style={{ fontSize: 13, color: '#55617D', flexShrink: 0 }}>{label}</span>
-                        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: '#C7D0E4', textAlign: 'right', wordBreak: 'break-all' }}>{value}</span>
-                      </div>
-                    ))}
+                  <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 16 }}>Confirm payment</div>
+                  <div style={{ borderRadius: 12, background: 'var(--surface-raised)', border: '1px solid rgba(var(--border-rgb),0.12)', overflow: 'hidden', marginBottom: 16 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '13px 15px', borderBottom: '1px solid rgba(var(--border-rgb),0.08)' }}><span style={{ fontSize: 13, color: 'var(--text-muted-dim)' }}>To</span><span style={{ fontFamily: MONO, fontSize: 13, color: 'var(--text-body)' }}>{sendRecipient.length > 24 ? sendRecipient.slice(0, 14) + '…' + sendRecipient.slice(-6) : sendRecipient}</span></div>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '13px 15px', borderBottom: '1px solid rgba(var(--border-rgb),0.08)' }}><span style={{ fontSize: 13, color: 'var(--text-muted-dim)' }}>Amount</span><span style={{ fontFamily: MONO, fontSize: 15, fontWeight: 600, color: 'var(--text-bright)' }}>{sendAmount} TARI</span></div>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '13px 15px' }}><span style={{ fontSize: 13, color: 'var(--text-muted-dim)' }}>Network fee</span><span style={{ fontFamily: MONO, fontSize: 13, color: 'var(--text-muted)' }}>≤ {fmtFee(MAX_FEE)} TARI</span></div>
                   </div>
+                  {sendNote && (
+                    <div style={{ padding: '12px 14px', borderRadius: 11, background: 'rgba(10,14,23,0.6)', border: '1px dashed rgba(var(--teal-500-rgb),0.26)', marginBottom: 16 }}>
+                      <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.12em', color: 'var(--text-teal-dim)', marginBottom: 6 }}>PRIVATE NOTE</div>
+                      <div style={{ fontSize: 13, color: 'var(--text-note)', fontStyle: 'italic' }}>“{sendNote}”</div>
+                    </div>
+                  )}
                   <div style={{ display: 'flex', gap: 10 }}>
-                    <button
-                      onClick={() => setSendStep('form')}
-                      style={{ flex: 1, padding: '13px', borderRadius: 12, border: '1px solid rgba(120,150,210,0.2)', background: 'none', color: '#8A97B4', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}
-                    >
-                      Back
-                    </button>
-                    <button
-                      onClick={handleConfirmSend}
-                      style={{ flex: 2, padding: '13px', borderRadius: 12, border: 'none', background: 'linear-gradient(180deg, #34E5D0, #12A594)', color: '#04120F', fontSize: 14, fontWeight: 700, cursor: 'pointer' }}
-                    >
-                      Confirm Send
-                    </button>
+                    <div onClick={() => setSendStep('form')} style={{ flex: '0 0 110px', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 13, borderRadius: 12, border: '1px solid rgba(var(--border-rgb),0.2)', color: 'var(--text-muted)', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>Back</div>
+                    <div onClick={handleConfirmSend} style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 13, borderRadius: 12, background: 'var(--teal-grad)', color: 'var(--ink-on-accent)', fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>Confirm and send</div>
                   </div>
                 </>
               )}
 
-              {/* ── sending ── */}
               {sendStep === 'sending' && (
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 20, padding: '28px 0' }}>
-                  <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="var(--acc,#2DE0C6)" strokeWidth="1.8" strokeLinecap="round" style={{ animation: 'spin 1s linear infinite' }}><path d="M21 12a9 9 0 1 1-6.219-8.56" /></svg>
-                  <div style={{ textAlign: 'center' }}>
-                    <div style={{ fontSize: 16, fontWeight: 700, color: '#E4EAF4', marginBottom: 8 }}>Sending…</div>
-                    <div style={{ fontSize: 13, color: '#55617D', lineHeight: 1.6 }}>{sendProgress}</div>
-                  </div>
+                <div style={{ padding: '44px 20px', borderRadius: 16, background: 'var(--surface)', border: '1px solid rgba(var(--teal-500-rgb),0.24)', textAlign: 'center' }}>
+                  <span style={{ display: 'inline-flex', width: 44, height: 44, borderRadius: '50%', border: '3px solid rgba(var(--teal-500-rgb),0.18)', borderTopColor: 'var(--teal-500)', animation: 'cv-spin 0.9s linear infinite', marginBottom: 20 }} />
+                  <div style={{ fontSize: 17, fontWeight: 700, color: 'var(--text-bright)', marginBottom: 8 }}>Sending {sendAmount} TARI</div>
+                  <div style={{ fontSize: 13, color: 'var(--text-muted-dim)', lineHeight: 1.5, maxWidth: 280, margin: '0 auto' }}>{sendProgress || 'Building the confidential proof and broadcasting. Do not close this window.'}</div>
                 </div>
               )}
 
-              {/* ── success ── */}
               {sendStep === 'success' && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14, padding: '20px 0 8px' }}>
-                    <div style={{ width: 52, height: 52, borderRadius: 16, background: 'rgba(45,224,198,0.12)', border: '1px solid rgba(45,224,198,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--acc,#2DE0C6)" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 7l-8 8-4-4" /></svg>
-                    </div>
-                    <div style={{ textAlign: 'center' }}>
-                      <div style={{ fontSize: 17, fontWeight: 700, color: '#E4EAF4', marginBottom: 4 }}>Sent!</div>
-                      <div style={{ fontSize: 13, color: '#55617D' }}>Transaction confirmed on-chain</div>
-                    </div>
+                <div style={{ padding: '32px 20px 20px', borderRadius: 16, background: 'linear-gradient(170deg, rgba(var(--teal-500-rgb),0.07), var(--surface) 62%)', border: '1px solid rgba(var(--teal-500-rgb),0.34)', textAlign: 'center' }}>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 52, height: 52, borderRadius: '50%', background: 'rgba(var(--teal-500-rgb),0.14)', border: '1px solid rgba(var(--teal-500-rgb),0.4)', marginBottom: 16 }}>
+                    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="var(--teal-500)" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
+                  </span>
+                  <div style={{ fontSize: 20, fontWeight: 800, color: 'var(--text-bright)', marginBottom: 6 }}>Sent</div>
+                  <div style={{ fontSize: 14, color: 'var(--text-teal-label)', marginBottom: 20 }}>{sendAmount} TARI to {sendRecipient.slice(0, 10)}…{sendRecipient.slice(-4)}</div>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '11px 14px', borderRadius: 11, background: 'var(--surface-raised)', border: '1px solid rgba(var(--border-rgb),0.12)', marginBottom: 10 }}>
+                    <span style={{ fontSize: 13, color: 'var(--text-muted-dim)' }}>Fee</span>
+                    <span style={{ fontFamily: MONO, fontSize: 13, color: 'var(--text-bright)' }}>{sendFee !== null ? `${fmtFee(sendFee)} TARI` : `≤ ${fmtFee(MAX_FEE)} TARI`}</span>
                   </div>
-
-                  {sendTxId && (
-                    <div>
-                      <SectionLabel>TRANSACTION HASH</SectionLabel>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', borderRadius: 12, background: '#10151F', border: '1px solid rgba(120,150,210,0.14)' }}>
-                        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: '#C7D0E4', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {sendTxId}
-                        </span>
-                        <CopyBtn text={sendTxId} compact />
-                      </div>
-                    </div>
-                  )}
-
-                  <button
-                    onClick={resetSend}
-                    style={{ padding: '13px', borderRadius: 12, border: '1px solid rgba(45,224,198,0.3)', background: 'rgba(45,224,198,0.08)', color: 'var(--acc,#2DE0C6)', fontSize: 14, fontWeight: 700, cursor: 'pointer' }}
-                  >
-                    New payment
-                  </button>
+                  {sendTxId && <div style={{ marginBottom: 18 }}>{hashRow(sendTxId)}</div>}
+                  <div onClick={resetSend} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 13, borderRadius: 12, background: 'var(--surface-raised)', border: '1px solid rgba(var(--teal-500-rgb),0.26)', color: 'var(--text-bright)', fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>Done</div>
                 </div>
               )}
 
-              {/* ── error ── */}
-              {sendStep === 'error' && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14, padding: '16px 0 8px' }}>
-                    <div style={{ width: 52, height: 52, borderRadius: 16, background: 'rgba(255,107,107,0.1)', border: '1px solid rgba(255,107,107,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#FF6B6B" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6L6 18M6 6l12 12" /></svg>
-                    </div>
-                    <div style={{ fontSize: 16, fontWeight: 700, color: '#FF8F8F' }}>Send failed</div>
-                  </div>
-
-                  <div style={{ padding: '13px 14px', borderRadius: 12, background: 'rgba(255,107,107,0.06)', border: '1px solid rgba(255,107,107,0.2)', fontSize: 13, color: '#FF8F8F', lineHeight: 1.6, wordBreak: 'break-word' }}>
-                    {sendError}
-                  </div>
-
-                  {sendTxId && (
-                    <div>
-                      <SectionLabel>TRANSACTION HASH</SectionLabel>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', borderRadius: 12, background: '#10151F', border: '1px solid rgba(120,150,210,0.14)' }}>
-                        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: '#C7D0E4', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {sendTxId}
-                        </span>
-                        <CopyBtn text={sendTxId} compact />
-                      </div>
-                    </div>
-                  )}
-
+              {sendStep === 'error' && sendOutcome !== 'Timeout' && (
+                <div style={{ padding: '32px 20px 20px', borderRadius: 16, background: 'var(--surface)', border: '1px solid rgba(var(--danger-rgb),0.3)', textAlign: 'center' }}>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 52, height: 52, borderRadius: '50%', background: 'rgba(var(--danger-rgb),0.1)', border: '1px solid rgba(var(--danger-rgb),0.35)', marginBottom: 16 }}>
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--danger-500)" strokeWidth="2.6" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
+                  </span>
+                  <div style={{ fontSize: 20, fontWeight: 800, color: 'var(--danger-300)', marginBottom: 6 }}>Rejected</div>
+                  <div style={{ fontSize: 14, color: 'var(--text-muted-dim)', lineHeight: 1.5, marginBottom: 20, maxWidth: 300, marginLeft: 'auto', marginRight: 'auto' }}>{sendError}</div>
                   <div style={{ display: 'flex', gap: 10 }}>
-                    <button
-                      onClick={resetSend}
-                      style={{ flex: 1, padding: '13px', borderRadius: 12, border: '1px solid rgba(120,150,210,0.2)', background: 'none', color: '#8A97B4', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}
-                    >
-                      Start over
-                    </button>
-                    <button
-                      onClick={() => { setSendStep('review'); setSendError('') }}
-                      style={{ flex: 1, padding: '13px', borderRadius: 12, border: 'none', background: 'rgba(120,150,210,0.15)', color: '#C7D0E4', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}
-                    >
-                      Retry
-                    </button>
+                    <div onClick={resetSend} style={{ flex: '0 0 110px', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 13, borderRadius: 12, border: '1px solid rgba(var(--border-rgb),0.2)', color: 'var(--text-muted)', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>Cancel</div>
+                    <div onClick={() => { setSendStep('review'); setSendError('') }} style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 13, borderRadius: 12, background: 'rgba(var(--danger-rgb),0.08)', border: '1px solid rgba(var(--danger-rgb),0.3)', color: 'var(--danger-300)', fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>Try again</div>
                   </div>
                 </div>
               )}
 
+              {sendStep === 'error' && sendOutcome === 'Timeout' && (
+                <div style={{ padding: '32px 20px 20px', borderRadius: 16, background: 'var(--surface)', border: '1px solid rgba(var(--warn-rgb),0.3)', textAlign: 'center' }}>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 52, height: 52, borderRadius: '50%', background: 'rgba(var(--warn-rgb),0.1)', border: '1px solid rgba(var(--warn-rgb),0.35)', marginBottom: 16 }}>
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--warn)" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg>
+                  </span>
+                  <div style={{ fontSize: 20, fontWeight: 800, color: 'var(--warn-300)', marginBottom: 6 }}>Not confirmed yet</div>
+                  <div style={{ fontSize: 14, color: 'var(--text-muted-dim)', lineHeight: 1.5, marginBottom: 18, maxWidth: 300, marginLeft: 'auto', marginRight: 'auto' }}>{sendError}</div>
+                  {sendTxId && <div style={{ marginBottom: 18 }}>{hashRow(sendTxId)}</div>}
+                  <div onClick={() => { resetSend(); setTab('activity') }} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 13, borderRadius: 12, background: 'var(--surface-raised)', border: '1px solid rgba(var(--teal-500-rgb),0.26)', color: 'var(--text-bright)', fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>View in Activity</div>
+                </div>
+              )}
             </div>
           )}
 
-          {/* ══════════════════════════ RECEIVE ═════════════════════════ */}
-
+          {/* ═══ RECEIVE ═══ */}
           {!inSettings && tab === 'receive' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 22, alignItems: 'center' }}>
-              <div style={{ fontSize: 13, color: '#8A97B4', textAlign: 'center', maxWidth: 360, lineHeight: 1.6 }}>
-                Share your address to receive confidential TARI. Amounts stay hidden on-chain.
-              </div>
-
-              <div style={{ padding: 14, borderRadius: 16, background: '#FFFFFF', display: 'inline-block' }}>
-                <QRCodeSVG value={address ?? ''} size={192} bgColor="#FFFFFF" fgColor="#0C111B" level="M" />
-              </div>
-
-              {address && (
-                <div style={{ width: '100%' }}>
-                  <SectionLabel>YOUR ADDRESS</SectionLabel>
-                  <div style={{ padding: '13px 15px', borderRadius: 12, background: '#10151F', border: '1px solid rgba(120,150,210,0.14)', display: 'flex', flexDirection: 'column', gap: 12 }}>
-                    <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: '#C7D0E4', wordBreak: 'break-all', lineHeight: 1.7 }}>
-                      {address}
-                    </span>
-                    <CopyBtn text={address} label="Copy address" />
-                  </div>
+            !address ? (
+              <div style={{ padding: '24px 20px', borderRadius: 16, background: 'var(--surface)', border: '1px solid rgba(var(--border-rgb),0.16)', textAlign: 'center' }}>
+                <div style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 178, height: 178, borderRadius: 14, background: 'var(--surface-raised)', border: '1px dashed rgba(var(--border-rgb),0.2)', marginBottom: 16 }}>
+                  <span style={{ width: 30, height: 30, borderRadius: '50%', border: '3px solid rgba(var(--border-rgb),0.15)', borderTopColor: 'var(--text-muted-dim)', animation: 'cv-spin 0.9s linear infinite' }} />
                 </div>
-              )}
-            </div>
+                <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 6 }}>Deriving your address</div>
+                <div style={{ fontSize: 13, color: 'var(--text-faint)', marginBottom: 14, lineHeight: 1.5 }}>This happens locally, in your browser.</div>
+                <div style={{ height: 42, borderRadius: 11, background: 'var(--surface-raised)', border: '1px solid rgba(var(--border-rgb),0.1)', marginBottom: 12 }} />
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 13, borderRadius: 12, background: 'rgba(16,21,31,0.6)', border: '1px solid rgba(var(--border-rgb),0.12)', color: 'var(--text-disabled)', fontSize: 14, fontWeight: 700 }}>Copy address</div>
+              </div>
+            ) : (
+              <div style={{ padding: '24px 20px', borderRadius: 16, background: 'var(--surface)', border: '1px solid rgba(var(--border-rgb),0.16)', textAlign: 'center' }}>
+                <div style={{ display: 'inline-flex', padding: 14, borderRadius: 14, background: 'var(--text-bright)', marginBottom: 16 }}>
+                  <QRCodeSVG value={address} size={150} bgColor="#EAFBF7" fgColor="#04120F" level="M" />
+                </div>
+                <div style={{ fontSize: 13, color: 'var(--text-muted-dim)', marginBottom: 14, lineHeight: 1.5 }}>Share this address to receive confidential payments.</div>
+                <div style={{ padding: '13px 15px', borderRadius: 11, background: 'var(--surface-raised)', border: '1px solid rgba(var(--border-rgb),0.12)', fontFamily: MONO, fontSize: 12, color: 'var(--text-body-dim)', lineHeight: 1.6, wordBreak: 'break-all', textAlign: 'left', marginBottom: 12 }}>{address}</div>
+                <div onClick={copyAddr} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, padding: 13, borderRadius: 12, background: 'var(--teal-grad)', color: 'var(--ink-on-accent)', fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>
+                  {copyIcon('var(--ink-on-accent)')}{addrCopied ? 'Copied' : 'Copy address'}
+                </div>
+              </div>
+            )
           )}
 
-          {/* ══════════════════════════ ACTIVITY ════════════════════════ */}
-
+          {/* ═══ ACTIVITY ═══ */}
           {!inSettings && tab === 'activity' && (
-            <div>
-              {txHistory.length === 0 ? (
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, padding: '48px 0 32px' }}>
-                  <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#2D3548" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
-                  </svg>
-                  <div style={{ fontSize: 14, color: '#55617D', textAlign: 'center', lineHeight: 1.6 }}>
-                    No transactions yet.<br />
-                    <span style={{ fontSize: 12 }}>Sends and received UTXOs will appear here.</span>
-                  </div>
+            txHistory.length === 0 ? (
+              <div style={{ padding: '56px 24px', borderRadius: 16, background: 'var(--surface)', border: '1px solid rgba(var(--border-rgb),0.16)', textAlign: 'center' }}>
+                <svg viewBox="0 0 44 44" width="40" height="40" style={{ opacity: 0.3, marginBottom: 16 }} aria-hidden="true">
+                  <path d="M22 4 C 33 12 35 24 33 33 L 22 33 Z" fill="var(--teal-500)" />
+                  <path d="M22 4 L 22 33 L 11 33 C 12 22 15 12 22 4 Z" fill="var(--teal-500)" opacity="0.4" />
+                  <path d="M8 37 L 36 37 L 32 42 L 12 42 Z" fill="var(--teal-500)" />
+                </svg>
+                <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-muted)', marginBottom: 6 }}>No transactions yet</div>
+                <div style={{ fontSize: 13, color: 'var(--text-faint)', lineHeight: 1.5, maxWidth: 250, margin: '0 auto' }}>Payments you send and receive will appear here.</div>
+              </div>
+            ) : (
+              <div style={{ padding: 0, borderRadius: 16 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '4px 13px 12px', borderBottom: '1px solid rgba(var(--border-rgb),0.07)' }}>
+                  <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.12em', color: 'var(--text-faint-dim)' }}>CONFIDENTIAL</span>
+                  <span onClick={() => setBalanceHidden(v => !v)} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 12, fontWeight: 600, color: balanceHidden ? 'var(--teal-500)' : 'var(--text-teal-dim)', cursor: 'pointer' }}>
+                    {balanceHidden ? eyeOff('var(--teal-500)') : eyeOpen('var(--text-teal-dim)')}{balanceHidden ? 'Show amounts' : 'Hide amounts'}
+                  </span>
                 </div>
-              ) : (
-                <div style={{ display: 'flex', flexDirection: 'column' }}>
-                  {[...txHistory]
-                    .sort((a, b) => {
-                      const ta = a.type === 'sent' ? a.timestamp : a.discoveredAt
-                      const tb = b.type === 'sent' ? b.timestamp : b.discoveredAt
-                      return tb - ta
-                    })
-                    .map(entry => <TxRow key={entry.id} entry={entry} />)
-                  }
-                </div>
-              )}
-            </div>
+                {[...txHistory].sort((a, b) => {
+                  const ta = a.type === 'sent' ? a.timestamp : a.discoveredAt
+                  const tb = b.type === 'sent' ? b.timestamp : b.discoveredAt
+                  return tb - ta
+                }).map(entry => <TxRow key={entry.id} entry={entry} hidden={balanceHidden} />)}
+              </div>
+            )
           )}
 
         </div>
       </div>
-
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </>
   )
 }

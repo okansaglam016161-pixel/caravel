@@ -133,5 +133,6 @@ a:hover { color: var(--accL); }
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-thumb { background: rgba(120,150,210,0.2); border-radius: 4px; }
 
-/* Shared spinner keyframe for the primitive kit (components/primitives/*). */
+/* Shared animations for the primitive kit + wallet modal (components/primitives/*, WalletModal). */
 @keyframes cv-spin { to { transform: rotate(360deg); } }
+@keyframes cv-pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }

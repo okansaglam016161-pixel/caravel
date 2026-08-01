@@ -29,6 +29,11 @@
   --danger-300: #FF9E9E;
   --ink-on-accent: #04120F;
 
+  /* rgb triplets for low-alpha tint borders/fills (used by primitives via rgba()) */
+  --border-rgb: 120, 150, 210; /* pervasive neutral border tint */
+  --warn-rgb: 255, 180, 60; /* rgb of --warn */
+  --danger-rgb: 255, 107, 107; /* rgb of --danger-500 */
+
   /* ── Text ramp ────────────────────────────────────────────────────────── */
   --text-bright: #EAFBF7;
   --text-primary: #F2F5FB;
@@ -127,3 +132,6 @@ a:hover { color: var(--accL); }
 
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-thumb { background: rgba(120,150,210,0.2); border-radius: 4px; }
+
+/* Shared spinner keyframe for the primitive kit (components/primitives/*). */
+@keyframes cv-spin { to { transform: rotate(360deg); } }

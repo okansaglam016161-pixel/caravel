@@ -69,5 +69,12 @@ export interface MessagingProvider {
   // Close all relay connections and subscriptions. Idempotent — safe to call more than once.
   disconnect(): void
 
+  // Snapshot of per-relay health (for the connection/relay-health UI). Not reactive — poll it.
+  getRelayStates(): RelayState[]
+
+  // Force an immediate reconnect on every relay that isn't already connecting/connected,
+  // resetting each one's retry budget (same path as the browser 'online' event).
+  reconnectAll(): void
+
   readonly isConnected: boolean
 }

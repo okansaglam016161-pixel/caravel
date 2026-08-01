@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback, useRef, type ReactNode } from 'react'
+import { createContext, useContext, useState, useCallback, useRef, type ReactNode, type Dispatch, type SetStateAction } from 'react'
 import { type SecretKeyWallet } from '@tari-project/ootle-secret-key-wallet'
 import {
   createMnemonic,
@@ -14,7 +14,7 @@ import { deriveNostrKeyFromSeed } from '../crypto/nostrCrypto'
 import { scanWallet, type ScannedUtxo, type ScanProgress } from '../crypto/walletScanner'
 import { loadHistory, addSent, mergeReceived, type TxEntry, type NewSentParams } from '../crypto/txHistory'
 import { NostrMessagingProvider } from '../messaging/NostrMessagingProvider'
-import type { MessagingProvider, MessagingConnectionStatus, CaravelMessage } from '../messaging/types'
+import type { MessagingProvider, MessagingConnectionStatus, CaravelMessage, RelayState } from '../messaging/types'
 import { loadMessages, addReceivedMessage, addSentMessage, deletePeerMessages } from '../messaging/messageStore'
 import { loadTombstoneIdSet, recordTombstones } from '../messaging/tombstoneStore'
 import { removeResolvedAmounts } from '../messaging/paymentResolutionStore'
@@ -95,6 +95,13 @@ export interface WalletCtx {
    *  or null if the wallet is locked. The secret key stays inside the closure — callers
    *  receive a working provider but never see the raw key. */
   createMessagingProvider: () => MessagingProvider | null
+  /** Snapshot of per-relay health from the live provider (empty when locked). Not reactive — poll. */
+  getRelayStates: () => RelayState[]
+  /** Force-reconnect all down relays on the live provider (relay-health panel "Reconnect all"). */
+  reconnectAll: () => void
+  /** Shared "hide balance" toggle — one source for the sidebar chip and the wallet modal. */
+  balanceHidden: boolean
+  setBalanceHidden: Dispatch<SetStateAction<boolean>>
 }
 
 // ── Context ───────────────────────────────────────────────────────────────────
@@ -132,6 +139,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   // for the pending-contact rule (React `messages` state is stale mid-burst). Seeded on unlock.
   const knownPeersRef = useRef<Set<string>>(new Set())
   const [messagingStatus, setMessagingStatus] = useState<MessagingConnectionStatus>('disconnected')
+  const [balanceHidden, setBalanceHidden] = useState(false)
   const [messages, setMessages] = useState<CaravelMessage[]>([])
   const [contacts, setContacts] = useState<ContactMap>({})
   // Per-contact Tari addresses (manual or verified-exchanged). Owned here because the inbound
@@ -391,13 +399,18 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     return new NostrMessagingProvider(secretHex, nostrPubkeyHex, DEFAULT_RELAYS)
   }, [nostrPubkeyHex])
 
+  // Read-only accessors onto the live provider for the connection/relay-health UI.
+  const getRelayStates = useCallback((): RelayState[] => messagingProviderRef.current?.getRelayStates() ?? [], [])
+  const reconnectAll = useCallback((): void => { messagingProviderRef.current?.reconnectAll() }, [])
+
   return (
     <Ctx.Provider value={{
       walletExists, wallet, address, nostrNpub, nostrPubkeyHex, scan, txHistory,
       messagingStatus, messages,
       generateMnemonic, createWallet, unlock, restore, lock, getMnemonic, rescan, recordSent,
       recordSentMessage, contacts, acceptContact, contactAddresses, setManualTariAddress,
-      deleteConversation, createMessagingProvider,
+      deleteConversation, createMessagingProvider, getRelayStates, reconnectAll,
+      balanceHidden, setBalanceHidden,
     }}>
       {children}
     </Ctx.Provider>

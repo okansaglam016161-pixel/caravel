@@ -136,3 +136,4 @@ a:hover { color: var(--accL); }
 /* Shared animations for the primitive kit + wallet modal (components/primitives/*, WalletModal). */
 @keyframes cv-spin { to { transform: rotate(360deg); } }
 @keyframes cv-pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
+@keyframes cv-breathe { 0%, 100% { box-shadow: 0 0 0 0 rgba(var(--teal-500-rgb), 0.35); } 50% { box-shadow: 0 0 0 4px rgba(var(--teal-500-rgb), 0); } }

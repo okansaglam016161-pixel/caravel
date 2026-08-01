@@ -69,12 +69,11 @@ function TxRow({ entry, hidden }: { entry: TxEntry; hidden: boolean }) {
 }
 
 export default function WalletModal({ onClose }: { onClose: () => void }) {
-  const { wallet, address, scan, lock, getMnemonic, rescan, txHistory, recordSent } = useWallet()
+  const { wallet, address, scan, lock, getMnemonic, rescan, txHistory, recordSent, balanceHidden, setBalanceHidden } = useWallet()
 
   const [tab, setTab] = useState<Tab>('overview')
   const [inSettings, setInSettings] = useState(false)
   const [settingsStep, setSettingsStep] = useState<SettingsStep>('main')
-  const [balanceHidden, setBalanceHidden] = useState(false)
   const [addrCopied, setAddrCopied] = useState(false)
 
   const [phrasePass, setPhrasePass] = useState('')

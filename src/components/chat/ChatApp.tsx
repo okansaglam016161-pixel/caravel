@@ -10,6 +10,7 @@ import { loadAddressSent, markAddressSent, clearAddressSent, type AddressSentMap
 import { sendConfidential, tariToMicrotari } from '../../crypto/confidentialSend'
 import { resolvePayment, type PaymentResolution } from '../../crypto/paymentResolver'
 import { resolveOnsNameToHex } from '../../crypto/ons'
+import { ConnectionIndicator, RelayHealthPanel } from './ConnectionStatus'
 import { loadResolvedAmounts, cacheResolvedAmount } from '../../messaging/paymentResolutionStore'
 
 // ── Conversation derivation ─────────────────────────────────────────────────────
@@ -82,12 +83,14 @@ function bubbleTime(ts: number): string {
   return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
-// Stable avatar gradient per peer, drawn from the existing palette so colours match the design.
+// Stable avatar gradient per peer — the design's 5 avatar-token pairs (teal/slate/plum/moss/amber),
+// assigned by hash of the contact key.
 const AVATARS = [
-  { grad: 'linear-gradient(135deg, #1E6E63, var(--accD,#12A594))', color: '#EAFBF7' },
-  { grad: 'linear-gradient(135deg, #2A3550, #3C4E78)', color: '#C7D0E4' },
-  { grad: 'linear-gradient(135deg, #4A2F55, #6E3C78)', color: '#E4C7EC' },
-  { grad: 'linear-gradient(135deg, #244A44, #2E6B5C)', color: '#C7ECE2' },
+  { grad: 'var(--avatar-teal)', color: 'var(--avatar-teal-ink)' },
+  { grad: 'var(--avatar-slate)', color: 'var(--avatar-slate-ink)' },
+  { grad: 'var(--avatar-plum)', color: 'var(--avatar-plum-ink)' },
+  { grad: 'var(--avatar-moss)', color: 'var(--avatar-moss-ink)' },
+  { grad: 'var(--avatar-amber)', color: 'var(--avatar-amber-ink)' },
 ]
 function avatarFor(peerHex: string) {
   let h = 0
@@ -303,9 +306,10 @@ function PaymentMessageCard({ message }: { message: CaravelMessage }) {
 // ── Component ────────────────────────────────────────────────────────────────────
 
 export default function ChatApp() {
-  const { wallet, address, scan, messages, nostrPubkeyHex, messagingStatus, contacts, acceptContact, contactAddresses, setManualTariAddress, createMessagingProvider, recordSentMessage, deleteConversation } = useWallet()
+  const { wallet, address, scan, messages, nostrPubkeyHex, messagingStatus, contacts, acceptContact, contactAddresses, setManualTariAddress, createMessagingProvider, recordSentMessage, deleteConversation, getRelayStates, reconnectAll, balanceHidden, setBalanceHidden } = useWallet()
   const [walletOpen, setWalletOpen] = useState(false)
-  const [balanceHidden, setBalanceHidden] = useState(false)
+  const [sidebarQuery, setSidebarQuery] = useState('')
+  const [relayPanelOpen, setRelayPanelOpen] = useState(false)
 
   // Selected conversation (peer hex). UI state only — falls back to most-recent when unset.
   const [selectedPeer, setSelectedPeer] = useState<string | null>(null)
@@ -397,6 +401,13 @@ export default function ChatApp() {
   })()
 
   const displayName = (peerHex: string) => nicknames[peerHex] ?? truncNpub(peerHex)
+
+  // Sidebar search (real) — filter conversations + requests by name, npub handle, or last-message text.
+  const sq = sidebarQuery.trim().toLowerCase()
+  const matchPeer = (peerHex: string, preview: string) =>
+    !sq || displayName(peerHex).toLowerCase().includes(sq) || truncNpub(peerHex).toLowerCase().includes(sq) || preview.toLowerCase().includes(sq)
+  const filteredConversations = conversations.filter(c => matchPeer(c.peerHex, c.lastMessage?.plaintext ?? ''))
+  const filteredRequests = pendingRequests.filter(r => matchPeer(r.peerHex, r.lastMessage?.plaintext ?? ''))
 
   function beginEditNick() {
     if (!selectedConvo) return
@@ -666,9 +677,6 @@ export default function ChatApp() {
   }, [draft])
 
   // Truncate address for display: otl_esm_1abc…xyz
-  const shortAddr = address
-    ? address.slice(0, 12) + '…' + address.slice(-4)
-    : null
 
   return (
     <>
@@ -676,7 +684,9 @@ export default function ChatApp() {
       <div style={{ display: 'flex', width: '100%', height: '100%' }}>
 
         {/* LEFT: sidebar */}
-        <div style={{ width: 380, flexShrink: 0, borderRight: '1px solid rgba(120,150,210,0.1)', display: 'flex', flexDirection: 'column', background: '#080B12' }}>
+        <div style={{ width: 380, flexShrink: 0, borderRight: '1px solid rgba(120,150,210,0.1)', display: 'flex', flexDirection: 'column', background: 'var(--surface-sidebar)', position: 'relative' }}>
+
+          {relayPanelOpen && <RelayHealthPanel getRelayStates={getRelayStates} reconnectAll={reconnectAll} onClose={() => setRelayPanelOpen(false)} />}
 
           {/* Sidebar header */}
           <div style={{ padding: '20px 20px 16px', borderBottom: '1px solid rgba(120,150,210,0.08)' }}>
@@ -754,24 +764,35 @@ export default function ChatApp() {
               )
             })()}
             <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-            {/* Wallet address chip — also opens panel */}
-            {shortAddr && (
-              <div
-                onClick={() => setWalletOpen(true)}
-                title={address ?? ''}
-                style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 7, padding: '6px 10px', borderRadius: 8, background: 'rgba(120,150,210,0.06)', border: '1px solid rgba(120,150,210,0.1)', cursor: 'pointer' }}
-              >
-                <svg width={11} height={11} viewBox="0 0 24 24" fill="none" stroke="#55617D" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><rect x={3} y={11} width={18} height={11} rx={2} /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
-                <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: '#55617D', letterSpacing: '0.04em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{shortAddr}</span>
-              </div>
-            )}
+            {/* Ambient connection indicator — click opens the relay-health panel */}
+            {(() => {
+              const rs = getRelayStates()
+              const total = rs.length
+              const connected = rs.filter(s => s.status === 'connected').length
+              return (
+                <div style={{ marginTop: 14 }}>
+                  <ConnectionIndicator status={messagingStatus} connected={connected} total={total} onClick={() => setRelayPanelOpen(v => !v)} />
+                </div>
+              )
+            })()}
           </div>
 
-          {/* Search (inert placeholder) */}
+          {/* Search — filters conversations + requests live */}
           <div style={{ padding: '14px 16px 8px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 13px', borderRadius: 10, background: '#10151F', border: '1px solid rgba(120,150,210,0.12)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 13px', borderRadius: 10, background: 'var(--surface-raised)', border: `1px solid ${sidebarQuery ? 'rgba(var(--teal-500-rgb),0.45)' : 'rgba(var(--border-rgb),0.12)'}`, boxShadow: sidebarQuery ? '0 0 0 3px rgba(var(--teal-500-rgb),0.09)' : 'none' }}>
               <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="#55617D" strokeWidth={2} strokeLinecap="round"><circle cx={11} cy={11} r={7} /><path d="M21 21l-4-4" /></svg>
-              <span style={{ fontSize: 14, color: '#55617D' }}>Search conversations</span>
+              <input
+                type="text"
+                value={sidebarQuery}
+                onChange={e => setSidebarQuery(e.target.value)}
+                placeholder="Search conversations"
+                style={{ flex: 1, minWidth: 0, background: 'transparent', border: 'none', outline: 'none', color: 'var(--text-body)', fontSize: 14, fontFamily: 'inherit', padding: 0 }}
+              />
+              {sidebarQuery && (
+                <span onClick={() => setSidebarQuery('')} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 18, height: 18, borderRadius: '50%', background: 'rgba(var(--border-rgb),0.14)', cursor: 'pointer', flexShrink: 0 }}>
+                  <svg width={10} height={10} viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth={3} strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
+                </span>
+              )}
             </div>
           </div>
 
@@ -780,32 +801,28 @@ export default function ChatApp() {
               amount: an unaccepted stranger could reference a UTXO, and we must not fire indexer
               fetches on their behalf before I choose to engage (network work + unsolicited contact).
               The note always renders as inert, auto-escaped text (M10.0 guarantee, no HTML/markdown). */}
-          {pendingRequests.length > 0 && (
-            <div style={{ padding: '4px 12px 8px', borderBottom: '1px solid rgba(120,150,210,0.08)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '4px 6px 8px' }}>
-                <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="var(--acc,#2DE0C6)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx={12} cy={7} r={4} /></svg>
-                <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.1em', color: 'var(--accT,#7DE9D8)' }}>REQUESTS ({pendingRequests.length})</span>
+          {filteredRequests.length > 0 && (
+            <div style={{ padding: '10px 10px 4px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px 8px' }}>
+                <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.14em', color: 'var(--text-faint-dim)' }}>REQUESTS</span>
+                <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: 18, height: 18, padding: '0 5px', borderRadius: 100, background: 'rgba(var(--teal-500-rgb),0.14)', border: '1px solid rgba(var(--teal-500-rgb),0.3)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, fontWeight: 600, color: 'var(--teal-300)' }}>{filteredRequests.length}</span>
               </div>
-              {pendingRequests.map(req => {
+              {filteredRequests.map(req => {
                 const av = avatarFor(req.peerHex)
-                const last = req.lastMessage
-                const preview = !last ? '' : last.payment ? 'Confidential payment' : last.plaintext
+                const nick = nicknames[req.peerHex]
                 return (
-                  <div key={req.peerHex} style={{ display: 'flex', gap: 11, padding: '10px 6px', borderRadius: 10 }}>
-                    <div style={{ width: 40, height: 40, flexShrink: 0, borderRadius: 12, background: av.grad, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, fontWeight: 700, color: av.color }}>··</div>
+                  <div key={req.peerHex} style={{ display: 'flex', gap: 12, padding: '11px 13px', borderRadius: 12, background: 'rgba(var(--teal-500-rgb),0.04)', border: '1px solid rgba(var(--teal-500-rgb),0.16)', marginBottom: 5 }}>
+                    <div style={{ width: 38, height: 38, borderRadius: 11, background: av.grad, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, fontWeight: 700, color: av.color, flexShrink: 0 }}>{initialsFor(nick)}</div>
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: '#E8EEF9', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{truncNpub(req.peerHex)}</div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12.5, color: '#8A97B4', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 1 }}>
-                        {last?.payment && <svg width={11} height={11} viewBox="0 0 24 24" fill="none" stroke="var(--acc,#2DE0C6)" strokeWidth={2} style={{ flexShrink: 0 }}><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>}
-                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{preview}</span>
-                      </div>
+                      <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-name)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: nick ? undefined : "'IBM Plex Mono', monospace" }}>{displayName(req.peerHex)}</div>
+                      {nick && <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: 'var(--text-teal-dim)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{truncNpub(req.peerHex)}</div>}
                       <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
                         <button onClick={() => acceptRequest(req.peerHex)}
-                          style={{ padding: '5px 14px', borderRadius: 8, border: 'none', background: 'linear-gradient(180deg, var(--accB,#34E5D0), var(--accD,#12A594))', color: 'var(--accOn,#04120F)', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
+                          style={{ padding: '5px 14px', borderRadius: 8, border: 'none', background: 'var(--teal-grad)', color: 'var(--ink-on-accent)', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
                           Accept
                         </button>
                         <button onClick={() => declineRequest(req.peerHex)}
-                          style={{ padding: '5px 14px', borderRadius: 8, border: '1px solid rgba(120,150,210,0.25)', background: 'transparent', color: '#8A97B4', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
+                          style={{ padding: '5px 14px', borderRadius: 8, border: '1px solid rgba(var(--border-rgb),0.25)', background: 'transparent', color: 'var(--text-muted-dim)', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
                           Decline
                         </button>
                       </div>
@@ -817,38 +834,61 @@ export default function ChatApp() {
           )}
 
           {/* Conversation list */}
-          <div style={{ flex: 1, overflowY: 'auto', padding: '6px 10px' }}>
+          <div style={{ flex: 1, overflowY: 'auto', padding: '6px 10px 10px' }}>
             {conversations.length === 0 ? (
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', height: '100%', padding: '0 28px', gap: 12 }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 52, height: 52, borderRadius: 15, background: 'rgba(120,150,210,0.06)', border: '1px solid rgba(120,150,210,0.12)' }}>
-                  <svg width={24} height={24} viewBox="0 0 24 24" fill="none" stroke="#55617D" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg>
+              /* Zero conversations (design empty state) */
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', height: '100%', padding: 24, gap: 16 }}>
+                <svg width={34} height={34} viewBox="0 0 24 24" fill="none" stroke="var(--teal-500)" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.4 }}><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg>
+                <div style={{ textAlign: 'center' }}>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-muted)', marginBottom: 6 }}>No conversations yet</div>
+                  <div style={{ fontSize: 13, color: 'var(--text-faint)', lineHeight: 1.55, maxWidth: 240 }}>Start one with an @name, or share yours so people can find you.</div>
                 </div>
-                <div style={{ fontSize: 15, fontWeight: 600, color: '#8A97B4' }}>No conversations yet</div>
-                <div style={{ fontSize: 13, color: '#55617D', lineHeight: 1.5 }}>Messages you send and receive will appear here as encrypted conversations.</div>
+                <button onClick={() => { setComposeNpub(''); setComposeError(null); setComposeOpen(true) }} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '11px 20px', borderRadius: 11, background: 'var(--teal-grad)', color: 'var(--ink-on-accent)', fontSize: 13, fontWeight: 700, cursor: 'pointer', border: 'none', fontFamily: 'inherit' }}>
+                  <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="var(--ink-on-accent)" strokeWidth={2.2} strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>New conversation
+                </button>
+              </div>
+            ) : filteredConversations.length === 0 ? (
+              /* Search with no matches (design "No matches") */
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', height: '100%', padding: 24, gap: 10 }}>
+                <svg width={26} height={26} viewBox="0 0 24 24" fill="none" stroke="var(--text-faint-dim)" strokeWidth={2} strokeLinecap="round"><circle cx={11} cy={11} r={7} /><path d="M21 21l-4-4" /></svg>
+                <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-muted)' }}>No matches</div>
+                <div style={{ fontSize: 13, color: 'var(--text-faint)', lineHeight: 1.5, maxWidth: 220 }}>Try a different name, @handle, or word.</div>
               </div>
             ) : (
-              conversations.map((c) => {
-                const active = selectedConvo?.peerHex === c.peerHex
-                const nick = nicknames[c.peerHex]
-                const av = avatarFor(c.peerHex)
-                const preview = !c.lastMessage ? ''
-                  : c.lastMessage.direction === 'sent' ? `You: ${c.lastMessage.plaintext}`
-                    : c.lastMessage.plaintext
-                return (
-                  <div key={c.peerHex} onClick={() => setSelectedPeer(c.peerHex)} className="cv-conv" style={{ display: 'flex', gap: 13, padding: 13, borderRadius: 12, background: active ? '#10161F' : 'transparent', border: active ? '1px solid rgba(var(--accRGB,45,224,198),0.18)' : '1px solid transparent', cursor: 'pointer', marginBottom: 4 }}>
-                    <div style={{ position: 'relative', flexShrink: 0 }}>
-                      <div style={{ width: 46, height: 46, borderRadius: 13, background: av.grad, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 17, fontWeight: 700, color: av.color }}>{initialsFor(nick)}</div>
-                    </div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 3, gap: 8 }}>
-                        <span style={{ fontSize: 15, fontWeight: 600, color: active ? '#F2F5FB' : '#E8EEF9', fontFamily: nick ? undefined : "'IBM Plex Mono', monospace", overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{displayName(c.peerHex)}</span>
-                        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: '#55617D', flexShrink: 0 }}>{compactTime(c.lastActivity)}</span>
+              <>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 8px 10px' }}>
+                  <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.14em', color: 'var(--text-faint-dim)' }}>CONVERSATIONS</span>
+                  <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-teal-dim)' }}>{sq ? `${filteredConversations.length} of ${conversations.length}` : ''}</span>
+                </div>
+                {filteredConversations.map((c) => {
+                  const active = selectedConvo?.peerHex === c.peerHex
+                  const nick = nicknames[c.peerHex]
+                  const av = avatarFor(c.peerHex)
+                  const lm = c.lastMessage
+                  const isPay = !!lm?.payment
+                  const preview = !lm ? '' : isPay ? 'Payment sent' : lm.direction === 'sent' ? `You: ${lm.plaintext}` : lm.plaintext
+                  return (
+                    <div key={c.peerHex} onClick={() => setSelectedPeer(c.peerHex)} className="cv-conv" style={{ display: 'flex', gap: 13, padding: 13, borderRadius: 12, position: 'relative', background: active ? 'var(--surface-row-selected)' : 'transparent', border: active ? '1px solid rgba(var(--teal-500-rgb),0.18)' : '1px solid transparent', cursor: 'pointer', marginBottom: 4 }}>
+                      {active && <span style={{ position: 'absolute', left: 0, top: 14, bottom: 14, width: 3, borderRadius: '0 3px 3px 0', background: 'var(--teal-500)' }} />}
+                      <div style={{ width: 46, height: 46, borderRadius: 13, background: av.grad, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, fontWeight: 700, color: av.color, flexShrink: 0 }}>{initialsFor(nick)}</div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 3, gap: 8 }}>
+                          <span style={{ fontSize: 15, fontWeight: 600, color: active ? 'var(--text-primary)' : 'var(--text-name)', fontFamily: nick ? undefined : "'IBM Plex Mono', monospace", overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{displayName(c.peerHex)}</span>
+                          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-faint-dim)', flexShrink: 0 }}>{compactTime(c.lastActivity)}</span>
+                        </div>
+                        {isPay ? (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="var(--teal-500)" strokeWidth={2} style={{ flexShrink: 0 }}><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>
+                            <span style={{ color: 'var(--teal-500)', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{preview}</span>
+                          </div>
+                        ) : (
+                          <div style={{ fontSize: 13, color: 'var(--text-muted-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{preview}</div>
+                        )}
                       </div>
-                      <div style={{ fontSize: 13, color: '#8A97B4', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{preview}</div>
                     </div>
-                  </div>
-                )
-              })
+                  )
+                })}
+              </>
             )}
           </div>
         </div>
@@ -857,13 +897,21 @@ export default function ChatApp() {
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, background: '#0A0E17', position: 'relative' }}>
 
           {selectedConvo === null ? (
-            /* No conversation selected / none exist */
-            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', padding: '0 40px', gap: 16 }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 72, height: 72, borderRadius: 20, background: 'rgba(var(--accRGB,45,224,198),0.06)', border: '1px solid rgba(var(--accRGB,45,224,198),0.16)' }}>
-                <svg width={34} height={34} viewBox="0 0 24 24" fill="none" stroke="var(--acc,#2DE0C6)" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg>
+            /* Chat pane at rest (design: sail + reassurance) */
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 20, background: 'radial-gradient(700px 420px at 50% 40%, rgba(var(--teal-500-rgb),0.045), rgba(10,14,23,0))' }}>
+              <svg viewBox="0 0 44 44" width={64} height={64} style={{ opacity: 0.34 }} aria-hidden="true">
+                <path d="M22 4 C 33 12 35 24 33 33 L 22 33 Z" fill="var(--teal-500)" />
+                <path d="M22 4 L 22 33 L 11 33 C 12 22 15 12 22 4 Z" fill="var(--teal-500)" opacity={0.4} />
+                <path d="M8 37 L 36 37 L 32 42 L 12 42 Z" fill="var(--teal-500)" />
+              </svg>
+              <div style={{ textAlign: 'center' }}>
+                <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-body-dim)', marginBottom: 8 }}>Select a conversation</div>
+                <div style={{ fontSize: 14, color: 'var(--text-faint)', lineHeight: 1.6, maxWidth: 340 }}>Messages and payments here are end to end encrypted.</div>
               </div>
-              <div style={{ fontSize: 18, fontWeight: 600, color: '#C7D0E4' }}>No conversation selected</div>
-              <div style={{ fontSize: 14, color: '#55617D', lineHeight: 1.6, maxWidth: 360 }}>Select a conversation on the left to read it. New messages arrive automatically once someone sends to your address.</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--text-faint-dim)' }}>
+                <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><rect x={3} y={11} width={18} height={11} rx={2} /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
+                Your keys never leave this device
+              </div>
             </div>
           ) : (
           <>

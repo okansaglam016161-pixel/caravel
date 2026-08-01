@@ -325,6 +325,12 @@ export class NostrMessagingProvider implements MessagingProvider {
     }, delay)
   }
 
+  // Public: force an immediate reconnect on every down relay (resets retry budgets). Wired to the
+  // relay-health panel's "Reconnect all" — same code path as the browser 'online' event.
+  reconnectAll(): void {
+    this.handleOnline()
+  }
+
   // Fired on the window 'online' event: connectivity just returned. Force an immediate
   // reconnect attempt on every relay that isn't already connecting/connected.
   private handleOnline(): void {

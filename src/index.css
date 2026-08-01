@@ -1,11 +1,106 @@
 :root {
-  --acc: #2DE0C6;
-  --accB: #34E5D0;
-  --accD: #12A594;
-  --accL: #5CEAD6;
-  --accT: #7DE9D8;
-  --accOn: #04120F;
-  --accRGB: 45,224,198;
+  /* ============================================================================
+     Caravel design tokens — the single source of truth.
+     Imported verbatim from the Claude Design project
+     ("Caravel Wallet Modal (Build)" → Token scale). Values here are the scale;
+     components will migrate onto them one surface at a time. No one-off literals.
+     ============================================================================ */
+
+  /* ── Surface ──────────────────────────────────────────────────────────── */
+  --surface-void: #05080E;
+  --surface-base: #0A0E17;
+  --surface: #0C111B;
+  --surface-raised: #10151F;
+  --surface-inset: #161C28;
+  --surface-trough: #080C14;
+  --surface-sidebar: #080B12;
+  --surface-row-selected: #10161F;
+
+  /* ── Accent & status ──────────────────────────────────────────────────── */
+  --teal-500: #2DE0C6;
+  --teal-300: #7DE9D8;
+  --teal-grad-top: #34E5D0;
+  --teal-grad-bottom: #12A594;
+  --teal-grad: linear-gradient(180deg, var(--teal-grad-top), var(--teal-grad-bottom));
+  --teal-500-rgb: 45, 224, 198; /* rgb triplet of teal/500, for rgba() glows */
+  --warn: #FFB43C;
+  --warn-300: #FFC978;
+  --danger-500: #FF6B6B;
+  --danger-300: #FF9E9E;
+  --ink-on-accent: #04120F;
+
+  /* ── Text ramp ────────────────────────────────────────────────────────── */
+  --text-bright: #EAFBF7;
+  --text-primary: #F2F5FB;
+  --text-body: #E4EAF4;
+  --text-body-dim: #C7D0E4;
+  --text-muted: #99A6C2;
+  --text-muted-dim: #8A97B4;
+  --text-faint: #6B7793;
+  --text-faint-dim: #55617D;
+  --text-disabled: #3D4657;
+  --text-teal-dim: #5E8A82;
+  --text-name: #E8EEF9;
+  --text-teal-label: #8FB7B0;
+  --text-note: #C7E4DD; /* rendered italic at the usage site */
+
+  /* ── Message surfaces ─────────────────────────────────────────────────── */
+  --msg-sent: linear-gradient(160deg, #1C7A6E, #12655A);
+  --msg-received: #161C28;
+  --card-payment: linear-gradient(165deg, #0E2A28, #0A1A1C);
+  --card-payment-border: rgba(45, 224, 198, 0.3);
+
+  /* ── Status card surfaces ─────────────────────────────────────────────── */
+  --card-neutral: #101722;
+  --card-neutral-border: rgba(120, 150, 210, 0.18);
+  --card-warn: #1F1A0E;
+  --card-warn-border: rgba(255, 180, 60, 0.28);
+  --card-danger: #180F14;
+  --card-danger-border: rgba(255, 107, 107, 0.28);
+
+  /* ── Avatar palette (gradient + fixed ink per pair) ───────────────────── */
+  --avatar-teal: linear-gradient(135deg, #1E6E63, #12A594);
+  --avatar-teal-ink: #EAFBF7;
+  --avatar-slate: linear-gradient(135deg, #2A3550, #3C4E78);
+  --avatar-slate-ink: #C7D0E4;
+  --avatar-plum: linear-gradient(135deg, #4A2F55, #6E3C78);
+  --avatar-plum-ink: #E4C7EC;
+  --avatar-moss: linear-gradient(135deg, #244A44, #2E6B5C);
+  --avatar-moss-ink: #C7ECE2;
+  --avatar-amber: linear-gradient(135deg, #4A3A24, #6E5A2E);
+  --avatar-amber-ink: #ECDFC7;
+
+  /* ── Radius & space ───────────────────────────────────────────────────── */
+  --r-8: 8px;
+  --r-11: 11px;
+  --r-14: 14px;
+  --r-20: 20px;
+  --r-pill: 100px;
+  --space-6: 6px;
+  --space-8: 8px;
+  --space-10: 10px;
+  --space-12: 12px;
+  --space-14: 14px;
+  --space-18: 18px;
+  --space-22: 22px;
+  --space-28: 28px;
+
+  /* ── Fonts ────────────────────────────────────────────────────────────── */
+  --font-mono: "IBM Plex Mono", monospace;
+  --font-ui: "Inter Tight", -apple-system, sans-serif;
+
+  /* ── Legacy accent aliases ────────────────────────────────────────────────
+     The existing 7 --acc* names remain, re-pointed at the new scale so current
+     components keep working with zero visual change. 6 map exactly; --accL has
+     no design-scale equivalent (a logo/hero light teal) and is kept as a literal
+     until/unless a future step folds it onto teal/300. */
+  --acc: var(--teal-500);
+  --accB: var(--teal-grad-top);
+  --accD: var(--teal-grad-bottom);
+  --accT: var(--teal-300);
+  --accOn: var(--ink-on-accent);
+  --accRGB: var(--teal-500-rgb);
+  --accL: #5CEAD6; /* legacy literal — no design token equivalent */
 }
 
 html, body, #root {

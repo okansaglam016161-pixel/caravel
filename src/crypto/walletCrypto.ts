@@ -92,6 +92,29 @@ export function isMnemonicValid(phrase: string): boolean {
   return validateMnemonic(phrase.trim().toLowerCase(), wordlist)
 }
 
+// Fast membership set for the BIP-39 English wordlist (built once).
+const WORDSET = new Set(wordlist)
+
+// Says WHY a phrase is invalid, so restore can distinguish (and name) the failure:
+//  - 'wordlist': the first word not in the BIP-39 list (1-indexed position + the word). Drives the
+//    design's "Fix word #N" affordance — there IS a specific culprit to jump to.
+//  - 'checksum': every word is in the list but the 24-word checksum doesn't verify. No single
+//    culprit, so the UI shows a variant message without a word number ("Back", not "Fix").
+// The boolean isMnemonicValid above is left untouched; this is additive.
+export type MnemonicDetail =
+  | { valid: true }
+  | { valid: false; kind: 'wordlist'; index: number; word: string }
+  | { valid: false; kind: 'checksum' }
+
+export function validateMnemonicDetail(phrase: string): MnemonicDetail {
+  const words = phrase.trim().toLowerCase().split(/\s+/).filter(Boolean)
+  for (let i = 0; i < words.length; i++) {
+    if (!WORDSET.has(words[i])) return { valid: false, kind: 'wordlist', index: i + 1, word: words[i] }
+  }
+  if (validateMnemonic(words.join(' '), wordlist)) return { valid: true }
+  return { valid: false, kind: 'checksum' }
+}
+
 // ── Mnemonic → Tari SecretKeyWallet ─────────────────────────────────────────
 // BIP-39 seed (64 bytes via PBKDF2-HMAC-SHA512) → domain-separated into two
 // independent Ristretto255 scalars: SHA-512(seed‖0x01) mod L = ownerSecretKey,

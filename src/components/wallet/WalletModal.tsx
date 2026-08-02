@@ -14,7 +14,6 @@ import { QRCodeSVG } from 'qrcode.react'
 
 type Tab = 'overview' | 'send' | 'receive' | 'activity'
 type SendStep = 'form' | 'review' | 'sending' | 'success' | 'error'
-type SettingsStep = 'main' | 'phraseAuth' | 'phraseWords'
 
 const MONO = 'var(--font-mono)'
 const HIDDEN = '••••••'
@@ -69,18 +68,10 @@ function TxRow({ entry, hidden }: { entry: TxEntry; hidden: boolean }) {
 }
 
 export default function WalletModal({ onClose }: { onClose: () => void }) {
-  const { wallet, address, scan, lock, getMnemonic, rescan, txHistory, recordSent, balanceHidden, setBalanceHidden } = useWallet()
+  const { wallet, address, scan, rescan, txHistory, recordSent, balanceHidden, setBalanceHidden } = useWallet()
 
   const [tab, setTab] = useState<Tab>('overview')
-  const [inSettings, setInSettings] = useState(false)
-  const [settingsStep, setSettingsStep] = useState<SettingsStep>('main')
   const [addrCopied, setAddrCopied] = useState(false)
-
-  const [phrasePass, setPhrasePass] = useState('')
-  const [showPhrasePass, setShowPhrasePass] = useState(false)
-  const [phraseError, setPhraseError] = useState('')
-  const [phraseLoading, setPhraseLoading] = useState(false)
-  const [words, setWords] = useState<string[] | null>(null)
 
   const [sendRecipient, setSendRecipient] = useState('')
   const [sendAmount, setSendAmount] = useState('')
@@ -105,35 +96,6 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
   const shortAddr = address ? address.slice(0, 20) + '…' + address.slice(-6) : null
 
   function copyAddr() { if (address) { navigator.clipboard.writeText(address).catch(() => {}); setAddrCopied(true); setTimeout(() => setAddrCopied(false), 1800) } }
-
-  async function revealPhrase() {
-    if (!phrasePass) return
-    setPhraseError('')
-    setPhraseLoading(true)
-    try {
-      const mnemonic = await getMnemonic(phrasePass)
-      setWords(mnemonic.split(' '))
-      setSettingsStep('phraseWords')
-    } catch (e) {
-      const isWrongPass = e instanceof DOMException && e.name === 'OperationError'
-      setPhraseError(isWrongPass ? 'Incorrect password. Try again.' : `Failed: ${e instanceof Error ? e.message : String(e)}`)
-    } finally {
-      setPhraseLoading(false)
-    }
-  }
-
-  function backToSettingsMain() {
-    setSettingsStep('main')
-    setPhrasePass('')
-    setPhraseError('')
-    setWords(null)
-    setShowPhrasePass(false)
-  }
-
-  function openSettings() { setInSettings(true); setSettingsStep('main') }
-  function closeSettings() { setInSettings(false); backToSettingsMain() }
-
-  function handleLock() { lock(); onClose() }
 
   function validateSendForm(): string | null {
     if (!wallet) return 'Wallet is locked — unlock before sending'
@@ -208,10 +170,6 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
     }
   }
 
-  const headerTitle = !inSettings ? 'Wallet'
-    : settingsStep === 'phraseAuth' ? 'Confirm identity'
-    : settingsStep === 'phraseWords' ? 'Recovery phrase'
-    : 'Settings'
 
   const logo = (size: number) => (
     <svg viewBox="0 0 44 44" width={size} height={size} aria-hidden="true">
@@ -329,113 +287,33 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
         {/* Header */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 18px', borderBottom: '1px solid rgba(var(--border-rgb),0.1)', flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            {inSettings && settingsStep !== 'main' && (
-              <span onClick={backToSettingsMain} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, border: '1px solid rgba(var(--border-rgb),0.16)', cursor: 'pointer' }}>
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5M12 5l-7 7 7 7" /></svg>
-              </span>
-            )}
             {logo(20)}
-            <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>{headerTitle}</span>
-            {!inSettings && (
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 10px', borderRadius: 100, background: 'rgba(var(--warn-rgb),0.06)', border: '1px solid rgba(var(--warn-rgb),0.28)' }}>
-                <span style={{ width: 5, height: 5, borderRadius: '50%', background: 'var(--warn)' }} />
-                <span style={{ fontFamily: MONO, fontSize: 10, color: 'var(--warn-300)' }}>Esmeralda testnet</span>
-              </span>
-            )}
+            <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>Wallet</span>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 10px', borderRadius: 100, background: 'rgba(var(--warn-rgb),0.06)', border: '1px solid rgba(var(--warn-rgb),0.28)' }}>
+              <span style={{ width: 5, height: 5, borderRadius: '50%', background: 'var(--warn)' }} />
+              <span style={{ fontFamily: MONO, fontSize: 10, color: 'var(--warn-300)' }}>Esmeralda testnet</span>
+            </span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            {inSettings && settingsStep === 'main' && (
-              <span onClick={closeSettings} style={{ padding: '5px 9px', borderRadius: 8, border: '1px solid rgba(var(--border-rgb),0.16)', cursor: 'pointer', color: 'var(--text-muted-dim)', fontSize: 12, fontWeight: 600 }}>Wallet</span>
-            )}
-            {!inSettings && <span style={{ padding: '3px 7px', borderRadius: 6, border: '1px solid rgba(var(--border-rgb),0.18)', fontFamily: MONO, fontSize: 10, color: 'var(--text-faint-dim)' }}>Esc</span>}
+            <span style={{ padding: '3px 7px', borderRadius: 6, border: '1px solid rgba(var(--border-rgb),0.18)', fontFamily: MONO, fontSize: 10, color: 'var(--text-faint-dim)' }}>Esc</span>
             <span onClick={onClose} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, border: '1px solid rgba(var(--border-rgb),0.16)', cursor: 'pointer' }}>
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth="2.2" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
             </span>
           </div>
         </div>
 
-        {/* Tab bar + gear */}
-        {!inSettings && (
-          <div style={{ padding: '14px 18px 0', flexShrink: 0 }}>
-            <div style={{ display: 'flex', gap: 4, padding: 5, borderRadius: 12, background: 'var(--surface-trough)', border: '1px solid rgba(var(--border-rgb),0.1)' }}>
-              {(['overview', 'send', 'receive', 'activity'] as Tab[]).map(tabItem)}
-              <span onClick={openSettings} title="Settings" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 34, borderRadius: 9, cursor: 'pointer' }}>
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></svg>
-              </span>
-            </div>
+        {/* Tab bar */}
+        <div style={{ padding: '14px 18px 0', flexShrink: 0 }}>
+          <div style={{ display: 'flex', gap: 4, padding: 5, borderRadius: 12, background: 'var(--surface-trough)', border: '1px solid rgba(var(--border-rgb),0.1)' }}>
+            {(['overview', 'send', 'receive', 'activity'] as Tab[]).map(tabItem)}
           </div>
-        )}
+        </div>
 
         {/* Content */}
         <div style={{ flex: 1, overflowY: 'auto', padding: 18 }}>
 
-          {/* ═══ SETTINGS ═══ */}
-          {inSettings && settingsStep === 'main' && (
-            <div style={{ padding: 0, borderRadius: 16 }}>
-              <div onClick={() => setSettingsStep('phraseAuth')} style={{ display: 'flex', alignItems: 'center', gap: 13, padding: '15px 14px', borderRadius: 12, borderBottom: '1px solid rgba(var(--border-rgb),0.07)', cursor: 'pointer' }}>
-                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><circle cx="8" cy="15" r="4" /><path d="M10.8 12.2L20 3M17 3h3v3" /></svg>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-body)' }}>Show recovery phrase</div>
-                  <div style={{ fontSize: 12, color: 'var(--text-faint)', marginTop: 2 }}>Requires your password</div>
-                </div>
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--text-faint-dim)" strokeWidth="2" strokeLinecap="round"><path d="M9 6l6 6-6 6" /></svg>
-              </div>
-              <div onClick={handleLock} style={{ display: 'flex', alignItems: 'center', gap: 13, padding: '15px 14px', borderRadius: 12, cursor: 'pointer' }}>
-                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="var(--danger-300)" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--danger-300)' }}>Lock wallet</div>
-                  <div style={{ fontSize: 12, color: 'var(--text-faint)', marginTop: 2 }}>You will need your password to unlock</div>
-                </div>
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--text-faint-dim)" strokeWidth="2" strokeLinecap="round"><path d="M9 6l6 6-6 6" /></svg>
-              </div>
-            </div>
-          )}
-
-          {inSettings && settingsStep === 'phraseAuth' && (
-            <div style={{ padding: 2 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
-                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="var(--warn)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
-                <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>Confirm your password</span>
-              </div>
-              <div style={{ fontSize: 13, color: 'var(--text-muted-dim)', lineHeight: 1.5, marginBottom: 16 }}>Your 24 words will be shown on screen. Make sure nobody is watching.</div>
-              <div style={{ display: 'flex', alignItems: 'center', padding: '13px 15px', borderRadius: 11, background: 'var(--surface-raised)', border: `1px solid ${phraseError ? 'rgba(var(--danger-rgb),0.45)' : 'rgba(var(--border-rgb),0.14)'}`, marginBottom: 10 }}>
-                <input type={showPhrasePass ? 'text' : 'password'} value={phrasePass} autoFocus onChange={e => { setPhrasePass(e.target.value); setPhraseError('') }} onKeyDown={e => { if (e.key === 'Enter' && phrasePass) revealPhrase() }} placeholder="Password" style={{ background: 'none', border: 'none', outline: 'none', fontFamily: MONO, fontSize: 15, color: 'var(--text-muted)', letterSpacing: '0.1em', flex: 1 }} />
-                <span onClick={() => setShowPhrasePass(v => !v)} style={{ cursor: 'pointer', flexShrink: 0 }}>{showPhrasePass ? eyeOpen('var(--text-faint-dim)') : eyeOff('var(--text-faint-dim)')}</span>
-              </div>
-              {phraseError && <div style={{ fontSize: 12, color: 'var(--danger-300)', marginBottom: 16 }}>{phraseError}</div>}
-              <div style={{ display: 'flex', gap: 10, marginTop: phraseError ? 0 : 16 }}>
-                <div onClick={backToSettingsMain} style={{ flex: '0 0 110px', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 13, borderRadius: 12, border: '1px solid rgba(var(--border-rgb),0.2)', color: 'var(--text-muted)', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>Cancel</div>
-                <div onClick={revealPhrase} style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, padding: 13, borderRadius: 12, background: phrasePass && !phraseLoading ? 'var(--teal-grad)' : 'rgba(16,21,31,0.6)', border: phrasePass && !phraseLoading ? 'none' : '1px solid rgba(var(--border-rgb),0.12)', color: phrasePass && !phraseLoading ? 'var(--ink-on-accent)' : 'var(--text-disabled)', fontSize: 14, fontWeight: 700, cursor: phrasePass && !phraseLoading ? 'pointer' : 'default' }}>
-                  {phraseLoading && <span style={{ width: 15, height: 15, borderRadius: '50%', border: '2px solid rgba(var(--border-rgb),0.25)', borderTopColor: 'var(--text-faint-dim)', animation: 'cv-spin 0.8s linear infinite' }} />}
-                  {phraseLoading ? 'Verifying…' : 'Reveal phrase'}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {inSettings && settingsStep === 'phraseWords' && words && (
-            <div style={{ padding: 2 }}>
-              <div style={{ display: 'flex', gap: 9, padding: '11px 13px', borderRadius: 11, background: 'rgba(var(--warn-rgb),0.05)', border: '1px solid rgba(var(--warn-rgb),0.25)', fontSize: 12, color: 'var(--warn-300)', lineHeight: 1.5, marginBottom: 16 }}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--warn)" strokeWidth="2" strokeLinecap="round" style={{ flexShrink: 0, marginTop: 1 }}><path d="M12 8v5M12 17h.01" /><circle cx="12" cy="12" r="9" /></svg>
-                Anyone with these words owns your wallet. Caravel cannot recover them for you.
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 7, marginBottom: 16 }}>
-                {words.map((w, i) => (
-                  <div key={i} style={{ display: 'flex', alignItems: 'baseline', gap: 6, padding: '8px 9px', borderRadius: 8, background: 'var(--surface-raised)', border: '1px solid rgba(var(--border-rgb),0.1)', userSelect: 'all' }}>
-                    <span style={{ fontFamily: MONO, fontSize: 10, color: 'var(--text-muted-dim)' }}>{i + 1}</span>
-                    <span style={{ fontFamily: MONO, fontSize: 12, color: 'var(--text-body)' }}>{w}</span>
-                  </div>
-                ))}
-              </div>
-              <div style={{ display: 'flex', gap: 10 }}>
-                <div onClick={() => navigator.clipboard.writeText(words.join(' ')).catch(() => {})} style={{ flex: '0 0 110px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, padding: 13, borderRadius: 12, border: '1px solid rgba(var(--border-rgb),0.2)', color: 'var(--text-muted)', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>{copyIcon('var(--text-muted)')}Copy</div>
-                <div onClick={backToSettingsMain} style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 13, borderRadius: 12, background: 'var(--surface-raised)', border: '1px solid rgba(var(--teal-500-rgb),0.26)', color: 'var(--text-bright)', fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>Hide</div>
-              </div>
-            </div>
-          )}
-
           {/* ═══ OVERVIEW ═══ */}
-          {!inSettings && tab === 'overview' && (
+          {tab === 'overview' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
               {balanceWidget()}
 
@@ -462,7 +340,7 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
           )}
 
           {/* ═══ SEND ═══ */}
-          {!inSettings && tab === 'send' && (
+          {tab === 'send' && (
             <div>
               {sendStep === 'form' && (
                 <>
@@ -569,7 +447,7 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
           )}
 
           {/* ═══ RECEIVE ═══ */}
-          {!inSettings && tab === 'receive' && (
+          {tab === 'receive' && (
             !address ? (
               <div style={{ padding: '24px 20px', borderRadius: 16, background: 'var(--surface)', border: '1px solid rgba(var(--border-rgb),0.16)', textAlign: 'center' }}>
                 <div style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 178, height: 178, borderRadius: 14, background: 'var(--surface-raised)', border: '1px dashed rgba(var(--border-rgb),0.2)', marginBottom: 16 }}>
@@ -595,7 +473,7 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
           )}
 
           {/* ═══ ACTIVITY ═══ */}
-          {!inSettings && tab === 'activity' && (
+          {tab === 'activity' && (
             txHistory.length === 0 ? (
               <div style={{ padding: '56px 24px', borderRadius: 16, background: 'var(--surface)', border: '1px solid rgba(var(--border-rgb),0.16)', textAlign: 'center' }}>
                 <svg viewBox="0 0 44 44" width="40" height="40" style={{ opacity: 0.3, marginBottom: 16 }} aria-hidden="true">

@@ -4,6 +4,7 @@ import * as nip19 from 'nostr-tools/nip19'
 import Logo from '../primitives/Logo'
 import { useWallet } from '../../context/WalletContext'
 import WalletModal from '../wallet/WalletModal'
+import ProfilePanel from '../wallet/ProfilePanel'
 import type { CaravelMessage } from '../../messaging/types'
 import { loadNicknames, setNickname, MAX_NICKNAME_LEN, type NicknameMap } from '../../messaging/nicknameStore'
 import { loadAddressSent, markAddressSent, clearAddressSent, type AddressSentMap } from '../../messaging/addressSentStore'
@@ -323,6 +324,10 @@ function PaymentMessageCard({ message }: { message: CaravelMessage }) {
 export default function ChatApp() {
   const { wallet, address, scan, messages, nostrPubkeyHex, messagingStatus, contacts, acceptContact, contactAddresses, setManualTariAddress, createMessagingProvider, recordSentMessage, deleteConversation, getRelayStates, reconnectAll, balanceHidden, setBalanceHidden } = useWallet()
   const [walletOpen, setWalletOpen] = useState(false)
+  const [profileOpen, setProfileOpen] = useState(false)
+  // The user's own generated avatar (deterministic gradient from their pubkey hash) — used for the
+  // sidebar profile button and the Profile panel's identity block.
+  const selfAvatar = avatarFor(nostrPubkeyHex ?? '')
   const [sidebarQuery, setSidebarQuery] = useState('')
   const [relayPanelOpen, setRelayPanelOpen] = useState(false)
 
@@ -749,13 +754,22 @@ export default function ChatApp() {
                 <Logo size={26} />
                 <span style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-primary)' }}>Caravel</span>
               </Link>
-              <button
-                onClick={() => { setComposeNpub(''); setComposeRes({ s: 'idle' }); setComposeOpen(true) }}
-                title="Start a new conversation"
-                style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 34, height: 34, borderRadius: 9, border: '1px solid rgba(var(--border-rgb),0.2)', background: 'transparent', cursor: 'pointer', padding: 0 }}
-              >
-                <svg width={17} height={17} viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth={2} strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>
-              </button>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <button
+                  onClick={() => setProfileOpen(true)}
+                  title="Your profile"
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 34, height: 34, borderRadius: 9, border: 'none', background: selfAvatar.grad, cursor: 'pointer', padding: 0 }}
+                >
+                  <svg width={17} height={17} viewBox="0 0 24 24" fill="none" stroke={selfAvatar.color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg>
+                </button>
+                <button
+                  onClick={() => { setComposeNpub(''); setComposeRes({ s: 'idle' }); setComposeOpen(true) }}
+                  title="Start a new conversation"
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 34, height: 34, borderRadius: 9, border: '1px solid rgba(var(--border-rgb),0.2)', background: 'transparent', cursor: 'pointer', padding: 0 }}
+                >
+                  <svg width={17} height={17} viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth={2} strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>
+                </button>
+              </div>
             </div>
 
             {/* Balance widget — click to open wallet panel */}
@@ -1377,6 +1391,7 @@ export default function ChatApp() {
     </div>
 
     {walletOpen && <WalletModal onClose={() => setWalletOpen(false)} />}
+    {profileOpen && <ProfilePanel onClose={() => setProfileOpen(false)} avatar={selfAvatar} />}
 
     {/* Compose new conversation */}
     {composeOpen && (() => {

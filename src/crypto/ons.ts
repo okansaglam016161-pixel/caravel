@@ -43,25 +43,30 @@ export function nostrValueToHex(value: string): string | null {
   return null
 }
 
+export type OnsResolveErrorKind = 'empty' | 'unreachable' | 'not-found' | 'no-key'
+
 export interface OnsResolveResult {
   ok: boolean
   hex?: string
   error?: string
+  // Typed so the compose UI can render each failure to its own distinct card (the branches below
+  // already distinguish these cases; this just labels them).
+  errorKind?: OnsResolveErrorKind
 }
 
 /** Resolve an `@name`/bare name to a Nostr pubkey hex, with user-facing messages. Keyless. */
 export async function resolveOnsNameToHex(rawInput: string): Promise<OnsResolveResult> {
   const name = toOnsName(rawInput)
-  if (!name) return { ok: false, error: 'Enter an npub or @name.' }
+  if (!name) return { ok: false, error: 'Enter an npub or @name.', errorKind: 'empty' }
   let value: string | null
   try {
     value = await ons.resolveToNostr(name)
   } catch {
-    return { ok: false, error: 'Could not reach the ONS registry — check your connection and try again.' }
+    return { ok: false, error: 'Could not reach the ONS registry — check your connection and try again.', errorKind: 'unreachable' }
   }
-  if (!value) return { ok: false, error: `No ONS name "@${name}" found.` }
+  if (!value) return { ok: false, error: `No ONS name "@${name}" found.`, errorKind: 'not-found' }
   const hex = nostrValueToHex(value)
-  if (!hex) return { ok: false, error: `"@${name}" has no valid Nostr key on record.` }
+  if (!hex) return { ok: false, error: `"@${name}" has no valid Nostr key on record.`, errorKind: 'no-key' }
   return { ok: true, hex }
 }
 

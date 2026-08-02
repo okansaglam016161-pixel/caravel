@@ -9,7 +9,7 @@ import { loadNicknames, setNickname, MAX_NICKNAME_LEN, type NicknameMap } from '
 import { loadAddressSent, markAddressSent, clearAddressSent, type AddressSentMap } from '../../messaging/addressSentStore'
 import { sendConfidential, tariToMicrotari, MAX_FEE } from '../../crypto/confidentialSend'
 import { resolvePayment, type PaymentResolution } from '../../crypto/paymentResolver'
-import { resolveOnsNameToHex } from '../../crypto/ons'
+import { resolveOnsNameToHex, toOnsName, type OnsResolveErrorKind } from '../../crypto/ons'
 import { ConnectionIndicator, RelayHealthPanel } from './ConnectionStatus'
 import { loadResolvedAmounts, cacheResolvedAmount } from '../../messaging/paymentResolutionStore'
 
@@ -83,6 +83,15 @@ function bubbleTime(ts: number): string {
   return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
+// Compact relative age for request rows: "3m" / "2h" / "1d".
+function ageShort(ts: number): string {
+  const mins = (Date.now() - ts) / 60_000
+  if (mins < 60) return `${Math.max(1, Math.round(mins))}m`
+  const hrs = mins / 60
+  if (hrs < 24) return `${Math.round(hrs)}h`
+  return `${Math.round(hrs / 24)}d`
+}
+
 // Stable avatar gradient per peer — the design's 5 avatar-token pairs (teal/slate/plum/moss/amber),
 // assigned by hash of the contact key.
 const AVATARS = [
@@ -109,6 +118,15 @@ const COMPOSER_MAX_H = 120
 // format so both surfaces render the identical "≤ 0.01 TARI".
 const FEE_CEIL_TARI = (Number(MAX_FEE) / 1_000_000).toString()
 const MONO = "'IBM Plex Mono', monospace"
+
+// Compose-modal resolution state (Flag 1b). `ok` carries the resolved peer; `name` is the ONS name
+// (null for a raw npub), `existing` true when it is already an accepted conversation.
+type ComposeRes =
+  | { s: 'idle' }
+  | { s: 'invalid'; kind: 'not-npub' | 'bad-npub' }
+  | { s: 'resolving'; name: string }
+  | { s: 'ok'; hex: string; name: string | null }
+  | { s: 'fail'; kind: OnsResolveErrorKind; name: string }
 
 // Decimal µTari string → TARI display string. Defensive; never throws.
 function microToTari(micro: string): string {
@@ -318,8 +336,13 @@ export default function ChatApp() {
   // Compose-new-conversation modal.
   const [composeOpen, setComposeOpen] = useState(false)
   const [composeNpub, setComposeNpub] = useState('')
-  const [composeError, setComposeError] = useState<string | null>(null)
-  const [composeResolving, setComposeResolving] = useState(false)
+  // Compose resolution state machine — driven by an eager, debounced resolve of the input (Flag 1b).
+  const [composeRes, setComposeRes] = useState<ComposeRes>({ s: 'idle' })
+  // Bumped by the "Try again" button on an unreachable failure to re-fire resolution unchanged.
+  const [composeRetry, setComposeRetry] = useState(0)
+  // Per-request in-flight guard (Flag 2) — disables both buttons + shows a spinner while accepting/
+  // declining. Local UI only; acceptRequest/declineRequest are unchanged.
+  const [busyRequest, setBusyRequest] = useState<{ peerHex: string; kind: 'accept' | 'decline' } | null>(null)
 
   // Composer state.
   const [draft, setDraft] = useState('')
@@ -440,40 +463,46 @@ export default function ChatApp() {
 
   // ── Compose / requests (M9.0c) ────────────────────────────────────────────────
 
-  // Start (or jump to) a conversation with an npub. Initiating accepts them (M9.0b). Uniform for
-  // brand-new (empty thread), already-accepted (jump), and pending (promote) — acceptContact is
-  // idempotent. Self (my own npub) is allowed: a notes-to-self thread.
-  async function startConversation() {
-    const raw = composeNpub.trim()
-    if (!raw) { setComposeError('Enter an npub or @name.'); return }
-    let hex: string
-    if (raw.startsWith('npub1')) {
-      // Existing npub path — unchanged.
-      try {
-        const decoded = nip19.decode(raw)
-        if (decoded.type !== 'npub') { setComposeError('That is not an npub (expected npub1…).'); return }
-        hex = decoded.data
-      } catch {
-        setComposeError('Invalid npub — could not decode it.')
-        return
-      }
-    } else {
-      // ONS name path (@name or a bare name) — resolve via the indexer, keyless. Additive: the
-      // npub path above is untouched; downstream (accept/address/open) is identical either way.
-      setComposeError(null)
-      setComposeResolving(true)
-      const res = await resolveOnsNameToHex(raw)
-      setComposeResolving(false)
-      if (!res.ok || !res.hex) { setComposeError(res.error ?? 'Could not resolve that name.'); return }
-      hex = res.hex
-    }
+  // Start (or jump to) a conversation with a resolved peer key. Initiating accepts them (M9.0b) —
+  // acceptContact is idempotent, so this is uniform for brand-new / already-accepted / existing.
+  // (Downstream is byte-identical to the old startConversation; only the resolution moved earlier.)
+  function startWith(hex: string) {
     acceptContact(hex)      // initiate = accept (creates/promotes/refreshes the accepted record)
     sendAddressControl(hex) // M9.0d: exchange my Tari address (silent) — I initiated
     setSelectedPeer(hex)    // open it (empty thread if brand-new, or the existing conversation)
     setComposeOpen(false)
     setComposeNpub('')
-    setComposeError(null)
+    setComposeRes({ s: 'idle' })
   }
+
+  // Eager, debounced resolution of the compose input (Flag 1b). Resolution logic is unchanged
+  // (nip19.decode for npub, resolveOnsNameToHex for @names) — only WHEN it runs moved from the old
+  // Start click to on-type (~350ms debounce). A token guards against stale async writes.
+  const composeToken = useRef(0)
+  useEffect(() => {
+    if (!composeOpen) return
+    const raw = composeNpub.trim()
+    const token = ++composeToken.current
+    if (!raw) { setComposeRes({ s: 'idle' }); return }
+    if (raw.startsWith('npub1')) {
+      try {
+        const decoded = nip19.decode(raw)
+        if (decoded.type !== 'npub') { setComposeRes({ s: 'invalid', kind: 'bad-npub' }); return }
+        setComposeRes({ s: 'ok', hex: decoded.data as string, name: null })
+      } catch { setComposeRes({ s: 'invalid', kind: 'bad-npub' }) }
+      return
+    }
+    const name = toOnsName(raw)
+    if (!/^[a-z0-9_-]+$/.test(name)) { setComposeRes({ s: 'invalid', kind: 'not-npub' }); return }
+    setComposeRes({ s: 'resolving', name })
+    const timer = setTimeout(async () => {
+      const res = await resolveOnsNameToHex(raw)
+      if (composeToken.current !== token) return   // input changed while resolving — drop stale result
+      if (res.ok && res.hex) setComposeRes({ s: 'ok', hex: res.hex, name })
+      else setComposeRes({ s: 'fail', kind: res.errorKind ?? 'not-found', name })
+    }, 350)
+    return () => clearTimeout(timer)
+  }, [composeNpub, composeOpen, composeRetry])
 
   // Accept a pending request → promotes to a normal conversation and opens it. Sends my Tari
   // address (M9.0d); accept still does NOT do anything else (no auto-reply).
@@ -721,7 +750,7 @@ export default function ChatApp() {
                 <span style={{ fontSize: 18, fontWeight: 700, color: '#F2F5FB' }}>Caravel</span>
               </Link>
               <button
-                onClick={() => { setComposeNpub(''); setComposeError(null); setComposeOpen(true) }}
+                onClick={() => { setComposeNpub(''); setComposeRes({ s: 'idle' }); setComposeOpen(true) }}
                 title="Start a new conversation"
                 style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 34, height: 34, borderRadius: 9, border: '1px solid rgba(120,150,210,0.2)', background: 'transparent', cursor: 'pointer', padding: 0 }}
               >
@@ -834,23 +863,92 @@ export default function ChatApp() {
               </div>
               {filteredRequests.map(req => {
                 const av = avatarFor(req.peerHex)
-                const nick = nicknames[req.peerHex]
+                const nick = nicknames[req.peerHex]     // resolved-name variant iff I have a nickname
+                const pay = req.lastMessage?.payment     // stranger payment — never resolved (privacy)
+                const note = req.lastMessage?.plaintext ?? ''
+                const busy = busyRequest?.peerHex === req.peerHex ? busyRequest.kind : null
+                // Card frame: teal at rest, teal-stronger while accepting, neutral while declining.
+                const frame = busy === 'decline'
+                  ? { background: 'rgba(var(--border-rgb),0.03)', border: '1px solid rgba(var(--border-rgb),0.16)' }
+                  : { background: 'rgba(var(--teal-500-rgb),0.04)', border: `1px solid rgba(var(--teal-500-rgb),${busy === 'accept' ? 0.26 : 0.18})` }
                 return (
-                  <div key={req.peerHex} style={{ display: 'flex', gap: 12, padding: '11px 13px', borderRadius: 12, background: 'rgba(var(--teal-500-rgb),0.04)', border: '1px solid rgba(var(--teal-500-rgb),0.16)', marginBottom: 5 }}>
-                    <div style={{ width: 38, height: 38, borderRadius: 11, background: av.grad, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, fontWeight: 700, color: av.color, flexShrink: 0 }}>{initialsFor(nick)}</div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-name)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: nick ? undefined : "'IBM Plex Mono', monospace" }}>{displayName(req.peerHex)}</div>
-                      {nick && <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: 'var(--text-teal-dim)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{truncNpub(req.peerHex)}</div>}
-                      <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-                        <button onClick={() => acceptRequest(req.peerHex)}
-                          style={{ padding: '5px 14px', borderRadius: 8, border: 'none', background: 'var(--teal-grad)', color: 'var(--ink-on-accent)', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
+                  <div key={req.peerHex} style={{ padding: 16, borderRadius: 14, marginBottom: 5, ...frame }}>
+                    {/* Header: avatar + name/npub + relative age. Dimmed while a decision is in flight. */}
+                    <div style={{ display: 'flex', gap: 12, marginBottom: 12, opacity: busy ? 0.6 : 1 }}>
+                      <div style={{ width: 40, height: 40, borderRadius: 12, background: av.grad, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, fontWeight: 700, color: av.color, flexShrink: 0 }}>{initialsFor(nick)}</div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        {nick ? (
+                          <>
+                            <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-name)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{nick}</div>
+                            <div style={{ fontFamily: MONO, fontSize: 11, color: 'var(--text-muted-dim)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{truncNpub(req.peerHex)}</div>
+                          </>
+                        ) : (
+                          <>
+                            <div style={{ fontFamily: MONO, fontSize: 14, fontWeight: 500, color: 'var(--text-name)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{truncNpub(req.peerHex)}</div>
+                            <div style={{ fontSize: 11, color: 'var(--text-muted-dim)', marginTop: 3 }}>No @name registered</div>
+                          </>
+                        )}
+                      </div>
+                      {!busy && req.lastMessage && <span style={{ fontFamily: MONO, fontSize: 11, color: 'var(--text-muted-dim)' }}>{ageShort(req.lastMessage.timestamp)}</span>}
+                    </div>
+
+                    {pay ? (
+                      /* Payment attached — amount stays confidential (••••) for a stranger; no chain query. */
+                      <div style={{ borderRadius: 11, overflow: 'hidden', border: '1px dashed rgba(var(--teal-500-rgb),0.3)', background: 'rgba(10,14,23,0.55)', marginBottom: 12 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 13px', background: 'rgba(var(--teal-500-rgb),0.06)', borderBottom: '1px dashed rgba(var(--teal-500-rgb),0.22)' }}>
+                          <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="var(--teal-500)" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>
+                          <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--teal-300)', letterSpacing: '0.06em' }}>CONFIDENTIAL PAYMENT ATTACHED</span>
+                        </div>
+                        <div style={{ padding: 13 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, marginBottom: 9 }}>
+                            <span style={{ fontFamily: MONO, fontSize: 22, fontWeight: 700, color: 'var(--text-teal-label)', letterSpacing: '0.1em' }}>••••</span>
+                            <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-teal-dim)' }}>TARI</span>
+                          </div>
+                          <div style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5, textAlign: 'center', marginBottom: note ? 11 : 0 }}>Amount stays unresolved until you accept. Caravel doesn’t query the chain for strangers.</div>
+                          {note && (
+                            <div style={{ padding: '10px 12px', borderRadius: 9, background: 'rgba(10,14,23,0.6)', border: '1px solid rgba(var(--border-rgb),0.1)' }}>
+                              <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.12em', color: 'var(--text-teal-dim)', marginBottom: 5 }}>NOTE</div>
+                              <div style={{ fontSize: 12, color: 'var(--text-body-dim)', lineHeight: 1.45, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{note}</div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ) : note ? (
+                      /* Text request — a stranger's message renders as inert plain text (React auto-escapes). */
+                      <>
+                        <div style={{ padding: '11px 13px', borderRadius: 10, background: `rgba(10,14,23,${busy ? 0.4 : 0.5})`, border: `1px solid rgba(var(--border-rgb),${busy ? 0.08 : 0.12})`, fontSize: 13, color: busy ? 'var(--text-muted-dim)' : 'var(--text-body-dim)', lineHeight: 1.5, marginBottom: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{note}</div>
+                        {!nick && !busy && (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 11, color: 'var(--text-muted-dim)', marginBottom: 12 }}>
+                            <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth={2} strokeLinecap="round"><circle cx="12" cy="12" r="9" /><path d="M12 16v-5M12 8h.01" /></svg>
+                            Shown as plain text. Formatting from strangers is never rendered.
+                          </div>
+                        )}
+                      </>
+                    ) : null}
+
+                    {/* Accept / Decline — inline. A click sets a local in-flight guard (Flag 2) that
+                        disables both buttons; the handlers themselves are unchanged. */}
+                    <div style={{ display: 'flex', gap: 9 }}>
+                      {busy === 'accept' ? (
+                        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 10, borderRadius: 10, background: 'var(--surface-inset)', border: '1px solid rgba(var(--teal-500-rgb),0.2)', color: 'var(--teal-300)', fontSize: 13, fontWeight: 700 }}>
+                          <span style={{ width: 13, height: 13, borderRadius: '50%', border: '2px solid rgba(var(--teal-500-rgb),0.2)', borderTopColor: 'var(--teal-500)', animation: 'cv-spin 0.8s linear infinite' }} />Accepting
+                        </div>
+                      ) : (
+                        <button onClick={() => { setBusyRequest({ peerHex: req.peerHex, kind: 'accept' }); acceptRequest(req.peerHex) }} disabled={!!busy}
+                          style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 10, borderRadius: 10, border: 'none', background: busy ? 'rgba(16,21,31,0.6)' : 'var(--teal-grad)', color: busy ? 'var(--text-faint-dim)' : 'var(--ink-on-accent)', fontSize: 13, fontWeight: 700, cursor: busy ? 'default' : 'pointer', fontFamily: 'inherit' }}>
                           Accept
                         </button>
-                        <button onClick={() => declineRequest(req.peerHex)}
-                          style={{ padding: '5px 14px', borderRadius: 8, border: '1px solid rgba(var(--border-rgb),0.25)', background: 'transparent', color: 'var(--text-muted-dim)', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
+                      )}
+                      {busy === 'decline' ? (
+                        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 10, borderRadius: 10, border: '1px solid rgba(var(--border-rgb),0.2)', color: 'var(--text-muted)', fontSize: 13, fontWeight: 600 }}>
+                          <span style={{ width: 13, height: 13, borderRadius: '50%', border: '2px solid rgba(var(--border-rgb),0.18)', borderTopColor: 'var(--text-muted-dim)', animation: 'cv-spin 0.8s linear infinite' }} />Declining
+                        </div>
+                      ) : (
+                        <button onClick={() => { setBusyRequest({ peerHex: req.peerHex, kind: 'decline' }); declineRequest(req.peerHex) }} disabled={!!busy}
+                          style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 10, borderRadius: 10, border: `1px solid rgba(var(--border-rgb),${busy ? 0.1 : 0.2})`, background: 'transparent', color: busy ? 'var(--text-faint-dim)' : 'var(--text-muted)', fontSize: 13, fontWeight: 600, cursor: busy ? 'default' : 'pointer', fontFamily: 'inherit' }}>
                           Decline
                         </button>
-                      </div>
+                      )}
                     </div>
                   </div>
                 )
@@ -868,7 +966,7 @@ export default function ChatApp() {
                   <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-muted)', marginBottom: 6 }}>No conversations yet</div>
                   <div style={{ fontSize: 13, color: 'var(--text-faint)', lineHeight: 1.55, maxWidth: 240 }}>Start one with an @name, or share yours so people can find you.</div>
                 </div>
-                <button onClick={() => { setComposeNpub(''); setComposeError(null); setComposeOpen(true) }} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '11px 20px', borderRadius: 11, background: 'var(--teal-grad)', color: 'var(--ink-on-accent)', fontSize: 13, fontWeight: 700, cursor: 'pointer', border: 'none', fontFamily: 'inherit' }}>
+                <button onClick={() => { setComposeNpub(''); setComposeRes({ s: 'idle' }); setComposeOpen(true) }} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '11px 20px', borderRadius: 11, background: 'var(--teal-grad)', color: 'var(--ink-on-accent)', fontSize: 13, fontWeight: 700, cursor: 'pointer', border: 'none', fontFamily: 'inherit' }}>
                   <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="var(--ink-on-accent)" strokeWidth={2.2} strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>New conversation
                 </button>
               </div>
@@ -1281,58 +1379,122 @@ export default function ChatApp() {
     {walletOpen && <WalletModal onClose={() => setWalletOpen(false)} />}
 
     {/* Compose new conversation */}
-    {composeOpen && (
+    {composeOpen && (() => {
+      // Derive the modal's visual state from the resolution machine (composeRes). Everything here is
+      // presentational — transcribed from the /compose-preview gallery; the input feeds composeNpub,
+      // the debounced effect fills composeRes, and Start/Open call startWith(hex).
+      const r = composeRes
+      const okHex = r.s === 'ok' ? r.hex : null
+      const existing = okHex ? conversations.some(c => c.peerHex === okHex) : false
+      const isRed = r.s === 'invalid' || (r.s === 'fail' && r.kind === 'not-found')
+      const isAmber = r.s === 'fail' && (r.kind === 'unreachable' || r.kind === 'no-key')
+      const inputBorder =
+        isRed ? 'rgba(var(--danger-rgb),0.5)'
+        : isAmber ? 'rgba(var(--warn-rgb),0.4)'
+        : r.s === 'resolving' ? 'rgba(var(--border-rgb),0.24)'
+        : r.s === 'ok' ? `rgba(var(--teal-500-rgb),${existing ? 0.32 : 0.45})`
+        : 'rgba(var(--border-rgb),0.14)'
+      const iconStroke = isRed ? 'var(--danger-300)' : isAmber ? 'var(--warn-300)' : r.s === 'ok' || r.s === 'resolving' ? 'var(--teal-300)' : 'var(--text-muted-dim)'
+      const canStart = r.s === 'ok'
+      const isUnreachable = r.s === 'fail' && r.kind === 'unreachable'
+      return (
       <div
         onClick={() => setComposeOpen(false)}
-        style={{ position: 'fixed', inset: 0, zIndex: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(4,7,12,0.72)', padding: 24 }}
+        style={{ position: 'fixed', inset: 0, zIndex: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(5,8,14,0.78)', backdropFilter: 'blur(3px)', padding: 24 }}
       >
         <div
           onClick={e => e.stopPropagation()}
-          style={{ width: '100%', maxWidth: 440, padding: '24px 24px 20px', borderRadius: 16, background: '#111722', border: '1px solid rgba(var(--accRGB,45,224,198),0.28)', boxShadow: '0 24px 60px rgba(0,0,0,0.6)' }}
+          style={{ width: '100%', maxWidth: 460, borderRadius: 18, background: 'var(--surface)', border: '1px solid rgba(var(--border-rgb),0.2)', boxShadow: '0 30px 90px rgba(0,0,0,0.65)', overflow: 'hidden' }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 14 }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 40, height: 40, borderRadius: 11, background: 'rgba(var(--accRGB,45,224,198),0.12)', flexShrink: 0 }}>
-              <svg width={20} height={20} viewBox="0 0 24 24" fill="none" stroke="var(--acc,#2DE0C6)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v14M5 12h14" /></svg>
+          {/* Header — title + Esc hint + close */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 18px', borderBottom: '1px solid rgba(var(--border-rgb),0.1)' }}>
+            <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>New conversation</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ padding: '3px 7px', borderRadius: 6, border: '1px solid rgba(var(--border-rgb),0.18)', fontFamily: MONO, fontSize: 10, color: 'var(--text-muted-dim)' }}>Esc</span>
+              <span onClick={() => setComposeOpen(false)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, border: '1px solid rgba(var(--border-rgb),0.16)', cursor: 'pointer' }}>
+                <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth={2.2} strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
+              </span>
             </div>
-            <div style={{ fontSize: 17, fontWeight: 700, color: '#F2F5FB' }}>New conversation</div>
           </div>
-          <div style={{ fontSize: 13, color: '#8A97B4', lineHeight: 1.55, marginBottom: 12 }}>
-            Enter the recipient's Nostr public key (npub), or an <strong style={{ color: '#B9C4DC' }}>@name</strong> registered
-            on ONS. Starting a conversation accepts them.
-          </div>
-          <input
-            autoFocus
-            value={composeNpub}
-            onChange={e => { setComposeNpub(e.target.value); if (composeError) setComposeError(null) }}
-            onKeyDown={e => { if (e.key === 'Enter') void startConversation(); else if (e.key === 'Escape') setComposeOpen(false) }}
-            placeholder="npub1… or @name"
-            spellCheck={false}
-            style={{ width: '100%', boxSizing: 'border-box', background: '#10151F', border: `1px solid ${composeError ? 'rgba(255,107,107,0.5)' : 'rgba(120,150,210,0.25)'}`, borderRadius: 9, padding: '11px 13px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, color: '#E4EAF4', outline: 'none' }}
-          />
-          {composeError && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 9, fontSize: 12, color: '#FF6B6B', fontFamily: "'IBM Plex Mono', monospace" }}>
-              <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="#FF6B6B" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><circle cx={12} cy={12} r={10} /><path d="M12 8v4M12 16h.01" /></svg>
-              {composeError}
+
+          <div style={{ padding: '20px 18px' }}>
+            <div style={{ fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.55, marginBottom: 14 }}>
+              Enter an npub or @name. Caravel resolves @names on chain to a messaging key.
             </div>
-          )}
-          <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 20 }}>
-            <button
-              onClick={() => setComposeOpen(false)}
-              style={{ padding: '10px 18px', borderRadius: 9, border: '1px solid rgba(120,150,210,0.25)', background: 'transparent', color: '#8A97B4', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}
-            >
-              Cancel
-            </button>
-            <button
-              onClick={() => void startConversation()}
-              disabled={!composeNpub.trim() || composeResolving}
-              style={{ padding: '10px 18px', borderRadius: 9, border: 'none', background: composeNpub.trim() && !composeResolving ? 'linear-gradient(180deg, var(--accB,#34E5D0), var(--accD,#12A594))' : 'rgba(120,150,210,0.15)', color: composeNpub.trim() && !composeResolving ? 'var(--accOn,#04120F)' : '#55617D', fontSize: 13, fontWeight: 700, cursor: composeNpub.trim() && !composeResolving ? 'pointer' : 'default', fontFamily: 'inherit' }}
-            >
-              {composeResolving ? 'Resolving…' : 'Start conversation'}
-            </button>
+
+            {/* Input row — leading icon tints by state, trailing shows spinner / check / cross. */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '13px 15px', borderRadius: 11, background: 'var(--surface-raised)', border: `1px solid ${inputBorder}`, boxShadow: r.s === 'ok' && !existing ? '0 0 0 3px rgba(var(--teal-500-rgb),0.09)' : undefined, marginBottom: 12 }}>
+              <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke={iconStroke} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg>
+              <input
+                autoFocus
+                value={composeNpub}
+                onChange={e => setComposeNpub(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') { if (canStart) startWith(okHex!) } else if (e.key === 'Escape') setComposeOpen(false) }}
+                placeholder="npub1… or @name"
+                spellCheck={false}
+                style={{ flex: 1, minWidth: 0, background: 'transparent', border: 'none', outline: 'none', color: 'var(--text-body)', fontSize: 14, fontFamily: MONO, padding: 0 }}
+              />
+              {r.s === 'resolving' && <span style={{ width: 14, height: 14, borderRadius: '50%', border: '2px solid rgba(var(--teal-500-rgb),0.2)', borderTopColor: 'var(--teal-500)', animation: 'cv-spin 0.8s linear infinite', flexShrink: 0 }} />}
+              {r.s === 'ok' && <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="var(--teal-500)" strokeWidth={2.8} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><path d="M20 6L9 17l-5-5" /></svg>}
+              {isRed && r.s !== 'invalid' && <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="var(--danger-500)" strokeWidth={2.4} strokeLinecap="round" style={{ flexShrink: 0 }}><path d="M6 6l12 12M18 6L6 18" /></svg>}
+            </div>
+
+            {/* State line / card below the input. */}
+            {r.s === 'invalid' && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--danger-300)', marginBottom: 18 }}>
+                <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="var(--danger-500)" strokeWidth={2.2} strokeLinecap="round"><circle cx="12" cy="12" r="9" /><path d="M12 8v5M12 16h.01" /></svg>
+                {r.kind === 'not-npub' ? 'That is not an npub or an @name' : 'Invalid npub. The checksum doesn’t match.'}
+              </div>
+            )}
+            {r.s === 'resolving' && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--text-teal-label)', marginBottom: 18 }}>
+                <span style={{ width: 12, height: 12, borderRadius: '50%', border: '2px solid rgba(var(--teal-500-rgb),0.2)', borderTopColor: 'var(--teal-500)', animation: 'cv-spin 0.8s linear infinite' }} />
+                Resolving @{r.name} on the Tari network…
+              </div>
+            )}
+            {r.s === 'ok' && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderRadius: 11, background: 'rgba(var(--teal-500-rgb),0.05)', border: `1px solid rgba(var(--teal-500-rgb),${existing ? 0.2 : 0.22})`, marginBottom: existing ? 14 : 18 }}>
+                <div style={{ width: 36, height: 36, borderRadius: 11, background: avatarFor(okHex!).grad, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 700, color: avatarFor(okHex!).color, flexShrink: 0 }}>{initialsFor(nicknames[okHex!] ?? r.name ?? undefined)}</div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-bright)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{nicknames[okHex!] ?? (r.name ? `@${r.name}` : truncNpub(okHex!))}</div>
+                  <div style={{ fontFamily: existing ? undefined : MONO, fontSize: 12, color: 'var(--text-teal-label)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{existing ? 'You already have this conversation' : (r.name ? truncNpub(okHex!) : 'Ready to message')}</div>
+                </div>
+              </div>
+            )}
+            {r.s === 'fail' && (
+              <div style={{ padding: '12px 14px', borderRadius: 11, background: `rgba(var(--${r.kind === 'not-found' ? 'danger' : 'warn'}-rgb),0.05)`, border: `1px solid rgba(var(--${r.kind === 'not-found' ? 'danger' : 'warn'}-rgb),0.25)`, marginBottom: isUnreachable ? 14 : 18 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: `var(--${r.kind === 'not-found' ? 'danger' : 'warn'}-300)`, marginBottom: 4 }}>
+                  {r.kind === 'not-found' ? `No one owns @${r.name}` : r.kind === 'unreachable' ? 'Couldn’t reach the name service' : `@${r.name} has no messaging key`}
+                </div>
+                <div style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+                  {r.kind === 'not-found' ? 'The name isn’t registered on chain. Check the spelling, or ask them for their npub.'
+                    : r.kind === 'unreachable' ? `This is a network problem, not a missing name. @${r.name} may well exist.`
+                    : 'The name is registered, but no Nostr key is published against it, so there is nowhere to send.'}
+                </div>
+              </div>
+            )}
+
+            {/* Actions — Cancel + primary (Start / Start conversation / Open conversation / Try again). */}
+            <div style={{ display: 'flex', gap: 10 }}>
+              <div onClick={() => setComposeOpen(false)} style={{ flex: '0 0 120px', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 13, borderRadius: 12, border: '1px solid rgba(var(--border-rgb),0.2)', color: 'var(--text-muted)', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>Cancel</div>
+              {canStart ? (
+                <div onClick={() => startWith(okHex!)} style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 13, borderRadius: 12, background: 'var(--teal-grad)', color: 'var(--ink-on-accent)', fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>
+                  {existing ? 'Open conversation' : 'Start conversation'}
+                  {existing && <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="var(--ink-on-accent)" strokeWidth={2.4} strokeLinecap="round"><path d="M9 6l6 6-6 6" /></svg>}
+                </div>
+              ) : isUnreachable ? (
+                <div onClick={() => setComposeRetry(n => n + 1)} style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 13, borderRadius: 12, background: 'var(--surface-raised)', border: '1px solid rgba(var(--teal-500-rgb),0.26)', color: 'var(--text-bright)', fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>
+                  <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="var(--teal-500)" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v5h-5" /></svg>Try again
+                </div>
+              ) : (
+                <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 13, borderRadius: 12, background: 'rgba(16,21,31,0.6)', border: '1px solid rgba(var(--border-rgb),0.12)', color: 'var(--text-faint-dim)', fontSize: 14, fontWeight: 700 }}>Start</div>
+              )}
+            </div>
           </div>
         </div>
       </div>
-    )}
+      )
+    })()}
 
     {/* Delete-conversation confirmation — destructive, localStorage is the only copy */}
     {confirmDelete && selectedConvo && (

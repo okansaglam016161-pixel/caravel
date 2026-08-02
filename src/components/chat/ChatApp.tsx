@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import * as nip19 from 'nostr-tools/nip19'
-import Logo from '../Logo'
+import Logo from '../primitives/Logo'
 import { useWallet } from '../../context/WalletContext'
 import WalletModal from '../wallet/WalletModal'
 import type { CaravelMessage } from '../../messaging/types'

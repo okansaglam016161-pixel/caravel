@@ -734,27 +734,27 @@ export default function ChatApp() {
 
   return (
     <>
-    <div style={{ height: '100vh', display: 'flex', background: '#0A0E17' }}>
+    <div style={{ height: '100vh', display: 'flex', background: 'var(--surface-base)' }}>
       <div style={{ display: 'flex', width: '100%', height: '100%' }}>
 
         {/* LEFT: sidebar */}
-        <div style={{ width: 380, flexShrink: 0, borderRight: '1px solid rgba(120,150,210,0.1)', display: 'flex', flexDirection: 'column', background: 'var(--surface-sidebar)', position: 'relative' }}>
+        <div style={{ width: 380, flexShrink: 0, borderRight: '1px solid rgba(var(--border-rgb),0.1)', display: 'flex', flexDirection: 'column', background: 'var(--surface-sidebar)', position: 'relative' }}>
 
           {relayPanelOpen && <RelayHealthPanel getRelayStates={getRelayStates} reconnectAll={reconnectAll} onClose={() => setRelayPanelOpen(false)} />}
 
           {/* Sidebar header */}
-          <div style={{ padding: '20px 20px 16px', borderBottom: '1px solid rgba(120,150,210,0.08)' }}>
+          <div style={{ padding: '20px 20px 16px', borderBottom: '1px solid rgba(var(--border-rgb),0.08)' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18 }}>
               <Link to="/" style={{ display: 'flex', alignItems: 'center', gap: 11, cursor: 'pointer', opacity: 1, transition: 'opacity 0.15s' }} onMouseEnter={e => (e.currentTarget.style.opacity = '0.75')} onMouseLeave={e => (e.currentTarget.style.opacity = '1')}>
                 <Logo size={26} />
-                <span style={{ fontSize: 18, fontWeight: 700, color: '#F2F5FB' }}>Caravel</span>
+                <span style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-primary)' }}>Caravel</span>
               </Link>
               <button
                 onClick={() => { setComposeNpub(''); setComposeRes({ s: 'idle' }); setComposeOpen(true) }}
                 title="Start a new conversation"
-                style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 34, height: 34, borderRadius: 9, border: '1px solid rgba(120,150,210,0.2)', background: 'transparent', cursor: 'pointer', padding: 0 }}
+                style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 34, height: 34, borderRadius: 9, border: '1px solid rgba(var(--border-rgb),0.2)', background: 'transparent', cursor: 'pointer', padding: 0 }}
               >
-                <svg width={17} height={17} viewBox="0 0 24 24" fill="none" stroke="#8A97B4" strokeWidth={2} strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>
+                <svg width={17} height={17} viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth={2} strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>
               </button>
             </div>
 
@@ -777,21 +777,21 @@ export default function ChatApp() {
                       ? '?'
                       : '—'       // idle (locked)
               const balanceColor = balanceHidden || isDone || (isScanning && tTARI !== null)
-                ? '#EAFBF7'
-                : '#8A97B4'
+                ? 'var(--text-bright)'
+                : 'var(--text-muted-dim)'
               return (
                 <div
                   onClick={() => setWalletOpen(true)}
                   title="Open wallet"
                   style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '13px 15px', borderRadius: 12, background: 'linear-gradient(140deg, rgba(var(--accRGB,45,224,198),0.1), rgba(18,165,148,0.04))', border: '1px solid rgba(var(--accRGB,45,224,198),0.22)', cursor: 'pointer', transition: 'border-color 0.15s' }}
-                  onMouseEnter={e => (e.currentTarget.style.borderColor = 'rgba(45,224,198,0.45)')}
+                  onMouseEnter={e => (e.currentTarget.style.borderColor = 'rgba(var(--teal-500-rgb),0.45)')}
                   onMouseLeave={e => (e.currentTarget.style.borderColor = 'rgba(var(--accRGB,45,224,198),0.22)')}
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                     <svg width={17} height={17} viewBox="0 0 24 24" fill="none" stroke="var(--acc,#2DE0C6)" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round"><rect x={2} y={6} width={20} height={13} rx={2.5} /><path d="M2 10h20" /></svg>
-                    <span style={{ fontSize: 13, color: '#8FB7B0', fontWeight: 500 }}>Balance</span>
+                    <span style={{ fontSize: 13, color: 'var(--text-teal-label)', fontWeight: 500 }}>Balance</span>
                     {isScanning && (
-                      <svg width={11} height={11} viewBox="0 0 24 24" fill="none" stroke="#55617D" strokeWidth={2.5} strokeLinecap="round" style={{ animation: 'spin 1s linear infinite', flexShrink: 0 }}>
+                      <svg width={11} height={11} viewBox="0 0 24 24" fill="none" stroke="var(--text-faint-dim)" strokeWidth={2.5} strokeLinecap="round" style={{ animation: 'spin 1s linear infinite', flexShrink: 0 }}>
                         <path d="M21 12a9 9 0 1 1-6.219-8.56" />
                       </svg>
                     )}
@@ -805,14 +805,14 @@ export default function ChatApp() {
                     <button
                       onClick={e => { e.stopPropagation(); setBalanceHidden(v => !v) }}
                       title={balanceHidden ? 'Show balance' : 'Hide balance'}
-                      style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'none', border: 'none', cursor: 'pointer', padding: 2, color: '#5E8A82', flexShrink: 0 }}
+                      style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'none', border: 'none', cursor: 'pointer', padding: 2, color: 'var(--text-teal-dim)', flexShrink: 0 }}
                     >
                       {balanceHidden
                         ? <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" /><circle cx={12} cy={12} r={3} /><path d="M4 4l16 16" /></svg>
                         : <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" /><circle cx={12} cy={12} r={3} /></svg>
                       }
                     </button>
-                    <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="#5E8A82" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M9 18l6-6-6-6" /></svg>
+                    <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="var(--text-teal-dim)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M9 18l6-6-6-6" /></svg>
                   </div>
                 </div>
               )
@@ -834,7 +834,7 @@ export default function ChatApp() {
           {/* Search — filters conversations + requests live */}
           <div style={{ padding: '14px 16px 8px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 13px', borderRadius: 10, background: 'var(--surface-raised)', border: `1px solid ${sidebarQuery ? 'rgba(var(--teal-500-rgb),0.45)' : 'rgba(var(--border-rgb),0.12)'}`, boxShadow: sidebarQuery ? '0 0 0 3px rgba(var(--teal-500-rgb),0.09)' : 'none' }}>
-              <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="#55617D" strokeWidth={2} strokeLinecap="round"><circle cx={11} cy={11} r={7} /><path d="M21 21l-4-4" /></svg>
+              <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="var(--text-faint-dim)" strokeWidth={2} strokeLinecap="round"><circle cx={11} cy={11} r={7} /><path d="M21 21l-4-4" /></svg>
               <input
                 type="text"
                 value={sidebarQuery}
@@ -1017,7 +1017,7 @@ export default function ChatApp() {
         </div>
 
         {/* RIGHT: active chat */}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, background: '#0A0E17', position: 'relative' }}>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, background: 'var(--surface-base)', position: 'relative' }}>
 
           {selectedConvo === null ? (
             /* Chat pane at rest (design: sail + reassurance) */
@@ -1504,27 +1504,27 @@ export default function ChatApp() {
       >
         <div
           onClick={e => e.stopPropagation()}
-          style={{ width: '100%', maxWidth: 420, padding: '24px 24px 20px', borderRadius: 16, background: '#111722', border: '1px solid rgba(255,107,107,0.3)', boxShadow: '0 24px 60px rgba(0,0,0,0.6)' }}
+          style={{ width: '100%', maxWidth: 420, padding: '24px 24px 20px', borderRadius: 16, background: '#111722', border: '1px solid rgba(var(--danger-rgb),0.3)', boxShadow: '0 24px 60px rgba(0,0,0,0.6)' }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 14 }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 40, height: 40, borderRadius: 11, background: 'rgba(255,107,107,0.12)', flexShrink: 0 }}>
-              <svg width={20} height={20} viewBox="0 0 24 24" fill="none" stroke="#FF6B6B" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /><path d="M10 11v6M14 11v6" /></svg>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 40, height: 40, borderRadius: 11, background: 'rgba(var(--danger-rgb),0.12)', flexShrink: 0 }}>
+              <svg width={20} height={20} viewBox="0 0 24 24" fill="none" stroke="var(--danger-500)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /><path d="M10 11v6M14 11v6" /></svg>
             </div>
-            <div style={{ fontSize: 17, fontWeight: 700, color: '#F2F5FB' }}>Delete conversation?</div>
+            <div style={{ fontSize: 17, fontWeight: 700, color: 'var(--text-primary)' }}>Delete conversation?</div>
           </div>
           <div style={{ fontSize: 14, color: '#B4C0D4', lineHeight: 1.6, marginBottom: 20 }}>
-            All messages, the nickname, and payment history with <b style={{ color: '#E8EEF9' }}>{displayName(selectedConvo.peerHex)}</b> will be permanently removed from this device and <b style={{ color: '#FF8A8A' }}>cannot be recovered</b>. The other person keeps their copy.
+            All messages, the nickname, and payment history with <b style={{ color: 'var(--text-name)' }}>{displayName(selectedConvo.peerHex)}</b> will be permanently removed from this device and <b style={{ color: 'var(--danger-300)' }}>cannot be recovered</b>. The other person keeps their copy.
           </div>
           <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
             <button
               onClick={() => setConfirmDelete(false)}
-              style={{ padding: '10px 18px', borderRadius: 9, border: '1px solid rgba(120,150,210,0.25)', background: 'transparent', color: '#8A97B4', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}
+              style={{ padding: '10px 18px', borderRadius: 9, border: '1px solid rgba(var(--border-rgb),0.25)', background: 'transparent', color: 'var(--text-muted-dim)', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}
             >
               Cancel
             </button>
             <button
               onClick={performDelete}
-              style={{ padding: '10px 18px', borderRadius: 9, border: 'none', background: '#E5484D', color: '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}
+              style={{ padding: '10px 18px', borderRadius: 9, border: 'none', background: 'var(--danger-500)', color: '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}
             >
               Delete
             </button>

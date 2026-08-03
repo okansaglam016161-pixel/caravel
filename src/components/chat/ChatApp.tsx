@@ -1519,7 +1519,7 @@ export default function ChatApp() {
       >
         <div
           onClick={e => e.stopPropagation()}
-          style={{ width: '100%', maxWidth: 420, padding: '24px 24px 20px', borderRadius: 16, background: '#111722', border: '1px solid rgba(var(--danger-rgb),0.3)', boxShadow: '0 24px 60px rgba(0,0,0,0.6)' }}
+          style={{ width: '100%', maxWidth: 420, padding: '24px 24px 20px', borderRadius: 16, background: 'var(--surface-raised)', border: '1px solid rgba(var(--danger-rgb),0.3)', boxShadow: '0 24px 60px rgba(0,0,0,0.6)' }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 14 }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 40, height: 40, borderRadius: 11, background: 'rgba(var(--danger-rgb),0.12)', flexShrink: 0 }}>

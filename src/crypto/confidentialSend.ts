@@ -33,7 +33,10 @@ import type { SecretKeyWallet } from '@tari-project/ootle-secret-key-wallet'
 
 const INDEXER_URL = 'https://ootle-indexer-a.tari.com'
 const RESOURCE_HEX = TARI_RESOURCE_ADDRESS.replace(/^resource_/, '')
-const PAGE_SIZE = 200
+// The indexer's /utxos endpoint IGNORES `offset` (every offset returns the same set) but HONORS
+// `limit`. So we fetch the whole set in one request with a limit safely above it — never paginate by
+// offset (that loops forever once the set exceeds one page). 1000 is honored; 5000 is rejected.
+const FETCH_LIMIT = 1000
 
 export const MAX_FEE = 10_000n   // 0.01 tTARI ceiling; actual ~1 006 µtTARI
 const MICROTARI_PER_TARI = 1_000_000n
@@ -89,40 +92,46 @@ interface OwnedUtxo {
 
 async function scanUtxos(crypto: WasmStealthCrypto, viewSecret: Uint8Array): Promise<OwnedUtxo[]> {
   const owned: OwnedUtxo[] = []
-  let offset = 0
 
-  while (true) {
-    const url = `${INDEXER_URL}/utxos?resource_address=${RESOURCE_HEX}&limit=${PAGE_SIZE}&offset=${offset}`
-    const res = await fetch(url)
-    if (!res.ok) throw new Error(`UTXO scan HTTP ${res.status}`)
-    const body = await res.json() as { utxos?: [string, unknown][] } | [string, unknown][]
-    const page = Array.isArray(body) ? body : (body as { utxos?: [string, unknown][] }).utxos ?? []
-    if (page.length === 0) break
+  // ONE request — the indexer ignores `offset`, so paginating by it would re-fetch the same set
+  // forever. Fetch the whole set with a big `limit` instead.
+  const url = `${INDEXER_URL}/utxos?resource_address=${RESOURCE_HEX}&limit=${FETCH_LIMIT}`
+  const res = await fetch(url)
+  if (!res.ok) throw new Error(`UTXO scan HTTP ${res.status}`)
+  const body = await res.json() as { utxos?: [string, unknown][] } | [string, unknown][]
+  const rows = Array.isArray(body) ? body : (body as { utxos?: [string, unknown][] }).utxos ?? []
+  // Ceiling guard: a full FETCH_LIMIT means there may be inputs we couldn't see. Send has no balance
+  // display, so surface it in the log; an actually-unspendable set still fails with "no suitable UTXO".
+  if (rows.length >= FETCH_LIMIT) {
+    console.warn(`[Caravel] confidential-send UTXO fetch hit the indexer limit (${FETCH_LIMIT}) — input selection may be incomplete`)
+  }
 
-    for (const [commitmentHex, utxoBody] of page) {
-      const substateId = `utxo_${RESOURCE_HEX}_${commitmentHex}`
-      const fakeResponse = { version: 0, verified: false, substate: { Utxo: utxoBody } }
-      const decrypted = await decryptOwnedUtxo(
-        crypto,
-        viewSecret,
-        fakeResponse as Parameters<typeof decryptOwnedUtxo>[2],
+  // Dedup by commitment — the indexer can return the same UTXO more than once; input selection must
+  // not consider a duplicate. Decrypt/nonce/mask handling below is unchanged.
+  const seen = new Set<string>()
+  for (const [commitmentHex, utxoBody] of rows) {
+    if (seen.has(commitmentHex)) continue
+    seen.add(commitmentHex)
+
+    const substateId = `utxo_${RESOURCE_HEX}_${commitmentHex}`
+    const fakeResponse = { version: 0, verified: false, substate: { Utxo: utxoBody } }
+    const decrypted = await decryptOwnedUtxo(
+      crypto,
+      viewSecret,
+      fakeResponse as Parameters<typeof decryptOwnedUtxo>[2],
+      substateId,
+    )
+    if (decrypted !== null) {
+      const output = (utxoBody as { output?: { output?: { public_nonce?: string } } })?.output?.output
+      if (!output?.public_nonce) continue
+      owned.push({
         substateId,
-      )
-      if (decrypted !== null) {
-        const output = (utxoBody as { output?: { output?: { public_nonce?: string } } })?.output?.output
-        if (!output?.public_nonce) continue
-        owned.push({
-          substateId,
-          commitment: fromHex(commitmentHex),
-          nonce: fromHex(output.public_nonce),
-          value: decrypted.value,
-          mask: decrypted.mask,
-        })
-      }
+        commitment: fromHex(commitmentHex),
+        nonce: fromHex(output.public_nonce),
+        value: decrypted.value,
+        mask: decrypted.mask,
+      })
     }
-
-    if (page.length < PAGE_SIZE) break
-    offset += PAGE_SIZE
   }
 
   return owned

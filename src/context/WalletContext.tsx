@@ -30,7 +30,8 @@ export interface ScanState {
   utxos: ScannedUtxo[]
   progress: ScanProgress
   totalScanned: number
-  capped: boolean
+  /** True when the indexer capped the returned set at its limit — balance may be understated. */
+  incomplete: boolean
   error: string
 }
 
@@ -40,7 +41,7 @@ const SCAN_IDLE: ScanState = {
   utxos: [],
   progress: { scanned: 0, found: 0 },
   totalScanned: 0,
-  capped: false,
+  incomplete: false,
   error: '',
 }
 
@@ -155,13 +156,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     const viewSecret = w.getViewOnlySecret()
     if (!viewSecret) return  // no view key — can't scan
 
-    setScan(prev => ({
-      ...SCAN_IDLE,
-      status: 'scanning',
-      // Carry over previous balance while re-scanning so UI doesn't blank
-      balance: prev.balance,
-      utxos: prev.utxos,
-    }))
+    // Clean slate — do NOT carry over the previous scan's balance/utxos. Carrying them produced the
+    // misleading "N owned" against a stale/zero balance; a fresh scan starts blank and fills in.
+    setScan({ ...SCAN_IDLE, status: 'scanning' })
 
     scanWallet(
       viewSecret,
@@ -178,17 +175,19 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         utxos: result.utxos,
         progress: { scanned: result.totalScanned, found: result.utxos.length },
         totalScanned: result.totalScanned,
-        capped: result.capped,
+        incomplete: result.incomplete,
         error: '',
       })
       setTxHistory(prev => mergeReceived(addr, prev, result.utxos))
     }).catch((err: unknown) => {
       if (ctrl.signal.aborted) return
-      setScan(prev => ({
-        ...prev,
+      // A real (post-retry) failure — clear stale balance/utxos so we show an honest error + Retry,
+      // never a leftover count against a failed scan.
+      setScan({
+        ...SCAN_IDLE,
         status: 'error',
         error: err instanceof Error ? err.message : String(err),
-      }))
+      })
     })
   }, [])
 

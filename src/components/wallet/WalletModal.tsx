@@ -90,7 +90,7 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
 
-  const { status, balance, capped } = scan
+  const { status, balance } = scan
   const balanceStr = balance !== null ? fmt2(balance) : null
 
   const shortAddr = address ? address.slice(0, 20) + '…' + address.slice(-6) : null
@@ -236,24 +236,24 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
         </div>
       )
     }
-    // DONE / CAPPED (positive balance)
+    // DONE (positive balance)
     return (
-      <div style={tealCard(capped ? '0.1' : '0.13')}>
+      <div style={tealCard('0.13')}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 10 }}>
           <span style={{ ...balLabel, color: 'var(--text-teal-dim)' }}>CONFIDENTIAL BALANCE</span>
           <span onClick={() => setBalanceHidden(true)} style={{ cursor: 'pointer', display: 'inline-flex' }}>{eyeOpen('var(--text-teal-dim)')}</span>
         </div>
-        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'center', gap: 9, marginBottom: capped ? 14 : 0 }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'center', gap: 9, marginBottom: scan.incomplete ? 14 : 0 }}>
           <span style={{ ...balBig, color: 'var(--text-bright)' }}>{balanceStr ?? '—'}</span><span style={balTari}>TARI</span>
         </div>
-        {capped && (
+        {scan.incomplete && (
           <div style={{ display: 'flex', gap: 9, padding: '10px 12px', borderRadius: 10, background: 'rgba(var(--warn-rgb),0.05)', border: '1px solid rgba(var(--warn-rgb),0.25)', fontSize: 12, color: 'var(--warn-300)', textAlign: 'left', lineHeight: 1.45, marginBottom: 12 }}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--warn)" strokeWidth="2" strokeLinecap="round" style={{ flexShrink: 0, marginTop: 1 }}><path d="M12 8v5M12 17h.01" /><circle cx="12" cy="12" r="9" /></svg>
-            Scan capped at 1,000 outputs. Balance may be higher than shown.
+            The indexer returned its maximum result set — there may be more outputs. Balance may be understated.
           </div>
         )}
         {/* Live-app addition (deliberate deviation from the static design card): scan summary + manual refresh. */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: capped ? 0 : 12, fontSize: 12, color: 'var(--text-teal-dim)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: scan.incomplete ? 0 : 12, fontSize: 12, color: 'var(--text-teal-dim)' }}>
           <span>{scan.totalScanned} UTXOs scanned · {scan.utxos.length} owned</span>
           <span onClick={rescan} style={{ color: 'var(--teal-500)', fontWeight: 600, cursor: 'pointer' }}>Refresh</span>
         </div>

@@ -44,7 +44,11 @@ async function deriveKey(password: string, salt: Uint8Array, iterations: number)
     ['deriveKey'],
   )
   return crypto.subtle.deriveKey(
-    { name: 'PBKDF2', salt, iterations, hash: 'SHA-256' },
+    // `salt as BufferSource`: a Uint8Array IS a BufferSource at runtime (and salt is always a plain
+    // ArrayBuffer-backed array), but TS 5.7's generic Uint8Array<ArrayBufferLike> default doesn't
+    // structurally match BufferSource (which requires ArrayBuffer, not SharedArrayBuffer). Lib-typing
+    // only — no runtime effect.
+    { name: 'PBKDF2', salt: salt as BufferSource, iterations, hash: 'SHA-256' },
     keyMaterial,
     { name: 'AES-GCM', length: 256 },
     false,
@@ -77,7 +81,9 @@ export async function decryptMnemonic(stored: StoredWallet, password: string): P
   const iv = b64Decode(stored.iv)
   const ciphertext = b64Decode(stored.ciphertext)
   const key = await deriveKey(password, salt, stored.iterations)
-  const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext)
+  // `iv` and `ciphertext` as BufferSource: same TS 5.7 lib-typing mismatch as in deriveKey — both are
+  // plain ArrayBuffer-backed Uint8Arrays (valid BufferSources); the casts reconcile the types only.
+  const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv as BufferSource }, key, ciphertext as BufferSource)
   return new TextDecoder().decode(plain)
 }
 

@@ -1,8 +1,14 @@
-import { defineConfig } from 'vite'
+import { defineConfig, type PluginOption } from 'vite'
 import react from '@vitejs/plugin-react'
-import wasm from 'vite-plugin-wasm'
+import wasmPlugin from 'vite-plugin-wasm'
 import path from 'path'
 import { fileURLToPath } from 'url'
+
+// vite-plugin-wasm ships dual CJS/ESM types (`export =` on the CJS side), so under
+// module:nodenext + verbatimModuleSyntax TS binds the default import to the module namespace
+// (no call signature) — even though at runtime the default IS the plugin factory (proven: the
+// bundle builds). Normalise the type to a callable factory so `tsc -b` / `npm run build` pass.
+const wasm = wasmPlugin as unknown as () => PluginOption
 
 // Repo-anchored (not cwd-dependent) path to the vendored dists — see vendor/README.md.
 const ROOT = path.dirname(fileURLToPath(import.meta.url))

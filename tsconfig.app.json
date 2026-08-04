@@ -16,12 +16,12 @@
     "noEmit": true,
     "jsx": "react-jsx",
 
-    /* Module resolution for Vite-aliased tari.js packages */
+    /* Types for the Vite-aliased Tari SDK + ONS client, vendored in-repo (see vendor/README.md) */
     "paths": {
-      "@tari-project/ootle": ["../caravel/tarijs-reference/packages/ootle/dist/index.d.ts"],
-      "@tari-project/ootle-secret-key-wallet": ["../caravel/tarijs-reference/packages/ootle-secret-key-wallet/dist/index.d.ts"],
-      "@tari-project/ootle-indexer": ["../caravel/tarijs-reference/packages/ootle-indexer/dist/index.d.ts"],
-      "@ootle/name-service": ["../ootle-name-service/client/dist/index.d.ts"]
+      "@tari-project/ootle": ["./vendor/tari/ootle/dist/index.d.ts"],
+      "@tari-project/ootle-secret-key-wallet": ["./vendor/tari/ootle-secret-key-wallet/dist/index.d.ts"],
+      "@tari-project/ootle-indexer": ["./vendor/tari/ootle-indexer/dist/index.d.ts"],
+      "@ootle/name-service": ["./vendor/ons/dist/index.d.ts"]
     },
 
     /* Linting */

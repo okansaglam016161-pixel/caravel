@@ -11,6 +11,10 @@ dist/
 build/
 .vite/
 
+# ...but the vendored built dists are committed on purpose (see vendor/README.md) — re-include them
+!vendor/**/dist/
+!vendor/**/dist/**
+
 # Local tari.js reference (if linked here)
 tarijs-reference/
 

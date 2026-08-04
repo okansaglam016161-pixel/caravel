@@ -97,22 +97,62 @@ export interface OnsRegisterResult {
   error?: string
 }
 
+export interface OnsEstimateResult {
+  ok: boolean
+  /** The µtTARI budget to reveal for the fee — the estimated network cost plus a small margin. This
+   *  is the amount the user actually pays (the whole revealed budget is consumed; overcharge is not
+   *  refunded), so it's what we show on the confirm gate. */
+  feeMicroTari?: bigint
+  error?: string
+}
+
+/** A small safety margin over the raw estimate. The whole budget is consumed on-chain (overcharge is
+ *  not refunded), so keep it minimal — just enough to absorb tiny drift between estimate and submit. */
+function withOnsFeeMargin(required: bigint): bigint {
+  const margin = (required * 2n) / 100n // +2%
+  return required + (margin > 100n ? margin : 100n)
+}
+
+/**
+ * Estimate the fee (µtTARI) to register `name` + its nostr record, WITHOUT committing anything —
+ * a simulated dry-run on the network, nothing spent. Returns the budget to reveal (estimate + a
+ * small margin), which is what to show the user before they confirm.
+ */
+export async function estimateOnsRegistration(
+  wallet: SecretKeyWallet,
+  senderAddress: string,
+  name: string,
+  ownNpub: string,
+): Promise<OnsEstimateResult> {
+  const policy = validateOnsName(name)
+  if (policy) return { ok: false, error: policy }
+  try {
+    const writer = await ons.withBrowserSigner({ wallet, senderAddress })
+    const { feeMicroTari } = await writer.estimateRegisterWithNostr(name, ownNpub)
+    return { ok: true, feeMicroTari: withOnsFeeMargin(feeMicroTari) }
+  } catch (e) {
+    return { ok: false, error: (e as Error).message || 'Could not estimate the fee.' }
+  }
+}
+
 /**
  * Register `name` for this wallet and set its "nostr" record to the wallet's own npub, in one
- * atomic on-chain transaction (client-signed, fee paid from a confidential UTXO). The wallet must
- * be funded. On-chain uniqueness is the final authority — a name free at preview can still be taken.
+ * atomic on-chain transaction (client-signed, fee paid from a confidential UTXO). `feeBudget` is the
+ * µtTARI the user approved (from {@link estimateOnsRegistration}) — revealed exactly. On-chain
+ * uniqueness is the final authority; a name free at preview can still be taken.
  */
 export async function registerOnsName(
   wallet: SecretKeyWallet,
   senderAddress: string,
   name: string,
   ownNpub: string,
+  feeBudget: bigint,
 ): Promise<OnsRegisterResult> {
   const policy = validateOnsName(name)
   if (policy) return { ok: false, error: policy }
   try {
     const writer = await ons.withBrowserSigner({ wallet, senderAddress })
-    const res = await writer.registerWithNostr(name, ownNpub)
+    const res = await writer.submitRegisterWithNostr(name, ownNpub, feeBudget)
     return { ok: true, txId: res.transactionId, fee: res.fee }
   } catch (e) {
     return { ok: false, error: (e as Error).message || 'Registration failed.' }

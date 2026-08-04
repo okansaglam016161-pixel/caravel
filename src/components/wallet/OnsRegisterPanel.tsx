@@ -4,9 +4,12 @@
 
 import { useState } from 'react'
 import { useWallet } from '../../context/WalletContext'
-import { validateOnsName, checkOnsAvailable, registerOnsName, toOnsName } from '../../crypto/ons'
+import { validateOnsName, checkOnsAvailable, estimateOnsRegistration, registerOnsName, toOnsName } from '../../crypto/ons'
 
-type Status = 'idle' | 'checking' | 'available' | 'taken' | 'registering' | 'done' | 'error'
+type Status = 'idle' | 'checking' | 'available' | 'taken' | 'estimating' | 'confirm' | 'registering' | 'done' | 'error'
+
+/** µtTARI → tTARI, matching the send-flow fee display. */
+const fmtTari = (micro: bigint) => (Number(micro) / 1_000_000).toFixed(6)
 
 const CARD = { padding: 18, borderRadius: 14, background: 'var(--surface-raised)' } as const
 const TITLE = { fontSize: 14, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 4 } as const
@@ -23,13 +26,14 @@ export default function OnsRegisterPanel() {
   const [status, setStatus] = useState<Status>('idle')
   const [msg, setMsg] = useState<string | null>(null)
   const [txId, setTxId] = useState<string | null>(null)
+  const [fee, setFee] = useState<bigint | null>(null)
 
   const clean = toOnsName(name)
   const policyErr = clean ? validateOnsName(clean) : null
   const canAct = !!wallet && !!address && !!nostrNpub && !!clean && !policyErr
-  const busy = status === 'checking' || status === 'registering'
+  const busy = status === 'checking' || status === 'estimating' || status === 'registering'
 
-  function reset(next: Status = 'idle') { setStatus(next); setMsg(null); if (next === 'idle') setTxId(null) }
+  function reset(next: Status = 'idle') { setStatus(next); setMsg(null); if (next === 'idle') { setTxId(null); setFee(null) } }
 
   async function check() {
     if (!clean || policyErr) return
@@ -40,11 +44,24 @@ export default function OnsRegisterPanel() {
     setMsg(r.available ? `@${clean} is available.` : `@${clean} is already registered.`)
   }
 
-  async function register() {
+  // Step 1: dry-run the registration to learn the real fee, then ask the user to confirm.
+  async function beginRegister() {
     if (!canAct || !wallet || !address || !nostrNpub) return
-    reset('registering')
+    reset('estimating')
+    setMsg(`Estimating the network fee for @${clean}.`)
+    const e = await estimateOnsRegistration(wallet, address, clean, nostrNpub)
+    if (!e.ok || e.feeMicroTari === undefined) { setStatus('error'); setMsg(e.error ?? 'Could not estimate the fee.'); return }
+    setFee(e.feeMicroTari)
+    setStatus('confirm')
+    setMsg(null)
+  }
+
+  // Step 2: on explicit confirmation, submit with the approved budget.
+  async function confirmRegister() {
+    if (!wallet || !address || !nostrNpub || fee === null) return
+    setStatus('registering')
     setMsg(`Writing @${clean} to the Tari network.`)
-    const r = await registerOnsName(wallet, address, clean, nostrNpub)
+    const r = await registerOnsName(wallet, address, clean, nostrNpub, fee)
     if (!r.ok) { setStatus('error'); setMsg(r.error ?? 'Registration failed.'); return }
     setStatus('done')
     setTxId(r.txId ?? null)
@@ -83,8 +100,30 @@ export default function OnsRegisterPanel() {
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--danger-500)" strokeWidth="2.2" strokeLinecap="round"><circle cx="12" cy="12" r="9" /><path d="M12 8v5M12 16h.01" /></svg>
           <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--danger-300)' }}>Registration failed</span>
         </div>
-        <div style={{ ...DESC, color: 'var(--text-muted-dim)' }}>{msg ?? 'The transaction was rejected. No name was registered and no fee was taken.'}</div>
+        <div style={{ ...DESC, color: 'var(--text-muted-dim)' }}>{msg ?? 'The registration did not complete. Check Activity to confirm whether a fee was spent.'}</div>
         <div onClick={() => reset('idle')} style={{ ...BTN, background: 'rgba(var(--danger-rgb),0.08)', border: '1px solid rgba(var(--danger-rgb),0.3)', color: 'var(--danger-300)', cursor: 'pointer' }}>Try again</div>
+      </div>
+    )
+  }
+
+  // ── CONFIRM (fee estimate → approve before spending) ──
+  if (status === 'confirm' && fee !== null) {
+    return (
+      <div style={{ ...CARD, border: '1px solid rgba(var(--teal-500-rgb),0.24)' }}>
+        <div style={TITLE}>Confirm registration</div>
+        <div style={{ ...DESC, color: 'var(--text-muted-dim)' }}>Registering an @name writes to the Tari network and costs a small fee, paid confidentially from your balance.</div>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '11px 14px', borderRadius: 11, background: 'var(--surface-base)', border: '1px solid rgba(var(--border-rgb),0.14)', marginBottom: 8 }}>
+          <span style={{ fontSize: 13, color: 'var(--text-muted-dim)' }}>Name</span>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--text-bright)' }}>@{clean}</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '11px 14px', borderRadius: 11, background: 'var(--surface-base)', border: '1px solid rgba(var(--border-rgb),0.14)', marginBottom: 12 }}>
+          <span style={{ fontSize: 13, color: 'var(--text-muted-dim)' }}>Network fee</span>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--text-bright)' }}>≈ {fmtTari(fee)} tTARI <span style={{ color: 'var(--text-faint-dim)' }}>({fee.toString()} µt)</span></span>
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <div onClick={() => reset('idle')} style={{ ...BTN, flex: 1, background: 'var(--surface-inset)', border: '1px solid rgba(var(--border-rgb),0.18)', color: 'var(--text-body)', cursor: 'pointer' }}>Cancel</div>
+          <div onClick={confirmRegister} style={{ ...BTN, flex: 1, background: 'var(--teal-grad)', color: 'var(--ink-on-accent)', cursor: 'pointer' }}>Confirm &amp; pay</div>
+        </div>
       </div>
     )
   }
@@ -127,16 +166,16 @@ export default function OnsRegisterPanel() {
         {status === 'checking' && spinner}
       </div>
 
-      {status === 'registering'
+      {status === 'registering' || status === 'estimating'
         ? <div style={{ ...BTN, gap: 9, background: 'var(--surface-inset)', border: '1px solid rgba(var(--teal-500-rgb),0.2)', color: 'var(--teal-300)' }}>
-            <span style={{ width: 15, height: 15, borderRadius: '50%', border: '2px solid rgba(var(--teal-500-rgb),0.2)', borderTopColor: 'var(--teal-500)', animation: 'cv-spin 0.8s linear infinite' }} />Registering…
+            <span style={{ width: 15, height: 15, borderRadius: '50%', border: '2px solid rgba(var(--teal-500-rgb),0.2)', borderTopColor: 'var(--teal-500)', animation: 'cv-spin 0.8s linear infinite' }} />{status === 'estimating' ? 'Estimating fee…' : 'Registering…'}
           </div>
         : isAvail
-          ? <div onClick={register} style={{ ...BTN, background: 'var(--teal-grad)', color: 'var(--ink-on-accent)', cursor: 'pointer' }}>Register @{clean}</div>
+          ? <div onClick={beginRegister} style={{ ...BTN, background: 'var(--teal-grad)', color: 'var(--ink-on-accent)', cursor: 'pointer' }}>Register @{clean}</div>
           : canAct
             ? <div style={{ display: 'flex', gap: 8 }}>
                 <div onClick={check} style={{ ...BTN, flex: 1, background: 'var(--surface-inset)', border: '1px solid rgba(var(--teal-500-rgb),0.26)', color: 'var(--text-bright)', cursor: 'pointer' }}>Check</div>
-                <div onClick={register} style={{ ...BTN, flex: 1, background: 'var(--teal-grad)', color: 'var(--ink-on-accent)', cursor: 'pointer' }}>Register</div>
+                <div onClick={beginRegister} style={{ ...BTN, flex: 1, background: 'var(--teal-grad)', color: 'var(--ink-on-accent)', cursor: 'pointer' }}>Register</div>
               </div>
             : <div style={DISABLED_BTN}>Register</div>}
 

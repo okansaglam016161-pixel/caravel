@@ -14,10 +14,14 @@ build/
 # Local tari.js reference (if linked here)
 tarijs-reference/
 
+# Private working notes — kept locally, not committed
+PROJECT_STATE.md
+
 # macOS
 .DS_Store
 
-# Logs & editor
+# Logs & editor, local tooling
 *.log
 .vscode/
 .idea/
+.claude/

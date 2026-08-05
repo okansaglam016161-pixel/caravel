@@ -4,8 +4,8 @@ import type { CaravelMessage } from './types'
 // localStorage keyed per identity, load on unlock, merge on arrival, clear React state on lock
 // while the stored copy persists. Two deliberate divergences from txHistory:
 //   1. No bigint fields — CaravelMessage is fully JSON-safe, so there is no toRaw/fromRaw layer.
-//   2. Function names are *Message-suffixed to avoid colliding with txHistory's addSent /
-//      mergeReceived, which WalletContext imports alongside these.
+//   2. Function names are *Message-suffixed to avoid colliding with txHistory's addSent, which
+//      WalletContext imports alongside these.
 
 // Window within which a self-authored 'received' copy is treated as an echo of a local 'sent'
 // message (see addReceivedMessage). Generous enough to cover relay round-trip + clock skew.

@@ -12,7 +12,7 @@ import {
 } from '../crypto/walletCrypto'
 import { deriveNostrKeyFromSeed } from '../crypto/nostrCrypto'
 import { scanWallet, type ScannedUtxo, type ScanProgress } from '../crypto/walletScanner'
-import { loadHistory, addSent, mergeReceived, type TxEntry, type NewSentParams } from '../crypto/txHistory'
+import { loadHistory, addSent, type SentEntry, type NewSentParams } from '../crypto/txHistory'
 import { NostrMessagingProvider } from '../messaging/NostrMessagingProvider'
 import type { MessagingProvider, MessagingConnectionStatus, CaravelMessage, RelayState } from '../messaging/types'
 import { loadMessages, addReceivedMessage, addSentMessage, deletePeerMessages } from '../messaging/messageStore'
@@ -56,7 +56,7 @@ export interface WalletCtx {
    *  need raw hex without re-decoding bech32 — derivation already computes it for free. */
   nostrPubkeyHex: string | null
   scan: ScanState
-  txHistory: TxEntry[]
+  txHistory: SentEntry[]
   /** Generate a fresh BIP-39 mnemonic (sync, call before showing step 2). */
   generateMnemonic: () => string
   /** Encrypt mnemonic with password, save to localStorage, unlock in memory. */
@@ -124,7 +124,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const [nostrPubkeyHex, setNostrPubkeyHex] = useState<string | null>(null)
   const [walletExists, setWalletExists] = useState(() => hasStoredWallet())
   const [scan, setScan] = useState<ScanState>(SCAN_IDLE)
-  const [txHistory, setTxHistory] = useState<TxEntry[]>([])
+  const [txHistory, setTxHistory] = useState<SentEntry[]>([])
 
   // Ref holds the AbortController for the active scan — replaced each run
   const scanAbortRef = useRef<AbortController | null>(null)
@@ -147,7 +147,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   // exchanged address arrives in the subscription callback (M9.0d).
   const [contactAddresses, setContactAddresses] = useState<TariAddressMap>({})
 
-  const startScan = useCallback((w: SecretKeyWallet, addr: string) => {
+  const startScan = useCallback((w: SecretKeyWallet) => {
     // Cancel any prior scan
     scanAbortRef.current?.abort()
     const ctrl = new AbortController()
@@ -178,7 +178,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         incomplete: result.incomplete,
         error: '',
       })
-      setTxHistory(prev => mergeReceived(addr, prev, result.utxos))
+      // Note: the scan feeds BALANCE only. Activity is derived from message-linked payments
+      // (see buildActivity) — the scan can't tell an incoming payment from our own change output.
     }).catch((err: unknown) => {
       if (ctrl.signal.aborted) return
       // A real (post-retry) failure — clear stale balance/utxos so we show an honest error + Retry,
@@ -197,7 +198,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     setWallet(w)
     setAddress(addr)
     setTxHistory(loadHistory(addr))
-    startScan(w, addr)
+    startScan(w)
   }, [startScan])
 
   const generateMnemonic = useCallback(() => createMnemonic(), [])
@@ -323,7 +324,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const rescan = useCallback(() => {
-    if (wallet && address) startScan(wallet, address)
+    if (wallet && address) startScan(wallet)
   }, [wallet, address, startScan])
 
   const recordSent = useCallback((params: NewSentParams) => {

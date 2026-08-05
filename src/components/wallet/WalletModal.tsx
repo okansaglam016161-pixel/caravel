@@ -9,7 +9,8 @@ import { useWallet } from '../../context/WalletContext'
 import OnsRegisterPanel from './OnsRegisterPanel'
 import FaucetClaimPanel from './FaucetClaimPanel'
 import { sendConfidential, tariToMicrotari, MAX_FEE, type SendOutcome } from '../../crypto/confidentialSend'
-import type { TxEntry } from '../../crypto/txHistory'
+import { buildActivity, type ActivityRow } from '../../crypto/activity'
+import { usePaymentResolution } from '../../hooks/usePaymentResolution'
 import { QRCodeSVG } from 'qrcode.react'
 
 type Tab = 'overview' | 'send' | 'receive' | 'activity'
@@ -22,34 +23,24 @@ const fmt2 = (µt: bigint | number) => (Number(µt) / 1_000_000).toLocaleString(
 // Fee: trimmed decimals (design shows "0.0042" / "0.01").
 const fmtFee = (µt: bigint) => (Number(µt) / 1_000_000).toString()
 
-function TxRow({ entry, hidden }: { entry: TxEntry; hidden: boolean }) {
-  const sent = entry.type === 'sent'
-  const outcome = sent ? entry.outcome : 'Commit'
-  // status → design icon-chip + inline status label
-  const kind = !sent ? 'received' : outcome === 'Commit' ? 'confirmed' : outcome === 'Reject' ? 'failed' : 'notconf'
-  const iconWrap: Record<string, React.CSSProperties> = {
+// Presentational row shell — the design markup, driven by already-computed display values so both
+// the sent (wallet + chat) and received (message-linked, resolved lazily) sources render identically.
+type RowKind = 'confirmed' | 'received' | 'notconf' | 'failed'
+function TxRowShell({ kind, title, sub, amount, amountColor, hidden, hasNote, status }: {
+  kind: RowKind; title: string; sub: string; amount: string; amountColor: string; hidden: boolean; hasNote: boolean; status: { t: string; c: string }
+}) {
+  const iconWrap: Record<RowKind, React.CSSProperties> = {
     confirmed: { background: 'rgba(var(--teal-500-rgb),0.1)', border: '1px solid rgba(var(--teal-500-rgb),0.22)' },
     received: { background: 'rgba(var(--border-rgb),0.07)', border: '1px solid rgba(var(--border-rgb),0.16)' },
     notconf: { background: 'rgba(var(--warn-rgb),0.05)', border: '1px dashed rgba(var(--warn-rgb),0.34)' },
     failed: { background: 'rgba(var(--danger-rgb),0.07)', border: '1px solid rgba(var(--danger-rgb),0.24)' },
   }
-  const icon: Record<string, React.ReactNode> = {
+  const icon: Record<RowKind, React.ReactNode> = {
     confirmed: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--teal-500)" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M12 19V5M5 12l7-7 7 7" /></svg>,
     received: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v14M5 12l7 7 7-7" /></svg>,
     notconf: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--warn)" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /><path d="M4.5 4.5l15 15" opacity="0.55" /></svg>,
     failed: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--danger-500)" strokeWidth="2.4" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>,
   }
-  const statusText: Record<string, { t: string; c: string }> = {
-    confirmed: { t: 'Confirmed', c: 'var(--teal-300)' },
-    received: { t: 'Confirmed', c: 'var(--teal-300)' },
-    notconf: { t: 'Not confirmed', c: 'var(--warn-300)' },
-    failed: { t: 'Failed', c: 'var(--danger-300)' },
-  }
-  const title = sent ? `Sent to ${entry.recipient.slice(0, 10)}…${entry.recipient.slice(-4)}` : 'Received'
-  const amount = fmt2(entry.amountMicrotari)
-  const amountColor = kind === 'failed' ? 'var(--text-faint-dim)' : 'var(--text-teal-label)'
-  const sub = entry.note ? `“${entry.note}”` : kind === 'notconf' ? 'Broadcast, never confirmed' : kind === 'failed' ? 'Nothing was taken' : 'No note'
-
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 13, padding: 13, borderRadius: 12, borderBottom: '1px solid rgba(var(--border-rgb),0.07)' }}>
       <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 34, height: 34, borderRadius: 10, flexShrink: 0, ...iconWrap[kind] }}>{icon[kind]}</span>
@@ -59,16 +50,43 @@ function TxRow({ entry, hidden }: { entry: TxEntry; hidden: boolean }) {
           <span style={{ fontFamily: MONO, fontSize: 13, color: hidden ? 'var(--text-teal-label)' : amountColor, letterSpacing: hidden ? '0.1em' : undefined, flexShrink: 0, marginLeft: 8 }}>{hidden ? '••••' : amount}</span>
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginTop: 3 }}>
-          <span style={{ fontSize: 12, color: entry.note ? 'var(--text-teal-dim)' : 'var(--text-faint)', fontStyle: entry.note ? 'italic' : 'normal', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{sub}</span>
-          <span style={{ fontSize: 11, fontWeight: 600, color: statusText[kind].c, flexShrink: 0, marginLeft: 8 }}>{statusText[kind].t}</span>
+          <span style={{ fontSize: 12, color: hasNote ? 'var(--text-teal-dim)' : 'var(--text-faint)', fontStyle: hasNote ? 'italic' : 'normal', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{sub}</span>
+          <span style={{ fontSize: 11, fontWeight: 600, color: status.c, flexShrink: 0, marginLeft: 8 }}>{status.t}</span>
         </div>
       </div>
     </div>
   )
 }
 
+// An outflow — wallet-modal send (has an outcome) or a chat send (outcome not tracked → shown "Sent").
+function SentActivityRow({ row, hidden }: { row: Extract<ActivityRow, { kind: 'sent' }>; hidden: boolean }) {
+  const kind: RowKind = row.outcome === 'Reject' ? 'failed' : row.outcome === 'Timeout' ? 'notconf' : 'confirmed'
+  const amount = row.amountMicrotari !== null ? fmt2(row.amountMicrotari) : '—'
+  const amountColor = kind === 'failed' ? 'var(--text-faint-dim)' : 'var(--text-teal-label)'
+  const sub = row.note ? `“${row.note}”` : kind === 'notconf' ? 'Broadcast, never confirmed' : kind === 'failed' ? 'Nothing was taken' : 'No note'
+  const status = row.outcome === null ? { t: 'Sent', c: 'var(--teal-300)' }
+    : kind === 'failed' ? { t: 'Failed', c: 'var(--danger-300)' }
+    : kind === 'notconf' ? { t: 'Not confirmed', c: 'var(--warn-300)' }
+    : { t: 'Confirmed', c: 'var(--teal-300)' }
+  return <TxRowShell kind={kind} title={row.counterparty} sub={sub} amount={amount} amountColor={amountColor} hidden={hidden} hasNote={!!row.note} status={status} />
+}
+
+// An inflow — a message-linked received payment; its confidential amount is resolved lazily (M10.2).
+function ReceivedActivityRow({ row, hidden }: { row: Extract<ActivityRow, { kind: 'received' }>; hidden: boolean }) {
+  const { state } = usePaymentResolution(row.utxoId)
+  let amount = '—'
+  let status: { t: string; c: string }
+  if (state.kind === 'resolved') { amount = fmt2(BigInt(state.amountMicrotari)); status = { t: 'Received', c: 'var(--teal-300)' } }
+  else if (state.kind === 'loading' || state.kind === 'retrying') { amount = '…'; status = { t: 'Resolving', c: 'var(--text-faint-dim)' } }
+  else status = state.reason === 'spent' ? { t: 'Spent', c: 'var(--text-faint-dim)' }
+    : state.reason === 'unreadable' ? { t: 'Unavailable', c: 'var(--text-faint-dim)' }
+    : { t: 'Pending', c: 'var(--warn-300)' }   // not_found / network — indexer lag, may still resolve
+  const sub = row.note ? `“${row.note}”` : 'No note'
+  return <TxRowShell kind="received" title={row.counterparty} sub={sub} amount={amount} amountColor="var(--text-teal-label)" hidden={hidden} hasNote={!!row.note} status={status} />
+}
+
 export default function WalletModal({ onClose }: { onClose: () => void }) {
-  const { wallet, address, scan, rescan, txHistory, recordSent, balanceHidden, setBalanceHidden } = useWallet()
+  const { wallet, address, scan, rescan, txHistory, messages, recordSent, balanceHidden, setBalanceHidden } = useWallet()
 
   const [tab, setTab] = useState<Tab>('overview')
   const [addrCopied, setAddrCopied] = useState(false)
@@ -473,8 +491,11 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
           )}
 
           {/* ═══ ACTIVITY ═══ */}
-          {tab === 'activity' && (
-            txHistory.length === 0 ? (
+          {tab === 'activity' && (() => {
+            // Derived from the two authoritative sources (wallet sends + message-linked payments),
+            // never the blind scan — see buildActivity. Balance still counts all owned UTXOs.
+            const activity = buildActivity(txHistory, messages)
+            return activity.length === 0 ? (
               <div style={{ padding: '56px 24px', borderRadius: 16, background: 'var(--surface)', border: '1px solid rgba(var(--border-rgb),0.16)', textAlign: 'center' }}>
                 <svg viewBox="0 0 44 44" width="40" height="40" style={{ opacity: 0.3, marginBottom: 16 }} aria-hidden="true">
                   <path d="M22 4 C 33 12 35 24 33 33 L 22 33 Z" fill="var(--teal-500)" />
@@ -492,14 +513,12 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
                     {balanceHidden ? eyeOff('var(--teal-500)') : eyeOpen('var(--text-teal-dim)')}{balanceHidden ? 'Show amounts' : 'Hide amounts'}
                   </span>
                 </div>
-                {[...txHistory].sort((a, b) => {
-                  const ta = a.type === 'sent' ? a.timestamp : a.discoveredAt
-                  const tb = b.type === 'sent' ? b.timestamp : b.discoveredAt
-                  return tb - ta
-                }).map(entry => <TxRow key={entry.id} entry={entry} hidden={balanceHidden} />)}
+                {activity.map(row => row.kind === 'sent'
+                  ? <SentActivityRow key={row.id} row={row} hidden={balanceHidden} />
+                  : <ReceivedActivityRow key={row.id} row={row} hidden={balanceHidden} />)}
               </div>
             )
-          )}
+          })()}
 
         </div>
       </div>

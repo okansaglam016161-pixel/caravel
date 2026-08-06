@@ -17,6 +17,7 @@ import { NostrMessagingProvider } from '../messaging/NostrMessagingProvider'
 import type { MessagingProvider, MessagingConnectionStatus, CaravelMessage, RelayState } from '../messaging/types'
 import { loadMessages, addReceivedMessage, addSentMessage, deletePeerMessages, deleteGroupMessages } from '../messaging/messageStore'
 import { loadGroups, addOrUpdateGroup, ensureGroup, deleteGroup as removeGroupFromStore } from '../messaging/groupStore'
+import { loadDeletedGroupIdSet, recordDeletedGroup } from '../messaging/deletedGroupStore'
 import type { Group } from '../messaging/types'
 import { loadTombstoneIdSet, recordTombstones } from '../messaging/tombstoneStore'
 import { removeResolvedAmounts } from '../messaging/paymentResolutionStore'
@@ -146,6 +147,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   // In-memory tombstone set (deleted gift-wrap event ids) — loaded once per unlock so a backfill
   // burst checks memory, not localStorage per message. Kept in sync on delete.
   const tombstonesRef = useRef<Set<string>>(new Set())
+  // In-memory set of deleted group ids — the def-suppression counterpart to tombstonesRef (which is
+  // per-message-id). Rehydrated from localStorage on unlock BEFORE the subscription replays.
+  const deletedGroupsRef = useRef<Set<string>>(new Set())
   // In-memory set of peers we have ANY message with — burst-safe "is this a brand-new peer?" test
   // for the pending-contact rule (React `messages` state is stale mid-burst). Seeded on unlock.
   const knownPeersRef = useRef<Set<string>>(new Set())
@@ -239,6 +243,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     )
     // Load deleted-message tombstones (pruned) so the relay's 2-day backfill can't resurrect them.
     tombstonesRef.current = loadTombstoneIdSet(pubkeyHex)
+    // Load deleted-group ids so onGroupDefinition can suppress a deleted group's replayed def.
+    deletedGroupsRef.current = loadDeletedGroupIdSet(pubkeyHex)
     const provider = new NostrMessagingProvider(secretHex, pubkeyHex, DEFAULT_RELAYS)
     messagingProviderRef.current = provider
     setMessagingStatus('connecting')
@@ -284,7 +290,14 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       // know can introduce a group. first-def-wins is enforced inside addOrUpdateGroup.
       (senderPubkeyHex, def) => {
         if (!knownPeersRef.current.has(senderPubkeyHex) && !contactsRef.current.has(senderPubkeyHex)) return
-        setGroups(prev => addOrUpdateGroup(pubkeyHex, prev, def))
+        setGroups(prev => {
+          // Present-check: drop a def that would RESURRECT a deleted group — one that is absent
+          // locally AND whose id is in the deleted-groups set (a stale backfill replay). A genuine
+          // new message re-materialises the group (ungated, in the onMessage branch); once the group
+          // is present again, a replayed def flows through here and re-names/re-rosters it.
+          if (!prev.some(g => g.id === def.id) && deletedGroupsRef.current.has(def.id)) return prev
+          return addOrUpdateGroup(pubkeyHex, prev, def)
+        })
       }
     )
   }, [])
@@ -337,6 +350,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     messagingProviderRef.current?.disconnect()
     messagingProviderRef.current = null
     tombstonesRef.current = new Set()
+    deletedGroupsRef.current = new Set()
     knownPeersRef.current = new Set()
     setMessagingStatus('disconnected')
     setMessages([])
@@ -463,9 +477,15 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const deleteGroup = useCallback((groupId: string) => {
     const pubkeyHex = nostrPubkeyHex
     if (!pubkeyHex) return
+    // Tombstone the group's MESSAGE ids so the backfill replay can't re-add them.
     const ids = messages.filter(m => m.groupId === groupId).map(m => m.id)
     recordTombstones(pubkeyHex, ids)
     for (const id of ids) tombstonesRef.current.add(id)
+    // A DEFINITION creates no stored message, so message-id tombstones can't cover it — suppress by
+    // GROUP ID instead: onGroupDefinition drops a replayed def for a deleted, still-absent group.
+    // Works for every group (legacy included); a genuine new message still re-materialises it.
+    recordDeletedGroup(pubkeyHex, groupId)
+    deletedGroupsRef.current.add(groupId)
     setGroups(prev => removeGroupFromStore(pubkeyHex, prev, groupId))
     setMessages(prev => deleteGroupMessages(pubkeyHex, prev, groupId))
   }, [nostrPubkeyHex, messages])

@@ -14,6 +14,9 @@ import { sendConfidential, tariToMicrotari, MAX_FEE } from '../../crypto/confide
 import { resolveOnsNameToHex, toOnsName, type OnsResolveErrorKind } from '../../crypto/ons'
 import { ConnectionIndicator, RelayHealthPanel } from './ConnectionStatus'
 import { usePaymentResolution } from '../../hooks/usePaymentResolution'
+import { avatarFor, initialsFor, truncNpub, bubbleTime, compactTime, MONO } from './chatDisplay'
+import Avatar from './Avatar'
+import MessageBubble from './MessageBubble'
 
 // ── Conversation derivation ─────────────────────────────────────────────────────
 
@@ -51,40 +54,9 @@ function deriveConversations(messages: CaravelMessage[]): Conversation[] {
 }
 
 // ── Display helpers ──────────────────────────────────────────────────────────────
-
-// npub1abcdefg…wxyz — never throws (blank/invalid hex falls back to raw prefix).
-function truncNpub(peerHex: string): string {
-  try {
-    const npub = nip19.npubEncode(peerHex)
-    return npub.slice(0, 12) + '…' + npub.slice(-4)
-  } catch { return peerHex.slice(0, 10) + '…' }
-}
-
-// Two-letter avatar initials from a nickname; "··" when we only have an npub.
-function initialsFor(nickname: string | undefined): string {
-  if (!nickname) return '··'
-  const parts = nickname.trim().split(/\s+/)
-  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase()
-  return nickname.trim().slice(0, 2).toUpperCase()
-}
-
-// Compact list timestamp: time today, weekday within a week, else month/day.
-function compactTime(ts: number): string {
-  const d = new Date(ts)
-  const now = new Date()
-  if (d.toDateString() === now.toDateString()) {
-    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-  }
-  if ((now.getTime() - ts) < 7 * 86_400_000) {
-    return d.toLocaleDateString([], { weekday: 'short' })
-  }
-  return d.toLocaleDateString([], { month: 'short', day: 'numeric' })
-}
-
-// Full time shown under each message bubble.
-function bubbleTime(ts: number): string {
-  return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-}
+// Shared helpers (avatarFor, initialsFor, truncNpub, bubbleTime, compactTime, MONO) now live in
+// chatDisplay.ts and are imported above — single source of truth for the DM + group views. The
+// remaining helpers/consts below are ChatApp-local.
 
 // Compact relative age for request rows: "3m" / "2h" / "1d".
 function ageShort(ts: number): string {
@@ -93,21 +65,6 @@ function ageShort(ts: number): string {
   const hrs = mins / 60
   if (hrs < 24) return `${Math.round(hrs)}h`
   return `${Math.round(hrs / 24)}d`
-}
-
-// Stable avatar gradient per peer — the design's 5 avatar-token pairs (teal/slate/plum/moss/amber),
-// assigned by hash of the contact key.
-const AVATARS = [
-  { grad: 'var(--avatar-teal)', color: 'var(--avatar-teal-ink)' },
-  { grad: 'var(--avatar-slate)', color: 'var(--avatar-slate-ink)' },
-  { grad: 'var(--avatar-plum)', color: 'var(--avatar-plum-ink)' },
-  { grad: 'var(--avatar-moss)', color: 'var(--avatar-moss-ink)' },
-  { grad: 'var(--avatar-amber)', color: 'var(--avatar-amber-ink)' },
-]
-function avatarFor(peerHex: string) {
-  let h = 0
-  for (let i = 0; i < peerHex.length; i++) h = (h * 31 + peerHex.charCodeAt(i)) >>> 0
-  return AVATARS[h % AVATARS.length]
 }
 
 // Cap on a single message. A longer paste would just be rejected by relays and surface as a
@@ -120,7 +77,6 @@ const COMPOSER_MAX_H = 120
 // Fee ceiling shown in the confirm step. Reuses confidentialSend.MAX_FEE and the wallet's trimmed
 // format so both surfaces render the identical "≤ 0.01 TARI".
 const FEE_CEIL_TARI = (Number(MAX_FEE) / 1_000_000).toString()
-const MONO = "'IBM Plex Mono', monospace"
 
 // Compose-modal resolution state (Flag 1b). `ok` carries the resolved peer; `name` is the ONS name
 // (null for a raw npub), `existing` true when it is already an accepted conversation.
@@ -1013,14 +969,13 @@ export default function ChatApp() {
                 {filteredConversations.map((c) => {
                   const active = !selectedGroupId && selectedConvo?.peerHex === c.peerHex
                   const nick = nicknames[c.peerHex]
-                  const av = avatarFor(c.peerHex)
                   const lm = c.lastMessage
                   const isPay = !!lm?.payment
                   const preview = !lm ? '' : isPay ? 'Payment sent' : lm.direction === 'sent' ? `You: ${lm.plaintext}` : lm.plaintext
                   return (
                     <div key={c.peerHex} onClick={() => { setSelectedPeer(c.peerHex); setSelectedGroupId(null) }} className="cv-conv" style={{ display: 'flex', gap: 13, padding: 13, borderRadius: 12, position: 'relative', background: active ? 'var(--surface-row-selected)' : 'transparent', border: active ? '1px solid rgba(var(--teal-500-rgb),0.18)' : '1px solid transparent', cursor: 'pointer', marginBottom: 4 }}>
                       {active && <span style={{ position: 'absolute', left: 0, top: 14, bottom: 14, width: 3, borderRadius: '0 3px 3px 0', background: 'var(--teal-500)' }} />}
-                      <div style={{ width: 46, height: 46, borderRadius: 13, background: av.grad, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, fontWeight: 700, color: av.color, flexShrink: 0 }}>{initialsFor(nick)}</div>
+                      <Avatar hex={c.peerHex} nickname={nick} size={46} radius={13} />
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 3, gap: 8 }}>
                           <span style={{ fontSize: 15, fontWeight: 600, color: active ? 'var(--text-primary)' : 'var(--text-name)', fontFamily: nick ? undefined : "'IBM Plex Mono', monospace", overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{displayName(c.peerHex)}</span>
@@ -1076,9 +1031,7 @@ export default function ChatApp() {
           {/* Chat header (design: avatar, nickname + @handle inline, E2E badge, ⋯ only) */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 24px', borderBottom: '1px solid rgba(var(--border-rgb),0.1)', flexShrink: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 13, minWidth: 0 }}>
-              {(() => { const av = avatarFor(selectedConvo.peerHex); return (
-                <div style={{ width: 42, height: 42, borderRadius: 12, background: av.grad, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, fontWeight: 700, color: av.color, flexShrink: 0 }}>{initialsFor(nicknames[selectedConvo.peerHex])}</div>
-              ) })()}
+              <Avatar hex={selectedConvo.peerHex} nickname={nicknames[selectedConvo.peerHex]} size={42} radius={12} />
               <div style={{ minWidth: 0 }}>
                 {editingNick ? (
                   <input
@@ -1189,21 +1142,13 @@ export default function ChatApp() {
             {selectedConvo.messages.map((m) => (
               m.payment ? (
                 <PaymentMessageCard key={m.id} message={m} />
-              ) : (isSelf || m.direction === 'received') ? (
-                /* Incoming / notes-to-self */
-                <div key={m.id} style={{ alignSelf: isSelf ? 'flex-end' : 'flex-start', maxWidth: '62%' }}>
-                  <div style={{ padding: '13px 17px', borderRadius: isSelf ? 14 : '4px 16px 16px 16px', background: 'var(--surface-inset)', border: isSelf ? '1px solid rgba(var(--border-rgb),0.14)' : 'none', color: 'var(--text-body)', fontSize: 15, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.plaintext}</div>
-                  {!isSelf && <div style={{ fontFamily: MONO, fontSize: 11, color: 'var(--text-faint-dim)', marginTop: 5, marginLeft: 4 }}>{bubbleTime(m.timestamp)}</div>}
-                </div>
               ) : (
-                /* Outgoing */
-                <div key={m.id} style={{ alignSelf: 'flex-end', maxWidth: '62%', display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
-                  <div style={{ padding: '13px 17px', borderRadius: '16px 4px 16px 16px', background: 'var(--msg-sent)', color: 'var(--text-bright)', fontSize: 15, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.plaintext}</div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontFamily: MONO, fontSize: 11, color: 'var(--text-muted-dim)', marginTop: 6, marginRight: 4 }}>
-                    {bubbleTime(m.timestamp)}
-                    <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="var(--teal-500)" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round"><path d="M18 7l-8 8-4-4" /></svg>
-                  </div>
-                </div>
+                <MessageBubble
+                  key={m.id}
+                  text={m.plaintext}
+                  timestamp={m.timestamp}
+                  variant={isSelf ? 'self' : m.direction === 'received' ? 'received' : 'sent'}
+                />
               )
             ))}
 

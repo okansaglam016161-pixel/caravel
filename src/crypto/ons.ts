@@ -5,7 +5,7 @@
 //   The live registry component is config passed to createOnsClient — nothing is hardcoded in the
 //   library itself. The register (write) side lives in the wallet UI and uses the browser signer.
 
-import { createOnsClient } from '@ootle/name-service'
+import { createOnsClient, type NameRecord } from '@ootle/name-service'
 import type { SecretKeyWallet } from '@tari-project/ootle-secret-key-wallet'
 import * as nip19 from 'nostr-tools/nip19'
 
@@ -156,5 +156,36 @@ export async function registerOnsName(
     return { ok: true, txId: res.transactionId, fee: res.fee }
   } catch (e) {
     return { ok: false, error: (e as Error).message || 'Registration failed.' }
+  }
+}
+
+// ── owned names (reverse lookup) ────────────────────────────────────────────────
+
+export type { NameRecord }
+
+export interface OwnedNamesResult {
+  ok: boolean
+  names?: NameRecord[]
+  error?: string
+}
+
+function bytesToHex(bytes: Uint8Array): string {
+  let s = ''
+  for (const b of bytes) s += b.toString(16).padStart(2, '0')
+  return s
+}
+
+/**
+ * The @names this wallet owns. Derives the owner key (the wallet's Ristretto public key, the same
+ * identity recorded on-chain as a name's owner) and filters the registry by it — keyless, on-chain,
+ * and identical on any device for the same wallet.
+ */
+export async function ownedOnsNames(wallet: SecretKeyWallet): Promise<OwnedNamesResult> {
+  try {
+    const ownerHex = bytesToHex(await wallet.getPublicKey())
+    const names = await ons.namesForOwner(ownerHex)
+    return { ok: true, names }
+  } catch (e) {
+    return { ok: false, error: (e as Error).message || 'Could not load your names — try again.' }
   }
 }

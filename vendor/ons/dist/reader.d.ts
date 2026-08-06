@@ -14,5 +14,12 @@ export declare class OnsReader {
     isRegistered(name: string): Promise<boolean>;
     /** Convenience for the common case: the `"nostr"` record for a name (what Caravel resolves). */
     resolveToNostr(name: string): Promise<string | null>;
+    /**
+     * Reverse lookup: every name owned by `ownerHex` (a Ristretto public key, hex). The contract has no
+     * owner→names query, but the whole registry is one substate, so we fetch it (the same read every
+     * resolution does) and filter by owner. Keyless and authoritative — works identically on any
+     * device for the same owner. Returns `[]` if the owner holds no names. Sorted by name.
+     */
+    namesForOwner(ownerKeyHex: string): Promise<NameRecord[]>;
 }
 //# sourceMappingURL=reader.d.ts.map

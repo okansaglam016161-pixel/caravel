@@ -8,6 +8,7 @@
 
 import { useEffect, useState } from 'react'
 import { useWallet } from '../../context/WalletContext'
+import { ownedOnsNames, type NameRecord } from '../../crypto/ons'
 import CopyBtn from '../primitives/CopyBtn'
 
 const MONO = 'var(--font-mono)'
@@ -22,21 +23,41 @@ function truncNpub(npub: string): string {
 }
 
 type Step = 'main' | 'phraseAuth' | 'phraseWords'
+type NamesState =
+  | { kind: 'loading' }
+  | { kind: 'list'; names: NameRecord[] }
+  | { kind: 'empty' }
+  | { kind: 'error'; msg: string }
 
 export default function ProfilePanel({ onClose, avatar }: { onClose: () => void; avatar: { grad: string; color: string } }) {
-  const { nostrNpub, getMnemonic, lock } = useWallet()
+  const { nostrNpub, getMnemonic, lock, wallet } = useWallet()
   const [step, setStep] = useState<Step>('main')
   const [phrasePass, setPhrasePass] = useState('')
   const [showPhrasePass, setShowPhrasePass] = useState(false)
   const [phraseError, setPhraseError] = useState('')
   const [phraseLoading, setPhraseLoading] = useState(false)
   const [words, setWords] = useState<string[] | null>(null)
+  const [names, setNames] = useState<NamesState>({ kind: 'loading' })
+  const [namesNonce, setNamesNonce] = useState(0)
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) { if (e.key === 'Escape') onClose() }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
+
+  // The @names this wallet owns — reverse-looked-up on-chain (see ownedOnsNames). Re-runs on retry.
+  useEffect(() => {
+    if (!wallet) return
+    let cancelled = false
+    setNames({ kind: 'loading' })
+    ownedOnsNames(wallet).then(r => {
+      if (cancelled) return
+      if (!r.ok) setNames({ kind: 'error', msg: r.error ?? 'Could not load your names — try again.' })
+      else setNames(r.names && r.names.length > 0 ? { kind: 'list', names: r.names } : { kind: 'empty' })
+    })
+    return () => { cancelled = true }
+  }, [wallet, namesNonce])
 
   // ── Relocated verbatim from WalletModal Settings ──
   async function revealPhrase() {
@@ -108,6 +129,31 @@ export default function ProfilePanel({ onClose, avatar }: { onClose: () => void;
               {nostrNpub
                 ? <CopyBtn value={nostrNpub} label={truncNpub(nostrNpub)} mono />
                 : <span style={{ fontFamily: MONO, fontSize: 12, color: 'var(--text-faint)' }}>npub unavailable</span>}
+
+              <div style={{ height: 1, background: 'rgba(var(--border-rgb),0.1)', margin: '18px 0 12px' }} />
+
+              {/* 1b · @names you own (on-chain reverse lookup) */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.14em', color: 'var(--text-faint-dim)' }}>YOUR @NAMES</span>
+                {names.kind === 'error' && <span onClick={() => setNamesNonce(n => n + 1)} style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-teal-dim)', cursor: 'pointer' }}>Retry</span>}
+              </div>
+              {names.kind === 'loading' && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 9, fontSize: 13, color: 'var(--text-faint)' }}>
+                  <span style={{ width: 14, height: 14, borderRadius: '50%', border: '2px solid rgba(var(--border-rgb),0.25)', borderTopColor: 'var(--text-muted-dim)', animation: 'cv-spin 0.8s linear infinite' }} />
+                  Looking up your names…
+                </div>
+              )}
+              {names.kind === 'empty' && (
+                <div style={{ fontSize: 13, color: 'var(--text-faint)', lineHeight: 1.5 }}>You haven't registered any @names yet.</div>
+              )}
+              {names.kind === 'error' && (
+                <div style={{ fontSize: 13, color: 'var(--danger-300)', lineHeight: 1.5 }}>{names.msg}</div>
+              )}
+              {names.kind === 'list' && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {names.names.map(n => <CopyBtn key={n.name} value={`@${n.name}`} label={`@${n.name}`} mono />)}
+                </div>
+              )}
 
               <div style={{ height: 1, background: 'rgba(var(--border-rgb),0.1)', margin: '18px 0 6px' }} />
 

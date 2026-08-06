@@ -53,6 +53,7 @@ export function addReceivedMessage(pubkeyHex: string, current: CaravelMessage[],
     const echoOfLocalSend = current.some(m =>
       m.direction === 'sent' &&
       m.plaintext === incoming.plaintext &&
+      m.groupId === incoming.groupId &&   // don't cross-match a DM and a same-text group message
       Math.abs(m.timestamp - incoming.timestamp) < SELF_ECHO_WINDOW_MS
     )
     // Have the local 'sent' already → drop the redundant echo. Otherwise it was sent from
@@ -79,6 +80,14 @@ export function deletePeerMessages(pubkeyHex: string, current: CaravelMessage[],
     const other = m.direction === 'received' ? m.senderPubkeyHex : m.recipientPubkeyHex
     return other !== peerHex
   })
+  if (next.length === current.length) return current
+  save(pubkeyHex, next)
+  return next
+}
+
+// Delete every message belonging to a group (Phase 1 group cleanup — pairs with groupStore.deleteGroup).
+export function deleteGroupMessages(pubkeyHex: string, current: CaravelMessage[], groupId: string): CaravelMessage[] {
+  const next = current.filter(m => m.groupId !== groupId)
   if (next.length === current.length) return current
   save(pubkeyHex, next)
   return next

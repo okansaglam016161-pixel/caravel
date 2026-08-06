@@ -2,7 +2,7 @@ import type { NostrEvent } from 'nostr-tools'
 import { wrapEvent } from 'nostr-tools/nip59'
 import { getConversationKey, decrypt } from 'nostr-tools/nip44'
 import { Relay } from 'nostr-tools/relay'
-import type { PaymentRef } from '../messaging/types'
+import type { PaymentRef, GroupDef } from '../messaging/types'
 
 // NIP-17 gift-wrap: https://github.com/nostr-protocol/nips/blob/master/17.md
 // Wraps a plaintext message in three layers: rumor (kind 14) → seal (kind 13, NIP-44) →
@@ -23,6 +23,50 @@ const PAYMENT_TAG_VERSION = 'v1'
 // authenticated by the seal.pubkey === rumor.pubkey check so it is bound to the sender's identity.
 const ADDRESS_TAG = 'caravel-tari-address'
 const ADDRESS_TAG_VERSION = 'v1'
+
+// Caravel group tags (Phase 1) — same seal-protected, versioned pattern as the tags above.
+//   ["caravel-group","v1","<group-id>"]        marks a rumor as belonging to a group (id).
+//   ["caravel-group-def","v1"]                 marks a rumor as a group DEFINITION control message;
+//     its content is JSON { name, members: [hex…] }. A non-Caravel client shows the JSON as text.
+const GROUP_TAG = 'caravel-group'
+const GROUP_TAG_VERSION = 'v1'
+const GROUP_DEF_TAG = 'caravel-group-def'
+const GROUP_DEF_VERSION = 'v1'
+
+// Pulls the group id out of a rumor's tags (version-checked, like extractPaymentRef).
+function extractGroupId(tags: string[][] | undefined): string | undefined {
+  if (!tags) return undefined
+  for (const tag of tags) {
+    if (tag[0] !== GROUP_TAG) continue
+    if (tag[1] !== GROUP_TAG_VERSION) return undefined  // unknown version → treat as non-group
+    const id = tag[2]
+    if (typeof id !== 'string' || id.length === 0) return undefined
+    return id
+  }
+  return undefined
+}
+
+// If the rumor is a group DEFINITION (has the def marker), parse content JSON → GroupDef, combining
+// the group id from the group tag with the { name, members } payload. Returns undefined otherwise or
+// on any malformed field, so a bad def degrades to "not a def" rather than being misread.
+function extractGroupDef(tags: string[][] | undefined, content: string): GroupDef | undefined {
+  if (!tags) return undefined
+  const isDef = tags.some(t => t[0] === GROUP_DEF_TAG && t[1] === GROUP_DEF_VERSION)
+  if (!isDef) return undefined
+  const id = extractGroupId(tags)
+  if (!id) return undefined
+  try {
+    const parsed = JSON.parse(content) as { name?: unknown; members?: unknown }
+    const name = typeof parsed.name === 'string' ? parsed.name : ''
+    const members = Array.isArray(parsed.members)
+      ? parsed.members.filter((m): m is string => typeof m === 'string' && m.length > 0)
+      : []
+    if (members.length === 0) return undefined
+    return { id, name, members }
+  } catch {
+    return undefined
+  }
+}
 
 // Pulls a payment reference out of the rumor's tags, or undefined if none/unrecognised.
 // A v1 reader MUST verify the version token and ignore unknown versions, so an unknown-version
@@ -61,15 +105,39 @@ export function wrapMessage(
   recipientPubkeyHex: string,
   plaintext: string,
   payment?: PaymentRef,
-  tariAddress?: string
+  tariAddress?: string,
+  groupId?: string
 ): NostrEvent {
   const tags: string[][] = [['p', recipientPubkeyHex]]
   if (payment) tags.push([PAYMENT_TAG, PAYMENT_TAG_VERSION, payment.utxoId])
   if (tariAddress) tags.push([ADDRESS_TAG, ADDRESS_TAG_VERSION, tariAddress])
+  if (groupId) tags.push([GROUP_TAG, GROUP_TAG_VERSION, groupId])
   const rumor = {
     kind: KIND_PRIVATE_DM,
     created_at: Math.round(Date.now() / 1000),
     content: plaintext,
+    tags,
+  }
+  return wrapEvent(rumor, senderSecretKey, recipientPubkeyHex)
+}
+
+// Wraps a group-DEFINITION control message for one recipient: content is JSON { name, members },
+// tagged with the group id and the def marker. Fan out one of these per member (minus self) so
+// their clients learn the group. Reuses the same seal/gift-wrap crypto as wrapMessage.
+export function wrapGroupDefinition(
+  senderSecretKey: Uint8Array,
+  recipientPubkeyHex: string,
+  def: GroupDef
+): NostrEvent {
+  const tags: string[][] = [
+    ['p', recipientPubkeyHex],
+    [GROUP_TAG, GROUP_TAG_VERSION, def.id],
+    [GROUP_DEF_TAG, GROUP_DEF_VERSION],
+  ]
+  const rumor = {
+    kind: KIND_PRIVATE_DM,
+    created_at: Math.round(Date.now() / 1000),
+    content: JSON.stringify({ name: def.name, members: def.members }),
     tags,
   }
   return wrapEvent(rumor, senderSecretKey, recipientPubkeyHex)
@@ -81,7 +149,7 @@ export function wrapMessage(
 export function unwrapMessage(
   recipientSecretKey: Uint8Array,
   giftWrapEvent: NostrEvent
-): { senderPubkeyHex: string; plaintext: string; payment?: PaymentRef; tariAddress?: string } {
+): { senderPubkeyHex: string; plaintext: string; payment?: PaymentRef; tariAddress?: string; groupId?: string; groupDef?: GroupDef } {
   // Layer 1: decrypt gift wrap (kind 1059) → seal (kind 13)
   const sealKey = getConversationKey(recipientSecretKey, giftWrapEvent.pubkey)
   const seal = JSON.parse(decrypt(giftWrapEvent.content, sealKey)) as {
@@ -111,6 +179,8 @@ export function unwrapMessage(
     plaintext: rumor.content,
     payment: extractPaymentRef(rumor.tags),
     tariAddress: extractTariAddress(rumor.tags),
+    groupId: extractGroupId(rumor.tags),
+    groupDef: extractGroupDef(rumor.tags, rumor.content),
   }
 }
 

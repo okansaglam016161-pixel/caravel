@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback, useRef, type ReactNode, type Dispatch, type SetStateAction } from 'react'
+import { createContext, useContext, useState, useCallback, useRef, useEffect, type ReactNode, type Dispatch, type SetStateAction } from 'react'
 import { type SecretKeyWallet } from '@tari-project/ootle-secret-key-wallet'
 import {
   createMnemonic,
@@ -15,7 +15,9 @@ import { scanWallet, type ScannedUtxo, type ScanProgress } from '../crypto/walle
 import { loadHistory, addSent, type SentEntry, type NewSentParams } from '../crypto/txHistory'
 import { NostrMessagingProvider } from '../messaging/NostrMessagingProvider'
 import type { MessagingProvider, MessagingConnectionStatus, CaravelMessage, RelayState } from '../messaging/types'
-import { loadMessages, addReceivedMessage, addSentMessage, deletePeerMessages } from '../messaging/messageStore'
+import { loadMessages, addReceivedMessage, addSentMessage, deletePeerMessages, deleteGroupMessages } from '../messaging/messageStore'
+import { loadGroups, addOrUpdateGroup, ensureGroup, deleteGroup as removeGroupFromStore } from '../messaging/groupStore'
+import type { Group } from '../messaging/types'
 import { loadTombstoneIdSet, recordTombstones } from '../messaging/tombstoneStore'
 import { removeResolvedAmounts } from '../messaging/paymentResolutionStore'
 import { loadContacts, setContactState, removeContact, type ContactMap } from '../messaging/contactStore'
@@ -80,6 +82,14 @@ export interface WalletCtx {
   messages: CaravelMessage[]
   /** Persist + surface a message we just sent (the CaravelMessage returned by sendMessage). */
   recordSentMessage: (msg: CaravelMessage) => void
+  /** Groups the current identity participates in (Phase 1: fan-out, in-message roster). Persisted
+   *  per-pubkey; reloaded on unlock; cleared on lock (stored copy survives). */
+  groups: Group[]
+  /** Create a group locally (id generated, self included in the roster) and fan its definition out
+   *  to the other members so their clients learn it. Returns the new Group. */
+  createGroup: (name: string, memberHexes: string[]) => Promise<Group>
+  /** Delete a group locally: remove it + its groupId-keyed messages (Phase 1 cleanup). */
+  deleteGroup: (groupId: string) => void
   /** Per-peer contact state (M9.0b). No record + has messages ⇒ treat as 'accepted' (lazy). */
   contacts: ContactMap
   /** Accept a pending peer (M9.0c request UI). */
@@ -139,6 +149,10 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   // In-memory set of peers we have ANY message with — burst-safe "is this a brand-new peer?" test
   // for the pending-contact rule (React `messages` state is stale mid-burst). Seeded on unlock.
   const knownPeersRef = useRef<Set<string>>(new Set())
+  const [groups, setGroups] = useState<Group[]>([])
+  // Fresh-in-callback set of contact pubkeys (any state) for the group-sender gate — React
+  // `contacts` state is stale inside the subscribe closure. Kept in sync via the effect below.
+  const contactsRef = useRef<Set<string>>(new Set())
   const [messagingStatus, setMessagingStatus] = useState<MessagingConnectionStatus>('disconnected')
   const [balanceHidden, setBalanceHidden] = useState(false)
   const [messages, setMessages] = useState<CaravelMessage[]>([])
@@ -146,6 +160,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   // Per-contact Tari addresses (manual or verified-exchanged). Owned here because the inbound
   // exchanged address arrives in the subscription callback (M9.0d).
   const [contactAddresses, setContactAddresses] = useState<TariAddressMap>({})
+
+  // Keep the gate ref in sync so the subscribe closure sees current contacts (state would be stale).
+  useEffect(() => { contactsRef.current = new Set(Object.keys(contacts)) }, [contacts])
 
   const startScan = useCallback((w: SecretKeyWallet) => {
     // Cancel any prior scan
@@ -214,6 +231,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     setMessages(loaded)
     setContacts(loadContacts(pubkeyHex))
     setContactAddresses(loadTariAddresses(pubkeyHex))
+    setGroups(loadGroups(pubkeyHex))
     // Seed the "known peers" set from persisted history — anyone we already have a message with is
     // NOT a new peer (so their next inbound never gets mis-flagged as a pending request).
     knownPeersRef.current = new Set(
@@ -230,6 +248,16 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       // Tombstoned ids (deleted conversations) are dropped silently before they hit the store.
       (msg) => {
         if (tombstonesRef.current.has(msg.id)) return
+        // GROUP message (Phase 1): gate to KNOWN CONTACTS (sender is someone we already know), and
+        // deliberately DO NOT run the DM pending-contact logic — group membership isn't a DM request.
+        // Drop group messages from strangers. A known group message ensures its (lazy) group entry.
+        if (msg.groupId) {
+          const sender = msg.senderPubkeyHex
+          if (!knownPeersRef.current.has(sender) && !contactsRef.current.has(sender)) return
+          setGroups(prev => ensureGroup(pubkeyHex, prev, msg.groupId!))
+          setMessages(prev => addReceivedMessage(pubkeyHex, prev, msg))
+          return
+        }
         const peerHex = msg.senderPubkeyHex
         // Brand-new peer (no message with them ever) → a PENDING request. Write the pending record
         // FIRST (before the message is added), so when the list re-derives in the same batched
@@ -251,6 +279,12 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       (senderPubkeyHex, tariAddress) => {
         if (!senderPubkeyHex || !tariAddress.startsWith('otl_')) return
         setContactAddresses(prev => setTariAddress(pubkeyHex, prev, senderPubkeyHex, tariAddress, 'exchanged'))
+      },
+      // Inbound group definition. Same KNOWN-CONTACT gate as group messages: only a sender we already
+      // know can introduce a group. first-def-wins is enforced inside addOrUpdateGroup.
+      (senderPubkeyHex, def) => {
+        if (!knownPeersRef.current.has(senderPubkeyHex) && !contactsRef.current.has(senderPubkeyHex)) return
+        setGroups(prev => addOrUpdateGroup(pubkeyHex, prev, def))
       }
     )
   }, [])
@@ -306,6 +340,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     knownPeersRef.current = new Set()
     setMessagingStatus('disconnected')
     setMessages([])
+    setGroups([])
+    contactsRef.current = new Set()
     setContacts({})
     setContactAddresses({})
     setScan(SCAN_IDLE)
@@ -399,6 +435,41 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     return new NostrMessagingProvider(secretHex, nostrPubkeyHex, DEFAULT_RELAYS)
   }, [nostrPubkeyHex])
 
+  // Create a group locally (random 32-byte id, self included in the roster) and fan its definition
+  // out to the other members so their clients learn it. Delivery is best-effort (relays-reached, not
+  // a receipt) and never blocks creation. Members are already my contacts, so their gate accepts me.
+  const createGroup = useCallback(async (name: string, memberHexes: string[]): Promise<Group> => {
+    if (!nostrPubkeyHex) throw new Error('Wallet locked')
+    const idBytes = crypto.getRandomValues(new Uint8Array(32))
+    let id = ''
+    for (const b of idBytes) id += b.toString(16).padStart(2, '0')
+    // Roster includes me; dedup; drop blanks.
+    const members = Array.from(new Set([nostrPubkeyHex, ...memberHexes].filter(Boolean)))
+    const group: Group = { id, name: name.trim(), members, createdAt: Date.now() }
+    setGroups(prev => addOrUpdateGroup(nostrPubkeyHex, prev, group))
+    const provider = createMessagingProvider()
+    if (provider) {
+      provider.sendGroupDefinition(group)
+        .catch(() => { /* best-effort — members can also learn the group from the first message */ })
+        .finally(() => provider.disconnect())
+    }
+    return group
+  }, [nostrPubkeyHex, createMessagingProvider])
+
+  // Delete a group locally (Phase 1 cleanup). Mirrors deleteConversation: tombstone the group's
+  // message ids FIRST — persisted + in-memory — so the relay's backfill replay can't resurrect the
+  // group via ensureGroup on the next unlock. Semantics are "forget until re-invited": a genuinely
+  // NEW message (new event id, not tombstoned) later re-materialises the group.
+  const deleteGroup = useCallback((groupId: string) => {
+    const pubkeyHex = nostrPubkeyHex
+    if (!pubkeyHex) return
+    const ids = messages.filter(m => m.groupId === groupId).map(m => m.id)
+    recordTombstones(pubkeyHex, ids)
+    for (const id of ids) tombstonesRef.current.add(id)
+    setGroups(prev => removeGroupFromStore(pubkeyHex, prev, groupId))
+    setMessages(prev => deleteGroupMessages(pubkeyHex, prev, groupId))
+  }, [nostrPubkeyHex, messages])
+
   // Read-only accessors onto the live provider for the connection/relay-health UI.
   const getRelayStates = useCallback((): RelayState[] => messagingProviderRef.current?.getRelayStates() ?? [], [])
   const reconnectAll = useCallback((): void => { messagingProviderRef.current?.reconnectAll() }, [])
@@ -411,6 +482,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       recordSentMessage, contacts, acceptContact, contactAddresses, setManualTariAddress,
       deleteConversation, createMessagingProvider, getRelayStates, reconnectAll,
       balanceHidden, setBalanceHidden,
+      groups, createGroup, deleteGroup,
     }}>
       {children}
     </Ctx.Provider>

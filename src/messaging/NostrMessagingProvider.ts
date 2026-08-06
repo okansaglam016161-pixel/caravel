@@ -1,7 +1,7 @@
 import type { NostrEvent, Filter } from 'nostr-tools'
 import { Relay, type Subscription } from 'nostr-tools/relay'
-import { wrapMessage, unwrapMessage, publishGiftWrap } from '../crypto/nostrMessaging'
-import type { CaravelMessage, MessagingConnectionStatus, MessagingProvider, PaymentRef, RelayState } from './types'
+import { wrapMessage, wrapGroupDefinition, unwrapMessage, publishGiftWrap } from '../crypto/nostrMessaging'
+import type { CaravelMessage, GroupDef, GroupSendResult, MessagingConnectionStatus, MessagingProvider, PaymentRef, RelayState } from './types'
 
 function hexToBytes(hex: string): Uint8Array {
   const arr = new Uint8Array(hex.length / 2)
@@ -56,6 +56,7 @@ export class NostrMessagingProvider implements MessagingProvider {
   private onMessageCallback: ((msg: CaravelMessage) => void) | null
   private onStatusCallback: ((status: MessagingConnectionStatus) => void) | null
   private onContactAddressCallback: ((senderPubkeyHex: string, tariAddress: string) => void) | null
+  private onGroupDefinitionCallback: ((senderPubkeyHex: string, def: GroupDef) => void) | null
   private disconnecting: boolean
   // Bound window listeners — stored so removeEventListener can find them in disconnect().
   private onlineHandler: (() => void) | null
@@ -79,6 +80,7 @@ export class NostrMessagingProvider implements MessagingProvider {
     this.onMessageCallback = null
     this.onStatusCallback = null
     this.onContactAddressCallback = null
+    this.onGroupDefinitionCallback = null
     this.disconnecting = false
     this.onlineHandler = null
     this.offlineHandler = null
@@ -100,11 +102,13 @@ export class NostrMessagingProvider implements MessagingProvider {
   subscribe(
     onMessage: (msg: CaravelMessage) => void,
     onStatusChange?: (status: MessagingConnectionStatus) => void,
-    onContactAddress?: (senderPubkeyHex: string, tariAddress: string) => void
+    onContactAddress?: (senderPubkeyHex: string, tariAddress: string) => void,
+    onGroupDefinition?: (senderPubkeyHex: string, def: GroupDef) => void
   ): void {
     this.onMessageCallback = onMessage
     this.onStatusCallback = onStatusChange ?? null
     this.onContactAddressCallback = onContactAddress ?? null
+    this.onGroupDefinitionCallback = onGroupDefinition ?? null
     const since = Math.floor(Date.now() / 1000) - SINCE_WINDOW_S
     this.filter = { kinds: [1059], '#p': [this.pubkeyHex], since }
 
@@ -153,6 +157,48 @@ export class NostrMessagingProvider implements MessagingProvider {
     const wrapped = wrapMessage(this.secretKey, recipientPubkeyHex, ' ', undefined, tariAddress)
     const results = await publishGiftWrap(wrapped, [...this.relayUrls], PUBLISH_TIMEOUT_MS)
     return results.some(r => r.ok)
+  }
+
+  // Group message (Phase 1): fan out one gift wrap per member, MINUS self (we record a local 'sent'
+  // instead — Caravel never self-wraps, so there is no cross-device echo; see messageStore). The
+  // returned count is RELAY ACCEPTANCE, not delivery — a member accepted-for-propagation may still
+  // never receive it. Throws only if no member's wrap reached any relay at all.
+  async sendGroupMessage(groupId: string, memberPubkeysHex: string[], plaintext: string): Promise<GroupSendResult> {
+    const recipients = memberPubkeysHex.filter(m => m && m !== this.pubkeyHex)
+    let membersReached = 0
+    await Promise.all(recipients.map(async member => {
+      const wrapped = wrapMessage(this.secretKey, member, plaintext, undefined, undefined, groupId)
+      const results = await publishGiftWrap(wrapped, [...this.relayUrls], PUBLISH_TIMEOUT_MS)
+      if (results.some(r => r.ok)) membersReached++
+    }))
+    if (recipients.length > 0 && membersReached === 0) {
+      throw new Error('NostrMessagingProvider: group message reached no relay for any member')
+    }
+    const message: CaravelMessage = {
+      // Synthetic id — there are N gift-wrap ids; we don't self-wrap so there is nothing to dedup
+      // against. Prefixed so it can never collide with a 64-hex gift-wrap event id.
+      id: `grp-${crypto.randomUUID()}`,
+      senderPubkeyHex: this.pubkeyHex,
+      recipientPubkeyHex: '',   // no single recipient — routed by groupId
+      plaintext,
+      timestamp: Date.now(),
+      direction: 'sent',
+      groupId,
+    }
+    return { message, memberCount: recipients.length, membersReached }
+  }
+
+  // Group definition control message: fan the { name, roster } out to members (minus self) so their
+  // clients learn the group. Same relays-reached (not delivery) semantics as sendGroupMessage.
+  async sendGroupDefinition(def: GroupDef): Promise<{ memberCount: number; membersReached: number }> {
+    const recipients = def.members.filter(m => m && m !== this.pubkeyHex)
+    let membersReached = 0
+    await Promise.all(recipients.map(async member => {
+      const wrapped = wrapGroupDefinition(this.secretKey, member, def)
+      const results = await publishGiftWrap(wrapped, [...this.relayUrls], PUBLISH_TIMEOUT_MS)
+      if (results.some(r => r.ok)) membersReached++
+    }))
+    return { memberCount: recipients.length, membersReached }
   }
 
   disconnect(): void {
@@ -387,7 +433,15 @@ export class NostrMessagingProvider implements MessagingProvider {
     if (this.seen.has(event.id)) return
     this.seen.add(event.id)
     try {
-      const { senderPubkeyHex, plaintext, payment, tariAddress } = unwrapMessage(this.secretKey, event)
+      const { senderPubkeyHex, plaintext, payment, tariAddress, groupId, groupDef } = unwrapMessage(this.secretKey, event)
+
+      // A group DEFINITION is a control message (no chat bubble): hand it to the group callback and
+      // stop. The gate (accept only from known contacts) lives with the callback, which has the
+      // contact list. Checked before the address/message handling below.
+      if (groupDef) {
+        this.onGroupDefinitionCallback?.(senderPubkeyHex, groupDef)
+        return
+      }
 
       // Extract + store any received Tari address FIRST, before any content-based suppression or
       // message handling. A dedicated address-exchange control message is empty; if suppression ran
@@ -407,6 +461,8 @@ export class NostrMessagingProvider implements MessagingProvider {
         timestamp: Date.now(),
         direction: 'received',
         payment,
+        // Present → routes to the group thread; the sender-is-a-contact gate is applied downstream.
+        ...(groupId ? { groupId } : {}),
       }
       this.onMessageCallback?.(msg)
     } catch (e) {

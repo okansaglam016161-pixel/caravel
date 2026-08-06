@@ -5,7 +5,9 @@ import Logo from '../primitives/Logo'
 import { useWallet } from '../../context/WalletContext'
 import WalletModal from '../wallet/WalletModal'
 import ProfilePanel from '../wallet/ProfilePanel'
-import type { CaravelMessage } from '../../messaging/types'
+import type { CaravelMessage, Group } from '../../messaging/types'
+import GroupThread from './GroupThread'
+import CreateGroupModal, { type GroupContactOption } from './CreateGroupModal'
 import { loadNicknames, setNickname, MAX_NICKNAME_LEN, type NicknameMap } from '../../messaging/nicknameStore'
 import { loadAddressSent, markAddressSent, clearAddressSent, type AddressSentMap } from '../../messaging/addressSentStore'
 import { sendConfidential, tariToMicrotari, MAX_FEE } from '../../crypto/confidentialSend'
@@ -30,6 +32,7 @@ interface Conversation {
 function deriveConversations(messages: CaravelMessage[]): Conversation[] {
   const byPeer = new Map<string, CaravelMessage[]>()
   for (const m of messages) {
+    if (m.groupId) continue   // group messages belong to their group thread ONLY — never a DM thread
     const peerHex = m.direction === 'received' ? m.senderPubkeyHex : m.recipientPubkeyHex
     if (!peerHex) continue
     const arr = byPeer.get(peerHex)
@@ -245,7 +248,7 @@ function PaymentMessageCard({ message }: { message: CaravelMessage }) {
 // ── Component ────────────────────────────────────────────────────────────────────
 
 export default function ChatApp() {
-  const { wallet, address, scan, messages, nostrPubkeyHex, messagingStatus, contacts, acceptContact, contactAddresses, setManualTariAddress, createMessagingProvider, recordSentMessage, deleteConversation, getRelayStates, reconnectAll, balanceHidden, setBalanceHidden } = useWallet()
+  const { wallet, address, scan, messages, nostrPubkeyHex, messagingStatus, contacts, acceptContact, contactAddresses, setManualTariAddress, createMessagingProvider, recordSentMessage, deleteConversation, getRelayStates, reconnectAll, balanceHidden, setBalanceHidden, groups, createGroup, deleteGroup } = useWallet()
   const [walletOpen, setWalletOpen] = useState(false)
   const [profileOpen, setProfileOpen] = useState(false)
   // The user's own generated avatar (deterministic gradient from their pubkey hash) — used for the
@@ -256,6 +259,8 @@ export default function ChatApp() {
 
   // Selected conversation (peer hex). UI state only — falls back to most-recent when unset.
   const [selectedPeer, setSelectedPeer] = useState<string | null>(null)
+  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null)
+  const [createGroupOpen, setCreateGroupOpen] = useState(false)
 
   // Conversation ⋯ menu + delete confirmation.
   const [menuOpen, setMenuOpen] = useState(false)
@@ -353,6 +358,44 @@ export default function ChatApp() {
   })()
 
   const displayName = (peerHex: string) => nicknames[peerHex] ?? truncNpub(peerHex)
+
+  // ── Groups (Phase 1) — a parallel selection path; DM logic above is untouched ──
+  const selectedGroup: Group | null = selectedGroupId ? (groups.find(g => g.id === selectedGroupId) ?? null) : null
+  const groupMessages = useMemo(
+    () => (selectedGroupId ? messages.filter(m => m.groupId === selectedGroupId).sort((a, b) => a.timestamp - b.timestamp) : []),
+    [messages, selectedGroupId]
+  )
+  // Sidebar group rows: each group + its most-recent activity, newest-first.
+  const groupRows = useMemo(() => {
+    return groups
+      .map(g => {
+        const gmsgs = messages.filter(m => m.groupId === g.id)
+        const lastMessage = gmsgs.length ? gmsgs.reduce((a, b) => (a.timestamp > b.timestamp ? a : b)) : null
+        return { group: g, lastMessage, lastActivity: lastMessage ? lastMessage.timestamp : g.createdAt }
+      })
+      .sort((a, b) => b.lastActivity - a.lastActivity)
+  }, [groups, messages])
+
+  function selectGroup(gid: string) { setSelectedGroupId(gid); setSelectedPeer(null) }
+
+  // Send to the selected group: fan out via the provider, then record the local 'sent' row. The
+  // provider's tally is relays-reached, not a delivery receipt (see sendGroupMessage).
+  async function handleGroupSend(text: string) {
+    if (!selectedGroup) return
+    const provider = createMessagingProvider()
+    if (!provider) return
+    try {
+      const res = await provider.sendGroupMessage(selectedGroup.id, selectedGroup.members, text)
+      recordSentMessage(res.message)
+    } finally {
+      provider.disconnect()
+    }
+  }
+
+  // Accepted contacts offered in the create-group modal, resolved to display names.
+  const groupContactOptions: GroupContactOption[] = Object.entries(contacts)
+    .filter(([, c]) => (c?.state ?? 'accepted') === 'accepted')
+    .map(([hex]) => ({ hex, name: displayName(hex) }))
 
   // Sidebar search (real) — filter conversations + requests by name, npub handle, or last-message text.
   const sq = sidebarQuery.trim().toLowerCase()
@@ -692,6 +735,13 @@ export default function ChatApp() {
                 >
                   <svg width={17} height={17} viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth={2} strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>
                 </button>
+                <button
+                  onClick={() => setCreateGroupOpen(true)}
+                  title="New group"
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 34, height: 34, borderRadius: 9, border: '1px solid rgba(var(--border-rgb),0.2)', background: 'transparent', cursor: 'pointer', padding: 0 }}
+                >
+                  <svg width={17} height={17} viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx={9} cy={7} r={4} /><path d="M19 8v6M22 11h-6" /></svg>
+                </button>
               </div>
             </div>
 
@@ -895,7 +945,47 @@ export default function ChatApp() {
 
           {/* Conversation list */}
           <div style={{ flex: 1, overflowY: 'auto', padding: '6px 10px 10px' }}>
-            {conversations.length === 0 ? (
+            {/* Groups (Phase 1) — rendered above the DMs; each opens its own group thread. */}
+            {(() => {
+              const rows = groupRows.filter(gr => {
+                const t = (gr.group.name || `group ${gr.group.id.slice(0, 6)}`).toLowerCase()
+                return !sq || t.includes(sq)
+              })
+              if (rows.length === 0) return null
+              return (
+                <>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 8px 10px' }}>
+                    <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.14em', color: 'var(--text-faint-dim)' }}>GROUPS</span>
+                  </div>
+                  {rows.map(gr => {
+                    const g = gr.group
+                    const title = g.name.trim() || `Group ${g.id.slice(0, 6)}…`
+                    const active = selectedGroupId === g.id
+                    const lm = gr.lastMessage
+                    const preview = !lm
+                      ? (g.members.length ? `${g.members.length} members` : 'New group')
+                      : lm.direction === 'sent' ? `You: ${lm.plaintext}` : `${displayName(lm.senderPubkeyHex)}: ${lm.plaintext}`
+                    return (
+                      <div key={g.id} onClick={() => selectGroup(g.id)} className="cv-conv" style={{ display: 'flex', gap: 13, padding: 13, borderRadius: 12, position: 'relative', background: active ? 'var(--surface-row-selected)' : 'transparent', border: active ? '1px solid rgba(var(--teal-500-rgb),0.18)' : '1px solid transparent', cursor: 'pointer', marginBottom: 4 }}>
+                        {active && <span style={{ position: 'absolute', left: 0, top: 14, bottom: 14, width: 3, borderRadius: '0 3px 3px 0', background: 'var(--teal-500)' }} />}
+                        <div style={{ width: 46, height: 46, borderRadius: 13, background: 'var(--teal-grad)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                          <svg width={20} height={20} viewBox="0 0 24 24" fill="none" stroke="var(--ink-on-accent)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx={9} cy={7} r={4} /><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" /></svg>
+                        </div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 3, gap: 8 }}>
+                            <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</span>
+                            <span style={{ fontFamily: MONO, fontSize: 11, color: 'var(--text-faint-dim)', flexShrink: 0 }}>{compactTime(gr.lastActivity)}</span>
+                          </div>
+                          <div style={{ fontSize: 13, color: 'var(--text-faint)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{preview}</div>
+                        </div>
+                      </div>
+                    )
+                  })}
+                  <div style={{ height: 1, background: 'rgba(var(--border-rgb),0.07)', margin: '6px 8px 10px' }} />
+                </>
+              )
+            })()}
+            {conversations.length === 0 && groupRows.length > 0 ? null : conversations.length === 0 ? (
               /* Zero conversations (design empty state) */
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', height: '100%', padding: 24, gap: 16 }}>
                 <svg width={34} height={34} viewBox="0 0 24 24" fill="none" stroke="var(--teal-500)" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.4 }}><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg>
@@ -921,14 +1011,14 @@ export default function ChatApp() {
                   <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-teal-dim)' }}>{sq ? `${filteredConversations.length} of ${conversations.length}` : ''}</span>
                 </div>
                 {filteredConversations.map((c) => {
-                  const active = selectedConvo?.peerHex === c.peerHex
+                  const active = !selectedGroupId && selectedConvo?.peerHex === c.peerHex
                   const nick = nicknames[c.peerHex]
                   const av = avatarFor(c.peerHex)
                   const lm = c.lastMessage
                   const isPay = !!lm?.payment
                   const preview = !lm ? '' : isPay ? 'Payment sent' : lm.direction === 'sent' ? `You: ${lm.plaintext}` : lm.plaintext
                   return (
-                    <div key={c.peerHex} onClick={() => setSelectedPeer(c.peerHex)} className="cv-conv" style={{ display: 'flex', gap: 13, padding: 13, borderRadius: 12, position: 'relative', background: active ? 'var(--surface-row-selected)' : 'transparent', border: active ? '1px solid rgba(var(--teal-500-rgb),0.18)' : '1px solid transparent', cursor: 'pointer', marginBottom: 4 }}>
+                    <div key={c.peerHex} onClick={() => { setSelectedPeer(c.peerHex); setSelectedGroupId(null) }} className="cv-conv" style={{ display: 'flex', gap: 13, padding: 13, borderRadius: 12, position: 'relative', background: active ? 'var(--surface-row-selected)' : 'transparent', border: active ? '1px solid rgba(var(--teal-500-rgb),0.18)' : '1px solid transparent', cursor: 'pointer', marginBottom: 4 }}>
                       {active && <span style={{ position: 'absolute', left: 0, top: 14, bottom: 14, width: 3, borderRadius: '0 3px 3px 0', background: 'var(--teal-500)' }} />}
                       <div style={{ width: 46, height: 46, borderRadius: 13, background: av.grad, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, fontWeight: 700, color: av.color, flexShrink: 0 }}>{initialsFor(nick)}</div>
                       <div style={{ flex: 1, minWidth: 0 }}>
@@ -956,7 +1046,15 @@ export default function ChatApp() {
         {/* RIGHT: active chat */}
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, background: 'var(--surface-base)', position: 'relative' }}>
 
-          {selectedConvo === null ? (
+          {selectedGroupId && selectedGroup ? (
+            <GroupThread
+              group={selectedGroup}
+              messages={groupMessages}
+              nameFor={displayName}
+              onSend={handleGroupSend}
+              onDelete={() => { deleteGroup(selectedGroup.id); setSelectedGroupId(null) }}
+            />
+          ) : selectedConvo === null ? (
             /* Chat pane at rest (design: sail + reassurance) */
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 20, background: 'radial-gradient(700px 420px at 50% 40%, rgba(var(--teal-500-rgb),0.045), rgba(10,14,23,0))' }}>
               <svg viewBox="0 0 44 44" width={64} height={64} style={{ opacity: 0.34 }} aria-hidden="true">
@@ -1315,6 +1413,13 @@ export default function ChatApp() {
 
     {walletOpen && <WalletModal onClose={() => setWalletOpen(false)} />}
     {profileOpen && <ProfilePanel onClose={() => setProfileOpen(false)} avatar={selfAvatar} />}
+    {createGroupOpen && (
+      <CreateGroupModal
+        contacts={groupContactOptions}
+        onCreate={(name, memberHexes) => { void createGroup(name, memberHexes).then(g => selectGroup(g.id)) }}
+        onClose={() => setCreateGroupOpen(false)}
+      />
+    )}
 
     {/* Compose new conversation */}
     {composeOpen && (() => {

@@ -43,6 +43,37 @@ export interface CaravelMessage {
   payment?: PaymentRef
   // LOCAL-ONLY (see LocalPaymentMeta): cached amount/txId for a payment WE sent. Never on the wire.
   localPayment?: LocalPaymentMeta
+  // Present when the message belongs to a group (carried a caravel-group tag). Absent = 1-to-1 DM.
+  // When set, the message routes to the group thread `groupId` instead of a pairwise peer thread.
+  groupId?: string
+}
+
+// ── Groups (Phase 1: fan-out, in-message roster, fixed membership) ──────────────
+
+// A group a wallet participates in. Membership is the in-message roster (Phase 1) — the members a
+// message is fanned out to. `members` includes the creator. A group with an empty name + roster is
+// a LAZY placeholder created from a group message seen before its definition arrived.
+export interface Group {
+  id: string               // random 32-byte hex, generated at creation; independent of the roster
+  name: string             // '' for a lazy placeholder (UI shows "Group <shortid>")
+  members: string[]        // member Nostr pubkeys (hex), including the creator
+  createdAt: number        // ms epoch (local)
+}
+
+// The on-the-wire group definition (content of a group-def control message). Tells a member the
+// group exists, its name, and its roster.
+export interface GroupDef {
+  id: string
+  name: string
+  members: string[]
+}
+
+// Result of a group send. The count is RELAY ACCEPTANCE (accepted for propagation), NOT delivery
+// confirmation — a member's client may still never receive it. Surface only as a soft "sent".
+export interface GroupSendResult {
+  message: CaravelMessage  // the local 'sent' record (groupId set, blank recipient)
+  memberCount: number      // members fanned to (roster minus self)
+  membersReached: number   // members whose wrap ≥1 relay ACCEPTED (relays-reached, not delivered)
 }
 
 export interface MessagingProvider {
@@ -57,13 +88,24 @@ export interface MessagingProvider {
   // Resolves true if at least one relay accepted it (so the caller can mark it delivered).
   sendContactAddress(recipientPubkeyHex: string, tariAddress: string): Promise<boolean>
 
+  // Group message (Phase 1): fan out one NIP-17 gift wrap per member (roster minus self), each
+  // tagged with the group id. Returns the local 'sent' record + a relays-reached tally (NOT a
+  // delivery receipt). Throws only if no member's wrap reached any relay.
+  sendGroupMessage(groupId: string, memberPubkeysHex: string[], plaintext: string): Promise<GroupSendResult>
+
+  // Group definition control message: fan out the group's { name, roster } to its members (minus
+  // self) so their clients learn the group exists. Empty-of-prose → no chat bubble on receipt.
+  sendGroupDefinition(def: GroupDef): Promise<{ memberCount: number; membersReached: number }>
+
   // Open a persistent subscription. Fire-and-forget — returns void immediately.
   // Relay connections happen in the background; onStatusChange fires as relay states change.
   // onContactAddress fires for a received (authenticated) Tari address — see M9.0d.
   subscribe(
     onMessage: (msg: CaravelMessage) => void,
     onStatusChange?: (status: MessagingConnectionStatus) => void,
-    onContactAddress?: (senderPubkeyHex: string, tariAddress: string) => void
+    onContactAddress?: (senderPubkeyHex: string, tariAddress: string) => void,
+    // Fires for a received group-definition control message (authenticated to senderPubkeyHex).
+    onGroupDefinition?: (senderPubkeyHex: string, def: GroupDef) => void
   ): void
 
   // Close all relay connections and subscriptions. Idempotent — safe to call more than once.

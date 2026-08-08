@@ -50,6 +50,16 @@ export interface CaravelMessage {
 
 // ── Groups (Phase 1: fan-out, in-message roster, fixed membership) ──────────────
 
+// Invite-gating lifecycle (Phase A). One clean field, not scattered booleans:
+//   - pending — an inbound def/message introduced this group; held out of the active thread until
+//               the user accepts (mirrors the DM 'pending' contact gate).
+//   - active  — a normal group (I created it, or I accepted an invite). Behaves as Phase 1 did.
+//   - left    — declined (Phase A) or, later, explicitly left (Phase B). Permanent LOCAL suppression:
+//               the record is KEPT (not removed) so "gone stays gone" — a new message can't re-open
+//               it (it stays held), and a replayed def is ignored by first-def-wins. Stronger than
+//               deleteGroup's forget-until-re-invited.
+export type GroupState = 'pending' | 'active' | 'left'
+
 // A group a wallet participates in. Membership is the in-message roster (Phase 1) — the members a
 // message is fanned out to. `members` includes the creator. A group with an empty name + roster is
 // a LAZY placeholder created from a group message seen before its definition arrived.
@@ -58,6 +68,7 @@ export interface Group {
   name: string             // '' for a lazy placeholder (UI shows "Group <shortid>")
   members: string[]        // member Nostr pubkeys (hex), including the creator
   createdAt: number        // ms epoch (local)
+  state: GroupState        // invite-gating lifecycle (Phase A). Legacy groups migrate → 'active'.
 }
 
 // The on-the-wire group definition (content of a group-def control message). Tells a member the

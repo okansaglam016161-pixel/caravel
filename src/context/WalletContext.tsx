@@ -16,7 +16,7 @@ import { loadHistory, addSent, type SentEntry, type NewSentParams } from '../cry
 import { NostrMessagingProvider } from '../messaging/NostrMessagingProvider'
 import type { MessagingProvider, MessagingConnectionStatus, CaravelMessage, RelayState } from '../messaging/types'
 import { loadMessages, addReceivedMessage, addSentMessage, deletePeerMessages, deleteGroupMessages } from '../messaging/messageStore'
-import { loadGroups, addOrUpdateGroup, ensureGroup, deleteGroup as removeGroupFromStore } from '../messaging/groupStore'
+import { loadGroups, addOrUpdateGroup, ensureGroup, setGroupState, deleteGroup as removeGroupFromStore } from '../messaging/groupStore'
 import { loadDeletedGroupIdSet, recordDeletedGroup } from '../messaging/deletedGroupStore'
 import type { Group } from '../messaging/types'
 import { loadTombstoneIdSet, recordTombstones } from '../messaging/tombstoneStore'
@@ -91,6 +91,10 @@ export interface WalletCtx {
   createGroup: (name: string, memberHexes: string[]) => Promise<Group>
   /** Delete a group locally: remove it + its groupId-keyed messages (Phase 1 cleanup). */
   deleteGroup: (groupId: string) => void
+  /** Accept a pending group invite (Phase A): pending → active, releasing its held messages. */
+  acceptGroup: (groupId: string) => void
+  /** Decline a pending group invite (Phase A): pending → 'left', a permanent local suppression. */
+  declineGroup: (groupId: string) => void
   /** Per-peer contact state (M9.0b). No record + has messages ⇒ treat as 'accepted' (lazy). */
   contacts: ContactMap
   /** Accept a pending peer (M9.0c request UI). */
@@ -296,7 +300,10 @@ export function WalletProvider({ children }: { children: ReactNode }) {
           // new message re-materialises the group (ungated, in the onMessage branch); once the group
           // is present again, a replayed def flows through here and re-names/re-rosters it.
           if (!prev.some(g => g.id === def.id) && deletedGroupsRef.current.has(def.id)) return prev
-          return addOrUpdateGroup(pubkeyHex, prev, def)
+          // Invite-gating (Phase A): a def for a BRAND-NEW group lands as 'pending' (held until the
+          // user accepts). A def for an existing group is ignored by first-def-wins / preserves its
+          // state (a placeholder upgrade keeps 'pending'/'left'), so initialState only bites on new ids.
+          return addOrUpdateGroup(pubkeyHex, prev, def, 'pending')
         })
       }
     )
@@ -459,8 +466,10 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     for (const b of idBytes) id += b.toString(16).padStart(2, '0')
     // Roster includes me; dedup; drop blanks.
     const members = Array.from(new Set([nostrPubkeyHex, ...memberHexes].filter(Boolean)))
-    const group: Group = { id, name: name.trim(), members, createdAt: Date.now() }
-    setGroups(prev => addOrUpdateGroup(nostrPubkeyHex, prev, group))
+    // I created it → 'active' immediately, no self-gating. addOrUpdateGroup defaults new groups to
+    // 'active', but set it on the literal too so the Group is well-formed at the call site.
+    const group: Group = { id, name: name.trim(), members, createdAt: Date.now(), state: 'active' }
+    setGroups(prev => addOrUpdateGroup(nostrPubkeyHex, prev, group, 'active'))
     const provider = createMessagingProvider()
     if (provider) {
       provider.sendGroupDefinition(group)
@@ -490,6 +499,29 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     setMessages(prev => deleteGroupMessages(pubkeyHex, prev, groupId))
   }, [nostrPubkeyHex, messages])
 
+  // Accept a pending group invite (Phase A). pending → active. Its messages are already stored
+  // (held only by derivation — active-group lists filter state === 'active'), so flipping the state
+  // RELEASES them with no message mutation. Mirrors acceptContact for DMs. (M2 wires the UI button.)
+  const acceptGroup = useCallback((groupId: string) => {
+    const pubkeyHex = nostrPubkeyHex
+    if (!pubkeyHex) return
+    setGroups(prev => setGroupState(pubkeyHex, prev, groupId, 'active'))
+  }, [nostrPubkeyHex])
+
+  // Decline a pending group invite (Phase A). pending → 'left', a PERMANENT local suppression that is
+  // stronger than deleteGroup's forget-until-re-invited: the 'left' record is KEPT (not removed), so
+  // a new message stays held and a replayed def is ignored by first-def-wins. We ALSO reuse the
+  // deletedGroups mechanism (not a duplicate of it) as belt-and-suspenders for the edge where the
+  // record is a placeholder or otherwise absent — same suppression the delete fix relies on.
+  // PHASE C (re-invite) TOUCHES THIS pairing — see the first-def-wins note in groupStore.
+  const declineGroup = useCallback((groupId: string) => {
+    const pubkeyHex = nostrPubkeyHex
+    if (!pubkeyHex) return
+    recordDeletedGroup(pubkeyHex, groupId)
+    deletedGroupsRef.current.add(groupId)
+    setGroups(prev => setGroupState(pubkeyHex, prev, groupId, 'left'))
+  }, [nostrPubkeyHex])
+
   // Read-only accessors onto the live provider for the connection/relay-health UI.
   const getRelayStates = useCallback((): RelayState[] => messagingProviderRef.current?.getRelayStates() ?? [], [])
   const reconnectAll = useCallback((): void => { messagingProviderRef.current?.reconnectAll() }, [])
@@ -502,7 +534,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       recordSentMessage, contacts, acceptContact, contactAddresses, setManualTariAddress,
       deleteConversation, createMessagingProvider, getRelayStates, reconnectAll,
       balanceHidden, setBalanceHidden,
-      groups, createGroup, deleteGroup,
+      groups, createGroup, deleteGroup, acceptGroup, declineGroup,
     }}>
       {children}
     </Ctx.Provider>

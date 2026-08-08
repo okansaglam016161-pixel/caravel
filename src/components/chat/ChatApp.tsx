@@ -17,6 +17,7 @@ import { usePaymentResolution } from '../../hooks/usePaymentResolution'
 import { avatarFor, initialsFor, truncNpub, bubbleTime, compactTime, MONO } from './chatDisplay'
 import Avatar from './Avatar'
 import MessageBubble from './MessageBubble'
+import { groupGlyph } from './groupGlyph'
 
 // ── Conversation derivation ─────────────────────────────────────────────────────
 
@@ -924,15 +925,13 @@ export default function ChatApp() {
                     return (
                       <div key={g.id} onClick={() => selectGroup(g.id)} className="cv-conv" style={{ display: 'flex', gap: 13, padding: 13, borderRadius: 12, position: 'relative', background: active ? 'var(--surface-row-selected)' : 'transparent', border: active ? '1px solid rgba(var(--teal-500-rgb),0.18)' : '1px solid transparent', cursor: 'pointer', marginBottom: 4 }}>
                         {active && <span style={{ position: 'absolute', left: 0, top: 14, bottom: 14, width: 3, borderRadius: '0 3px 3px 0', background: 'var(--teal-500)' }} />}
-                        <div style={{ width: 46, height: 46, borderRadius: 13, background: 'var(--teal-grad)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                          <svg width={20} height={20} viewBox="0 0 24 24" fill="none" stroke="var(--ink-on-accent)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx={9} cy={7} r={4} /><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" /></svg>
-                        </div>
+                        <Avatar icon={groupGlyph} size={46} radius={13} />
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 3, gap: 8 }}>
-                            <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</span>
+                            <span style={{ fontSize: 15, fontWeight: 600, color: active ? 'var(--text-primary)' : 'var(--text-name)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</span>
                             <span style={{ fontFamily: MONO, fontSize: 11, color: 'var(--text-faint-dim)', flexShrink: 0 }}>{compactTime(gr.lastActivity)}</span>
                           </div>
-                          <div style={{ fontSize: 13, color: 'var(--text-faint)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{preview}</div>
+                          <div style={{ fontSize: 13, color: 'var(--text-muted-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{preview}</div>
                         </div>
                       </div>
                     )

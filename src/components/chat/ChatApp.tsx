@@ -205,7 +205,7 @@ function PaymentMessageCard({ message }: { message: CaravelMessage }) {
 // ── Component ────────────────────────────────────────────────────────────────────
 
 export default function ChatApp() {
-  const { wallet, address, scan, messages, nostrPubkeyHex, messagingStatus, contacts, acceptContact, contactAddresses, setManualTariAddress, createMessagingProvider, recordSentMessage, deleteConversation, getRelayStates, reconnectAll, balanceHidden, setBalanceHidden, groups, createGroup, deleteGroup } = useWallet()
+  const { wallet, address, scan, messages, nostrPubkeyHex, messagingStatus, contacts, acceptContact, contactAddresses, setManualTariAddress, createMessagingProvider, recordSentMessage, deleteConversation, getRelayStates, reconnectAll, balanceHidden, setBalanceHidden, groups, createGroup, deleteGroup, acceptGroup, declineGroup } = useWallet()
   const [walletOpen, setWalletOpen] = useState(false)
   const [profileOpen, setProfileOpen] = useState(false)
   // The user's own generated avatar (deterministic gradient from their pubkey hash) — used for the
@@ -233,6 +233,9 @@ export default function ChatApp() {
   // Per-request in-flight guard (Flag 2) — disables both buttons + shows a spinner while accepting/
   // declining. Local UI only; acceptRequest/declineRequest are unchanged.
   const [busyRequest, setBusyRequest] = useState<{ peerHex: string; kind: 'accept' | 'decline' } | null>(null)
+  // Group-invite in-flight guard (A-M2), keyed on group id — the parallel to busyRequest (which
+  // keys on peerHex). Separate key space: a group invite and a DM request never collide.
+  const [busyInvite, setBusyInvite] = useState<{ groupId: string; kind: 'accept' | 'decline' } | null>(null)
 
   // Composer state.
   const [draft, setDraft] = useState('')
@@ -322,9 +325,12 @@ export default function ChatApp() {
     () => (selectedGroupId ? messages.filter(m => m.groupId === selectedGroupId).sort((a, b) => a.timestamp - b.timestamp) : []),
     [messages, selectedGroupId]
   )
-  // Sidebar group rows: each group + its most-recent activity, newest-first.
-  const groupRows = useMemo(() => {
+  // Sidebar group rows, split by invite state (A-M2). Only ACTIVE groups render as open-thread
+  // rows; PENDING groups render as invite cards (accept/decline); 'left' groups are excluded from
+  // both — the store already suppresses them, this is where the UI finally stops surfacing them.
+  const activeGroupRows = useMemo(() => {
     return groups
+      .filter(g => g.state === 'active')
       .map(g => {
         const gmsgs = messages.filter(m => m.groupId === g.id)
         const lastMessage = gmsgs.length ? gmsgs.reduce((a, b) => (a.timestamp > b.timestamp ? a : b)) : null
@@ -332,8 +338,20 @@ export default function ChatApp() {
       })
       .sort((a, b) => b.lastActivity - a.lastActivity)
   }, [groups, messages])
+  // Pending group invites, newest-first by creation. Their held messages stay in the store,
+  // unsurfaced (A-M1), until accept flips the group to 'active'.
+  const pendingInvites = useMemo(
+    () => groups.filter(g => g.state === 'pending').sort((a, b) => b.createdAt - a.createdAt),
+    [groups],
+  )
 
-  function selectGroup(gid: string) { setSelectedGroupId(gid); setSelectedPeer(null) }
+  // Only an ACTIVE group opens a thread (A-M2 §5). Pending groups reach the user as invite cards,
+  // never as a clickable row; this guard makes "opening a pending group can't open the thread"
+  // structural rather than incidental.
+  function selectGroup(gid: string) {
+    if (groups.find(g => g.id === gid)?.state !== 'active') return
+    setSelectedGroupId(gid); setSelectedPeer(null)
+  }
 
   // Send to the selected group: fan out via the provider, then record the local 'sent' row. The
   // provider's tally is relays-reached, not a delivery receipt (see sendGroupMessage).
@@ -448,6 +466,22 @@ export default function ChatApp() {
       setNicknames(prev => setNickname(nostrPubkeyHex, prev, peerHex, ''))
       setAddressSent(prev => clearAddressSent(nostrPubkeyHex, prev, peerHex))
     }
+  }
+
+  // Accept a pending group invite (A-M2) → acceptGroup flips it to 'active' (releasing its held
+  // messages at the store), then open the now-active thread. No address handshake (Flag B) and no
+  // auto-reply — the group parallel to acceptRequest.
+  function acceptInvite(groupId: string) {
+    acceptGroup(groupId)
+    setSelectedGroupId(groupId)
+    setSelectedPeer(null)
+  }
+
+  // Decline a group invite (A-M2) → declineGroup marks it 'left' (permanent local suppression;
+  // A-M1). Unlike declineRequest this is NON-destructive (Flag C): held messages stay in the store,
+  // suppressed by state — nothing to delete, no nickname/address to clear (groups have neither).
+  function declineInvite(groupId: string) {
+    declineGroup(groupId)
   }
 
   // Send the composer draft to the selected conversation. Same proven path as the dev panel:
@@ -902,9 +936,74 @@ export default function ChatApp() {
 
           {/* Conversation list */}
           <div style={{ flex: 1, overflowY: 'auto', padding: '6px 10px 10px' }}>
-            {/* Groups (Phase 1) — rendered above the DMs; each opens its own group thread. */}
+            {/* Group invites (A-M2) — pending groups render as accept/decline cards, NOT open-thread
+                rows. Mirrors the DM REQUESTS card (same frame/tokens/spinner), adapted to a group:
+                Avatar glyph, group name, member/roster subtitle. Placed above active group rows so
+                all group affordances stay co-located. Search-filtered on the same title as rows. */}
             {(() => {
-              const rows = groupRows.filter(gr => {
+              const invites = pendingInvites.filter(g => {
+                const t = (g.name || `group ${g.id.slice(0, 6)}`).toLowerCase()
+                return !sq || t.includes(sq)
+              })
+              if (invites.length === 0) return null
+              return (
+                <div style={{ padding: '0 0 4px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px 8px' }}>
+                    <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.14em', color: 'var(--text-faint-dim)' }}>GROUP INVITES</span>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: 18, height: 18, padding: '0 5px', borderRadius: 100, background: 'rgba(var(--teal-500-rgb),0.14)', border: '1px solid rgba(var(--teal-500-rgb),0.3)', fontFamily: MONO, fontSize: 10, fontWeight: 600, color: 'var(--teal-300)' }}>{invites.length}</span>
+                  </div>
+                  {invites.map(g => {
+                    const title = g.name.trim() || `Group ${g.id.slice(0, 6)}…`
+                    const sub = g.members.length ? `${g.members.length} members` : 'roster pending…'
+                    const busy = busyInvite?.groupId === g.id ? busyInvite.kind : null
+                    // Card frame: teal at rest, teal-stronger while accepting, neutral while declining
+                    // — identical treatment to the DM request card.
+                    const frame = busy === 'decline'
+                      ? { background: 'rgba(var(--border-rgb),0.03)', border: '1px solid rgba(var(--border-rgb),0.16)' }
+                      : { background: 'rgba(var(--teal-500-rgb),0.04)', border: `1px solid rgba(var(--teal-500-rgb),${busy === 'accept' ? 0.26 : 0.18})` }
+                    return (
+                      <div key={g.id} style={{ padding: 16, borderRadius: 14, marginBottom: 5, ...frame }}>
+                        {/* Header: glyph avatar + name/subtitle. Dimmed while a decision is in flight. */}
+                        <div style={{ display: 'flex', gap: 12, marginBottom: 12, alignItems: 'center', opacity: busy ? 0.6 : 1 }}>
+                          <Avatar icon={groupGlyph} size={40} radius={12} />
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-name)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</div>
+                            <div style={{ fontSize: 11, color: 'var(--text-muted-dim)', marginTop: 2 }}>{sub}</div>
+                          </div>
+                        </div>
+                        {/* Accept / Decline — same markup/tokens/spinner as the DM request card. */}
+                        <div style={{ display: 'flex', gap: 9 }}>
+                          {busy === 'accept' ? (
+                            <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 10, borderRadius: 10, background: 'var(--surface-inset)', border: '1px solid rgba(var(--teal-500-rgb),0.2)', color: 'var(--teal-300)', fontSize: 13, fontWeight: 700 }}>
+                              <span style={{ width: 13, height: 13, borderRadius: '50%', border: '2px solid rgba(var(--teal-500-rgb),0.2)', borderTopColor: 'var(--teal-500)', animation: 'cv-spin 0.8s linear infinite' }} />Accepting
+                            </div>
+                          ) : (
+                            <button onClick={() => { setBusyInvite({ groupId: g.id, kind: 'accept' }); acceptInvite(g.id) }} disabled={!!busy}
+                              style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 10, borderRadius: 10, border: 'none', background: busy ? 'rgba(16,21,31,0.6)' : 'var(--teal-grad)', color: busy ? 'var(--text-faint-dim)' : 'var(--ink-on-accent)', fontSize: 13, fontWeight: 700, cursor: busy ? 'default' : 'pointer', fontFamily: 'inherit' }}>
+                              Accept
+                            </button>
+                          )}
+                          {busy === 'decline' ? (
+                            <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 10, borderRadius: 10, border: '1px solid rgba(var(--border-rgb),0.2)', color: 'var(--text-muted)', fontSize: 13, fontWeight: 600 }}>
+                              <span style={{ width: 13, height: 13, borderRadius: '50%', border: '2px solid rgba(var(--border-rgb),0.18)', borderTopColor: 'var(--text-muted-dim)', animation: 'cv-spin 0.8s linear infinite' }} />Declining
+                            </div>
+                          ) : (
+                            <button onClick={() => { setBusyInvite({ groupId: g.id, kind: 'decline' }); declineInvite(g.id) }} disabled={!!busy}
+                              style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 10, borderRadius: 10, border: `1px solid rgba(var(--border-rgb),${busy ? 0.1 : 0.2})`, background: 'transparent', color: busy ? 'var(--text-faint-dim)' : 'var(--text-muted)', fontSize: 13, fontWeight: 600, cursor: busy ? 'default' : 'pointer', fontFamily: 'inherit' }}>
+                              Decline
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  })}
+                  <div style={{ height: 1, background: 'rgba(var(--border-rgb),0.07)', margin: '6px 8px 10px' }} />
+                </div>
+              )
+            })()}
+            {/* Groups (Phase 1) — active groups rendered above the DMs; each opens its own thread. */}
+            {(() => {
+              const rows = activeGroupRows.filter(gr => {
                 const t = (gr.group.name || `group ${gr.group.id.slice(0, 6)}`).toLowerCase()
                 return !sq || t.includes(sq)
               })
@@ -940,7 +1039,7 @@ export default function ChatApp() {
                 </>
               )
             })()}
-            {conversations.length === 0 && groupRows.length > 0 ? null : conversations.length === 0 ? (
+            {conversations.length === 0 && activeGroupRows.length > 0 ? null : conversations.length === 0 ? (
               /* Zero conversations (design empty state) */
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', height: '100%', padding: 24, gap: 16 }}>
                 <svg width={34} height={34} viewBox="0 0 24 24" fill="none" stroke="var(--teal-500)" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.4 }}><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg>
@@ -1000,7 +1099,7 @@ export default function ChatApp() {
         {/* RIGHT: active chat */}
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, background: 'var(--surface-base)', position: 'relative' }}>
 
-          {selectedGroupId && selectedGroup ? (
+          {selectedGroupId && selectedGroup && selectedGroup.state === 'active' ? (
             <GroupThread
               group={selectedGroup}
               messages={groupMessages}

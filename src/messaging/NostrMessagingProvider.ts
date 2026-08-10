@@ -11,8 +11,18 @@ function hexToBytes(hex: string): Uint8Array {
   return arr
 }
 
+// Connect budget. Used by BOTH the subscription (connectRelay) and every publish — publishes used
+// to derive their own 4.5s from a ratio inside publishGiftWrap, which is how a slow link ended up
+// able to subscribe but not send. One constant, one behaviour.
 const CONNECT_TIMEOUT_MS = 10_000
 const PUBLISH_TIMEOUT_MS = 10_000
+// Bounded retry for FIRE-AND-FORGET control messages only (leave notice, group definition,
+// re-invite). Nothing awaits these and they have no user-facing retry affordance, so a single slow
+// handshake would drop them silently — the leave notice being the case we actually lost. Deliberately
+// NOT applied to sendMessage/sendGroupMessage: a human is watching those, they already surface an
+// error with a Retry control, and an invisible retry would double the worst-case wait.
+const CONTROL_RETRIES = 1
+const CONTROL_RETRY_BACKOFF_MS = 2_000
 // Gift wraps use randomNow() which backdates created_at by up to 2 days (172800s).
 // Using `since = now` silently misses all of them — always cover the full window.
 const SINCE_WINDOW_S = 172800
@@ -130,7 +140,7 @@ export class NostrMessagingProvider implements MessagingProvider {
 
   async sendMessage(recipientPubkeyHex: string, plaintext: string, payment?: PaymentRef, tariAddress?: string): Promise<CaravelMessage> {
     const wrapped = wrapMessage(this.secretKey, recipientPubkeyHex, plaintext, payment, tariAddress)
-    const results = await publishGiftWrap(wrapped, [...this.relayUrls], PUBLISH_TIMEOUT_MS)
+    const results = await publishGiftWrap(wrapped, [...this.relayUrls], PUBLISH_TIMEOUT_MS, CONNECT_TIMEOUT_MS)
 
     const anyOk = results.some(r => r.ok)
     if (!anyOk) {
@@ -155,7 +165,7 @@ export class NostrMessagingProvider implements MessagingProvider {
   // true if at least one relay accepted, so the caller can mark the address as delivered.
   async sendContactAddress(recipientPubkeyHex: string, tariAddress: string): Promise<boolean> {
     const wrapped = wrapMessage(this.secretKey, recipientPubkeyHex, ' ', undefined, tariAddress)
-    const results = await publishGiftWrap(wrapped, [...this.relayUrls], PUBLISH_TIMEOUT_MS)
+    const results = await publishGiftWrap(wrapped, [...this.relayUrls], PUBLISH_TIMEOUT_MS, CONNECT_TIMEOUT_MS)
     return results.some(r => r.ok)
   }
 
@@ -168,7 +178,7 @@ export class NostrMessagingProvider implements MessagingProvider {
     let membersReached = 0
     await Promise.all(recipients.map(async member => {
       const wrapped = wrapMessage(this.secretKey, member, plaintext, undefined, undefined, groupId)
-      const results = await publishGiftWrap(wrapped, [...this.relayUrls], PUBLISH_TIMEOUT_MS)
+      const results = await publishGiftWrap(wrapped, [...this.relayUrls], PUBLISH_TIMEOUT_MS, CONNECT_TIMEOUT_MS)
       if (results.some(r => r.ok)) membersReached++
     }))
     if (recipients.length > 0 && membersReached === 0) {
@@ -218,8 +228,9 @@ export class NostrMessagingProvider implements MessagingProvider {
       // NOTE: `def` is passed through UNMODIFIED — full roster in the payload, regardless of who is
       // being sent to. Narrowing happens only in `recipients` above.
       const wrapped = wrapGroupDefinition(this.secretKey, member, def, reinvite)
-      const results = await publishGiftWrap(wrapped, [...this.relayUrls], PUBLISH_TIMEOUT_MS)
-      if (results.some(r => r.ok)) membersReached++
+      // Retried, same reasoning as the leave notice: a dropped def/re-invite surfaces much later as
+      // "they never got the invite", with nothing to retry from.
+      if (await this.publishControl(wrapped)) membersReached++
     }))
     return { memberCount: recipients.length, membersReached }
   }
@@ -233,10 +244,25 @@ export class NostrMessagingProvider implements MessagingProvider {
     let membersReached = 0
     await Promise.all(recipients.map(async member => {
       const wrapped = wrapGroupLeave(this.secretKey, member, groupId)
-      const results = await publishGiftWrap(wrapped, [...this.relayUrls], PUBLISH_TIMEOUT_MS)
-      if (results.some(r => r.ok)) membersReached++
+      // Retried: nothing awaits this, and a silently-dropped leave notice is invisible to both sides.
+      if (await this.publishControl(wrapped)) membersReached++
     }))
     return { memberCount: recipients.length, membersReached }
+  }
+
+  // Publish a fire-and-forget CONTROL message with a bounded retry. Never throws — the caller has
+  // already committed to the local effect (leaving, creating, re-inviting) and a relay failure must
+  // cost only the notification. Stops early if the provider is being torn down, so a lock() can't be
+  // held up by a pending backoff. Returns whether any relay accepted, for the caller's tally.
+  private async publishControl(wrapped: NostrEvent): Promise<boolean> {
+    for (let attempt = 0; attempt <= CONTROL_RETRIES; attempt++) {
+      const results = await publishGiftWrap(wrapped, [...this.relayUrls], PUBLISH_TIMEOUT_MS, CONNECT_TIMEOUT_MS)
+      if (results.some(r => r.ok)) return true
+      if (attempt === CONTROL_RETRIES || this.disconnecting) break
+      await new Promise(resolve => setTimeout(resolve, CONTROL_RETRY_BACKOFF_MS))
+      if (this.disconnecting) break
+    }
+    return false
   }
 
   disconnect(): void {

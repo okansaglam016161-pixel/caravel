@@ -262,29 +262,60 @@ interface PublishResult {
   error?: string
 }
 
-// Publishes a gift wrap to each relay in parallel. Each relay gets its own connection
-// with an explicit connect timeout and publish timeout. Connections are closed in finally.
+// Publishes a gift wrap to each relay in parallel. Each relay gets its own connection with an
+// explicit connect timeout and publish timeout. Connections are closed in finally.
+//
+// `connectTimeoutMs` is passed in rather than derived from `timeoutMs` by a ratio. It used to be
+// `timeoutMs * 0.45` — 4.5s — while the subscription's own connect budget was a named 10s constant,
+// so a slow link could connect the SUBSCRIPTION while every SEND timed out: relays showing healthy,
+// nothing sendable. Callers now pass the same constant the subscription uses, so the two budgets
+// cannot drift apart again.
+//
+// RESOLVES ON FIRST ACCEPT: publishing is satisfied by any one relay accepting, so we return as soon
+// as one does and let the remaining attempts settle in the background (each still closes its own
+// socket in its own finally — nothing leaks, and no attempt ever rejects). Without this, widening
+// the connect budget would make a send wait out a DEAD relay even after a live one had accepted.
+// Consequence: on success the returned array may be PARTIAL. That is safe for every current caller
+// — four only ask `some(r => r.ok)`, and sendMessage reads the full array only to build its
+// all-relays-failed error detail, a path where nothing accepted and we therefore waited for all.
 export async function publishGiftWrap(
   giftWrap: NostrEvent,
   relayUrls: string[],
-  timeoutMs: number
+  timeoutMs: number,
+  connectTimeoutMs: number
 ): Promise<PublishResult[]> {
-  const connectTimeout = Math.min(10_000, Math.floor(timeoutMs * 0.45))
   const publishTimeout = Math.floor(timeoutMs * 0.9)
 
-  return Promise.all(
-    relayUrls.map(async (url): Promise<PublishResult> => {
-      const relay = new Relay(url)
-      relay.publishTimeout = publishTimeout
-      try {
-        await relay.connect({ timeout: connectTimeout })
-        await relay.publish(giftWrap)
-        return { relay: url, ok: true }
-      } catch (e) {
-        return { relay: url, ok: false, error: e instanceof Error ? e.message : String(e) }
-      } finally {
-        relay.close()
-      }
-    })
-  )
+  const attempts = relayUrls.map(async (url): Promise<PublishResult> => {
+    const relay = new Relay(url)
+    relay.publishTimeout = publishTimeout
+    try {
+      await relay.connect({ timeout: connectTimeoutMs })
+      await relay.publish(giftWrap)
+      return { relay: url, ok: true }
+    } catch (e) {
+      return { relay: url, ok: false, error: e instanceof Error ? e.message : String(e) }
+    } finally {
+      relay.close()
+    }
+  })
+
+  if (attempts.length === 0) return []
+
+  return new Promise<PublishResult[]>(resolve => {
+    const results: PublishResult[] = []
+    let settled = 0
+    let done = false
+    for (const attempt of attempts) {
+      // Attempts never reject (the catch above turns every failure into a result), so a plain .then
+      // is sufficient and cannot leave an unhandled rejection behind after we resolve.
+      void attempt.then(result => {
+        results.push(result)
+        settled++
+        if (done) return
+        if (result.ok) { done = true; resolve([...results]) }            // first accept wins
+        else if (settled === attempts.length) { done = true; resolve(results) }  // all failed — full detail
+      })
+    }
+  })
 }

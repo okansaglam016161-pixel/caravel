@@ -27,22 +27,21 @@ export default function GroupThread({
   nameFor: (hex: string) => string  // sender display name (nickname ?? truncated npub)
   onSend: (text: string) => Promise<void>
   onLeave: () => void
-  onReinvite: () => void
+  onReinvite: () => void   // opens the member picker (C-M2); does not send on its own
 }) {
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
-  // "Invite again" is fire-and-forget with no delivery receipt, so the only honest feedback is that
-  // the send was started — a brief confirmation on the item itself rather than a fake success state.
-  const [reinvited, setReinvited] = useState(false)
   // Two-step leave (B-M1): the ⋯ item swaps the menu panel to an inline confirm rather than opening
   // a modal. Leave hides a history the user has been reading and is irreversible until Phase C, so
   // it is guarded — Delete never was, but Delete was the weaker "forget until re-invited".
   const [confirmLeave, setConfirmLeave] = useState(false)
   const canSend = draft.trim().length > 0 && !sending
+  // A roster of just me (or a placeholder with no roster yet) has nobody to re-invite.
+  const canReinvite = group.members.length > 1
 
   // Any dismissal drops the confirm step too, so re-opening the menu always starts at step one.
-  function closeMenu() { setMenuOpen(false); setConfirmLeave(false); setReinvited(false) }
+  function closeMenu() { setMenuOpen(false); setConfirmLeave(false) }
 
   async function send() {
     const text = draft.trim()
@@ -112,16 +111,17 @@ export default function GroupThread({
                 ) : (
                   /* Step 1 — the menu items. Invite again (neutral) above Leave (danger). */
                   <>
+                    {/* Opens the C-M2 picker rather than sending immediately — the menu closes and
+                        the modal owns the choice + confirm. Disabled for a group with no one else
+                        in the roster, where there is nobody to invite. */}
                     <button
-                      onClick={() => { setReinvited(true); onReinvite() }}
-                      disabled={reinvited}
-                      title="Re-send this group's invite to its members"
-                      style={{ display: 'flex', alignItems: 'center', gap: 11, width: '100%', padding: '9px 11px', borderRadius: 8, border: 'none', background: 'transparent', color: reinvited ? 'var(--teal-300)' : 'var(--text-body)', fontSize: 14, fontWeight: 600, cursor: reinvited ? 'default' : 'pointer', fontFamily: 'inherit', textAlign: 'left' }}
+                      onClick={() => { closeMenu(); onReinvite() }}
+                      disabled={!canReinvite}
+                      title={canReinvite ? "Choose members to re-send this group's invite to" : 'No other members in this group'}
+                      style={{ display: 'flex', alignItems: 'center', gap: 11, width: '100%', padding: '9px 11px', borderRadius: 8, border: 'none', background: 'transparent', color: canReinvite ? 'var(--text-body)' : 'var(--text-disabled)', fontSize: 14, fontWeight: 600, cursor: canReinvite ? 'pointer' : 'default', fontFamily: 'inherit', textAlign: 'left' }}
                     >
-                      {reinvited
-                        ? <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="var(--teal-300)" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
-                        : <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M19 8v6M22 11h-6" /></svg>}
-                      {reinvited ? 'Invite sent' : 'Invite again'}
+                      <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke={canReinvite ? 'var(--text-muted-dim)' : 'var(--text-disabled)'} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M19 8v6M22 11h-6" /></svg>
+                      Invite again
                     </button>
                     <button
                       onClick={() => setConfirmLeave(true)}

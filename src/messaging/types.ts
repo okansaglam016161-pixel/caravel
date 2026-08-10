@@ -118,11 +118,14 @@ export interface MessagingProvider {
   // self) so their clients learn the group exists. Empty-of-prose → no chat bubble on receipt.
   sendGroupDefinition(def: GroupDef): Promise<{ memberCount: number; membersReached: number }>
 
-  // RE-INVITE (Phase C): re-send the group definition to the roster, marked as a deliberate
-  // re-invite. Identical fan-out to sendGroupDefinition — members who still have the group ignore it
-  // via first-def-wins; only a member who LEFT lifts that state and gets a fresh invite card.
-  // Non-throwing, like sendGroupDefinition.
-  sendGroupReinvite(def: GroupDef): Promise<{ memberCount: number; membersReached: number }>
+  // RE-INVITE (Phase C): re-send the group definition, marked as a deliberate re-invite. Identical
+  // fan-out to sendGroupDefinition — members who still have the group ignore it via first-def-wins;
+  // only a member who LEFT lifts that state and gets a fresh invite card. Non-throwing.
+  //
+  // `recipientsHex` (C-M2) selects WHICH members receive it; omit for the whole roster. It is
+  // deliberately separate from def.members: `def` carries the group's real roster into the wrap and
+  // must NEVER be subsetted, or re-invited members rebuild their roster from the subset.
+  sendGroupReinvite(def: GroupDef, recipientsHex?: string[]): Promise<{ memberCount: number; membersReached: number }>
 
   // Group LEAVE notice (B-M2): fan out "I have left this group" to the roster (minus self) so their
   // clients can render a system line. Like sendGroupDefinition — and deliberately UNLIKE

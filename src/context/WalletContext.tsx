@@ -99,9 +99,11 @@ export interface WalletCtx {
   /** Leave a group I'm active in (Phase B): active → 'left', the same permanent local suppression
    *  as decline. Non-destructive — history and roster are kept, hidden by state. */
   leaveGroup: (groupId: string) => void
-  /** Re-invite (Phase C): re-send this group's definition to its roster, marked as a deliberate
-   *  re-invite, so a member who LEFT gets a fresh invite card. Best-effort; never throws. */
-  reinviteGroup: (groupId: string) => void
+  /** Re-invite (Phase C): re-send this group's definition, marked as a deliberate re-invite, so a
+   *  member who LEFT gets a fresh invite card. `memberHexes` selects who receives it (C-M2's
+   *  picker); omit for the whole roster. The def always carries the FULL roster either way.
+   *  Best-effort; never throws. */
+  reinviteGroup: (groupId: string, memberHexes?: string[]) => void
   /** Per-peer contact state (M9.0b). No record + has messages ⇒ treat as 'accepted' (lazy). */
   contacts: ContactMap
   /** Accept a pending peer (M9.0c request UI). */
@@ -633,12 +635,15 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   // group ignore it (first-def-wins); a member in 'left' lifts to 'pending' and sees an invite card.
   // Best-effort and fire-and-forget, exactly like createGroup's original fan-out — the sender learns
   // nothing about who was actually re-invited, since relays-reached is not a delivery receipt.
-  const reinviteGroup = useCallback((groupId: string) => {
+  const reinviteGroup = useCallback((groupId: string, memberHexes?: string[]) => {
     const group = groups.find(g => g.id === groupId)
     if (!group || group.state !== 'active') return
+    if (memberHexes && memberHexes.length === 0) return  // nothing selected — nothing to send
     const provider = createMessagingProvider()
     if (!provider) return
-    provider.sendGroupReinvite({ id: group.id, name: group.name, members: group.members })
+    // The def carries the FULL roster (group.members) in every case; memberHexes only narrows who it
+    // is sent to. Never build the def from the selection — see sendGroupReinvite's contract.
+    provider.sendGroupReinvite({ id: group.id, name: group.name, members: group.members }, memberHexes)
       .catch(() => { /* best-effort — same contract as the original definition fan-out */ })
       .finally(() => provider.disconnect())
   }, [groups, createMessagingProvider])

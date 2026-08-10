@@ -8,6 +8,7 @@ import ProfilePanel from '../wallet/ProfilePanel'
 import type { CaravelMessage, Group } from '../../messaging/types'
 import GroupThread from './GroupThread'
 import CreateGroupModal, { type GroupContactOption } from './CreateGroupModal'
+import ReinviteModal, { type ReinviteMemberOption } from './ReinviteModal'
 import { loadNicknames, setNickname, MAX_NICKNAME_LEN, type NicknameMap } from '../../messaging/nicknameStore'
 import { loadAddressSent, markAddressSent, clearAddressSent, type AddressSentMap } from '../../messaging/addressSentStore'
 import { sendConfidential, tariToMicrotari, MAX_FEE } from '../../crypto/confidentialSend'
@@ -218,6 +219,8 @@ export default function ChatApp() {
   const [selectedPeer, setSelectedPeer] = useState<string | null>(null)
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null)
   const [createGroupOpen, setCreateGroupOpen] = useState(false)
+  // C-M2 re-invite picker, keyed on the group it was opened for.
+  const [reinviteFor, setReinviteFor] = useState<string | null>(null)
 
   // Conversation ⋯ menu + delete confirmation.
   const [menuOpen, setMenuOpen] = useState(false)
@@ -402,6 +405,34 @@ export default function ChatApp() {
       provider.disconnect()
     }
   }
+
+  // Roster options for the C-M2 re-invite picker: the FULL roster minus self, annotated with a
+  // BELIEVED-LEFT hint and sorted so believed-left members come first.
+  //
+  // The hint is derived from the leave notices already persisted by B-M2 (system rows in `messages`)
+  // — no new store. It is deliberately only a hint: leave notices are best-effort, so a member can
+  // be genuinely gone with no notice, and pre-B-M2 leaves left none at all. That is why every roster
+  // member stays listed and selectable; the hint drives ordering, subtitle and pre-selection only.
+  //
+  // A member who left and later RE-JOINED still has their old leave row, so compare it against their
+  // newest ordinary message: if they have spoken since leaving, they are back and not flagged.
+  const reinviteMembers: ReinviteMemberOption[] = useMemo(() => {
+    const g = reinviteFor ? groups.find(gr => gr.id === reinviteFor) : null
+    if (!g) return []
+    const gmsgs = messages.filter(m => m.groupId === g.id)
+    const newestBy = (hex: string, pick: (m: CaravelMessage) => boolean) =>
+      gmsgs.reduce((acc, m) => (m.senderPubkeyHex === hex && pick(m) && m.timestamp > acc ? m.timestamp : acc), 0)
+    return g.members
+      .filter(hex => hex && hex !== nostrPubkeyHex)
+      .map(hex => {
+        const leftTs = newestBy(hex, m => m.system === 'group-leave')
+        const spokeTs = newestBy(hex, m => !m.system)
+        // Inlined rather than via displayName() so the memo depends on `nicknames` itself, not on a
+        // function identity that changes every render.
+        return { hex, name: nicknames[hex] ?? truncNpub(hex), leftAt: leftTs > spokeTs && leftTs > 0 ? leftTs : null }
+      })
+      .sort((a, b) => (b.leftAt ?? 0) - (a.leftAt ?? 0))
+  }, [reinviteFor, groups, messages, nostrPubkeyHex, nicknames])
 
   // Accepted contacts offered in the create-group modal, resolved to display names.
   const groupContactOptions: GroupContactOption[] = Object.entries(contacts)
@@ -1145,10 +1176,8 @@ export default function ChatApp() {
                  suppression (delete's "forget until re-invited" resurrects the group as a pending
                  invite on the next message) and it keeps the roster the B-M2 notice fans out to. */
               onLeave={() => handleLeaveGroup(selectedGroup)}
-              /* Re-invite (C-M1): re-send the marked def to the roster. Members who still hold the
-                 group ignore it via first-def-wins; a member who LEFT lifts to 'pending' and gets a
-                 normal invite card. No member-picker — the roster still contains the leaver. */
-              onReinvite={() => reinviteGroup(selectedGroup.id)}
+              /* Re-invite (C-M2): open the picker. Sending is the modal's confirm, not this click. */
+              onReinvite={() => setReinviteFor(selectedGroup.id)}
             />
           ) : selectedConvo === null ? (
             /* Chat pane at rest (design: sail + reassurance) */
@@ -1499,6 +1528,17 @@ export default function ChatApp() {
 
     {walletOpen && <WalletModal onClose={() => setWalletOpen(false)} />}
     {profileOpen && <ProfilePanel onClose={() => setProfileOpen(false)} avatar={selfAvatar} />}
+    {reinviteFor && (
+      <ReinviteModal
+        groupName={groups.find(g => g.id === reinviteFor)?.name?.trim() || 'this group'}
+        members={reinviteMembers}
+        /* Only the fan-out targets are narrowed — reinviteGroup always builds the def from the
+           group's full roster. Never pass the selection as the roster. */
+        onConfirm={hexes => reinviteGroup(reinviteFor, hexes)}
+        onClose={() => setReinviteFor(null)}
+      />
+    )}
+
     {createGroupOpen && (
       <CreateGroupModal
         contacts={groupContactOptions}

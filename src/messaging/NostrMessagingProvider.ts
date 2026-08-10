@@ -194,18 +194,29 @@ export class NostrMessagingProvider implements MessagingProvider {
     return this.fanOutDefinition(def, false)
   }
 
-  // RE-INVITE (Phase C): the same fan-out, with the def marked as a deliberate re-send. Sent to the
-  // WHOLE roster rather than a chosen member — the roster still contains whoever left (B-M2 leaves
-  // it unedited), members who still have the group drop it via first-def-wins, and only a member in
-  // 'left' lifts. That keeps C-M1 free of a member-picker. Non-throwing, like its sibling.
-  async sendGroupReinvite(def: GroupDef): Promise<{ memberCount: number; membersReached: number }> {
-    return this.fanOutDefinition(def, true)
+  // RE-INVITE (Phase C): the same fan-out, with the def marked as a deliberate re-send. Members who
+  // still hold the group drop it via first-def-wins; only a member in 'left' lifts.
+  //
+  // `recipientsHex` (C-M2) narrows WHO receives it — the picker's selection. It is a SEPARATE
+  // parameter from def.members ON PURPOSE and the two must never be conflated: `def` is the group's
+  // identity and is serialised into the wrap, so the roster it carries has to stay the FULL roster.
+  // Passing a subset as def.members would rewrite every re-invited member's roster to that subset on
+  // arrival (their lift path rebuilds the record from def.members) — silent group corruption, not a
+  // UI bug. Omit `recipientsHex` for the whole roster. Non-throwing, like its sibling.
+  async sendGroupReinvite(def: GroupDef, recipientsHex?: string[]): Promise<{ memberCount: number; membersReached: number }> {
+    return this.fanOutDefinition(def, true, recipientsHex)
   }
 
-  private async fanOutDefinition(def: GroupDef, reinvite: boolean): Promise<{ memberCount: number; membersReached: number }> {
-    const recipients = def.members.filter(m => m && m !== this.pubkeyHex)
+  private async fanOutDefinition(def: GroupDef, reinvite: boolean, recipientsHex?: string[]): Promise<{ memberCount: number; membersReached: number }> {
+    // Targets default to the full roster. A caller-supplied list is intersected WITH the roster, so a
+    // stale or hand-made selection can never address a non-member. Self is always filtered out.
+    const roster = new Set(def.members.filter(Boolean))
+    const targets = recipientsHex ? recipientsHex.filter(m => roster.has(m)) : [...roster]
+    const recipients = targets.filter(m => m && m !== this.pubkeyHex)
     let membersReached = 0
     await Promise.all(recipients.map(async member => {
+      // NOTE: `def` is passed through UNMODIFIED — full roster in the payload, regardless of who is
+      // being sent to. Narrowing happens only in `recipients` above.
       const wrapped = wrapGroupDefinition(this.secretKey, member, def, reinvite)
       const results = await publishGiftWrap(wrapped, [...this.relayUrls], PUBLISH_TIMEOUT_MS)
       if (results.some(r => r.ok)) membersReached++

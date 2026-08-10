@@ -205,7 +205,7 @@ function PaymentMessageCard({ message }: { message: CaravelMessage }) {
 // ── Component ────────────────────────────────────────────────────────────────────
 
 export default function ChatApp() {
-  const { wallet, address, scan, messages, nostrPubkeyHex, messagingStatus, contacts, acceptContact, contactAddresses, setManualTariAddress, createMessagingProvider, recordSentMessage, deleteConversation, getRelayStates, reconnectAll, balanceHidden, setBalanceHidden, groups, createGroup, deleteGroup, acceptGroup, declineGroup } = useWallet()
+  const { wallet, address, scan, messages, nostrPubkeyHex, messagingStatus, contacts, acceptContact, contactAddresses, setManualTariAddress, createMessagingProvider, recordSentMessage, deleteConversation, getRelayStates, reconnectAll, balanceHidden, setBalanceHidden, groups, createGroup, acceptGroup, declineGroup, leaveGroup } = useWallet()
   const [walletOpen, setWalletOpen] = useState(false)
   const [profileOpen, setProfileOpen] = useState(false)
   // The user's own generated avatar (deterministic gradient from their pubkey hash) — used for the
@@ -1105,7 +1105,11 @@ export default function ChatApp() {
               messages={groupMessages}
               nameFor={displayName}
               onSend={handleGroupSend}
-              onDelete={() => { deleteGroup(selectedGroup.id); setSelectedGroupId(null) }}
+              /* Leave (B-M1) replaces Delete as the thread's exit action: 'left' is the stronger
+                 suppression (delete's "forget until re-invited" resurrects the group as a pending
+                 invite on the next message) and it keeps the roster B-M2's leave notice needs.
+                 Clearing the selection is required — the render guard above demands 'active'. */
+              onLeave={() => { leaveGroup(selectedGroup.id); setSelectedGroupId(null) }}
             />
           ) : selectedConvo === null ? (
             /* Chat pane at rest (design: sail + reassurance) */

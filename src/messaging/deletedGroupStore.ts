@@ -8,6 +8,10 @@
 // is ungated), after which a replayed def re-names/re-rosters it: "forget until re-invited" via a
 // message. Covers every group, legacy included, since the group id is always known.
 //
+// Phase A/B also write here as belt-and-suspenders for the permanent 'left' suppression: declining
+// an invite (A-M1) and leaving an active group (B-M1) both record the id, covering the edge where
+// the local record is absent or a placeholder.
+//
 // Phase 2 (leave/join, versioned defs): key the suppression on (groupId, defVersion) so a newer def
 // defeats the entry and def-based re-invite returns in full.
 //

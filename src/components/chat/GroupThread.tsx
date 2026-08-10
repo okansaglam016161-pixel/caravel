@@ -1,8 +1,11 @@
 //   Phase 1 group thread — a sibling of the DM view, built on the shared Stage 1 primitives
 //   (Avatar, MessageBubble, chatDisplay). The ONLY group-specific differences vs a DM thread:
 //   a group-glyph avatar + "N members" subtitle in the header, and a per-sender identity
-//   (avatar + label, grouped by run) on received bubbles. No logic changes; no payments; no
-//   leave/join. Fan-out / routing / gate / delete are unchanged from the committed behavior.
+//   (avatar + label, grouped by run) on received bubbles. No logic changes; no payments.
+//   Fan-out / routing / gate are unchanged from the committed behavior.
+//
+//   B-M1: the ⋯ menu's exit action is LEAVE (was Delete) — two-step, confirmed inline in the menu.
+//   Leave is local-only here; the outbound "X has left the chat" notice is B-M2.
 
 import { useState } from 'react'
 import type { CaravelMessage, Group } from '../../messaging/types'
@@ -17,18 +20,25 @@ function groupTitle(g: Group): string {
 }
 
 export default function GroupThread({
-  group, messages, nameFor, onSend, onDelete,
+  group, messages, nameFor, onSend, onLeave,
 }: {
   group: Group
   messages: CaravelMessage[]        // this group's messages, oldest-first
   nameFor: (hex: string) => string  // sender display name (nickname ?? truncated npub)
   onSend: (text: string) => Promise<void>
-  onDelete: () => void
+  onLeave: () => void
 }) {
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
+  // Two-step leave (B-M1): the ⋯ item swaps the menu panel to an inline confirm rather than opening
+  // a modal. Leave hides a history the user has been reading and is irreversible until Phase C, so
+  // it is guarded — Delete never was, but Delete was the weaker "forget until re-invited".
+  const [confirmLeave, setConfirmLeave] = useState(false)
   const canSend = draft.trim().length > 0 && !sending
+
+  // Any dismissal drops the confirm step too, so re-opening the menu always starts at step one.
+  function closeMenu() { setMenuOpen(false); setConfirmLeave(false) }
 
   async function send() {
     const text = draft.trim()
@@ -62,7 +72,7 @@ export default function GroupThread({
         </div>
         <div style={{ position: 'relative', flexShrink: 0 }}>
           <button
-            onClick={() => setMenuOpen(o => !o)}
+            onClick={() => (menuOpen ? closeMenu() : setMenuOpen(true))}
             title="Group options"
             style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 36, height: 36, borderRadius: 10, border: '1px solid rgba(var(--border-rgb),0.16)', background: menuOpen ? 'rgba(var(--border-rgb),0.1)' : 'transparent', cursor: 'pointer', padding: 0 }}
           >
@@ -70,15 +80,41 @@ export default function GroupThread({
           </button>
           {menuOpen && (
             <>
-              <div onClick={() => setMenuOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
-              <div style={{ position: 'absolute', top: 42, right: 0, zIndex: 41, minWidth: 200, padding: 6, borderRadius: 11, background: 'var(--surface-raised)', border: '1px solid rgba(var(--border-rgb),0.18)', boxShadow: '0 10px 30px rgba(0,0,0,0.5)' }}>
-                <button
-                  onClick={() => { setMenuOpen(false); onDelete() }}
-                  style={{ display: 'flex', alignItems: 'center', gap: 11, width: '100%', padding: '9px 11px', borderRadius: 8, border: 'none', background: 'transparent', color: 'var(--danger-300)', fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}
-                >
-                  <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="var(--danger-300)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14" /></svg>
-                  Delete group
-                </button>
+              <div onClick={closeMenu} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+              <div style={{ position: 'absolute', top: 42, right: 0, zIndex: 41, minWidth: confirmLeave ? 244 : 200, padding: 6, borderRadius: 11, background: 'var(--surface-raised)', border: '1px solid rgba(var(--border-rgb),0.18)', boxShadow: '0 10px 30px rgba(0,0,0,0.5)' }}>
+                {confirmLeave ? (
+                  /* Step 2 — inline confirm, in the same panel. Cancel/Leave reuse the invite card's
+                     neutral/decisive button tokens, danger-toned for the destructive side. */
+                  <div style={{ padding: '5px 6px 6px' }}>
+                    <div style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--text-primary)' }}>Leave this group?</div>
+                    <div style={{ fontSize: 11.5, color: 'var(--text-muted-dim)', lineHeight: 1.45, marginTop: 4, marginBottom: 11 }}>
+                      You'll stop seeing new messages and this chat is hidden for good.
+                    </div>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button
+                        onClick={closeMenu}
+                        style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 9, borderRadius: 9, border: '1px solid rgba(var(--border-rgb),0.2)', background: 'transparent', color: 'var(--text-muted)', fontSize: 12.5, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={() => { closeMenu(); onLeave() }}
+                        style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 9, borderRadius: 9, border: '1px solid rgba(var(--danger-rgb),0.3)', background: 'rgba(var(--danger-rgb),0.08)', color: 'var(--danger-300)', fontSize: 12.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}
+                      >
+                        Leave
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  /* Step 1 — the menu item, styled exactly as the Delete item it replaces. */
+                  <button
+                    onClick={() => setConfirmLeave(true)}
+                    style={{ display: 'flex', alignItems: 'center', gap: 11, width: '100%', padding: '9px 11px', borderRadius: 8, border: 'none', background: 'transparent', color: 'var(--danger-300)', fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}
+                  >
+                    <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="var(--danger-300)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" /></svg>
+                    Leave group
+                  </button>
+                )}
               </div>
             </>
           )}

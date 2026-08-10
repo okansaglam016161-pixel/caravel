@@ -95,6 +95,9 @@ export interface WalletCtx {
   acceptGroup: (groupId: string) => void
   /** Decline a pending group invite (Phase A): pending → 'left', a permanent local suppression. */
   declineGroup: (groupId: string) => void
+  /** Leave a group I'm active in (Phase B): active → 'left', the same permanent local suppression
+   *  as decline. Non-destructive — history and roster are kept, hidden by state. */
+  leaveGroup: (groupId: string) => void
   /** Per-peer contact state (M9.0b). No record + has messages ⇒ treat as 'accepted' (lazy). */
   contacts: ContactMap
   /** Accept a pending peer (M9.0c request UI). */
@@ -522,6 +525,32 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     setGroups(prev => setGroupState(pubkeyHex, prev, groupId, 'left'))
   }, [nostrPubkeyHex])
 
+  // Leave a group I'm actively in (Phase B). active → 'left', via declineGroup's EXACT three-step
+  // suppression (persisted group-id record + in-memory set + kept-record state flip) — the same
+  // "gone stays gone" guarantee, differing only in the entry state. Deliberately a sibling of
+  // declineGroup rather than a shared helper: B-M2 adds a network side-effect to leave only, and
+  // Phase C's re-invite lift will treat the two entry paths differently.
+  //
+  // NON-DESTRUCTIVE (like decline, unlike deleteGroup): the record and the group's messages are
+  // KEPT — history is hidden by state at derivation, not erased — which also preserves `members`,
+  // the roster B-M2's leave notice has to fan out to. deleteGroup would throw that roster away.
+  //
+  // B-M2 LAYERS HERE: (1) send the leave control message BEFORE calling this, while the provider
+  // and roster are in hand, so other members render "X has left the chat"; (2) add a drop-at-ingest
+  // check for 'left' groups in the onMessage group branch — peers still hold me in their roster, so
+  // today a left group keeps accumulating invisible messages in localStorage.
+  const leaveGroup = useCallback((groupId: string) => {
+    const pubkeyHex = nostrPubkeyHex
+    if (!pubkeyHex) return
+    // Guarded to an ACTIVE entry state: leave is the active-group action, so it can't double as a
+    // back-door state jump out of 'pending' (that path is declineGroup) or re-fire on a left group.
+    // Read off `groups` (not inside the updater) to keep the updater pure, as deleteGroup does.
+    if (groups.find(g => g.id === groupId)?.state !== 'active') return
+    recordDeletedGroup(pubkeyHex, groupId)
+    deletedGroupsRef.current.add(groupId)
+    setGroups(prev => setGroupState(pubkeyHex, prev, groupId, 'left'))
+  }, [nostrPubkeyHex, groups])
+
   // Read-only accessors onto the live provider for the connection/relay-health UI.
   const getRelayStates = useCallback((): RelayState[] => messagingProviderRef.current?.getRelayStates() ?? [], [])
   const reconnectAll = useCallback((): void => { messagingProviderRef.current?.reconnectAll() }, [])
@@ -534,7 +563,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       recordSentMessage, contacts, acceptContact, contactAddresses, setManualTariAddress,
       deleteConversation, createMessagingProvider, getRelayStates, reconnectAll,
       balanceHidden, setBalanceHidden,
-      groups, createGroup, deleteGroup, acceptGroup, declineGroup,
+      groups, createGroup, deleteGroup, acceptGroup, declineGroup, leaveGroup,
     }}>
       {children}
     </Ctx.Provider>

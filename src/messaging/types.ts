@@ -54,7 +54,7 @@ export interface CaravelMessage {
 //   - pending — an inbound def/message introduced this group; held out of the active thread until
 //               the user accepts (mirrors the DM 'pending' contact gate).
 //   - active  — a normal group (I created it, or I accepted an invite). Behaves as Phase 1 did.
-//   - left    — declined (Phase A) or, later, explicitly left (Phase B). Permanent LOCAL suppression:
+//   - left    — declined (Phase A) or explicitly left (Phase B). Permanent LOCAL suppression:
 //               the record is KEPT (not removed) so "gone stays gone" — a new message can't re-open
 //               it (it stays held), and a replayed def is ignored by first-def-wins. Stronger than
 //               deleteGroup's forget-until-re-invited.

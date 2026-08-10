@@ -13,6 +13,7 @@ import Avatar from './Avatar'
 import MessageBubble from './MessageBubble'
 import { MONO } from './chatDisplay'
 import { groupGlyph } from './groupGlyph'
+import { useScrollToBottom } from './useScrollToBottom'
 
 // A group with no real name yet (a lazy placeholder learned from a message before its definition).
 function groupTitle(g: Group): string {
@@ -39,6 +40,10 @@ export default function GroupThread({
   const canSend = draft.trim().length > 0 && !sending
   // A roster of just me (or a placeholder with no roster yet) has nobody to re-invite.
   const canReinvite = group.members.length > 1
+  // Same auto-scroll as the DM thread, from the shared hook. Keyed on group.id because this
+  // component is reused (not remounted) when switching groups; the count covers send and receive
+  // alike, including system notices, which are new rows at the bottom like any other.
+  const bottomRef = useScrollToBottom(group.id, messages.length)
 
   // Any dismissal drops the confirm step too, so re-opening the menu always starts at step one.
   function closeMenu() { setMenuOpen(false); setConfirmLeave(false) }
@@ -177,6 +182,8 @@ export default function GroupThread({
             />
           )
         })}
+        {/* Auto-scroll anchor */}
+        <div ref={bottomRef} />
       </div>
 
       {/* Composer — DM compose treatment, minus the $ payment toggle (deferred). */}

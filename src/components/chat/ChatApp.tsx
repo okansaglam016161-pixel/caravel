@@ -9,6 +9,7 @@ import type { CaravelMessage, Group } from '../../messaging/types'
 import GroupThread from './GroupThread'
 import CreateGroupModal, { type GroupContactOption } from './CreateGroupModal'
 import ReinviteModal, { type ReinviteMemberOption } from './ReinviteModal'
+import { useScrollToBottom } from './useScrollToBottom'
 import { loadNicknames, setNickname, MAX_NICKNAME_LEN, type NicknameMap } from '../../messaging/nicknameStore'
 import { loadAddressSent, markAddressSent, clearAddressSent, type AddressSentMap } from '../../messaging/addressSentStore'
 import { sendConfidential, tariToMicrotari, MAX_FEE } from '../../crypto/confidentialSend'
@@ -730,13 +731,10 @@ export default function ChatApp() {
     }
   }
 
-  // Auto-scroll to newest: on conversation open and whenever this thread gains a message.
-  const bottomRef = useRef<HTMLDivElement>(null)
+  // Auto-scroll to newest: on conversation open and whenever this thread gains a message. Shared
+  // with GroupThread so the two views can't drift — see useScrollToBottom.
   const selectedPeerHex = selectedConvo?.peerHex ?? null
-  const selectedCount = selectedConvo?.messages.length ?? 0
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ block: 'end' })
-  }, [selectedPeerHex, selectedCount])
+  const bottomRef = useScrollToBottom(selectedPeerHex, selectedConvo?.messages.length ?? 0)
 
   // Reset the payment composer when switching conversations so a half-filled payment can't carry
   // across to a different peer. The must-acknowledge alert banner is intentionally NOT reset here.

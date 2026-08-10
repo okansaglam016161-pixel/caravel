@@ -205,7 +205,7 @@ function PaymentMessageCard({ message }: { message: CaravelMessage }) {
 // ── Component ────────────────────────────────────────────────────────────────────
 
 export default function ChatApp() {
-  const { wallet, address, scan, messages, nostrPubkeyHex, messagingStatus, contacts, acceptContact, contactAddresses, setManualTariAddress, createMessagingProvider, recordSentMessage, deleteConversation, getRelayStates, reconnectAll, balanceHidden, setBalanceHidden, groups, createGroup, acceptGroup, declineGroup, leaveGroup } = useWallet()
+  const { wallet, address, scan, messages, nostrPubkeyHex, messagingStatus, contacts, acceptContact, contactAddresses, setManualTariAddress, createMessagingProvider, recordSentMessage, deleteConversation, getRelayStates, reconnectAll, balanceHidden, setBalanceHidden, groups, createGroup, acceptGroup, declineGroup, leaveGroup, reinviteGroup } = useWallet()
   const [walletOpen, setWalletOpen] = useState(false)
   const [profileOpen, setProfileOpen] = useState(false)
   // The user's own generated avatar (deterministic gradient from their pubkey hash) — used for the
@@ -348,6 +348,20 @@ export default function ChatApp() {
     () => groups.filter(g => g.state === 'pending').sort((a, b) => b.createdAt - a.createdAt),
     [groups],
   )
+
+  // Release the in-flight guards once their card is gone (C-M1 fix). Both guards are keyed on the
+  // subject's id and were never cleared: harmless while an id could only ever be pending ONCE, but
+  // a re-invite returns the SAME group id to 'pending', and the stale 'accept' then rendered the
+  // fresh card permanently mid-flight (a spinner that only a reload — which resets this component
+  // state — could clear). Clearing on the commit that removes the card means no flicker, and it
+  // holds for any future path that re-pends a subject rather than special-casing re-invite.
+  // busyRequest has the identical latent bug, masked only because declineRequest deletes outright.
+  useEffect(() => {
+    if (busyInvite && !pendingInvites.some(g => g.id === busyInvite.groupId)) setBusyInvite(null)
+  }, [pendingInvites, busyInvite])
+  useEffect(() => {
+    if (busyRequest && !pendingRequests.some(c => c.peerHex === busyRequest.peerHex)) setBusyRequest(null)
+  }, [pendingRequests, busyRequest])
 
   // Only an ACTIVE group opens a thread (A-M2 §5). Pending groups reach the user as invite cards,
   // never as a clickable row; this guard makes "opening a pending group can't open the thread"
@@ -1131,6 +1145,10 @@ export default function ChatApp() {
                  suppression (delete's "forget until re-invited" resurrects the group as a pending
                  invite on the next message) and it keeps the roster the B-M2 notice fans out to. */
               onLeave={() => handleLeaveGroup(selectedGroup)}
+              /* Re-invite (C-M1): re-send the marked def to the roster. Members who still hold the
+                 group ignore it via first-def-wins; a member who LEFT lifts to 'pending' and gets a
+                 normal invite card. No member-picker — the roster still contains the leaver. */
+              onReinvite={() => reinviteGroup(selectedGroup.id)}
             />
           ) : selectedConvo === null ? (
             /* Chat pane at rest (design: sail + reassurance) */

@@ -42,11 +42,36 @@ function isPlaceholder(g: Group): boolean {
 // upgrading a placeholder, the EXISTING state is preserved — a placeholder created 'pending' by a
 // message-first arrival stays pending after its def lands, and a 'left' placeholder stays left.
 //
-// PHASE C (re-invite) TOUCHES THIS: first-def-wins makes 'left' permanent — it also swallows a
-// genuine re-invite def. Lifting 'left' on a real new invite is a deliberate Phase C change and
-// must be added here (and/or the present-check in onGroupDefinition), not discovered as a surprise.
-export function addOrUpdateGroup(pubkeyHex: string, current: Group[], def: GroupDef, initialState: GroupState = 'active'): Group[] {
+// PHASE C (re-invite) LANDED HERE: `reinvite` is the opt-in that lets a genuine re-invite def lift a
+// locally 'left' group, bypassing first-def-wins for that ONE case. The caller must have verified
+// the def carried the caravel-group-reinvite marker AND that its event id was not already acted on
+// (seenDefStore) — this function does not and cannot check either.
+//
+// INDEPENDENCE FROM THE DELETE SUPPRESSION (d3baa8b) — the reason this is safe to touch alone:
+// a 'left' group's record is KEPT, so it is PRESENT locally, so onGroupDefinition's present-check
+// (`!prev.some(id) && deletedGroupsRef.has(id)`) never fires for it — only first-def-wins here does.
+// A DELETED group is the mirror image: its record is ABSENT, so the present-check is what stops it
+// and this function is never reached. The two suppressions cover disjoint cases, which is why
+// Phase C changes this line and leaves the present-check byte-for-byte alone.
+export function addOrUpdateGroup(
+  pubkeyHex: string,
+  current: Group[],
+  def: GroupDef,
+  initialState: GroupState = 'active',
+  opts: { reinvite?: boolean } = {},
+): Group[] {
   const existing = current.find(g => g.id === def.id)
+  // RE-INVITE LIFT: a marked, not-yet-acted-on def for a group I have LEFT. Replace the record from
+  // the new def (name/roster may have changed while I was away) and return it to 'pending', so it
+  // surfaces as an ordinary invite card and goes through the normal Accept/Decline flow — never
+  // straight to 'active'. Scoped to state === 'left': a 'pending' or 'active' group is untouched by
+  // a re-invite marker, so first-def-wins still holds everywhere else.
+  if (opts.reinvite && existing && existing.state === 'left') {
+    const lifted: Group = { id: def.id, name: def.name, members: def.members, createdAt: existing.createdAt, state: 'pending' }
+    const next = current.map(g => (g.id === def.id ? lifted : g))
+    save(pubkeyHex, next)
+    return next
+  }
   if (existing && !isPlaceholder(existing)) return current  // first real def wins — ignore later defs
   const group: Group = {
     id: def.id,
@@ -85,6 +110,14 @@ export function ensureGroup(pubkeyHex: string, current: Group[], groupId: string
 // rare control message but not for every inbound message.
 export function hasGroup(pubkeyHex: string, groupId: string): boolean {
   return loadGroups(pubkeyHex).some(g => g.id === groupId)
+}
+
+// A group's persisted lifecycle state, or undefined if unknown locally. Same authoritative-at-call-
+// time property as hasGroup, and used for the same reason: the re-invite lift (Phase C) must decide
+// against real state, not a ref snapshot that the [groups] effect has not caught up with. Also rare
+// (one call per received def), so the whole-store parse is fine.
+export function getGroupState(pubkeyHex: string, groupId: string): GroupState | undefined {
+  return loadGroups(pubkeyHex).find(g => g.id === groupId)?.state
 }
 
 // Set a group's lifecycle state (read-modify-write, persisted). No-op if the group is absent or

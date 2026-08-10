@@ -62,8 +62,12 @@ export interface CaravelMessage {
 //   - active  — a normal group (I created it, or I accepted an invite). Behaves as Phase 1 did.
 //   - left    — declined (Phase A) or explicitly left (Phase B). Permanent LOCAL suppression:
 //               the record is KEPT (not removed) so "gone stays gone" — a new message can't re-open
-//               it (it stays held), and a replayed def is ignored by first-def-wins. Stronger than
-//               deleteGroup's forget-until-re-invited.
+//               it (messages are dropped at ingest), and an ordinary replayed def is ignored by
+//               first-def-wins. Stronger than deleteGroup's forget-until-re-invited.
+//               PHASE C: exactly ONE thing lifts it — a def carrying the caravel-group-reinvite
+//               marker whose event id has not been acted on before. That returns it to 'pending',
+//               i.e. a normal invite card; never straight to 'active'. Pre-existing history is kept
+//               (leave was non-destructive), so a re-accepted group reads as old thread + gap + new.
 export type GroupState = 'pending' | 'active' | 'left'
 
 // A group a wallet participates in. Membership is the in-message roster (Phase 1) — the members a
@@ -114,6 +118,12 @@ export interface MessagingProvider {
   // self) so their clients learn the group exists. Empty-of-prose → no chat bubble on receipt.
   sendGroupDefinition(def: GroupDef): Promise<{ memberCount: number; membersReached: number }>
 
+  // RE-INVITE (Phase C): re-send the group definition to the roster, marked as a deliberate
+  // re-invite. Identical fan-out to sendGroupDefinition — members who still have the group ignore it
+  // via first-def-wins; only a member who LEFT lifts that state and gets a fresh invite card.
+  // Non-throwing, like sendGroupDefinition.
+  sendGroupReinvite(def: GroupDef): Promise<{ memberCount: number; membersReached: number }>
+
   // Group LEAVE notice (B-M2): fan out "I have left this group" to the roster (minus self) so their
   // clients can render a system line. Like sendGroupDefinition — and deliberately UNLIKE
   // sendGroupMessage — this NEVER throws: leaving is a local act that must not be blocked or undone
@@ -128,7 +138,10 @@ export interface MessagingProvider {
     onStatusChange?: (status: MessagingConnectionStatus) => void,
     onContactAddress?: (senderPubkeyHex: string, tariAddress: string) => void,
     // Fires for a received group-definition control message (authenticated to senderPubkeyHex).
-    onGroupDefinition?: (senderPubkeyHex: string, def: GroupDef) => void
+    // `defEventId` is the gift-wrap event id — unique per publish, so it distinguishes a genuine
+    // re-send from a stale backfill replay of the same def. `reinvite` is the caravel-group-reinvite
+    // marker (Phase C); only a marked def may lift a locally 'left' group.
+    onGroupDefinition?: (senderPubkeyHex: string, def: GroupDef, defEventId: string, reinvite: boolean) => void
   ): void
 
   // Close all relay connections and subscriptions. Idempotent — safe to call more than once.

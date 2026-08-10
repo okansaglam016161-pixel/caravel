@@ -20,17 +20,21 @@ function groupTitle(g: Group): string {
 }
 
 export default function GroupThread({
-  group, messages, nameFor, onSend, onLeave,
+  group, messages, nameFor, onSend, onLeave, onReinvite,
 }: {
   group: Group
   messages: CaravelMessage[]        // this group's messages, oldest-first
   nameFor: (hex: string) => string  // sender display name (nickname ?? truncated npub)
   onSend: (text: string) => Promise<void>
   onLeave: () => void
+  onReinvite: () => void
 }) {
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
+  // "Invite again" is fire-and-forget with no delivery receipt, so the only honest feedback is that
+  // the send was started — a brief confirmation on the item itself rather than a fake success state.
+  const [reinvited, setReinvited] = useState(false)
   // Two-step leave (B-M1): the ⋯ item swaps the menu panel to an inline confirm rather than opening
   // a modal. Leave hides a history the user has been reading and is irreversible until Phase C, so
   // it is guarded — Delete never was, but Delete was the weaker "forget until re-invited".
@@ -38,7 +42,7 @@ export default function GroupThread({
   const canSend = draft.trim().length > 0 && !sending
 
   // Any dismissal drops the confirm step too, so re-opening the menu always starts at step one.
-  function closeMenu() { setMenuOpen(false); setConfirmLeave(false) }
+  function closeMenu() { setMenuOpen(false); setConfirmLeave(false); setReinvited(false) }
 
   async function send() {
     const text = draft.trim()
@@ -106,14 +110,27 @@ export default function GroupThread({
                     </div>
                   </div>
                 ) : (
-                  /* Step 1 — the menu item, styled exactly as the Delete item it replaces. */
-                  <button
-                    onClick={() => setConfirmLeave(true)}
-                    style={{ display: 'flex', alignItems: 'center', gap: 11, width: '100%', padding: '9px 11px', borderRadius: 8, border: 'none', background: 'transparent', color: 'var(--danger-300)', fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}
-                  >
-                    <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="var(--danger-300)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" /></svg>
-                    Leave group
-                  </button>
+                  /* Step 1 — the menu items. Invite again (neutral) above Leave (danger). */
+                  <>
+                    <button
+                      onClick={() => { setReinvited(true); onReinvite() }}
+                      disabled={reinvited}
+                      title="Re-send this group's invite to its members"
+                      style={{ display: 'flex', alignItems: 'center', gap: 11, width: '100%', padding: '9px 11px', borderRadius: 8, border: 'none', background: 'transparent', color: reinvited ? 'var(--teal-300)' : 'var(--text-body)', fontSize: 14, fontWeight: 600, cursor: reinvited ? 'default' : 'pointer', fontFamily: 'inherit', textAlign: 'left' }}
+                    >
+                      {reinvited
+                        ? <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="var(--teal-300)" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
+                        : <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M19 8v6M22 11h-6" /></svg>}
+                      {reinvited ? 'Invite sent' : 'Invite again'}
+                    </button>
+                    <button
+                      onClick={() => setConfirmLeave(true)}
+                      style={{ display: 'flex', alignItems: 'center', gap: 11, width: '100%', padding: '9px 11px', borderRadius: 8, border: 'none', background: 'transparent', color: 'var(--danger-300)', fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}
+                    >
+                      <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="var(--danger-300)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" /></svg>
+                      Leave group
+                    </button>
+                  </>
                 )}
               </div>
             </>

@@ -16,8 +16,9 @@ import { loadHistory, addSent, type SentEntry, type NewSentParams } from '../cry
 import { NostrMessagingProvider } from '../messaging/NostrMessagingProvider'
 import type { MessagingProvider, MessagingConnectionStatus, CaravelMessage, RelayState } from '../messaging/types'
 import { loadMessages, addReceivedMessage, addSentMessage, deletePeerMessages, deleteGroupMessages } from '../messaging/messageStore'
-import { loadGroups, addOrUpdateGroup, ensureGroup, setGroupState, hasGroup, deleteGroup as removeGroupFromStore } from '../messaging/groupStore'
-import { loadDeletedGroupIdSet, recordDeletedGroup } from '../messaging/deletedGroupStore'
+import { loadGroups, addOrUpdateGroup, ensureGroup, setGroupState, hasGroup, getGroupState, deleteGroup as removeGroupFromStore } from '../messaging/groupStore'
+import { loadDeletedGroupIdSet, recordDeletedGroup, clearDeletedGroup } from '../messaging/deletedGroupStore'
+import { loadSeenDefIdSet, recordSeenDef } from '../messaging/seenDefStore'
 import type { Group } from '../messaging/types'
 import { loadTombstoneIdSet, recordTombstones } from '../messaging/tombstoneStore'
 import { removeResolvedAmounts } from '../messaging/paymentResolutionStore'
@@ -98,6 +99,9 @@ export interface WalletCtx {
   /** Leave a group I'm active in (Phase B): active → 'left', the same permanent local suppression
    *  as decline. Non-destructive — history and roster are kept, hidden by state. */
   leaveGroup: (groupId: string) => void
+  /** Re-invite (Phase C): re-send this group's definition to its roster, marked as a deliberate
+   *  re-invite, so a member who LEFT gets a fresh invite card. Best-effort; never throws. */
+  reinviteGroup: (groupId: string) => void
   /** Per-peer contact state (M9.0b). No record + has messages ⇒ treat as 'accepted' (lazy). */
   contacts: ContactMap
   /** Accept a pending peer (M9.0c request UI). */
@@ -169,6 +173,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   // whose contract is "forget UNTIL RE-INVITED" (a new message must re-materialise the group), and
   // it is age-pruned at 3 days. Only `state: 'left'` is the durable, permanent suppression.
   const leftGroupsRef = useRef<Set<string>>(new Set())
+  // In-memory set of RE-INVITE def event ids already acted on (Phase C). Makes the 'left' lift
+  // exactly-once against the relay's ~2-day replay window. Rehydrated on unlock before subscribing.
+  const seenDefsRef = useRef<Set<string>>(new Set())
   const [messagingStatus, setMessagingStatus] = useState<MessagingConnectionStatus>('disconnected')
   const [balanceHidden, setBalanceHidden] = useState(false)
   const [messages, setMessages] = useState<CaravelMessage[]>([])
@@ -265,6 +272,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     // the effect normally wins, but that is timing luck, not a guarantee. Seeding here puts this on
     // the same footing as tombstonesRef/deletedGroupsRef: correct before the subscription replays.
     leftGroupsRef.current = new Set(loadedGroups.filter(g => g.state === 'left').map(g => g.id))
+    // Re-invite def ids already acted on, so a replayed re-invite can't re-open the card on reload.
+    seenDefsRef.current = loadSeenDefIdSet(pubkeyHex)
     const provider = new NostrMessagingProvider(secretHex, pubkeyHex, DEFAULT_RELAYS)
     messagingProviderRef.current = provider
     setMessagingStatus('connecting')
@@ -331,18 +340,47 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       },
       // Inbound group definition. Same KNOWN-CONTACT gate as group messages: only a sender we already
       // know can introduce a group. first-def-wins is enforced inside addOrUpdateGroup.
-      (senderPubkeyHex, def) => {
+      (senderPubkeyHex, def, defEventId, reinvite) => {
         if (!knownPeersRef.current.has(senderPubkeyHex) && !contactsRef.current.has(senderPubkeyHex)) return
+        // RE-INVITE LIFT (Phase C). A def may lift a locally 'left' group only if it is MARKED as a
+        // re-invite and its gift-wrap event id has not been acted on before. The marker rules out
+        // every def sent before Phase C existed (so upgrading can't spuriously resurrect a left
+        // group from a replay of its ORIGINAL def); the event id rules out the relay replaying the
+        // re-invite itself for ~2 days, which would otherwise re-open the card on every reload and
+        // after every decline. Both checks run BEFORE any state change, and the id is recorded
+        // first, so a duplicate arriving in the same burst finds it already seen.
+        // The 'left' test reads PERSISTED state, not leftGroupsRef: the ref is a snapshot the
+        // [groups] effect maintains, so a group left moments earlier in this same session may not be
+        // in it yet. Same reasoning as B-M2's notice gate — a def is rare enough to afford the read.
+        const lifting = reinvite && !seenDefsRef.current.has(defEventId) && getGroupState(pubkeyHex, def.id) === 'left'
+        if (lifting) {
+          seenDefsRef.current.add(defEventId)
+          recordSeenDef(pubkeyHex, defEventId)
+          // Drop the tombstone with the state, or a later replay would find a stale entry and
+          // suppress the group again. Both the persisted record and the in-memory set.
+          deletedGroupsRef.current.delete(def.id)
+          clearDeletedGroup(pubkeyHex, def.id)
+          // Clear the ingest drop EAGERLY — the [groups] effect would not catch up until after the
+          // commit, and an inbound message for the newly-lifted group in that window would be
+          // dropped (the same commit-window hazard as B-M2's gate refs).
+          leftGroupsRef.current.delete(def.id)
+        }
         setGroups(prev => {
           // Present-check: drop a def that would RESURRECT a deleted group — one that is absent
           // locally AND whose id is in the deleted-groups set (a stale backfill replay). A genuine
           // new message re-materialises the group (ungated, in the onMessage branch); once the group
           // is present again, a replayed def flows through here and re-names/re-rosters it.
+          //
+          // UNTOUCHED BY PHASE C, deliberately: this guards the DELETED case, where the record is
+          // ABSENT. A 'left' group's record is PRESENT, so this line never fires for one — the lift
+          // above and first-def-wins in addOrUpdateGroup cover that disjoint case. Keeping the two
+          // separate is what stops re-invite from reopening the delete-suppression bug d3baa8b fixed.
           if (!prev.some(g => g.id === def.id) && deletedGroupsRef.current.has(def.id)) return prev
           // Invite-gating (Phase A): a def for a BRAND-NEW group lands as 'pending' (held until the
           // user accepts). A def for an existing group is ignored by first-def-wins / preserves its
           // state (a placeholder upgrade keeps 'pending'/'left'), so initialState only bites on new ids.
-          return addOrUpdateGroup(pubkeyHex, prev, def, 'pending')
+          // `reinvite` (Phase C) is the one exception, and only for state === 'left' → 'pending'.
+          return addOrUpdateGroup(pubkeyHex, prev, def, 'pending', { reinvite: lifting })
         })
       }
     )
@@ -404,6 +442,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     // Cleared eagerly, like contactsRef below: the [groups] effect would also clear this, but not
     // until after the commit, and the subscribe closure must not see another identity's ids.
     leftGroupsRef.current = new Set()
+    seenDefsRef.current = new Set()
     contactsRef.current = new Set()
     setContacts({})
     setContactAddresses({})
@@ -590,6 +629,20 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     setGroups(prev => setGroupState(pubkeyHex, prev, groupId, 'left'))
   }, [nostrPubkeyHex, groups])
 
+  // Re-invite (Phase C): fan the group's definition out again, marked. Members who still hold the
+  // group ignore it (first-def-wins); a member in 'left' lifts to 'pending' and sees an invite card.
+  // Best-effort and fire-and-forget, exactly like createGroup's original fan-out — the sender learns
+  // nothing about who was actually re-invited, since relays-reached is not a delivery receipt.
+  const reinviteGroup = useCallback((groupId: string) => {
+    const group = groups.find(g => g.id === groupId)
+    if (!group || group.state !== 'active') return
+    const provider = createMessagingProvider()
+    if (!provider) return
+    provider.sendGroupReinvite({ id: group.id, name: group.name, members: group.members })
+      .catch(() => { /* best-effort — same contract as the original definition fan-out */ })
+      .finally(() => provider.disconnect())
+  }, [groups, createMessagingProvider])
+
   // Read-only accessors onto the live provider for the connection/relay-health UI.
   const getRelayStates = useCallback((): RelayState[] => messagingProviderRef.current?.getRelayStates() ?? [], [])
   const reconnectAll = useCallback((): void => { messagingProviderRef.current?.reconnectAll() }, [])
@@ -602,7 +655,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       recordSentMessage, contacts, acceptContact, contactAddresses, setManualTariAddress,
       deleteConversation, createMessagingProvider, getRelayStates, reconnectAll,
       balanceHidden, setBalanceHidden,
-      groups, createGroup, deleteGroup, acceptGroup, declineGroup, leaveGroup,
+      groups, createGroup, deleteGroup, acceptGroup, declineGroup, leaveGroup, reinviteGroup,
     }}>
       {children}
     </Ctx.Provider>

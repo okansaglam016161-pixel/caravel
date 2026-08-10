@@ -49,6 +49,20 @@ export function loadDeletedGroupIdSet(myPubkeyHex: string): Set<string> {
   return new Set(Object.keys(loadDeletedGroups(myPubkeyHex)))
 }
 
+// Forget a group's deleted/left record (Phase C). Called when a genuine RE-INVITE lifts a 'left'
+// group: the tombstone must go with it, or a later replay would find a stale entry and suppress the
+// group again. Idempotent — absent id is a no-op.
+export function clearDeletedGroup(myPubkeyHex: string, groupId: string): void {
+  try {
+    const raw = localStorage.getItem(key(myPubkeyHex))
+    if (!raw) return
+    const map = JSON.parse(raw) as DeletedGroupMap
+    if (!(groupId in map)) return
+    delete map[groupId]
+    save(myPubkeyHex, map)
+  } catch { /* quota / private mode */ }
+}
+
 // Record a group id as deleted (read-modify-write). Idempotent — re-deleting refreshes the timestamp.
 export function recordDeletedGroup(myPubkeyHex: string, groupId: string): void {
   try {

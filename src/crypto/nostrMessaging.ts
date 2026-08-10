@@ -37,6 +37,15 @@ const GROUP_DEF_TAG = 'caravel-group-def'
 const GROUP_DEF_VERSION = 'v1'
 const GROUP_LEAVE_TAG = 'caravel-group-leave'
 const GROUP_LEAVE_VERSION = 'v1'
+//   ["caravel-group-reinvite","v1"]           rides ALONGSIDE the def marker (Phase C): this def is a
+//     deliberate RE-INVITE, not the original invite. Only a marked def may lift a locally 'left'
+//     group; an unmarked def keeps today's first-def-wins behaviour exactly. That asymmetry is the
+//     point — every def sent before this tag existed is unmarked, so upgrading a client can never
+//     spuriously resurrect a left group from a stale backfill replay of its ORIGINAL def.
+//     Old clients ignore the tag and read the def normally (first-def-wins drops it if they have
+//     the group), so mixed-version behaviour degrades to current behaviour, never worse.
+const GROUP_REINVITE_TAG = 'caravel-group-reinvite'
+const GROUP_REINVITE_VERSION = 'v1'
 
 // Pulls the group id out of a rumor's tags (version-checked, like extractPaymentRef).
 function extractGroupId(tags: string[][] | undefined): string | undefined {
@@ -71,6 +80,17 @@ function extractGroupDef(tags: string[][] | undefined, content: string): GroupDe
   } catch {
     return undefined
   }
+}
+
+// True when the rumor's def carries the RE-INVITE marker (Phase C). Same version discipline as its
+// siblings: an unknown version degrades to "not a re-invite", i.e. an ordinary def.
+function extractGroupReinvite(tags: string[][] | undefined): boolean {
+  if (!tags) return false
+  for (const tag of tags) {
+    if (tag[0] !== GROUP_REINVITE_TAG) continue
+    return tag[1] === GROUP_REINVITE_VERSION
+  }
+  return false
 }
 
 // True when the rumor is a group LEAVE notice (B-M2). Same version discipline as the extractors
@@ -141,16 +161,21 @@ export function wrapMessage(
 // Wraps a group-DEFINITION control message for one recipient: content is JSON { name, members },
 // tagged with the group id and the def marker. Fan out one of these per member (minus self) so
 // their clients learn the group. Reuses the same seal/gift-wrap crypto as wrapMessage.
+// `reinvite` (Phase C) adds the re-invite marker: same def payload, but flagged as a deliberate
+// re-send so a recipient who has LEFT this group may lift that state. Defaults false — the original
+// invite and every pre-Phase-C def are unmarked.
 export function wrapGroupDefinition(
   senderSecretKey: Uint8Array,
   recipientPubkeyHex: string,
-  def: GroupDef
+  def: GroupDef,
+  reinvite = false
 ): NostrEvent {
   const tags: string[][] = [
     ['p', recipientPubkeyHex],
     [GROUP_TAG, GROUP_TAG_VERSION, def.id],
     [GROUP_DEF_TAG, GROUP_DEF_VERSION],
   ]
+  if (reinvite) tags.push([GROUP_REINVITE_TAG, GROUP_REINVITE_VERSION])
   const rumor = {
     kind: KIND_PRIVATE_DM,
     created_at: Math.round(Date.now() / 1000),
@@ -189,7 +214,7 @@ export function wrapGroupLeave(
 export function unwrapMessage(
   recipientSecretKey: Uint8Array,
   giftWrapEvent: NostrEvent
-): { senderPubkeyHex: string; plaintext: string; payment?: PaymentRef; tariAddress?: string; groupId?: string; groupDef?: GroupDef; groupLeave?: boolean } {
+): { senderPubkeyHex: string; plaintext: string; payment?: PaymentRef; tariAddress?: string; groupId?: string; groupDef?: GroupDef; groupLeave?: boolean; groupReinvite?: boolean } {
   // Layer 1: decrypt gift wrap (kind 1059) → seal (kind 13)
   const sealKey = getConversationKey(recipientSecretKey, giftWrapEvent.pubkey)
   const seal = JSON.parse(decrypt(giftWrapEvent.content, sealKey)) as {
@@ -222,6 +247,7 @@ export function unwrapMessage(
     groupId: extractGroupId(rumor.tags),
     groupDef: extractGroupDef(rumor.tags, rumor.content),
     groupLeave: extractGroupLeave(rumor.tags),
+    groupReinvite: extractGroupReinvite(rumor.tags),
   }
 }
 

@@ -56,7 +56,7 @@ export class NostrMessagingProvider implements MessagingProvider {
   private onMessageCallback: ((msg: CaravelMessage) => void) | null
   private onStatusCallback: ((status: MessagingConnectionStatus) => void) | null
   private onContactAddressCallback: ((senderPubkeyHex: string, tariAddress: string) => void) | null
-  private onGroupDefinitionCallback: ((senderPubkeyHex: string, def: GroupDef) => void) | null
+  private onGroupDefinitionCallback: ((senderPubkeyHex: string, def: GroupDef, defEventId: string, reinvite: boolean) => void) | null
   private disconnecting: boolean
   // Bound window listeners — stored so removeEventListener can find them in disconnect().
   private onlineHandler: (() => void) | null
@@ -103,7 +103,7 @@ export class NostrMessagingProvider implements MessagingProvider {
     onMessage: (msg: CaravelMessage) => void,
     onStatusChange?: (status: MessagingConnectionStatus) => void,
     onContactAddress?: (senderPubkeyHex: string, tariAddress: string) => void,
-    onGroupDefinition?: (senderPubkeyHex: string, def: GroupDef) => void
+    onGroupDefinition?: (senderPubkeyHex: string, def: GroupDef, defEventId: string, reinvite: boolean) => void
   ): void {
     this.onMessageCallback = onMessage
     this.onStatusCallback = onStatusChange ?? null
@@ -191,10 +191,22 @@ export class NostrMessagingProvider implements MessagingProvider {
   // Group definition control message: fan the { name, roster } out to members (minus self) so their
   // clients learn the group. Same relays-reached (not delivery) semantics as sendGroupMessage.
   async sendGroupDefinition(def: GroupDef): Promise<{ memberCount: number; membersReached: number }> {
+    return this.fanOutDefinition(def, false)
+  }
+
+  // RE-INVITE (Phase C): the same fan-out, with the def marked as a deliberate re-send. Sent to the
+  // WHOLE roster rather than a chosen member — the roster still contains whoever left (B-M2 leaves
+  // it unedited), members who still have the group drop it via first-def-wins, and only a member in
+  // 'left' lifts. That keeps C-M1 free of a member-picker. Non-throwing, like its sibling.
+  async sendGroupReinvite(def: GroupDef): Promise<{ memberCount: number; membersReached: number }> {
+    return this.fanOutDefinition(def, true)
+  }
+
+  private async fanOutDefinition(def: GroupDef, reinvite: boolean): Promise<{ memberCount: number; membersReached: number }> {
     const recipients = def.members.filter(m => m && m !== this.pubkeyHex)
     let membersReached = 0
     await Promise.all(recipients.map(async member => {
-      const wrapped = wrapGroupDefinition(this.secretKey, member, def)
+      const wrapped = wrapGroupDefinition(this.secretKey, member, def, reinvite)
       const results = await publishGiftWrap(wrapped, [...this.relayUrls], PUBLISH_TIMEOUT_MS)
       if (results.some(r => r.ok)) membersReached++
     }))
@@ -448,13 +460,15 @@ export class NostrMessagingProvider implements MessagingProvider {
     if (this.seen.has(event.id)) return
     this.seen.add(event.id)
     try {
-      const { senderPubkeyHex, plaintext, payment, tariAddress, groupId, groupDef, groupLeave } = unwrapMessage(this.secretKey, event)
+      const { senderPubkeyHex, plaintext, payment, tariAddress, groupId, groupDef, groupLeave, groupReinvite } = unwrapMessage(this.secretKey, event)
 
       // A group DEFINITION is a control message (no chat bubble): hand it to the group callback and
       // stop. The gate (accept only from known contacts) lives with the callback, which has the
       // contact list. Checked before the address/message handling below.
       if (groupDef) {
-        this.onGroupDefinitionCallback?.(senderPubkeyHex, groupDef)
+        // The gift-wrap event id goes with it (Phase C): unique per publish, so the callback can
+        // tell a genuine re-send from a relay replaying the same def out of its ~2-day window.
+        this.onGroupDefinitionCallback?.(senderPubkeyHex, groupDef, event.id, !!groupReinvite)
         return
       }
 

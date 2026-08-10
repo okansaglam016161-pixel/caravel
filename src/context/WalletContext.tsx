@@ -16,7 +16,7 @@ import { loadHistory, addSent, type SentEntry, type NewSentParams } from '../cry
 import { NostrMessagingProvider } from '../messaging/NostrMessagingProvider'
 import type { MessagingProvider, MessagingConnectionStatus, CaravelMessage, RelayState } from '../messaging/types'
 import { loadMessages, addReceivedMessage, addSentMessage, deletePeerMessages, deleteGroupMessages } from '../messaging/messageStore'
-import { loadGroups, addOrUpdateGroup, ensureGroup, setGroupState, deleteGroup as removeGroupFromStore } from '../messaging/groupStore'
+import { loadGroups, addOrUpdateGroup, ensureGroup, setGroupState, hasGroup, deleteGroup as removeGroupFromStore } from '../messaging/groupStore'
 import { loadDeletedGroupIdSet, recordDeletedGroup } from '../messaging/deletedGroupStore'
 import type { Group } from '../messaging/types'
 import { loadTombstoneIdSet, recordTombstones } from '../messaging/tombstoneStore'
@@ -164,6 +164,11 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   // Fresh-in-callback set of contact pubkeys (any state) for the group-sender gate — React
   // `contacts` state is stale inside the subscribe closure. Kept in sync via the effect below.
   const contactsRef = useRef<Set<string>>(new Set())
+  // Fresh-in-callback set of group ids I have LEFT (state === 'left'), for the drop-at-ingest gate
+  // (B-M2). Deliberately its OWN ref, not deletedGroupsRef: that set also holds deleteGroup's ids,
+  // whose contract is "forget UNTIL RE-INVITED" (a new message must re-materialise the group), and
+  // it is age-pruned at 3 days. Only `state: 'left'` is the durable, permanent suppression.
+  const leftGroupsRef = useRef<Set<string>>(new Set())
   const [messagingStatus, setMessagingStatus] = useState<MessagingConnectionStatus>('disconnected')
   const [balanceHidden, setBalanceHidden] = useState(false)
   const [messages, setMessages] = useState<CaravelMessage[]>([])
@@ -174,6 +179,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
   // Keep the gate ref in sync so the subscribe closure sees current contacts (state would be stale).
   useEffect(() => { contactsRef.current = new Set(Object.keys(contacts)) }, [contacts])
+  useEffect(() => { leftGroupsRef.current = new Set(groups.filter(g => g.state === 'left').map(g => g.id)) }, [groups])
 
   const startScan = useCallback((w: SecretKeyWallet) => {
     // Cancel any prior scan
@@ -242,7 +248,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     setMessages(loaded)
     setContacts(loadContacts(pubkeyHex))
     setContactAddresses(loadTariAddresses(pubkeyHex))
-    setGroups(loadGroups(pubkeyHex))
+    const loadedGroups = loadGroups(pubkeyHex)
+    setGroups(loadedGroups)
     // Seed the "known peers" set from persisted history — anyone we already have a message with is
     // NOT a new peer (so their next inbound never gets mis-flagged as a pending request).
     knownPeersRef.current = new Set(
@@ -252,6 +259,12 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     tombstonesRef.current = loadTombstoneIdSet(pubkeyHex)
     // Load deleted-group ids so onGroupDefinition can suppress a deleted group's replayed def.
     deletedGroupsRef.current = loadDeletedGroupIdSet(pubkeyHex)
+    // Seed the group gate refs EAGERLY from the same load (B-M2). setGroups above only schedules a
+    // state update, so the [groups] effect that maintains these would not run until after the commit
+    // — strictly after subscribe() below. Relay backfill arrives well after a WebSocket handshake, so
+    // the effect normally wins, but that is timing luck, not a guarantee. Seeding here puts this on
+    // the same footing as tombstonesRef/deletedGroupsRef: correct before the subscription replays.
+    leftGroupsRef.current = new Set(loadedGroups.filter(g => g.state === 'left').map(g => g.id))
     const provider = new NostrMessagingProvider(secretHex, pubkeyHex, DEFAULT_RELAYS)
     messagingProviderRef.current = provider
     setMessagingStatus('connecting')
@@ -267,6 +280,29 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         if (msg.groupId) {
           const sender = msg.senderPubkeyHex
           if (!knownPeersRef.current.has(sender) && !contactsRef.current.has(sender)) return
+          // DROP-AT-INGEST for a group I have LEFT (B-M2). 'left' is permanent local suppression, so
+          // nothing about this group should touch the store again — otherwise a left group keeps
+          // accumulating invisible messages in localStorage forever (peers still hold me in their
+          // roster and keep fanning out). This STRENGTHENS the guarantee: suppression moves from
+          // derivation-time to ingest-time, with the state filters in ChatApp as a second layer.
+          // Only 'left' matches — 'pending' (held) and 'active' are untouched.
+          // PHASE C: re-invite therefore resumes FRESH — messages sent while I was left were never
+          // stored and cannot be back-filled. Deliberate, and the honest semantic for a re-invite
+          // (the relay's ~2-day window made "keep them all" unachievable anyway).
+          if (leftGroupsRef.current.has(msg.groupId)) return
+          // A system NOTICE must NEVER call ensureGroup — that is what stops a leave notice for an
+          // unknown group from minting a phantom 'pending' placeholder, i.e. an invite card conjured
+          // out of someone LEAVING. Presence is a SEPARATE concern, tested against the persisted
+          // store (authoritative at call time) rather than a ref snapshot, so this has no dependency
+          // on React commit timing: a group learned earlier in the same backfill burst is already
+          // saved and answers true. Dropping an unknown group's notice also keeps a stale "X has
+          // left" from surfacing later if that group re-materialises via deleteGroup's
+          // forget-until-re-invited path — the row is never stored in the first place.
+          if (msg.system) {
+            if (!hasGroup(pubkeyHex, msg.groupId)) return
+            setMessages(prev => addReceivedMessage(pubkeyHex, prev, msg))
+            return
+          }
           setGroups(prev => ensureGroup(pubkeyHex, prev, msg.groupId!))
           setMessages(prev => addReceivedMessage(pubkeyHex, prev, msg))
           return
@@ -365,6 +401,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     setMessagingStatus('disconnected')
     setMessages([])
     setGroups([])
+    // Cleared eagerly, like contactsRef below: the [groups] effect would also clear this, but not
+    // until after the commit, and the subscribe closure must not see another identity's ids.
+    leftGroupsRef.current = new Set()
     contactsRef.current = new Set()
     setContacts({})
     setContactAddresses({})

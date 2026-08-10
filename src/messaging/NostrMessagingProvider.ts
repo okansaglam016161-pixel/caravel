@@ -1,6 +1,6 @@
 import type { NostrEvent, Filter } from 'nostr-tools'
 import { Relay, type Subscription } from 'nostr-tools/relay'
-import { wrapMessage, wrapGroupDefinition, unwrapMessage, publishGiftWrap } from '../crypto/nostrMessaging'
+import { wrapMessage, wrapGroupDefinition, wrapGroupLeave, unwrapMessage, publishGiftWrap } from '../crypto/nostrMessaging'
 import type { CaravelMessage, GroupDef, GroupSendResult, MessagingConnectionStatus, MessagingProvider, PaymentRef, RelayState } from './types'
 
 function hexToBytes(hex: string): Uint8Array {
@@ -195,6 +195,21 @@ export class NostrMessagingProvider implements MessagingProvider {
     let membersReached = 0
     await Promise.all(recipients.map(async member => {
       const wrapped = wrapGroupDefinition(this.secretKey, member, def)
+      const results = await publishGiftWrap(wrapped, [...this.relayUrls], PUBLISH_TIMEOUT_MS)
+      if (results.some(r => r.ok)) membersReached++
+    }))
+    return { memberCount: recipients.length, membersReached }
+  }
+
+  // Group LEAVE notice (B-M2): fan "I left" out to the roster (minus self) so members can render a
+  // system line. Modelled on sendGroupDefinition, NOT on sendGroupMessage: it reports the tally but
+  // NEVER throws, because the caller has already decided to leave locally and a dead relay must cost
+  // only the notice. The roster is passed in because the caller's group record is about to go 'left'.
+  async sendGroupLeave(groupId: string, memberPubkeysHex: string[]): Promise<{ memberCount: number; membersReached: number }> {
+    const recipients = memberPubkeysHex.filter(m => m && m !== this.pubkeyHex)
+    let membersReached = 0
+    await Promise.all(recipients.map(async member => {
+      const wrapped = wrapGroupLeave(this.secretKey, member, groupId)
       const results = await publishGiftWrap(wrapped, [...this.relayUrls], PUBLISH_TIMEOUT_MS)
       if (results.some(r => r.ok)) membersReached++
     }))
@@ -433,13 +448,32 @@ export class NostrMessagingProvider implements MessagingProvider {
     if (this.seen.has(event.id)) return
     this.seen.add(event.id)
     try {
-      const { senderPubkeyHex, plaintext, payment, tariAddress, groupId, groupDef } = unwrapMessage(this.secretKey, event)
+      const { senderPubkeyHex, plaintext, payment, tariAddress, groupId, groupDef, groupLeave } = unwrapMessage(this.secretKey, event)
 
       // A group DEFINITION is a control message (no chat bubble): hand it to the group callback and
       // stop. The gate (accept only from known contacts) lives with the callback, which has the
       // contact list. Checked before the address/message handling below.
       if (groupDef) {
         this.onGroupDefinitionCallback?.(senderPubkeyHex, groupDef)
+        return
+      }
+
+      // A group LEAVE notice (B-M2) rides the ORDINARY message callback rather than a dedicated one,
+      // carrying system:'group-leave' as its discriminator — so it inherits every downstream gate
+      // (known-contact, group-known, left-group drop) and persists/orders like any other row.
+      // Intercepting here is mandatory: the rumor carries a group tag, so falling through would
+      // store it as a group message and render a blank bubble for its single-space content.
+      if (groupLeave && groupId) {
+        this.onMessageCallback?.({
+          id: event.id,
+          senderPubkeyHex,
+          recipientPubkeyHex: this.pubkeyHex,
+          plaintext: '',            // notice text is composed at render time from the display name
+          timestamp: Date.now(),
+          direction: 'received',
+          groupId,
+          system: 'group-leave',
+        })
         return
       }
 

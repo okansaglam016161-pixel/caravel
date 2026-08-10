@@ -28,10 +28,15 @@ const ADDRESS_TAG_VERSION = 'v1'
 //   ["caravel-group","v1","<group-id>"]        marks a rumor as belonging to a group (id).
 //   ["caravel-group-def","v1"]                 marks a rumor as a group DEFINITION control message;
 //     its content is JSON { name, members: [hex…] }. A non-Caravel client shows the JSON as text.
+//   ["caravel-group-leave","v1"]               marks a rumor as a LEAVE notice (B-M2): the sender has
+//     left the tagged group. Carries NO payload — the leaver's identity is seal.pubkey, authenticated
+//     by the NIP-17 invariant below, so it can't be self-declared/spoofed in the content.
 const GROUP_TAG = 'caravel-group'
 const GROUP_TAG_VERSION = 'v1'
 const GROUP_DEF_TAG = 'caravel-group-def'
 const GROUP_DEF_VERSION = 'v1'
+const GROUP_LEAVE_TAG = 'caravel-group-leave'
+const GROUP_LEAVE_VERSION = 'v1'
 
 // Pulls the group id out of a rumor's tags (version-checked, like extractPaymentRef).
 function extractGroupId(tags: string[][] | undefined): string | undefined {
@@ -66,6 +71,18 @@ function extractGroupDef(tags: string[][] | undefined, content: string): GroupDe
   } catch {
     return undefined
   }
+}
+
+// True when the rumor is a group LEAVE notice (B-M2). Same version discipline as the extractors
+// above: an unknown version degrades to "not a leave", which routes the rumor down the ordinary
+// message path rather than being misread.
+function extractGroupLeave(tags: string[][] | undefined): boolean {
+  if (!tags) return false
+  for (const tag of tags) {
+    if (tag[0] !== GROUP_LEAVE_TAG) continue
+    return tag[1] === GROUP_LEAVE_VERSION
+  }
+  return false
 }
 
 // Pulls a payment reference out of the rumor's tags, or undefined if none/unrecognised.
@@ -143,13 +160,36 @@ export function wrapGroupDefinition(
   return wrapEvent(rumor, senderSecretKey, recipientPubkeyHex)
 }
 
+// Wraps a group LEAVE notice for one recipient (B-M2): the group id plus the leave marker, over a
+// single-space content (NIP-44 requires >= 1 byte, so it can't be truly empty — same floor as the
+// silent address control message). Fan one out per member (minus self) when leaving a group. The
+// leaver is identified by the seal pubkey on unwrap, so nothing about identity rides in the payload.
+export function wrapGroupLeave(
+  senderSecretKey: Uint8Array,
+  recipientPubkeyHex: string,
+  groupId: string
+): NostrEvent {
+  const tags: string[][] = [
+    ['p', recipientPubkeyHex],
+    [GROUP_TAG, GROUP_TAG_VERSION, groupId],
+    [GROUP_LEAVE_TAG, GROUP_LEAVE_VERSION],
+  ]
+  const rumor = {
+    kind: KIND_PRIVATE_DM,
+    created_at: Math.round(Date.now() / 1000),
+    content: ' ',
+    tags,
+  }
+  return wrapEvent(rumor, senderSecretKey, recipientPubkeyHex)
+}
+
 // Returns the plaintext, the sender's public key (hex), and any payment reference — or throws on
 // decryption failure. Performs a manual two-layer decrypt (rather than nip59.unwrapEvent) so we
 // can access the intermediate seal and enforce the NIP-17 pubkey consistency check below.
 export function unwrapMessage(
   recipientSecretKey: Uint8Array,
   giftWrapEvent: NostrEvent
-): { senderPubkeyHex: string; plaintext: string; payment?: PaymentRef; tariAddress?: string; groupId?: string; groupDef?: GroupDef } {
+): { senderPubkeyHex: string; plaintext: string; payment?: PaymentRef; tariAddress?: string; groupId?: string; groupDef?: GroupDef; groupLeave?: boolean } {
   // Layer 1: decrypt gift wrap (kind 1059) → seal (kind 13)
   const sealKey = getConversationKey(recipientSecretKey, giftWrapEvent.pubkey)
   const seal = JSON.parse(decrypt(giftWrapEvent.content, sealKey)) as {
@@ -181,6 +221,7 @@ export function unwrapMessage(
     tariAddress: extractTariAddress(rumor.tags),
     groupId: extractGroupId(rumor.tags),
     groupDef: extractGroupDef(rumor.tags, rumor.content),
+    groupLeave: extractGroupLeave(rumor.tags),
   }
 }
 

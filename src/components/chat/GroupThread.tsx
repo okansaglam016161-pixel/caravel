@@ -130,12 +130,24 @@ export default function GroupThread({
           </div>
         )}
         {messages.map((m, i) => {
+          // System NOTICE (B-M2) — an inline centered line, never a bubble. Visual only: the roster
+          // is unchanged, so the header still counts the leaver among the members (Phase 1 has no
+          // roster edit). Text is composed here; the stored row carries empty plaintext.
+          if (m.system === 'group-leave') {
+            return (
+              <div key={m.id} style={{ padding: '2px 0', textAlign: 'center', fontSize: 11.5, color: 'var(--text-faint-dim)' }}>
+                {nameFor(m.senderPubkeyHex)} has left the chat
+              </div>
+            )
+          }
           if (m.direction === 'sent') {
             return <MessageBubble key={m.id} text={m.plaintext} timestamp={m.timestamp} variant="sent" />
           }
-          // Group consecutive same-sender received messages: avatar + label once per run.
+          // Group consecutive same-sender received messages: avatar + label once per run. A system
+          // line BREAKS the run — otherwise the sender header would be wrongly suppressed after an
+          // interruption, since prev.senderPubkeyHex still matches across the notice.
           const prev = messages[i - 1]
-          const firstOfRun = !prev || prev.direction !== 'received' || prev.senderPubkeyHex !== m.senderPubkeyHex
+          const firstOfRun = !prev || prev.system !== undefined || prev.direction !== 'received' || prev.senderPubkeyHex !== m.senderPubkeyHex
           return (
             <MessageBubble
               key={m.id}

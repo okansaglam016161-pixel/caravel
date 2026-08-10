@@ -333,8 +333,12 @@ export default function ChatApp() {
       .filter(g => g.state === 'active')
       .map(g => {
         const gmsgs = messages.filter(m => m.groupId === g.id)
-        const lastMessage = gmsgs.length ? gmsgs.reduce((a, b) => (a.timestamp > b.timestamp ? a : b)) : null
-        return { group: g, lastMessage, lastActivity: lastMessage ? lastMessage.timestamp : g.createdAt }
+        // Preview text comes from PROSE only: a system notice (B-M2) has empty plaintext and would
+        // render as a blank preview. It still counts for lastActivity, so a leave re-sorts the row.
+        const prose = gmsgs.filter(m => !m.system)
+        const lastMessage = prose.length ? prose.reduce((a, b) => (a.timestamp > b.timestamp ? a : b)) : null
+        const newest = gmsgs.length ? gmsgs.reduce((a, b) => (a.timestamp > b.timestamp ? a : b)) : null
+        return { group: g, lastMessage, lastActivity: newest ? newest.timestamp : g.createdAt }
       })
       .sort((a, b) => b.lastActivity - a.lastActivity)
   }, [groups, messages])
@@ -351,6 +355,24 @@ export default function ChatApp() {
   function selectGroup(gid: string) {
     if (groups.find(g => g.id === gid)?.state !== 'active') return
     setSelectedGroupId(gid); setSelectedPeer(null)
+  }
+
+  // Leave a group (B-M1 + B-M2). ORDERING IS THE POINT: fan the leave notice out FIRST, while the
+  // provider and the roster are still in hand (`group.members` is captured in the closure, so the
+  // state flip below cannot affect wraps still in flight), then suppress locally — synchronously and
+  // unconditionally. The send is deliberately NOT awaited and its rejection is swallowed: leaving is
+  // a local act, so a dead relay costs the notice, never the leave. Same fire-and-forget shape as
+  // createGroup's definition fan-out; sendGroupLeave never throws by design.
+  // Clearing the selection is required — the render guard below demands state 'active'.
+  function handleLeaveGroup(group: Group) {
+    const provider = createMessagingProvider()
+    if (provider) {
+      provider.sendGroupLeave(group.id, group.members)
+        .catch(() => { /* best-effort — the notice is cosmetic; the leave already happened locally */ })
+        .finally(() => provider.disconnect())
+    }
+    leaveGroup(group.id)
+    setSelectedGroupId(null)
   }
 
   // Send to the selected group: fan out via the provider, then record the local 'sent' row. The
@@ -1107,9 +1129,8 @@ export default function ChatApp() {
               onSend={handleGroupSend}
               /* Leave (B-M1) replaces Delete as the thread's exit action: 'left' is the stronger
                  suppression (delete's "forget until re-invited" resurrects the group as a pending
-                 invite on the next message) and it keeps the roster B-M2's leave notice needs.
-                 Clearing the selection is required — the render guard above demands 'active'. */
-              onLeave={() => { leaveGroup(selectedGroup.id); setSelectedGroupId(null) }}
+                 invite on the next message) and it keeps the roster the B-M2 notice fans out to. */
+              onLeave={() => handleLeaveGroup(selectedGroup)}
             />
           ) : selectedConvo === null ? (
             /* Chat pane at rest (design: sail + reassurance) */

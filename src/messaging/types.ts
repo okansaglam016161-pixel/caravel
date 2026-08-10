@@ -46,6 +46,12 @@ export interface CaravelMessage {
   // Present when the message belongs to a group (carried a caravel-group tag). Absent = 1-to-1 DM.
   // When set, the message routes to the group thread `groupId` instead of a pairwise peer thread.
   groupId?: string
+  // NOTICE, not prose (B-M2). Set on a row that renders as an inline system line in the group
+  // thread instead of a chat bubble; `plaintext` is empty and the text is composed at render time
+  // from the sender's display name. Absent on every ordinary message — no migration needed.
+  //   'group-leave' — senderPubkeyHex has left groupId. Visual only: the roster is NOT edited
+  //                   (Phase 1 has no roster changes).
+  system?: 'group-leave'
 }
 
 // ── Groups (Phase 1: fan-out, in-message roster, fixed membership) ──────────────
@@ -107,6 +113,12 @@ export interface MessagingProvider {
   // Group definition control message: fan out the group's { name, roster } to its members (minus
   // self) so their clients learn the group exists. Empty-of-prose → no chat bubble on receipt.
   sendGroupDefinition(def: GroupDef): Promise<{ memberCount: number; membersReached: number }>
+
+  // Group LEAVE notice (B-M2): fan out "I have left this group" to the roster (minus self) so their
+  // clients can render a system line. Like sendGroupDefinition — and deliberately UNLIKE
+  // sendGroupMessage — this NEVER throws: leaving is a local act that must not be blocked or undone
+  // by relay failure, so the caller fires it and moves on regardless of the tally.
+  sendGroupLeave(groupId: string, memberPubkeysHex: string[]): Promise<{ memberCount: number; membersReached: number }>
 
   // Open a persistent subscription. Fire-and-forget — returns void immediately.
   // Relay connections happen in the background; onStatusChange fires as relay states change.

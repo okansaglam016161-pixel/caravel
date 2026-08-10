@@ -77,6 +77,16 @@ export function ensureGroup(pubkeyHex: string, current: Group[], groupId: string
   return next
 }
 
+// Is this group known locally? Reads the PERSISTED store, which every mutation helper here writes
+// synchronously — so it is authoritative at call time, unlike a snapshot held in a ref. Used by the
+// system-notice ingest gate (B-M2), which must not depend on React commit timing: a group learned
+// moments earlier in the same relay backfill burst is already saved here and answers true.
+// Deliberately not used for per-message gates — this parses the whole store, which is fine for the
+// rare control message but not for every inbound message.
+export function hasGroup(pubkeyHex: string, groupId: string): boolean {
+  return loadGroups(pubkeyHex).some(g => g.id === groupId)
+}
+
 // Set a group's lifecycle state (read-modify-write, persisted). No-op if the group is absent or
 // already in that state. Drives accept (pending → active) and decline (pending → left).
 export function setGroupState(pubkeyHex: string, current: Group[], groupId: string, state: GroupState): Group[] {

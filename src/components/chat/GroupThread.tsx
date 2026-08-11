@@ -14,6 +14,7 @@ import MessageBubble from './MessageBubble'
 import { MONO } from './chatDisplay'
 import { groupGlyph } from './groupGlyph'
 import { useScrollToBottom } from './useScrollToBottom'
+import PendingBubble, { type PendingSend } from './PendingBubble'
 
 // A group with no real name yet (a lazy placeholder learned from a message before its definition).
 function groupTitle(g: Group): string {
@@ -21,14 +22,18 @@ function groupTitle(g: Group): string {
 }
 
 export default function GroupThread({
-  group, messages, nameFor, onSend, onLeave, onReinvite,
+  group, messages, pending, nameFor, onSend, onRetryPending, onLeave, onReinvite, sendNote,
 }: {
   group: Group
   messages: CaravelMessage[]        // this group's messages, oldest-first
+  pending: PendingSend[]            // provisional sends for THIS group (already filtered)
   nameFor: (hex: string) => string  // sender display name (nickname ?? truncated npub)
   onSend: (text: string) => Promise<void>
+  onRetryPending: (id: string) => void
   onLeave: () => void
   onReinvite: () => void   // opens the member picker (C-M2); does not send on its own
+  // Honest partial-fan-out note for the composer footer, or null. Never claims delivery.
+  sendNote: { reached: number; total: number } | null
 }) {
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
@@ -43,7 +48,9 @@ export default function GroupThread({
   // Same auto-scroll as the DM thread, from the shared hook. Keyed on group.id because this
   // component is reused (not remounted) when switching groups; the count covers send and receive
   // alike, including system notices, which are new rows at the bottom like any other.
-  const bottomRef = useScrollToBottom(group.id, messages.length)
+  // Pending sends count toward the scroll trigger so the provisional bubble is scrolled into view
+  // the instant it appears, rather than when the fan-out finally resolves.
+  const bottomRef = useScrollToBottom(group.id, messages.length + pending.length)
 
   // Any dismissal drops the confirm step too, so re-opening the menu always starts at step one.
   function closeMenu() { setMenuOpen(false); setConfirmLeave(false) }
@@ -54,7 +61,11 @@ export default function GroupThread({
     setSending(true)
     try {
       await onSend(text)
-      setDraft('')
+      setDraft('')   // success only — a failed send keeps the text, as the failed bubble promises
+    } catch {
+      // Swallowed deliberately: onSend has already logged the cause and turned the provisional
+      // bubble into a failed one with Retry, which is the user-facing surface. Without this catch
+      // the rejection escaped through `void send()` as an unhandled promise rejection.
     } finally {
       setSending(false)
     }
@@ -182,6 +193,11 @@ export default function GroupThread({
             />
           )
         })}
+        {/* Pending-send overlay — same lifecycle and markup as the DM view. Retry is offered only
+            when the send reached nobody; a partial fan-out is not retryable (it would duplicate). */}
+        {pending.map(p => (
+          <PendingBubble key={p.id} text={p.text} status={p.status} onRetry={() => onRetryPending(p.id)} />
+        ))}
         {/* Auto-scroll anchor */}
         <div ref={bottomRef} />
       </div>
@@ -208,9 +224,19 @@ export default function GroupThread({
               : <svg width={20} height={20} viewBox="0 0 24 24" fill="none" stroke={canSend ? 'var(--teal-500)' : 'var(--text-muted-dim)'} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" /></svg>}
           </button>
         </div>
-        <div style={{ fontFamily: MONO, fontSize: 11, color: 'var(--text-muted-dim)', marginTop: 8, marginLeft: 2 }}>
-          Sent to {Math.max(group.members.length - 1, 0)} member(s) · end-to-end encrypted · best-effort delivery
-        </div>
+        {/* Footer: the standing best-effort line, replaced after a PARTIAL fan-out by an honest
+            tally. "Reached" is deliberate — membersReached counts relay acceptance, not receipt, so
+            this must never read as "delivered". Ephemeral: cleared on the next send. */}
+        {sendNote ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontFamily: MONO, fontSize: 11, color: 'var(--warn-300)', marginTop: 8, marginLeft: 2 }}>
+            <svg width={11} height={11} viewBox="0 0 24 24" fill="none" stroke="var(--warn)" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><path d="M12 9v4M12 17h.01" /></svg>
+            Last message reached {sendNote.reached} of {sendNote.total} member(s)
+          </div>
+        ) : (
+          <div style={{ fontFamily: MONO, fontSize: 11, color: 'var(--text-muted-dim)', marginTop: 8, marginLeft: 2 }}>
+            Sent to {Math.max(group.members.length - 1, 0)} member(s) · end-to-end encrypted · best-effort delivery
+          </div>
+        )}
       </div>
     </>
   )

@@ -10,6 +10,7 @@ import GroupThread from './GroupThread'
 import CreateGroupModal, { type GroupContactOption } from './CreateGroupModal'
 import ReinviteModal, { type ReinviteMemberOption } from './ReinviteModal'
 import { useScrollToBottom } from './useScrollToBottom'
+import PendingBubble, { type PendingSend } from './PendingBubble'
 import { loadNicknames, setNickname, MAX_NICKNAME_LEN, type NicknameMap } from '../../messaging/nicknameStore'
 import { loadAddressSent, markAddressSent, clearAddressSent, type AddressSentMap } from '../../messaging/addressSentStore'
 import { sendConfidential, tariToMicrotari, MAX_FEE } from '../../crypto/confidentialSend'
@@ -248,7 +249,15 @@ export default function ChatApp() {
   // Per-message send overlay (design lifecycle): provisional bubbles rendered while a plain-text
   // send is in flight, then removed once the real persisted message appears (or marked 'failed').
   // ChatApp-local only — never persisted, never on the wire; the send path itself is unchanged.
-  const [pendingSends, setPendingSends] = useState<{ id: string; peerHex: string; text: string; status: 'sending' | 'failed' }[]>([])
+  const [pendingSends, setPendingSends] = useState<(PendingSend & { peerHex: string })[]>([])
+  // Group equivalent, keyed on groupId (the parallel to pendingSends' peerHex). Same lifecycle:
+  // provisional bubble before the fan-out resolves, removed on success, marked failed on throw.
+  const [pendingGroupSends, setPendingGroupSends] = useState<(PendingSend & { groupId: string })[]>([])
+  // Ephemeral, honest partial-delivery note for the group composer footer: a fan-out can reach some
+  // members and not others, and `membersReached` is RELAY ACCEPTANCE, not receipt — so this says
+  // "reached", never "delivered". React state only; nothing is persisted per message (a durable
+  // per-bubble indicator would need a local-only CaravelMessage field — noted follow-up).
+  const [groupSendNote, setGroupSendNote] = useState<{ groupId: string; reached: number; total: number } | null>(null)
 
   // Payment (TARI) composer state.
   const [paymentMode, setPaymentMode] = useState(false)
@@ -395,16 +404,59 @@ export default function ChatApp() {
 
   // Send to the selected group: fan out via the provider, then record the local 'sent' row. The
   // provider's tally is relays-reached, not a delivery receipt (see sendGroupMessage).
+  // Group send, at DM parity: a provisional bubble appears immediately (so the thread scrolls and
+  // the wait is visible), then resolves to a real message or a failed bubble with Retry.
+  //
+  // PARTIAL FAN-OUT is the one genuinely group-specific case. sendGroupMessage throws only when the
+  // message reached NO member, and that is exactly the boundary where a retry is safe: retrying
+  // re-wraps with fresh event ids, so anyone who already received the message would get a duplicate
+  // (addReceivedMessage dedups by event id only). So ≥1 reached is recorded as sent with NO retry
+  // offered, and the shortfall is reported honestly in the composer footer instead.
+  async function sendToGroup(groupId: string, members: string[], text: string) {
+    const tempId = `gpending-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+    setPendingGroupSends(p => [...p, { id: tempId, groupId, text, status: 'sending' }])
+    setGroupSendNote(null)
+    try {
+      const provider = createMessagingProvider()
+      // Locked wallet → null. Previously this returned silently; now it surfaces as a failed bubble.
+      if (!provider) throw new Error('Wallet is locked — unlock to send')
+      try {
+        const res = await provider.sendGroupMessage(groupId, members, text)
+        recordSentMessage(res.message)
+        setPendingGroupSends(p => p.filter(x => x.id !== tempId))  // real persisted bubble now shows
+        // Reached some but not all — surface it rather than letting "sent" imply everyone got it.
+        if (res.membersReached < res.memberCount) {
+          setGroupSendNote({ groupId, reached: res.membersReached, total: res.memberCount })
+        }
+      } finally {
+        provider.disconnect()
+      }
+    } catch (e) {
+      // Mirrors the DM path: log the underlying relay error (the bubble shows no raw string), then
+      // switch the provisional bubble to failed + Retry. This catch is also what stops the rejection
+      // escaping into an unhandled promise rejection, which it did for every failed group send.
+      console.warn('[Caravel] group message send failed:', e)
+      setPendingGroupSends(p => p.map(x => x.id === tempId ? { ...x, status: 'failed' } : x))
+      throw e   // GroupThread's send() relies on this to keep the draft (it clears only on success)
+    }
+  }
+
   async function handleGroupSend(text: string) {
     if (!selectedGroup) return
-    const provider = createMessagingProvider()
-    if (!provider) return
-    try {
-      const res = await provider.sendGroupMessage(selectedGroup.id, selectedGroup.members, text)
-      recordSentMessage(res.message)
-    } finally {
-      provider.disconnect()
-    }
+    await sendToGroup(selectedGroup.id, selectedGroup.members, text)
+  }
+
+  // Retry a failed group send. Unlike the DM retry (which re-reads the composer draft), this resends
+  // the PENDING ENTRY'S OWN TEXT — ChatApp doesn't own the group composer's draft, and retrying the
+  // message you actually tried to send is the correct semantic anyway. Only reachable from a bubble
+  // whose send reached nobody, so it cannot duplicate.
+  function retryGroupSend(id: string) {
+    const entry = pendingGroupSends.find(x => x.id === id)
+    if (!entry) return
+    const group = groups.find(g => g.id === entry.groupId)
+    if (!group) return
+    setPendingGroupSends(p => p.filter(x => x.id !== id))
+    void sendToGroup(group.id, group.members, entry.text).catch(() => { /* surfaced as a failed bubble */ })
   }
 
   // Roster options for the C-M2 re-invite picker: the FULL roster minus self, annotated with a
@@ -734,7 +786,12 @@ export default function ChatApp() {
   // Auto-scroll to newest: on conversation open and whenever this thread gains a message. Shared
   // with GroupThread so the two views can't drift — see useScrollToBottom.
   const selectedPeerHex = selectedConvo?.peerHex ?? null
-  const bottomRef = useScrollToBottom(selectedPeerHex, selectedConvo?.messages.length ?? 0)
+  // Pending sends count too, so a provisional bubble is scrolled into view as soon as it appears
+  // instead of only when the real message lands. Same rule in GroupThread — one behaviour.
+  const bottomRef = useScrollToBottom(
+    selectedPeerHex,
+    (selectedConvo?.messages.length ?? 0) + pendingSends.filter(p => p.peerHex === selectedPeerHex).length,
+  )
 
   // Reset the payment composer when switching conversations so a half-filled payment can't carry
   // across to a different peer. The must-acknowledge alert banner is intentionally NOT reset here.
@@ -1168,8 +1225,11 @@ export default function ChatApp() {
             <GroupThread
               group={selectedGroup}
               messages={groupMessages}
+              pending={pendingGroupSends.filter(p => p.groupId === selectedGroup.id)}
+              sendNote={groupSendNote?.groupId === selectedGroup.id ? { reached: groupSendNote.reached, total: groupSendNote.total } : null}
               nameFor={displayName}
               onSend={handleGroupSend}
+              onRetryPending={retryGroupSend}
               /* Leave (B-M1) replaces Delete as the thread's exit action: 'left' is the stronger
                  suppression (delete's "forget until re-invited" resurrects the group as a pending
                  invite on the next message) and it keeps the roster the B-M2 notice fans out to. */
@@ -1322,29 +1382,7 @@ export default function ChatApp() {
 
             {/* Pending-send overlay (design lifecycle: sending → failed + Retry) */}
             {pendingForPeer.map((p) => (
-              <div key={p.id} style={{ alignSelf: 'flex-end', maxWidth: '62%', display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
-                {p.status === 'sending' ? (
-                  <>
-                    <div style={{ padding: '13px 17px', borderRadius: '16px 4px 16px 16px', background: 'linear-gradient(160deg, rgba(28,122,110,0.55), rgba(18,101,90,0.55))', color: 'var(--text-note)', fontSize: 15, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{p.text}</div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontFamily: MONO, fontSize: 11, color: 'var(--text-muted-dim)', marginTop: 6, marginRight: 4 }}>
-                      <span style={{ width: 11, height: 11, borderRadius: '50%', border: '2px solid rgba(var(--border-rgb),0.2)', borderTopColor: 'var(--text-muted-dim)', animation: 'cv-spin 0.8s linear infinite' }} />Sending
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <div style={{ padding: '13px 17px', borderRadius: '16px 4px 16px 16px', background: 'rgba(var(--danger-rgb),0.06)', border: '1px solid rgba(var(--danger-rgb),0.34)', color: 'var(--text-body)', fontSize: 15, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{p.text}</div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 7, marginRight: 4 }}>
-                      <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'var(--danger-300)' }}>
-                        <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="var(--danger-500)" strokeWidth={2.4} strokeLinecap="round"><circle cx={12} cy={12} r={9} /><path d="M12 8v5M12 16h.01" /></svg>Couldn’t send
-                      </span>
-                      <span onClick={() => retrySend(p.id)} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '4px 10px', borderRadius: 8, background: 'rgba(var(--danger-rgb),0.08)', border: '1px solid rgba(var(--danger-rgb),0.3)', fontSize: 11, fontWeight: 700, color: 'var(--danger-300)', cursor: 'pointer' }}>
-                        <svg width={11} height={11} viewBox="0 0 24 24" fill="none" stroke="var(--danger-300)" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v5h-5" /></svg>Retry
-                      </span>
-                    </div>
-                    <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6, marginRight: 4 }}>Your text is kept in the composer.</div>
-                  </>
-                )}
-              </div>
+              <PendingBubble key={p.id} text={p.text} status={p.status} onRetry={() => retrySend(p.id)} />
             ))}
             {/* Auto-scroll anchor */}
             <div ref={bottomRef} />

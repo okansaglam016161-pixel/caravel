@@ -50,8 +50,7 @@ export async function resolvePayment(
   let parsed: unknown
   try { parsed = parseSubstateUtxo(substate, utxoId) } catch { parsed = null }
   if (parsed === null) {
-    // Log so the indexer's actual spent behaviour is visible while testing (404 vs 200+null).
-    console.debug(`[payResolve] ${utxoId.slice(0, 24)}… returned 200 but is not a live UTXO (spent/frozen)`)
+    // 200 + null output = the UTXO existed but is spent or frozen, as opposed to a 404 (never ours).
     return { status: 'spent' }
   }
 

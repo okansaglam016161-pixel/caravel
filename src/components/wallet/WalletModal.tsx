@@ -6,6 +6,7 @@
 
 import { useState, useEffect } from 'react'
 import { useWallet } from '../../context/WalletContext'
+import { Logo } from '../primitives'
 import OnsRegisterPanel from './OnsRegisterPanel'
 import FaucetClaimPanel from './FaucetClaimPanel'
 import { sendConfidential, tariToMicrotari, MAX_FEE, type SendOutcome } from '../../crypto/confidentialSend'
@@ -189,13 +190,6 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
   }
 
 
-  const logo = (size: number) => (
-    <svg viewBox="0 0 44 44" width={size} height={size} aria-hidden="true">
-      <path d="M22 4 C 33 12 35 24 33 33 L 22 33 Z" fill="var(--teal-500)" />
-      <path d="M22 4 L 22 33 L 11 33 C 12 22 15 12 22 4 Z" fill="var(--teal-500)" opacity="0.4" />
-      <path d="M8 37 L 36 37 L 32 42 L 12 42 Z" fill="var(--teal-500)" />
-    </svg>
-  )
   const eyeOpen = (c: string) => (<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" /><circle cx="12" cy="12" r="3" /></svg>)
   const eyeOff = (c: string) => (<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" /><circle cx="12" cy="12" r="3" /><path d="M4 4l16 16" /></svg>)
 
@@ -305,7 +299,7 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
         {/* Header */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 18px', borderBottom: '1px solid rgba(var(--border-rgb),0.1)', flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            {logo(20)}
+            <Logo size={20} mono />
             <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>Wallet</span>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 10px', borderRadius: 100, background: 'rgba(var(--warn-rgb),0.06)', border: '1px solid rgba(var(--warn-rgb),0.28)' }}>
               <span style={{ width: 5, height: 5, borderRadius: '50%', background: 'var(--warn)' }} />
@@ -497,11 +491,7 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
             const activity = buildActivity(txHistory, messages)
             return activity.length === 0 ? (
               <div style={{ padding: '56px 24px', borderRadius: 16, background: 'var(--surface)', border: '1px solid rgba(var(--border-rgb),0.16)', textAlign: 'center' }}>
-                <svg viewBox="0 0 44 44" width="40" height="40" style={{ opacity: 0.3, marginBottom: 16 }} aria-hidden="true">
-                  <path d="M22 4 C 33 12 35 24 33 33 L 22 33 Z" fill="var(--teal-500)" />
-                  <path d="M22 4 L 22 33 L 11 33 C 12 22 15 12 22 4 Z" fill="var(--teal-500)" opacity="0.4" />
-                  <path d="M8 37 L 36 37 L 32 42 L 12 42 Z" fill="var(--teal-500)" />
-                </svg>
+                <Logo size={40} mono style={{ opacity: 0.3, marginBottom: 16 }} />
                 <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-muted)', marginBottom: 6 }}>No transactions yet</div>
                 <div style={{ fontSize: 13, color: 'var(--text-faint)', lineHeight: 1.5, maxWidth: 250, margin: '0 auto' }}>Payments you send and receive will appear here.</div>
               </div>

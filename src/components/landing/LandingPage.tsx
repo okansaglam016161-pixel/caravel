@@ -438,19 +438,9 @@ export default function LandingPage() {
         {/* keep it sailing (donations) */}
         <div className="cv-section">
           <div className="cv-donate" style={{ position: 'relative', borderRadius: 22, border: '1px solid rgba(var(--teal-500-rgb),0.22)', background: 'linear-gradient(160deg, #0C1A1B, #070C12 68%)', boxShadow: '0 0 70px rgba(45,224,198,0.07)', overflow: 'hidden' }}>
-            <svg viewBox="0 0 44 44" width={420} height={420} style={{ position: 'absolute', right: -40, bottom: -120, opacity: 0.05, pointerEvents: 'none' }} aria-hidden="true">
-              <path d="M22 4 C 33 12 35 24 33 33 L 22 33 Z" fill="#2DE0C6" />
-              <path d="M22 4 L 22 33 L 11 33 C 12 22 15 12 22 4 Z" fill="#2DE0C6" opacity={0.5} />
-              <path d="M8 37 L 36 37 L 32 42 L 12 42 Z" fill="#2DE0C6" />
-            </svg>
+            <Logo size={420} mono style={{ position: 'absolute', right: -40, bottom: -120, opacity: 0.05, pointerEvents: 'none' }} />
             <div className="cv-donate-copy" style={{ position: 'relative' }}>
-              <Eyebrow style={{ marginBottom: 22 }} label="FUND THE VOYAGE" icon={
-                <svg viewBox="0 0 44 44" width={13} height={13} aria-hidden="true">
-                  <path d="M22 4 C 33 12 35 24 33 33 L 22 33 Z" fill="#2DE0C6" />
-                  <path d="M22 4 L 22 33 L 11 33 C 12 22 15 12 22 4 Z" fill="#2DE0C6" opacity={0.45} />
-                  <path d="M8 37 L 36 37 L 32 42 L 12 42 Z" fill="#2DE0C6" />
-                </svg>
-              } />
+              <Eyebrow style={{ marginBottom: 22 }} label="FUND THE VOYAGE" icon={<Logo size={13} mono />} />
               <h2 className="cv-donate-h2" style={{ margin: '0 0 18px', fontWeight: 800, letterSpacing: '-0.035em', lineHeight: 1.05 }}>Keep it sailing.</h2>
               <p style={{ margin: 0, maxWidth: 420, fontSize: 17, lineHeight: 1.6, color: 'var(--text-muted)' }}>Caravel is free. It runs on donations, not ads or your data. If it&rsquo;s useful to you, help keep it sailing.</p>
             </div>

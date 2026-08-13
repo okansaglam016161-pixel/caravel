@@ -1240,11 +1240,7 @@ export default function ChatApp() {
           ) : selectedConvo === null ? (
             /* Chat pane at rest (design: sail + reassurance) */
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 20, background: 'radial-gradient(700px 420px at 50% 40%, rgba(var(--teal-500-rgb),0.045), rgba(10,14,23,0))' }}>
-              <svg viewBox="0 0 44 44" width={64} height={64} style={{ opacity: 0.34 }} aria-hidden="true">
-                <path d="M22 4 C 33 12 35 24 33 33 L 22 33 Z" fill="var(--teal-500)" />
-                <path d="M22 4 L 22 33 L 11 33 C 12 22 15 12 22 4 Z" fill="var(--teal-500)" opacity={0.4} />
-                <path d="M8 37 L 36 37 L 32 42 L 12 42 Z" fill="var(--teal-500)" />
-              </svg>
+              <Logo size={64} mono style={{ opacity: 0.34 }} />
               <div style={{ textAlign: 'center' }}>
                 <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-body-dim)', marginBottom: 8 }}>Select a conversation</div>
                 <div style={{ fontSize: 14, color: 'var(--text-faint)', lineHeight: 1.6, maxWidth: 340 }}>Messages and payments here are end to end encrypted.</div>

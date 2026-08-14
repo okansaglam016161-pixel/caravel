@@ -135,6 +135,36 @@ export function applyEdit(
   return next
 }
 
+// The revision an edit of `logicalId` should carry: one past whatever has been applied, so it
+// satisfies applyEdit's strictly-newer guard. Derived from stored state rather than a counter, so a
+// send that failed and is retried recomputes the SAME number instead of drifting. An unknown
+// logicalId yields 1 — harmless, because the caller checks the message exists before sending.
+export function nextRevision(current: CaravelMessage[], logicalId: string): number {
+  const row = current.find(m => m.logicalId === logicalId)
+  return (row?.revision ?? 0) + 1
+}
+
+// applyEdit keyed by LOGICAL id — the name an edit travels under on the wire, since `id` is not
+// shared between sender and recipients for group messages (see CaravelMessage.logicalId).
+//
+// Deliberately a thin sibling rather than a change to applyEdit's key: every guard stays inside
+// applyEdit (authorship, revision, system row, existence), so this cannot weaken them, and M1's
+// primitive plus its tests are untouched. An unknown logicalId returns `current` by reference —
+// which is also how a tombstoned/deleted message is handled, since deletion removes the row.
+export function applyEditByLogicalId(
+  pubkeyHex: string,
+  current: CaravelMessage[],
+  logicalId: string,
+  newText: string,
+  revision: number,
+  editorPubkeyHex: string
+): CaravelMessage[] {
+  if (!logicalId) return current
+  const target = current.find(m => m.logicalId === logicalId)
+  if (!target) return current
+  return applyEdit(pubkeyHex, current, target.id, newText, revision, editorPubkeyHex)
+}
+
 // Delete every message belonging to one peer conversation (M9.0a). Membership matches
 // ChatApp's deriveConversations: the "other party" is senderPubkeyHex for received, recipientPubkeyHex
 // for sent. Returns the remaining messages (also persisted). Caller must tombstone the deleted ids

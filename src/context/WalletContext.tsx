@@ -15,7 +15,7 @@ import { scanWallet, type ScannedUtxo, type ScanProgress } from '../crypto/walle
 import { loadHistory, addSent, type SentEntry, type NewSentParams } from '../crypto/txHistory'
 import { NostrMessagingProvider } from '../messaging/NostrMessagingProvider'
 import type { MessagingProvider, MessagingConnectionStatus, CaravelMessage, RelayState } from '../messaging/types'
-import { loadMessages, addReceivedMessage, addSentMessage, deletePeerMessages, deleteGroupMessages } from '../messaging/messageStore'
+import { loadMessages, addReceivedMessage, addSentMessage, deletePeerMessages, deleteGroupMessages, applyEditByLogicalId, nextRevision } from '../messaging/messageStore'
 import { loadGroups, addOrUpdateGroup, ensureGroup, setGroupState, hasGroup, getGroupState, deleteGroup as removeGroupFromStore } from '../messaging/groupStore'
 import { loadDeletedGroupIdSet, recordDeletedGroup, clearDeletedGroup } from '../messaging/deletedGroupStore'
 import { loadSeenDefIdSet, recordSeenDef } from '../messaging/seenDefStore'
@@ -116,6 +116,10 @@ export interface WalletCtx {
    *  resurrect them), then clear its messages + resolved payment amounts + contact record. Also
    *  the decline path — local-only. */
   deleteConversation: (peerHex: string) => void
+  /** Edit an already-sent DM (M2): publish the edit, then apply it locally IF a relay accepted.
+   *  Resolves false when the message can't be edited (not ours, no logicalId, a group message, a
+   *  system row, empty text) or nothing accepted. Best-effort — see MessagingProvider.sendEdit. */
+  editMessage: (logicalId: string, newText: string) => Promise<boolean>
   /** Factory: returns a ready-to-use MessagingProvider backed by the current identity,
    *  or null if the wallet is locked. The secret key stays inside the closure — callers
    *  receive a working provider but never see the raw key. */
@@ -384,6 +388,14 @@ export function WalletProvider({ children }: { children: ReactNode }) {
           // `reinvite` (Phase C) is the one exception, and only for state === 'left' → 'pending'.
           return addOrUpdateGroup(pubkeyHex, prev, def, 'pending', { reinvite: lifting })
         })
+      },
+      // Inbound EDIT (M2). No gate here on purpose: every check that matters lives in the store, and
+      // the one that matters most is AUTHORSHIP — applyEdit refuses unless this authenticated sender
+      // (seal.pubkey, verified against the rumor pubkey in unwrapMessage) is the original message's
+      // sender. So an edit naming a message we don't have, one we deleted, one from someone else, or
+      // one carrying a stale revision all resolve to the same thing: the array comes back unchanged.
+      (senderPubkeyHex, targetLogicalId, newText, revision) => {
+        setMessages(prev => applyEditByLogicalId(pubkeyHex, prev, targetLogicalId, newText, revision, senderPubkeyHex))
       }
     )
   }, [])
@@ -539,6 +551,44 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     return new NostrMessagingProvider(secretHex, nostrPubkeyHex, DEFAULT_RELAYS)
   }, [nostrPubkeyHex])
 
+  // Edit an already-sent DM (M2). SEND FIRST, apply locally only on acceptance: nothing is watching
+  // a bubble yet (the UI lands in M3), and this way a failed send never leaves the sender reading
+  // text the recipient will never see. Whether M3 goes optimistic is a UX call to make with the UI.
+  //
+  // The recipient is DERIVED from the stored row rather than passed in, so this can't be called with
+  // a mismatched (message, recipient) pair. Group rows are refused until M4 — they already carry a
+  // logicalId (sendGroupMessage mints one), so M4 needs no data migration, just the fan-out.
+  const editMessage = useCallback(async (logicalId: string, newText: string): Promise<boolean> => {
+    const pubkeyHex = nostrPubkeyHex
+    if (!pubkeyHex || !logicalId) return false
+    const text = newText.trim()
+    if (!text) return false
+
+    const row = messages.find(m => m.logicalId === logicalId)
+    if (!row) return false
+    if (row.direction !== 'sent') return false   // only my own message
+    if (row.system) return false                 // never a system notice
+    if (row.groupId) return false                // DM-only until M4
+    const recipient = row.recipientPubkeyHex
+    if (!recipient) return false
+
+    // One past whatever has been applied. Derived from stored state, so a failed send that is
+    // retried recomputes the SAME number rather than drifting; a stale read is a benign no-op
+    // because the recipient's strictly-newer guard rejects a duplicate revision.
+    const revision = nextRevision(messages, logicalId)
+
+    const provider = createMessagingProvider()
+    if (!provider) return false
+    try {
+      const ok = await provider.sendEdit(recipient, logicalId, text, revision)
+      if (!ok) return false
+      setMessages(prev => applyEditByLogicalId(pubkeyHex, prev, logicalId, text, revision, pubkeyHex))
+      return true
+    } finally {
+      provider.disconnect()
+    }
+  }, [nostrPubkeyHex, messages, createMessagingProvider])
+
   // Create a group locally (random 32-byte id, self included in the roster) and fan its definition
   // out to the other members so their clients learn it. Delivery is best-effort (relays-reached, not
   // a receipt) and never blocks creation. Members are already my contacts, so their gate accepts me.
@@ -658,7 +708,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       messagingStatus, messages,
       generateMnemonic, createWallet, unlock, restore, lock, getMnemonic, rescan, recordSent,
       recordSentMessage, contacts, acceptContact, contactAddresses, setManualTariAddress,
-      deleteConversation, createMessagingProvider, getRelayStates, reconnectAll,
+      deleteConversation, editMessage, createMessagingProvider, getRelayStates, reconnectAll,
       balanceHidden, setBalanceHidden,
       groups, createGroup, deleteGroup, acceptGroup, declineGroup, leaveGroup, reinviteGroup,
     }}>

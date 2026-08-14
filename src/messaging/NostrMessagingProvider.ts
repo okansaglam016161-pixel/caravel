@@ -1,6 +1,6 @@
 import type { NostrEvent, Filter } from 'nostr-tools'
 import { Relay, type Subscription } from 'nostr-tools/relay'
-import { wrapMessage, wrapGroupDefinition, wrapGroupLeave, unwrapMessage, publishGiftWrap } from '../crypto/nostrMessaging'
+import { wrapMessage, wrapGroupDefinition, wrapGroupLeave, wrapEdit, unwrapMessage, publishGiftWrap, newLogicalId } from '../crypto/nostrMessaging'
 import type { CaravelMessage, GroupDef, GroupSendResult, MessagingConnectionStatus, MessagingProvider, PaymentRef, RelayState } from './types'
 
 function hexToBytes(hex: string): Uint8Array {
@@ -67,6 +67,7 @@ export class NostrMessagingProvider implements MessagingProvider {
   private onStatusCallback: ((status: MessagingConnectionStatus) => void) | null
   private onContactAddressCallback: ((senderPubkeyHex: string, tariAddress: string) => void) | null
   private onGroupDefinitionCallback: ((senderPubkeyHex: string, def: GroupDef, defEventId: string, reinvite: boolean) => void) | null
+  private onEditCallback: ((senderPubkeyHex: string, targetLogicalId: string, newText: string, revision: number) => void) | null
   private disconnecting: boolean
   // Bound window listeners — stored so removeEventListener can find them in disconnect().
   private onlineHandler: (() => void) | null
@@ -91,6 +92,7 @@ export class NostrMessagingProvider implements MessagingProvider {
     this.onStatusCallback = null
     this.onContactAddressCallback = null
     this.onGroupDefinitionCallback = null
+    this.onEditCallback = null
     this.disconnecting = false
     this.onlineHandler = null
     this.offlineHandler = null
@@ -113,12 +115,14 @@ export class NostrMessagingProvider implements MessagingProvider {
     onMessage: (msg: CaravelMessage) => void,
     onStatusChange?: (status: MessagingConnectionStatus) => void,
     onContactAddress?: (senderPubkeyHex: string, tariAddress: string) => void,
-    onGroupDefinition?: (senderPubkeyHex: string, def: GroupDef, defEventId: string, reinvite: boolean) => void
+    onGroupDefinition?: (senderPubkeyHex: string, def: GroupDef, defEventId: string, reinvite: boolean) => void,
+    onEdit?: (senderPubkeyHex: string, targetLogicalId: string, newText: string, revision: number) => void
   ): void {
     this.onMessageCallback = onMessage
     this.onStatusCallback = onStatusChange ?? null
     this.onContactAddressCallback = onContactAddress ?? null
     this.onGroupDefinitionCallback = onGroupDefinition ?? null
+    this.onEditCallback = onEdit ?? null
     const since = Math.floor(Date.now() / 1000) - SINCE_WINDOW_S
     this.filter = { kinds: [1059], '#p': [this.pubkeyHex], since }
 
@@ -139,7 +143,10 @@ export class NostrMessagingProvider implements MessagingProvider {
   }
 
   async sendMessage(recipientPubkeyHex: string, plaintext: string, payment?: PaymentRef, tariAddress?: string): Promise<CaravelMessage> {
-    const wrapped = wrapMessage(this.secretKey, recipientPubkeyHex, plaintext, payment, tariAddress)
+    // M2: mint the logical id BEFORE wrapping and keep it on the local row, so sender and recipient
+    // store the same handle for this message and an edit can name it.
+    const logicalId = newLogicalId()
+    const wrapped = wrapMessage(this.secretKey, recipientPubkeyHex, plaintext, payment, tariAddress, undefined, logicalId)
     const results = await publishGiftWrap(wrapped, [...this.relayUrls], PUBLISH_TIMEOUT_MS, CONNECT_TIMEOUT_MS)
 
     const anyOk = results.some(r => r.ok)
@@ -156,7 +163,18 @@ export class NostrMessagingProvider implements MessagingProvider {
       timestamp: Date.now(),
       direction: 'sent',
       payment,
+      logicalId,
     }
+  }
+
+  // Send an EDIT of an already-sent message (M2). Boolean, not a throw: acceptance by any one relay
+  // is all we can observe, and the caller decides how to surface a miss. Nothing is applied locally
+  // here — WalletContext.editMessage applies via the store only after this resolves true, so a
+  // failed send never leaves the sender showing text the recipient will never see.
+  async sendEdit(recipientPubkeyHex: string, targetLogicalId: string, newText: string, revision: number): Promise<boolean> {
+    const wrapped = wrapEdit(this.secretKey, recipientPubkeyHex, targetLogicalId, newText, revision)
+    const results = await publishGiftWrap(wrapped, [...this.relayUrls], PUBLISH_TIMEOUT_MS, CONNECT_TIMEOUT_MS)
+    return results.some(r => r.ok)
   }
 
   // Send a dedicated silent Tari-address control message (M9.0d): only the address tag, over a
@@ -175,9 +193,14 @@ export class NostrMessagingProvider implements MessagingProvider {
   // never receive it. Throws only if no member's wrap reached any relay at all.
   async sendGroupMessage(groupId: string, memberPubkeysHex: string[], plaintext: string): Promise<GroupSendResult> {
     const recipients = memberPubkeysHex.filter(m => m && m !== this.pubkeyHex)
+    // ONE logical id for the whole fan-out (M2): every member's wrap carries the same value, so all
+    // N copies plus our local row name the same logical message. This is exactly what `id` cannot
+    // do here — each member gets a different event id — and it is what makes group editing possible
+    // in M4 without a data migration. Group EDITING is still refused until then; only the id ships.
+    const logicalId = newLogicalId()
     let membersReached = 0
     await Promise.all(recipients.map(async member => {
-      const wrapped = wrapMessage(this.secretKey, member, plaintext, undefined, undefined, groupId)
+      const wrapped = wrapMessage(this.secretKey, member, plaintext, undefined, undefined, groupId, logicalId)
       const results = await publishGiftWrap(wrapped, [...this.relayUrls], PUBLISH_TIMEOUT_MS, CONNECT_TIMEOUT_MS)
       if (results.some(r => r.ok)) membersReached++
     }))
@@ -194,6 +217,7 @@ export class NostrMessagingProvider implements MessagingProvider {
       timestamp: Date.now(),
       direction: 'sent',
       groupId,
+      logicalId,
     }
     return { message, memberCount: recipients.length, membersReached }
   }
@@ -497,7 +521,7 @@ export class NostrMessagingProvider implements MessagingProvider {
     if (this.seen.has(event.id)) return
     this.seen.add(event.id)
     try {
-      const { senderPubkeyHex, plaintext, payment, tariAddress, groupId, groupDef, groupLeave, groupReinvite } = unwrapMessage(this.secretKey, event)
+      const { senderPubkeyHex, plaintext, payment, tariAddress, groupId, groupDef, groupLeave, groupReinvite, logicalId, edit } = unwrapMessage(this.secretKey, event)
 
       // A group DEFINITION is a control message (no chat bubble): hand it to the group callback and
       // stop. The gate (accept only from known contacts) lives with the callback, which has the
@@ -528,6 +552,20 @@ export class NostrMessagingProvider implements MessagingProvider {
         return
       }
 
+      // An EDIT (M2) is a control message like a group definition: it MUTATES an existing row and
+      // must never become a bubble, so it takes a dedicated callback and returns early. Intercepted
+      // before the address/message handling below because an edit carries neither.
+      //
+      // `senderPubkeyHex` here is seal.pubkey, which unwrapMessage has already verified equals the
+      // rumor pubkey — so it is the authenticated editor, not a self-declared one. The receiver is
+      // NOT trusted to have authored the target: applyEdit rejects the edit unless this key matches
+      // the original message's sender, which is what stops anyone who has seen a public wrap id (or
+      // a logical id we sent them) from rewriting somebody else's message.
+      if (edit) {
+        this.onEditCallback?.(senderPubkeyHex, edit.targetLogicalId, plaintext, edit.revision)
+        return
+      }
+
       // Extract + store any received Tari address FIRST, before any content-based suppression or
       // message handling. A dedicated address-exchange control message is empty; if suppression ran
       // before extraction the address would be silently discarded and payments could never find it.
@@ -548,6 +586,8 @@ export class NostrMessagingProvider implements MessagingProvider {
         payment,
         // Present → routes to the group thread; the sender-is-a-contact gate is applied downstream.
         ...(groupId ? { groupId } : {}),
+        // M2: absent on messages from a pre-M2 sender, which are therefore not editable.
+        ...(logicalId ? { logicalId } : {}),
       }
       this.onMessageCallback?.(msg)
     } catch (e) {

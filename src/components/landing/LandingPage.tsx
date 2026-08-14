@@ -8,6 +8,19 @@
 //   (≤1024 tablet, ≤640 phone) can override them; colours / borders / decorative offsets stay
 //   inline. The radar decorations (fixed 880px field, ±px offsets) can't reflow, so they're hidden
 //   ≤1024 (and their motion under prefers-reduced-motion) — only the browser-frame demo remains.
+//
+//   HERO ABOVE-THE-FOLD (≥1025 only): at the design's fixed sizes the hero is 989px tall, so with
+//   the 86px nav it needs a 1075px-tall viewport — taller than most desktops, incl. 1080p. The
+//   `@media (min-width: 1025px)` block at the end of LANDING_CSS makes the whole composition fluid
+//   off ONE scalar, --cv-k, interpolated linearly from viewport height AND width (whichever is
+//   tighter) between two anchors: 600px/1180px → k 0.68, and 1100px/1430px → k 1. Hero padding
+//   interpolates over the same height range on its own (faster) curve. Because every term is
+//   linear in the viewport, total occupancy is linear too — so proving it fits at both anchors
+//   proves it fits at every size between (measured slack: 21–26px throughout). At the max anchor
+//   every value is today's exact number, so ≥1100px-tall screens render pixel-identically.
+//   The mockup's internals are ~100 fixed-px inline styles, so it scales via transform on
+//   .cv-demo-frame-wrap; the paired negative margin-bottom pulls layout height back in step
+//   (it is exactly 0 at k=1, so tall screens are untouched even if the 636px constant drifts).
 
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
@@ -32,6 +45,10 @@ const BLIPS: { pos: Pos; delay: number; dir: 'in' | 'out'; amount: string }[] = 
 
 // Scoped landing CSS: hover rules + keyframes (unchanged) + responsive layout classes + reduced-motion.
 const LANDING_CSS = `
+  /* The one fluid knob (desktop hero only). Registered so that a browser without calc()
+     length-division drops the declaration and falls back to 1 — i.e. today's rendering. */
+  @property --cv-k { syntax: "<number>"; inherits: true; initial-value: 1; }
+
   .cv-landing a { color: var(--teal-500); text-decoration: none; }
   .cv-landing a:hover { color: var(--accL, #5CEAD6); }
   .cv-landing .cv-primary:hover { filter: brightness(1.07); }
@@ -61,6 +78,11 @@ const LANDING_CSS = `
   .cv-landing .cv-hero-h1 { font-size: 58px; }
   .cv-landing .cv-hero-ctas { display: flex; align-items: center; gap: 14px; margin-top: 40px; }
   .cv-landing .cv-hero-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 40px; }
+  /* lifted out of inline styles (values unchanged at every width) so the ≥1025 block can scale them */
+  .cv-landing .cv-hero-sub { margin: 30px auto 0; max-width: 470px; font-size: 20px; }
+  .cv-landing .cv-hero-ctas .cv-primary { padding: 16px 32px; }
+  .cv-landing .cv-hero-ctas .cv-quiet { padding: 16px 28px; }
+  .cv-landing .cv-hero-chips .cv-chip { padding: 8px 13px; }
   .cv-landing .cv-demo-frame-wrap { position: relative; width: 368px; }
   .cv-landing .cv-section { padding: 150px 100px 0; }
   .cv-landing .cv-hiw-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 40px; }
@@ -119,6 +141,60 @@ const LANDING_CSS = `
     .cv-landing .cv-donate-h2 { font-size: 32px; }
     .cv-landing .cv-donate-addr { font-size: 11px; }
     .cv-landing .cv-footer { flex-direction: column; gap: 20px; text-align: center; padding: 40px 20px; }
+  }
+
+  /* ── desktop: fluid above-the-fold hero (see header comment) ──────────────────────
+     Scoped ≥1025 — the exact complement of the ≤1024 tablet block, so mobile/tablet
+     never see any of this. Every max value is the base value above, so at k=1 and
+     max padding the render is identical to the fixed design.
+
+       --cv-k  0.68 → 1.00   over height 600→1100px  AND  width 1180→1430px (min of the two)
+       pad-top   34 → 184px  over height 600→1100px   (clamp floor 16px, see below)
+       pad-bot   26 → 168px  over height 600→1100px   (clamp floor 12px, see below)
+
+     600px is the design floor: a 1280x720 desktop leaves ~600px of viewport, a 1366x768
+     laptop ~650px. Under 600 the scale is pinned at 0.68 (below that the mockup's 15px
+     body text stops being legible) and only the padding keeps giving — hence clamp floors
+     of 16/12px rather than the 34/26px the curve reaches at 600. They cost nothing at or
+     above 600, where the curve is well clear of them, and they carry the fit down to a
+     ~550px viewport. Under ~550 the hero scrolls; no desktop display is that short, only
+     a deliberately shrunk window.
+
+     The width curves top out at 1430, not the 1440 design canvas, so that at 1440 they are
+     already past the max and clamp to it exactly — interpolating straight to 1440 lands on
+     171.988px rather than 172px, and the brief is that the canvas render be pixel-exact.
+
+     Length clamps use the division-free clamp(MIN, calc(Apx + Bvh), MAX) form solved
+     through both anchors; only --cv-k (which must be unitless) needs length division. */
+  @media (min-width: 1025px) {
+    .cv-landing .cv-hero {
+      --cv-k: clamp(0.68, min(calc(0.68 + 0.32 * (100dvh - 600px) / 500px),
+                              calc(0.78 + 0.22 * (100vw - 1180px) / 250px)), 1);
+      padding-top: clamp(16px, calc(-146px + 30dvh), 184px);
+      padding-bottom: clamp(12px, calc(-144.4px + 28.4dvh), 168px);
+      gap: clamp(40px, calc(-583.04px + 52.8vw), 172px);
+    }
+    .cv-landing .cv-hero-left { flex-basis: clamp(400px, calc(-355.2px + 64vw), 560px); }
+    .cv-landing .cv-hero-h1 { font-size: calc(58px * var(--cv-k)); }
+    .cv-landing .cv-hero-sub {
+      margin-top: calc(30px * var(--cv-k));
+      margin-inline: 0;   /* base rule centres the 470px block via auto; desktop is left-aligned */
+      max-width: calc(470px * var(--cv-k));
+      font-size: calc(20px * var(--cv-k));
+    }
+    .cv-landing .cv-hero-ctas { margin-top: calc(40px * var(--cv-k)); }
+    .cv-landing .cv-hero-ctas .cv-primary { padding: calc(16px * var(--cv-k)) calc(32px * var(--cv-k)); }
+    .cv-landing .cv-hero-ctas .cv-quiet { padding: calc(16px * var(--cv-k)) calc(28px * var(--cv-k)); }
+    .cv-landing .cv-hero-chips { margin-top: calc(40px * var(--cv-k)); }
+    .cv-landing .cv-hero-chips .cv-chip { padding: calc(8px * var(--cv-k)) calc(13px * var(--cv-k)); }
+    /* The mockup (rings, blips, chips, frame) is one fixed-px unit → scale it whole.
+       transform doesn't affect layout, so margin-bottom removes the height the scale
+       gave back. 636px = measured wrap height; the term is exactly 0 at k=1. */
+    .cv-landing .cv-demo-frame-wrap {
+      transform: scale(var(--cv-k));
+      transform-origin: top center;
+      margin-bottom: calc(636px * (var(--cv-k) - 1));
+    }
   }
 
   /* ── reduced motion: keep the static mark, drop the animated sweep/ping/blips ── */
@@ -188,11 +264,11 @@ export default function LandingPage() {
         <div className="cv-hero" style={{ position: 'relative', overflow: 'hidden', borderBottom: '1px solid rgba(var(--border-rgb),0.1)' }}>
           <div className="cv-hero-left">
             <h1 className="cv-hero-h1" style={{ margin: 0, lineHeight: 1.06, fontWeight: 900, letterSpacing: '-0.04em' }}>Private messages.<br />Private money.<br /><span style={{ color: 'var(--teal-500)' }}>One conversation.</span></h1>
-            <p style={{ margin: '30px auto 0', maxWidth: 470, fontSize: 20, lineHeight: 1.6, color: 'var(--text-muted)' }}>Caravel is a vessel for a new era of private exchange.</p>
+            <p className="cv-hero-sub" style={{ lineHeight: 1.6, color: 'var(--text-muted)' }}>Caravel is a vessel for a new era of private exchange.</p>
 
             <div className="cv-hero-ctas">
-              <span onClick={onOpenApp} className="cv-primary" style={{ display: 'inline-flex', alignItems: 'center', padding: '16px 32px', borderRadius: 12, background: 'var(--teal-grad)', color: 'var(--ink-on-accent)', fontSize: 18, fontWeight: 700, cursor: 'pointer', transition: '0.2s' }}>Launch Caravel</span>
-              <span onClick={onOpenApp} className="cv-quiet" style={{ display: 'inline-flex', alignItems: 'center', padding: '16px 28px', borderRadius: 12, border: '1px solid rgba(var(--border-rgb),0.2)', color: 'var(--text-muted)', fontSize: 17, fontWeight: 600, cursor: 'pointer', transition: '0.2s' }}>Create wallet</span>
+              <span onClick={onOpenApp} className="cv-primary" style={{ display: 'inline-flex', alignItems: 'center', borderRadius: 12, background: 'var(--teal-grad)', color: 'var(--ink-on-accent)', fontSize: 18, fontWeight: 700, cursor: 'pointer', transition: '0.2s' }}>Launch Caravel</span>
+              <span onClick={onOpenApp} className="cv-quiet" style={{ display: 'inline-flex', alignItems: 'center', borderRadius: 12, border: '1px solid rgba(var(--border-rgb),0.2)', color: 'var(--text-muted)', fontSize: 17, fontWeight: 600, cursor: 'pointer', transition: '0.2s' }}>Create wallet</span>
             </div>
 
             <div className="cv-hero-chips">
@@ -201,7 +277,7 @@ export default function LandingPage() {
                 { icon: <><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></>, label: 'Ootle Enabled Payments' },
                 { icon: <><circle cx="12" cy="12" r="4" /><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8" /></>, label: 'ONS on chain identity' },
               ].map(chip => (
-                <span key={chip.label} className="cv-chip" style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '8px 13px', borderRadius: 100, border: '1px solid rgba(var(--teal-500-rgb),0.3)', background: 'rgba(var(--teal-500-rgb),0.05)', whiteSpace: 'nowrap', transition: '0.2s' }}>
+                <span key={chip.label} className="cv-chip" style={{ display: 'inline-flex', alignItems: 'center', gap: 7, borderRadius: 100, border: '1px solid rgba(var(--teal-500-rgb),0.3)', background: 'rgba(var(--teal-500-rgb),0.05)', whiteSpace: 'nowrap', transition: '0.2s' }}>
                   <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="var(--teal-500)" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round">{chip.icon}</svg>
                   <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--teal-300)' }}>{chip.label}</span>
                 </span>
@@ -211,7 +287,11 @@ export default function LandingPage() {
 
           {/* HERO DEMO */}
           <div style={{ position: 'relative', flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-            {/* radar ambiance — hidden ≤1024 (can't reflow); animated ones also hidden under reduced-motion */}
+            <div className="cv-demo-frame-wrap">
+            {/* radar ambiance — hidden ≤1024 (can't reflow); animated ones also hidden under reduced-motion.
+                Lives inside cv-demo-frame-wrap so the ≥1025 fluid transform scales the rings with the
+                frame. The wrap is 368×636 and sits centred in this column, so 50%/50% here resolves to
+                the same point on screen as it did when these were siblings of the wrap. */}
             <div className="cv-radar-decor" style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', width: 560, height: 560, borderRadius: '50%', border: '1px solid rgba(var(--teal-500-rgb),0.09)', pointerEvents: 'none' }} />
             <div className="cv-radar-decor" style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', width: 720, height: 720, borderRadius: '50%', border: '1px solid rgba(var(--teal-500-rgb),0.06)', pointerEvents: 'none' }} />
             <div className="cv-radar-decor" style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', width: 880, height: 880, borderRadius: '50%', border: '1px solid rgba(var(--teal-500-rgb),0.04)', pointerEvents: 'none' }} />
@@ -221,7 +301,6 @@ export default function LandingPage() {
             <div className="cv-radar-decor cv-radar-anim" style={{ position: 'absolute', top: '50%', left: '50%', width: 880, height: 880, borderRadius: '50%', border: '1px solid rgba(var(--teal-500-rgb),0.16)', animation: 'cv-ping 7s ease-out infinite', animationDelay: '4.6s', pointerEvents: 'none' }} />
             <div className="cv-radar-decor" style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', width: 520, height: 520, borderRadius: '50%', background: 'radial-gradient(circle, rgba(45,224,198,0.09), rgba(45,224,198,0) 68%)', pointerEvents: 'none' }} />
 
-            <div className="cv-demo-frame-wrap">
               {/* payment blips */}
               {BLIPS.map((b, i) => {
                 const tint = b.dir === 'out' ? '255,122,136' : '45,224,198'

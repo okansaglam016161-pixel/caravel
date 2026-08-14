@@ -52,7 +52,12 @@ export function addReceivedMessage(pubkeyHex: string, current: CaravelMessage[],
   if (incoming.senderPubkeyHex === pubkeyHex) {
     const echoOfLocalSend = current.some(m =>
       m.direction === 'sent' &&
-      m.plaintext === incoming.plaintext &&
+      // Content match, widened for edits (M1): the echo carries the text as SENT, but applyEdit
+      // has since overwritten `plaintext` — so also compare the pre-edit text it preserved.
+      // Without this a late echo of an edited message fails every match and is stored as a
+      // duplicate 'sent from another device' row. Matching on event id instead is not an option:
+      // the echo is a DIFFERENT event with its own id (same-id is already handled above).
+      (m.plaintext === incoming.plaintext || m.preEditPlaintext === incoming.plaintext) &&
       m.groupId === incoming.groupId &&   // don't cross-match a DM and a same-text group message
       Math.abs(m.timestamp - incoming.timestamp) < SELF_ECHO_WINDOW_MS
     )
@@ -67,6 +72,65 @@ export function addReceivedMessage(pubkeyHex: string, current: CaravelMessage[],
   }
 
   const next = [incoming, ...current]
+  save(pubkeyHex, next)
+  return next
+}
+
+// ── Editing (M1) ──────────────────────────────────────────────────────────────
+
+// Apply an edit to a stored message, replacing its text in place — Caravel keeps no version
+// history. THE FIRST MUTATION in this store: every other helper appends (dedup-by-id,
+// first-write-wins) or bulk-deletes, so the guards below are what keep that contract honest.
+//
+// Rejects — returning `current` BY REFERENCE, so React skips the re-render, exactly as the delete
+// helpers do — unless all of these hold:
+//
+//   1. the message exists. This is ALSO the deleted/tombstoned check: deleteConversation removes
+//      the rows as well as tombstoning their ids, so a deleted message is simply absent from
+//      `current` and this store needs no dependency on tombstoneStore.
+//   2. the editor authored it. Gift-wrap event ids are PUBLIC on relays, so without this check
+//      anyone who saw one could rewrite someone else's message. `senderPubkeyHex` is our own key
+//      on 'sent' rows and the peer's on 'received', so one comparison covers both directions.
+//   3. it is not a system notice — a group-leave row has empty plaintext composed at render time,
+//      so editing one would put a stray bubble in the thread.
+//   4. `revision` is strictly newer than any revision already applied. STRICTLY: the same edit is
+//      re-delivered by every relay that has it and again by the ~2-day backfill on each unlock, so
+//      a replay must be a no-op. That is also what makes this safe under React StrictMode, which
+//      double-invokes the functional updater this runs inside.
+//
+// `timestamp` is deliberately never written: threads order by it, so an edit that touched it would
+// jump the message to the bottom and destroy the real per-message timing the dedup guard in
+// addReceivedMessage exists to protect. payment / localPayment / groupId / direction all survive —
+// only the text changes.
+export function applyEdit(
+  pubkeyHex: string,
+  current: CaravelMessage[],
+  messageId: string,
+  newText: string,
+  revision: number,
+  editorPubkeyHex: string
+): CaravelMessage[] {
+  if (!Number.isInteger(revision) || revision <= 0) return current
+
+  const index = current.findIndex(m => m.id === messageId)
+  if (index === -1) return current                                   // absent, incl. deleted
+  const target = current[index]
+  if (target.senderPubkeyHex !== editorPubkeyHex) return current     // authorship
+  if (target.system) return current                                  // never edit a system notice
+  if (revision <= (target.revision ?? 0)) return current             // stale / replayed edit
+
+  // New object AND new array: ChatApp memoises deriveConversations on the array identity, so an
+  // in-place write would persist correctly and still leave the UI showing the old text.
+  const edited: CaravelMessage = {
+    ...target,
+    plaintext: newText,
+    editedAt: Date.now(),
+    revision,
+    // First edit only — pin the text as actually SENT, for the echo suppressor above.
+    preEditPlaintext: target.preEditPlaintext ?? target.plaintext,
+  }
+  const next = [...current]
+  next[index] = edited
   save(pubkeyHex, next)
   return next
 }

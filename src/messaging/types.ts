@@ -52,6 +52,38 @@ export interface CaravelMessage {
   //   'group-leave' — senderPubkeyHex has left groupId. Visual only: the roster is NOT edited
   //                   (Phase 1 has no roster changes).
   system?: 'group-leave'
+
+  // ── Message editing (M1) ──────────────────────────────────────────────────────
+  // All four are optional and absent on every row written before editing existed, so stored
+  // JSON parses unchanged (loadMessages is an unchecked cast) — there is no migration.
+
+  // Stable LOGICAL identity, generated once at SEND time and — from M2 — carried on the wire, so
+  // the sender and every recipient name the same message.
+  //
+  // Needed because `id` is NOT a shared name for group messages. A group send fans out N gift
+  // wraps with N distinct ids and keeps a synthetic `grp-<uuid>` locally (see
+  // NostrMessagingProvider.sendGroupMessage), so sender and recipients hold different ids for the
+  // same message. DMs happen to share `id` — both sides store the same gift-wrap id — which is why
+  // DM editing can ship first (M2/M3) while groups (M4) need this field.
+  //
+  // DECLARED, NOT YET POPULATED: M1 is store-only, and setting it at send time without also
+  // putting it on the wire would produce a local id no peer shares. M2 does both together.
+  logicalId?: string
+
+  // Set when an edit has been applied. OUR clock, the same basis as `timestamp` — which an edit
+  // never writes, so an edited message keeps its position in the thread (see applyEdit).
+  editedAt?: number
+
+  // Sender-supplied monotonic edit counter: absent = never edited, 1 = first edit, 2 = second.
+  // Edits CANNOT be ordered by event time — gift wraps fuzz created_at by up to 2 days, per the
+  // `timestamp` note above — so ordering rides on this instead. applyEdit accepts strictly-newer
+  // revisions only, which also makes replayed edits idempotent.
+  revision?: number
+
+  // The plaintext as originally SENT, retained on the first edit only. NOT version history and
+  // never rendered: it exists so addReceivedMessage's self-echo suppressor, which matches on
+  // content, can still recognise a late echo carrying the pre-edit text. See messageStore.
+  preEditPlaintext?: string
 }
 
 // ── Groups (Phase 1: fan-out, in-message roster, fixed membership) ──────────────

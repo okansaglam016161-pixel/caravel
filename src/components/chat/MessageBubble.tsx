@@ -11,6 +11,10 @@
 // `actions` renders INSIDE this component rather than in a wrapper on purpose. The sent/self roots
 // carry alignSelf:'flex-end'; wrapping them in a flex row outside would silently reinterpret that
 // as VERTICAL alignment. Keeping every alignment decision in one file avoids that class of bug.
+//
+// The `cv-msg-actionrow` class below is the HOVER TARGET for the affordance: the reveal rule
+// (.cv-msg-actionrow:hover .cv-msg-edit) lives in index.css, global, because both chat views mount
+// this component and they never mount at the same time.
 // Only the markup slot lives here — all edit STATE stays in ChatApp, matching PendingBubble's split.
 
 import type { ReactNode } from 'react'

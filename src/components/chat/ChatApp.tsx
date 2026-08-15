@@ -1704,11 +1704,6 @@ export default function ChatApp() {
                   <span style={{ fontFamily: MONO, fontSize: 11, color: draft.length >= MAX_MESSAGE_LEN ? 'var(--danger-500)' : 'var(--text-muted-dim)' }}>{draft.length}/{MAX_MESSAGE_LEN}</span>
                 </div>
               )}
-              <style>{`.cv-composer::placeholder { color: var(--text-faint-dim); }
-                .cv-msg-edit { opacity: 0; transition: opacity 0.15s; }
-                .cv-msg-actionrow:hover .cv-msg-edit { opacity: 1; }
-                .cv-msg-edit:focus-visible { opacity: 1; }
-                .cv-msg-edit:hover { color: var(--text-primary); border-color: rgba(var(--teal-500-rgb),0.4); }`}</style>
             </div>
             )
           })()}

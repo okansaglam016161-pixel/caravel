@@ -21,20 +21,29 @@ export interface EditFlight {
 // WalletContext.editMessage both use.
 export type EditFlightMap = Record<string, EditFlight>
 
-// Which rows offer the Edit affordance. DM-only and mine-only:
+// Which rows offer the Edit affordance. MINE-ONLY, and from M4 the same rule for DMs and groups —
+// the `!groupId` exclusion is gone, because a group send has minted and carried a shared logicalId
+// since M2 and M4 added the fan-out that names it:
 //   direction 'sent'  — you can only edit your own message; a peer's row would be refused by the
-//                       store's authorship guard anyway, so offering it would be a lie.
+//                       store's authorship guard anyway, so offering it would be a lie. In a GROUP
+//                       this clause is also the security-relevant one: every member legitimately
+//                       learns the logicalId of every group message, so this is what stops the UI
+//                       ever offering to rewrite another member's bubble (the receive-side
+//                       authorship guard in applyEdit independently rejects it on every device).
 //   !system           — a group-leave notice has no prose; its text is composed at render time.
-//   !groupId          — groups carry a logicalId already (M2) but editing them is M4.
+//                       Load-bearing from M4: those rows only exist in group threads.
 //   logicalId present — messages sent before M2 have no shared handle, so no edit can name them.
 //                       This resolves itself as old messages age out; the affordance is simply
 //                       absent rather than shown disabled.
 //   !payment          — payment rows render as PaymentMessageCard and never reach MessageBubble;
 //                       asserted anyway so the rule reads completely in one place.
+//
+// Not checked here, deliberately: whether the row's GROUP is still active. That is a send-time
+// concern with a different answer (WalletContext.editMessage refuses a non-active group), and a
+// non-active group's thread is not rendered at all — so there is no bubble to hang this off.
 export function canEditMessage(m: CaravelMessage): boolean {
   return m.direction === 'sent'
     && !m.system
-    && !m.groupId
     && !!m.logicalId
     && !m.payment
 }

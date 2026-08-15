@@ -6,8 +6,14 @@
 //
 //   B-M1: the ⋯ menu's exit action is LEAVE (was Delete) — two-step, confirmed inline in the menu.
 //   Leave is local-only here; the outbound "X has left the chat" notice is B-M2.
+//
+//   EDIT M4: this thread now offers the DM's per-message edit — hover pencil on my own sent bubbles,
+//   "edited" label on any edited bubble (mine or a member's), and the composer's fourth state. The
+//   state is split deliberately: the optimistic FLIGHT map is ChatApp's (shared with the DM thread,
+//   keyed by logicalId, must survive a thread switch), while which bubble is loaded into the
+//   composer is local, because the composer itself is local.
 
-import { useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import type { CaravelMessage, Group } from '../../messaging/types'
 import Avatar from './Avatar'
 import MessageBubble from './MessageBubble'
@@ -15,6 +21,7 @@ import { MONO } from './chatDisplay'
 import { groupGlyph } from './groupGlyph'
 import { useScrollToBottom } from './useScrollToBottom'
 import PendingBubble, { type PendingSend } from './PendingBubble'
+import { canEditMessage, displayTextFor, flightFor, isEditSubmittable, type EditFlightMap } from './messageEdit'
 
 // A group with no real name yet (a lazy placeholder learned from a message before its definition).
 function groupTitle(g: Group): string {
@@ -23,6 +30,7 @@ function groupTitle(g: Group): string {
 
 export default function GroupThread({
   group, messages, pending, nameFor, onSend, onRetryPending, onLeave, onReinvite, sendNote,
+  editFlights, onSaveEdit, onRetryEdit, onDismissEdit,
 }: {
   group: Group
   messages: CaravelMessage[]        // this group's messages, oldest-first
@@ -33,16 +41,34 @@ export default function GroupThread({
   onLeave: () => void
   onReinvite: () => void   // opens the member picker (C-M2); does not send on its own
   // Honest partial-fan-out note for the composer footer, or null. Never claims delivery.
-  sendNote: { reached: number; total: number } | null
+  // `kind` says whether the shortfall was the last MESSAGE or the last EDIT — both fan out the same
+  // way, and both share this one slot (M4).
+  sendNote: { kind: 'send' | 'edit'; reached: number; total: number } | null
+  // ── Editing (M4) ──
+  // The in-flight map is OWNED BY ChatApp and shared with the DM thread: it is keyed by logicalId,
+  // so it must outlive this component's per-group state (switching threads mid-save must not lose
+  // the flight). What lives here is only which bubble is loaded into THIS composer.
+  editFlights: EditFlightMap
+  onSaveEdit: (logicalId: string, text: string) => Promise<void>
+  onRetryEdit: (logicalId: string) => void
+  onDismissEdit: (logicalId: string) => void
 }) {
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
+  // EDIT MODE (M4) — the group mirror of ChatApp's fourth composer state, minus the payment
+  // interlocks this composer doesn't have. `stashedDraft` holds whatever was half-typed, restored
+  // verbatim on cancel: starting an edit must never destroy an unsent message.
+  const [editing, setEditing] = useState<{ logicalId: string; original: string } | null>(null)
+  const [stashedDraft, setStashedDraft] = useState('')
   // Two-step leave (B-M1): the ⋯ item swaps the menu panel to an inline confirm rather than opening
   // a modal. Leave hides a history the user has been reading and is irreversible until Phase C, so
   // it is guarded — Delete never was, but Delete was the weaker "forget until re-invited".
   const [confirmLeave, setConfirmLeave] = useState(false)
   const canSend = draft.trim().length > 0 && !sending
+  // Save is live only when the text is both non-empty and actually different — an unchanged save
+  // would burn a revision for nothing.
+  const editSubmittable = !!editing && isEditSubmittable(editing.original, draft)
   // A roster of just me (or a placeholder with no roster yet) has nobody to re-invite.
   const canReinvite = group.members.length > 1
   // Same auto-scroll as the DM thread, from the shared hook. Keyed on group.id because this
@@ -54,6 +80,45 @@ export default function GroupThread({
 
   // Any dismissal drops the confirm step too, so re-opening the menu always starts at step one.
   function closeMenu() { setMenuOpen(false); setConfirmLeave(false) }
+
+  // ── Editing (M4) ────────────────────────────────────────────────────────────
+
+  // MANDATORY reset on thread switch. This component is REUSED, not remounted, when the selected
+  // group changes (the same reason useScrollToBottom is keyed on group.id) — so without this, leaving
+  // mid-edit would keep the composer bound to a logicalId belonging to another group's thread, and
+  // Save would silently edit a message you can no longer see.
+  useEffect(() => { setEditing(null); setStashedDraft('') }, [group.id])
+
+  // Load a message into the composer. Refused while a send is in flight — both bind this textarea.
+  function beginEdit(logicalId: string, currentText: string) {
+    if (sending) return
+    setStashedDraft(editing ? stashedDraft : draft)   // don't clobber the stash when re-targeting
+    setEditing({ logicalId, original: currentText })
+    setDraft(currentText)
+  }
+
+  // Put the composer back exactly as the user left it.
+  function cancelEdit() {
+    if (!editing) return
+    setEditing(null)
+    setDraft(stashedDraft)
+    setStashedDraft('')
+  }
+
+  // Hand off to ChatApp's shared publish path, which owns the optimistic flight and the partial-reach
+  // note. The composer is released immediately — the fan-out can take seconds and the user should not
+  // be held in edit mode waiting for it.
+  async function saveEdit() {
+    if (!editing) return
+    const next = draft.trim()
+    // Unchanged or empty is a cancel, not a send.
+    if (!isEditSubmittable(editing.original, next)) { cancelEdit(); return }
+    const { logicalId } = editing
+    setEditing(null)
+    setDraft(stashedDraft)
+    setStashedDraft('')
+    await onSaveEdit(logicalId, next)
+  }
 
   async function send() {
     const text = draft.trim()
@@ -174,7 +239,48 @@ export default function GroupThread({
             )
           }
           if (m.direction === 'sent') {
-            return <MessageBubble key={m.id} text={m.plaintext} timestamp={m.timestamp} variant="sent" />
+            // My own group message: the same edit affordance the DM thread offers, on the same
+            // predicate. `flight` is the optimistic layer — the bubble reads the new text while the
+            // fan-out is outstanding and snaps back if it reached NOBODY.
+            const flight = flightFor(m, editFlights)
+            return (
+              <Fragment key={m.id}>
+                <MessageBubble
+                  text={displayTextFor(m, editFlights)}
+                  timestamp={m.timestamp}
+                  variant="sent"
+                  edited={!!m.editedAt}
+                  highlighted={!!m.logicalId && editing?.logicalId === m.logicalId}
+                  actions={canEditMessage(m) ? (
+                    <button
+                      className="cv-msg-edit"
+                      onClick={() => beginEdit(m.logicalId!, m.plaintext)}
+                      title="Edit message"
+                      aria-label="Edit message"
+                      style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 26, height: 26, flexShrink: 0, padding: 0, borderRadius: 8, border: '1px solid rgba(var(--border-rgb),0.16)', background: 'var(--surface-raised)', color: 'var(--text-muted)', cursor: 'pointer' }}
+                    >
+                      <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" /></svg>
+                    </button>
+                  ) : undefined}
+                />
+                {/* In-flight + failed states. "Saving" says only that the fan-out is running; a
+                    PARTIAL result is a success here and is reported in the footer instead. */}
+                {flight?.status === 'saving' && (
+                  <div style={{ alignSelf: 'flex-end', display: 'flex', alignItems: 'center', gap: 6, fontFamily: MONO, fontSize: 11, color: 'var(--text-muted-dim)', marginTop: -2, marginRight: 4 }}>
+                    <span style={{ width: 10, height: 10, borderRadius: '50%', border: '2px solid rgba(var(--border-rgb),0.2)', borderTopColor: 'var(--text-muted-dim)', animation: 'cv-spin 0.8s linear infinite' }} />Saving edit
+                  </div>
+                )}
+                {flight?.status === 'failed' && (
+                  <div style={{ alignSelf: 'flex-end', display: 'flex', alignItems: 'center', gap: 10, marginTop: -2, marginRight: 4 }}>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'var(--danger-300)' }}>
+                      <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="var(--danger-500)" strokeWidth={2.4} strokeLinecap="round"><circle cx={12} cy={12} r={9} /><path d="M12 8v5M12 16h.01" /></svg>Couldn’t save edit
+                    </span>
+                    <span onClick={() => onRetryEdit(m.logicalId!)} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '4px 10px', borderRadius: 8, background: 'rgba(var(--danger-rgb),0.08)', border: '1px solid rgba(var(--danger-rgb),0.3)', fontSize: 11, fontWeight: 700, color: 'var(--danger-300)', cursor: 'pointer' }}>Retry</span>
+                    <span onClick={() => onDismissEdit(m.logicalId!)} style={{ fontSize: 11, color: 'var(--text-muted-dim)', cursor: 'pointer' }}>Dismiss</span>
+                  </div>
+                )}
+              </Fragment>
+            )
           }
           // Group consecutive same-sender received messages: avatar + label once per run. A system
           // line BREAKS the run — otherwise the sender header would be wrongly suppressed after an
@@ -187,6 +293,10 @@ export default function GroupThread({
               text={m.plaintext}
               timestamp={m.timestamp}
               variant="received"
+              // A member's corrected message is labelled here exactly as in the DM thread — the
+              // edit is only visible as an edit if the label travels with it. No affordance: only
+              // the author can edit, and applyEdit enforces that on every device.
+              edited={!!m.editedAt}
               senderHeader={firstOfRun
                 ? { avatar: <Avatar hex={m.senderPubkeyHex} size={28} radius={9} fontSize={11} />, label: nameFor(m.senderPubkeyHex) }
                 : 'continuation'}
@@ -204,33 +314,67 @@ export default function GroupThread({
 
       {/* Composer — DM compose treatment, minus the $ payment toggle (deferred). */}
       <div style={{ padding: '16px 24px 20px', borderTop: '1px solid rgba(var(--border-rgb),0.1)', flexShrink: 0 }}>
+
+        {/* Editing banner (M4), matching the DM composer: names the state and offers the explicit
+            way out. The bubble being edited is ringed in the thread, so the pairing is visible. */}
+        {editing && (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 10, padding: '9px 13px', borderRadius: 11, background: 'rgba(var(--teal-500-rgb),0.06)', border: '1px solid rgba(var(--teal-500-rgb),0.28)' }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12.5, fontWeight: 600, color: 'var(--teal-300)' }}>
+              <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="var(--teal-500)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" /></svg>
+              Editing message
+            </span>
+            <span onClick={cancelEdit} style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', cursor: 'pointer' }}>Cancel</span>
+          </div>
+        )}
+
         <div style={{ display: 'flex', alignItems: 'flex-end', gap: 12 }}>
           <div style={{ flex: 1, display: 'flex', alignItems: 'center', padding: '13px 17px', borderRadius: 13, background: 'var(--surface-raised)', border: '1px solid rgba(var(--border-rgb),0.14)' }}>
             <textarea
               className="cv-composer"
               value={draft}
               onChange={e => setDraft(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send() } }}
-              placeholder="Message the group…"
+              onKeyDown={e => {
+                if (e.key === 'Escape' && editing) { e.preventDefault(); cancelEdit(); return }
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault()
+                  if (editing) void saveEdit(); else void send()
+                }
+              }}
+              placeholder={editing ? 'Edit your message…' : 'Message the group…'}
               rows={1}
               maxLength={2000}
               disabled={sending}
               style={{ flex: 1, resize: 'none', background: 'transparent', border: 'none', outline: 'none', color: 'var(--text-body)', fontSize: 15, fontFamily: 'inherit', lineHeight: 1.4, maxHeight: 120, overflowY: 'auto', padding: 0, display: 'block' }}
             />
           </div>
-          <button onClick={() => void send()} disabled={!canSend} title="Send to group" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 46, height: 46, flexShrink: 0, borderRadius: 12, background: 'var(--surface-inset)', border: '1px solid rgba(var(--border-rgb),0.16)', cursor: canSend ? 'pointer' : 'default', opacity: canSend ? 1 : 0.5, padding: 0 }}>
-            {sending
-              ? <span style={{ width: 20, height: 20, borderRadius: '50%', border: '2.5px solid rgba(var(--border-rgb),0.25)', borderTopColor: 'var(--text-muted-dim)', animation: 'cv-spin 0.8s linear infinite' }} />
-              : <svg width={20} height={20} viewBox="0 0 24 24" fill="none" stroke={canSend ? 'var(--teal-500)' : 'var(--text-muted-dim)'} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" /></svg>}
-          </button>
+          {/* Send doubles as Save in edit mode — one button, one enabled rule per mode (M4). */}
+          {(() => {
+            const active = editing ? editSubmittable : canSend
+            return (
+              <button
+                onClick={() => (editing ? void saveEdit() : void send())}
+                disabled={!active}
+                title={editing ? 'Save edit' : 'Send to group'}
+                style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 46, height: 46, flexShrink: 0, borderRadius: 12, background: 'var(--surface-inset)', border: '1px solid rgba(var(--border-rgb),0.16)', cursor: active ? 'pointer' : 'default', opacity: active ? 1 : 0.5, padding: 0 }}
+              >
+                {sending && !editing
+                  ? <span style={{ width: 20, height: 20, borderRadius: '50%', border: '2.5px solid rgba(var(--border-rgb),0.25)', borderTopColor: 'var(--text-muted-dim)', animation: 'cv-spin 0.8s linear infinite' }} />
+                  : editing
+                    ? <svg width={20} height={20} viewBox="0 0 24 24" fill="none" stroke={active ? 'var(--teal-500)' : 'var(--text-muted-dim)'} strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
+                    : <svg width={20} height={20} viewBox="0 0 24 24" fill="none" stroke={active ? 'var(--teal-500)' : 'var(--text-muted-dim)'} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" /></svg>}
+              </button>
+            )
+          })()}
         </div>
         {/* Footer: the standing best-effort line, replaced after a PARTIAL fan-out by an honest
             tally. "Reached" is deliberate — membersReached counts relay acceptance, not receipt, so
-            this must never read as "delivered". Ephemeral: cleared on the next send. */}
+            this must never read as "delivered". Ephemeral: cleared on the next send.
+            An EDIT (M4) reuses this line: a partial edit fan-out leaves some members reading the new
+            text and some the old, with no way for anyone to tell — the sender at least sees that. */}
         {sendNote ? (
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontFamily: MONO, fontSize: 11, color: 'var(--warn-300)', marginTop: 8, marginLeft: 2 }}>
             <svg width={11} height={11} viewBox="0 0 24 24" fill="none" stroke="var(--warn)" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><path d="M12 9v4M12 17h.01" /></svg>
-            Last message reached {sendNote.reached} of {sendNote.total} member(s)
+            Last {sendNote.kind === 'edit' ? 'edit' : 'message'} reached {sendNote.reached} of {sendNote.total} member(s)
           </div>
         ) : (
           <div style={{ fontFamily: MONO, fontSize: 11, color: 'var(--text-muted-dim)', marginTop: 8, marginLeft: 2 }}>

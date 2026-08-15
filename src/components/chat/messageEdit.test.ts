@@ -43,13 +43,26 @@ describe('canEditMessage', () => {
     expect(canEditMessage(msg({ logicalId: undefined }))).toBe(false)
   })
 
-  it('refuses a group message until M4, even though it has a logicalId', () => {
-    expect(canEditMessage(msg({ groupId: 'g1' }))).toBe(false)
+  it('allows my own sent GROUP message (M4) — same rule, minus the DM-only exclusion', () => {
+    // Shaped like a real group 'sent' row: synthetic id, blank recipient, shared logicalId.
+    expect(canEditMessage(msg({ id: 'grp-1', recipientPubkeyHex: '', groupId: 'g1' }))).toBe(true)
+  })
+
+  it('refuses another member\'s group message — the send-side half of the authorship rule', () => {
+    expect(canEditMessage(msg({ groupId: 'g1', direction: 'received', senderPubkeyHex: PEER }))).toBe(false)
+  })
+
+  it('refuses a pre-M2 group row, which has no shared handle to name', () => {
+    expect(canEditMessage(msg({ groupId: 'g1', logicalId: undefined }))).toBe(false)
   })
 
   it('refuses a system notice and a payment row', () => {
     expect(canEditMessage(msg({ system: 'group-leave', plaintext: '' }))).toBe(false)
     expect(canEditMessage(msg({ payment: { utxoId: 'utxo_1' } }))).toBe(false)
+  })
+
+  it('refuses a group-leave notice in a group thread — the only place system rows live', () => {
+    expect(canEditMessage(msg({ groupId: 'g1', system: 'group-leave', plaintext: '', logicalId: 'L9' }))).toBe(false)
   })
 })
 

@@ -177,6 +177,42 @@ export class NostrMessagingProvider implements MessagingProvider {
     return results.some(r => r.ok)
   }
 
+  // Group EDIT (M4): sendEdit's payload over sendGroupMessage's fan-out. Every member gets the same
+  // (targetLogicalId, revision) pair naming the shared logical id their copy already carries, so all
+  // N clients apply the identical change via applyEditByLogicalId.
+  //
+  // Two contract choices, both deliberate and both DIFFERENT from sendGroupMessage:
+  //
+  //   1. NEVER THROWS. sendGroupMessage throws when it reaches nobody because ChatApp.sendToGroup
+  //      catches it and turns it into a failed bubble with Retry. The edit path has no such catch —
+  //      editMessage is `try/finally`, and saveEdit is invoked as `void saveEdit()` — so a throw
+  //      would surface as an unhandled rejection instead of UI. Total failure is reported as
+  //      membersReached === 0 and the caller's optimistic layer snaps the bubble back.
+  //   2. Plain publishGiftWrap, NOT publishControl. An edit is a control message by wire shape but a
+  //      human-watching action by UX: M3 already gives it a spinner and an explicit Retry, which is
+  //      exactly the reasoning in CONTROL_RETRIES' note for excluding sends from the bounded retry.
+  //
+  // `groupId` is taken for symmetry with its siblings and is deliberately NOT put on the wire: an
+  // edit stays group-agnostic (wrapEdit tags no group), because the RECEIVER's own stored row is the
+  // authoritative statement of which group the target belongs to. That is what the left/deleted-group
+  // ingest gate keys off — see editTargetsLeftGroup in messageStore.
+  async sendGroupEdit(
+    _groupId: string,
+    memberPubkeysHex: string[],
+    targetLogicalId: string,
+    newText: string,
+    revision: number
+  ): Promise<{ memberCount: number; membersReached: number }> {
+    const recipients = memberPubkeysHex.filter(m => m && m !== this.pubkeyHex)
+    let membersReached = 0
+    await Promise.all(recipients.map(async member => {
+      const wrapped = wrapEdit(this.secretKey, member, targetLogicalId, newText, revision)
+      const results = await publishGiftWrap(wrapped, [...this.relayUrls], PUBLISH_TIMEOUT_MS, CONNECT_TIMEOUT_MS)
+      if (results.some(r => r.ok)) membersReached++
+    }))
+    return { memberCount: recipients.length, membersReached }
+  }
+
   // Send a dedicated silent Tari-address control message (M9.0d): only the address tag, over a
   // single-space content (NIP-44 requires >= 1 byte, so it can't be truly empty). It carries no
   // payment and no note; the recipient extracts + stores the address and renders nothing. Returns
@@ -195,8 +231,8 @@ export class NostrMessagingProvider implements MessagingProvider {
     const recipients = memberPubkeysHex.filter(m => m && m !== this.pubkeyHex)
     // ONE logical id for the whole fan-out (M2): every member's wrap carries the same value, so all
     // N copies plus our local row name the same logical message. This is exactly what `id` cannot
-    // do here — each member gets a different event id — and it is what makes group editing possible
-    // in M4 without a data migration. Group EDITING is still refused until then; only the id ships.
+    // do here — each member gets a different event id. M4's sendGroupEdit is what consumes it, and
+    // because the id shipped from M2 onward that milestone needed no data migration.
     const logicalId = newLogicalId()
     let membersReached = 0
     await Promise.all(recipients.map(async member => {

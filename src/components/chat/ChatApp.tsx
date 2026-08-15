@@ -273,7 +273,10 @@ export default function ChatApp() {
   // members and not others, and `membersReached` is RELAY ACCEPTANCE, not receipt — so this says
   // "reached", never "delivered". React state only; nothing is persisted per message (a durable
   // per-bubble indicator would need a local-only CaravelMessage field — noted follow-up).
-  const [groupSendNote, setGroupSendNote] = useState<{ groupId: string; reached: number; total: number } | null>(null)
+  // `kind` (M4) names which fan-out fell short, since an EDIT fans out the same way a message does.
+  // ONE slot for both, last-writer-wins: either way it means "the most recent thing you sent to this
+  // group didn't reach everyone", and stacking two warn lines in the footer would say no more.
+  const [groupSendNote, setGroupSendNote] = useState<{ groupId: string; kind: 'send' | 'edit'; reached: number; total: number } | null>(null)
 
   // Payment (TARI) composer state.
   const [paymentMode, setPaymentMode] = useState(false)
@@ -442,7 +445,7 @@ export default function ChatApp() {
         setPendingGroupSends(p => p.filter(x => x.id !== tempId))  // real persisted bubble now shows
         // Reached some but not all — surface it rather than letting "sent" imply everyone got it.
         if (res.membersReached < res.memberCount) {
-          setGroupSendNote({ groupId, reached: res.membersReached, total: res.memberCount })
+          setGroupSendNote({ groupId, kind: 'send', reached: res.membersReached, total: res.memberCount })
         }
       } finally {
         provider.disconnect()
@@ -685,10 +688,30 @@ export default function ChatApp() {
     setStashedDraft('')
   }
 
-  // Save: optimistic by design. The bubble shows the new text immediately (a publish can take up to
-  // PUBLISH_TIMEOUT_MS, and a frozen bubble reads as broken), while the STORE still only changes if
-  // a relay accepts — editMessage owns that. On failure the flight flips to 'failed', the bubble
-  // snaps back to the stored text, and a Retry appears. Nothing here claims the edit was delivered.
+  // THE one edit publish path, shared by the DM composer, the group composer (via GroupThread's
+  // onSaveEdit) and both Retry buttons. Optimistic by design: the bubble shows the new text
+  // immediately (a publish can take up to PUBLISH_TIMEOUT_MS, and a frozen bubble reads as broken),
+  // while the STORE only changes if the edit actually got out — editMessage owns that. On failure the
+  // flight flips to 'failed', the bubble snaps back to the stored text, and a Retry appears.
+  //
+  // GROUPS (M4) add partial reach. `ok` is TOTAL-failure-only there, so a fan-out that reached some
+  // members keeps the new text (those members already show it) and the shortfall is reported in the
+  // composer footer instead. Nothing on either path ever claims the edit was DELIVERED.
+  async function runEdit(logicalId: string, text: string) {
+    setEditFlights(m => beginFlight(m, logicalId, text))
+    const res = await editMessage(logicalId, text)
+    setEditFlights(m => settleFlight(m, logicalId, res.ok))
+
+    // Partial fan-out: same honest tally the group SEND footer shows, flagged as an edit so the line
+    // names the right thing. Counts are group-only, so a DM never reaches this.
+    const groupId = messages.find(m => m.logicalId === logicalId)?.groupId
+    if (res.ok && groupId && res.memberCount !== undefined && res.membersReached !== undefined
+        && res.membersReached < res.memberCount) {
+      setGroupSendNote({ groupId, kind: 'edit', reached: res.membersReached, total: res.memberCount })
+    }
+  }
+
+  // Save from the DM composer.
   async function saveEdit() {
     if (!editing) return
     const next = draft.trim()
@@ -696,22 +719,19 @@ export default function ChatApp() {
     if (!isEditSubmittable(editing.original, next)) { cancelEdit(); return }
 
     const { logicalId } = editing
-    setEditFlights(m => beginFlight(m, logicalId, next))
     setEditing(null)
     setDraft(stashedDraft)
     setStashedDraft('')
-
-    const ok = await editMessage(logicalId, next)
-    setEditFlights(m => settleFlight(m, logicalId, ok))
+    await runEdit(logicalId, next)
   }
 
-  // Retry a failed edit with the text the user actually typed (kept on the failed flight).
+  // Retry a failed edit with the text the user actually typed (kept on the failed flight). Safe to
+  // offer after ANY failure, including a partial group fan-out: applyEdit's strictly-newer guard
+  // makes a re-delivered edit idempotent, so unlike a retried group SEND this cannot duplicate.
   async function retryEdit(logicalId: string) {
     const flight = editFlights[logicalId]
     if (!flight) return
-    setEditFlights(m => beginFlight(m, logicalId, flight.text))
-    const ok = await editMessage(logicalId, flight.text)
-    setEditFlights(m => settleFlight(m, logicalId, ok))
+    await runEdit(logicalId, flight.text)
   }
 
   // ── Payment (TARI) flow ──────────────────────────────────────────────────────
@@ -1300,10 +1320,17 @@ export default function ChatApp() {
               group={selectedGroup}
               messages={groupMessages}
               pending={pendingGroupSends.filter(p => p.groupId === selectedGroup.id)}
-              sendNote={groupSendNote?.groupId === selectedGroup.id ? { reached: groupSendNote.reached, total: groupSendNote.total } : null}
+              sendNote={groupSendNote?.groupId === selectedGroup.id ? { kind: groupSendNote.kind, reached: groupSendNote.reached, total: groupSendNote.total } : null}
               nameFor={displayName}
               onSend={handleGroupSend}
               onRetryPending={retryGroupSend}
+              /* Editing (M4): the flight map is owned HERE, shared with the DM thread, so a group
+                 edit's in-flight state survives switching threads. GroupThread owns only which of
+                 ITS bubbles is loaded into ITS own composer. */
+              editFlights={editFlights}
+              onSaveEdit={runEdit}
+              onRetryEdit={retryEdit}
+              onDismissEdit={(logicalId) => setEditFlights(x => clearFlight(x, logicalId))}
               /* Leave (B-M1) replaces Delete as the thread's exit action: 'left' is the stronger
                  suppression (delete's "forget until re-invited" resurrects the group as a pending
                  invite on the next message) and it keeps the roster the B-M2 notice fans out to. */

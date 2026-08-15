@@ -4,8 +4,9 @@
 // is never passed by the DM view — so a DM bubble renders byte-identically to before.
 //
 // EDIT SUPPORT (M3) adds three optional props — `edited`, `actions`, `highlighted`. All are opt-in,
-// so every existing call site (both GroupThread sites included) renders exactly as it did, and the
-// group path cannot show an edit affordance by construction: it simply never passes them.
+// so a call site that passes none renders exactly as it did before editing existed. M4 wired the
+// group sites up too: a sent group bubble now passes all three and a received one passes `edited`,
+// with the SAME markup as the DM thread, so an edit reads identically wherever it appears.
 //
 // `actions` renders INSIDE this component rather than in a wrapper on purpose. The sent/self roots
 // carry alignSelf:'flex-end'; wrapping them in a flex row outside would silently reinterpret that

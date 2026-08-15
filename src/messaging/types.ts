@@ -141,12 +141,23 @@ export interface MessagingProvider {
   // Resolves true if at least one relay accepted it (so the caller can mark it delivered).
   sendContactAddress(recipientPubkeyHex: string, tariAddress: string): Promise<boolean>
 
-  // Send an EDIT of an already-sent message (M2): replaces the text of the message carrying
+  // Send an EDIT of an already-sent DM (M2): replaces the text of the message carrying
   // `targetLogicalId`. Resolves true if at least one relay accepted, false otherwise — like
   // sendContactAddress and deliberately UNLIKE sendMessage's throw, so the caller decides how to
   // surface a failure. Best-effort: acceptance is not delivery, and a recipient who never receives
   // it keeps the original text with no way for either side to detect the divergence.
   sendEdit(recipientPubkeyHex: string, targetLogicalId: string, newText: string, revision: number): Promise<boolean>
+
+  // Group EDIT (M4): the same instruction, fanned out to the roster (minus self) so every member's
+  // client can apply it to the row carrying `targetLogicalId` — the shared handle sendGroupMessage
+  // has minted since M2. Returns the same relays-reached tally as its siblings, NOT a delivery
+  // receipt: a partial fan-out leaves some members on the new text and some on the old, and neither
+  // side can tell which.
+  //
+  // NEVER THROWS, unlike sendGroupMessage — the caller (WalletContext.editMessage) is awaited from a
+  // `void saveEdit()` with no catch, so a rejection here would escape as an unhandled rejection.
+  // Same contract as sendGroupLeave for the same class of reason.
+  sendGroupEdit(groupId: string, memberPubkeysHex: string[], targetLogicalId: string, newText: string, revision: number): Promise<{ memberCount: number; membersReached: number }>
 
   // Group message (Phase 1): fan out one NIP-17 gift wrap per member (roster minus self), each
   // tagged with the group id. Returns the local 'sent' record + a relays-reached tally (NOT a

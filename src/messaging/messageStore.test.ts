@@ -3,7 +3,7 @@
 // contract honest, and a bug here corrupts stored messages, so each guard is covered explicitly.
 
 import { beforeEach, describe, expect, it } from 'vitest'
-import { addReceivedMessage, addSentMessage, applyEdit, applyEditByLogicalId, loadMessages, nextRevision } from './messageStore'
+import { addReceivedMessage, addSentMessage, applyEdit, applyEditByLogicalId, editReachOk, editTargetsLeftGroup, loadMessages, nextRevision } from './messageStore'
 import type { CaravelMessage } from './types'
 
 // messageStore persists through localStorage, which does not exist under Vitest's node
@@ -245,6 +245,122 @@ describe('applyEditByLogicalId (M2)', () => {
     expect(second[0].plaintext).toBe('v2')
     expect(second[0].revision).toBe(2)
     expect(second[0].preEditPlaintext).toBe('original')
+  })
+})
+
+// ── Group editing (M4) ────────────────────────────────────────────────────────
+
+const MEMBER = 'c'.repeat(64)
+
+// A group message as the SENDER stores it: synthetic grp- id (there are N gift-wrap ids, none of
+// them shared), no single recipient, and the shared logicalId every member's copy also carries.
+function groupSent(over: Partial<CaravelMessage> = {}): CaravelMessage {
+  return msg({ id: 'grp-1', recipientPubkeyHex: '', groupId: 'g1', logicalId: 'L1', ...over })
+}
+
+// The same logical message as a MEMBER stores it: a real gift-wrap id, sender = the author.
+function groupReceived(over: Partial<CaravelMessage> = {}): CaravelMessage {
+  return msg({ id: 'evt-g1', senderPubkeyHex: PEER, recipientPubkeyHex: ME, direction: 'received', groupId: 'g1', logicalId: 'L1', ...over })
+}
+
+describe('applyEditByLogicalId — group rows (M4)', () => {
+  it('applies to the sender\'s own group row, keyed on the shared logical id', () => {
+    const current = [groupSent()]
+    const next = applyEditByLogicalId(ME, current, 'L1', 'edited', 1, ME)
+
+    expect(next[0].plaintext).toBe('edited')
+    expect(next[0].revision).toBe(1)
+    // The group routing fields survive — only the text changes.
+    expect(next[0].groupId).toBe('g1')
+    expect(next[0].id).toBe('grp-1')
+    expect(next[0].timestamp).toBe(1_000_000)
+  })
+
+  it('applies to a member\'s received copy when its AUTHOR sent the edit', () => {
+    const current = [groupReceived()]
+    const next = applyEditByLogicalId(ME, current, 'L1', 'edited', 1, PEER)
+    expect(next[0].plaintext).toBe('edited')
+  })
+
+  it('REJECTS a member editing another member\'s group message', () => {
+    // The attack group editing actually creates: every member legitimately learns the logicalId of
+    // every group message, so MEMBER can address an edit at PEER's message. Rejected on every
+    // device by the authorship guard — including on the author's own, where the stored sender is
+    // themself and the editor is not.
+    const asMember = [groupReceived()]                                   // I hold PEER's message
+    expect(applyEditByLogicalId(ME, asMember, 'L1', 'hijacked', 1, MEMBER)).toBe(asMember)
+
+    const asAuthor = [groupSent({ senderPubkeyHex: ME })]                 // PEER's own device
+    expect(applyEditByLogicalId(ME, asAuthor, 'L1', 'hijacked', 1, MEMBER)).toBe(asAuthor)
+  })
+
+  it('no-ops for a RE-INVITED member who never stored the original — no phantom row', () => {
+    // Phase C: messages sent while I was 'left' were never stored, so the group resumes fresh and an
+    // edit can name a logicalId I have no row for. It must degrade to nothing at all.
+    const afterReinvite = [groupSent({ id: 'grp-old', logicalId: 'L-old' })]
+    const next = applyEditByLogicalId(ME, afterReinvite, 'L1', 'edit of a message I never had', 1, PEER)
+    expect(next).toBe(afterReinvite)      // by reference — React skips the re-render
+    expect(next).toHaveLength(1)          // nothing appended
+  })
+
+  it('is idempotent across a re-delivered fan-out — every member applies the same revision once', () => {
+    const first = applyEditByLogicalId(ME, [groupReceived()], 'L1', 'edited', 1, PEER)
+    // The same edit re-arrives (another relay, or the ~2-day backfill on the next unlock).
+    expect(applyEditByLogicalId(ME, first, 'L1', 'edited', 1, PEER)).toBe(first)
+  })
+})
+
+describe('editReachOk (M4)', () => {
+  it('is ok when at least one member was reached', () => {
+    expect(editReachOk(3, 1)).toBe(true)
+    expect(editReachOk(3, 3)).toBe(true)
+  })
+
+  it('fails ONLY on total failure, which is what snaps the bubble back', () => {
+    expect(editReachOk(3, 0)).toBe(false)
+    expect(editReachOk(1, 0)).toBe(false)
+  })
+
+  it('is ok with an empty roster — nobody to reach is not a failure', () => {
+    // A solo roster or a lazy placeholder with no members yet. Treating this as failure would make
+    // such a group's messages permanently un-editable.
+    expect(editReachOk(0, 0)).toBe(true)
+  })
+})
+
+describe('editTargetsLeftGroup (M4)', () => {
+  const LEFT = new Set(['g-left'])
+
+  it('drops an edit whose target belongs to a group I have LEFT', () => {
+    // Leave/decline are NON-destructive: the rows are kept and hidden by state, so without this gate
+    // an edit would keep rewriting history inside a group that should never be touched again.
+    const current = [groupSent({ groupId: 'g-left' })]
+    expect(editTargetsLeftGroup(current, 'L1', LEFT)).toBe(true)
+  })
+
+  it('allows a live group, a pending group, and a DM', () => {
+    expect(editTargetsLeftGroup([groupSent()], 'L1', LEFT)).toBe(false)
+    // A pending (invite-gated) group stores its messages; an edit should land so the corrected text
+    // is what you read on accept.
+    expect(editTargetsLeftGroup([groupSent({ groupId: 'g-pending' })], 'L1', LEFT)).toBe(false)
+    expect(editTargetsLeftGroup([msg({ logicalId: 'L1' })], 'L1', LEFT)).toBe(false)
+  })
+
+  it('allows an unknown or empty logical id — deletion already resolves to a store no-op', () => {
+    expect(editTargetsLeftGroup([groupSent({ groupId: 'g-left' })], 'unknown', LEFT)).toBe(false)
+    expect(editTargetsLeftGroup([groupSent({ groupId: 'g-left' })], '', LEFT)).toBe(false)
+    expect(editTargetsLeftGroup([], 'L1', LEFT)).toBe(false)
+  })
+
+  it('allows everything when no group has been left', () => {
+    expect(editTargetsLeftGroup([groupSent({ groupId: 'g-left' })], 'L1', new Set())).toBe(false)
+  })
+})
+
+describe('nextRevision — group rows (M4)', () => {
+  it('derives from the sender\'s own group row, so a retried fan-out cannot drift', () => {
+    expect(nextRevision([groupSent()], 'L1')).toBe(1)
+    expect(nextRevision([groupSent({ revision: 2 })], 'L1')).toBe(3)
   })
 })
 

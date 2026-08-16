@@ -17,7 +17,7 @@ import { sendConfidential, tariToMicrotari, MAX_FEE } from '../../crypto/confide
 import { resolveOnsNameToHex, toOnsName, type OnsResolveErrorKind } from '../../crypto/ons'
 import { ConnectionIndicator, RelayHealthPanel } from './ConnectionStatus'
 import { usePaymentResolution } from '../../hooks/usePaymentResolution'
-import { avatarFor, initialsFor, truncNpub, bubbleTime, compactTime, MONO } from './chatDisplay'
+import { avatarFor, initialsFor, truncNpub, bubbleTime, compactTime, mergeThreadItems, MONO } from './chatDisplay'
 import Avatar from './Avatar'
 import MessageBubble from './MessageBubble'
 import MediaMessageCard from './MediaMessageCard'
@@ -416,7 +416,7 @@ export default function ChatApp() {
   // offered, and the shortfall is reported honestly in the composer footer instead.
   async function sendToGroup(groupId: string, members: string[], text: string) {
     const tempId = `gpending-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
-    setPendingGroupSends(p => [...p, { id: tempId, groupId, text, status: 'sending' }])
+    setPendingGroupSends(p => [...p, { id: tempId, groupId, text, status: 'sending', attemptedAt: Date.now() }])
     setGroupSendNote(null)
     try {
       const provider = createMessagingProvider()
@@ -619,7 +619,7 @@ export default function ChatApp() {
     // Overlay (flag 1): show a provisional "sending" bubble immediately. Additive — the send path
     // below is unchanged.
     const tempId = `pending-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
-    setPendingSends(p => [...p, { id: tempId, peerHex: peer, text, status: 'sending' }])
+    setPendingSends(p => [...p, { id: tempId, peerHex: peer, text, status: 'sending', attemptedAt: Date.now() }])
     try {
       const provider = createMessagingProvider()
       // Locked wallet → null. Surface a clear reason rather than leaking a null-reference error.
@@ -678,8 +678,8 @@ export default function ChatApp() {
     if (!inGroup && !peerHex) { setImageBusy(false); return }
 
     // Provisional bubble immediately, in whichever thread we are in.
-    if (inGroup) setPendingGroupSends(p => [...p, { id: tempId, groupId: groupId!, text: file.name, status: 'sending', file }])
-    else setPendingSends(p => [...p, { id: tempId, peerHex: peerHex!, text: file.name, status: 'sending', file }])
+    if (inGroup) setPendingGroupSends(p => [...p, { id: tempId, groupId: groupId!, text: file.name, status: 'sending', attemptedAt: Date.now(), file }])
+    else setPendingSends(p => [...p, { id: tempId, peerHex: peerHex!, text: file.name, status: 'sending', attemptedAt: Date.now(), file }])
 
     const provider = createMessagingProvider()
     try {
@@ -720,6 +720,17 @@ export default function ChatApp() {
     void handlePickedImage(entry.file)
   }
   // ───────────────────────────────────────────────────────── end test harness ──
+
+  // Clear a failed provisional bubble. The ONLY deliberate way out, and the only one at all for a
+  // terminal failure such as an undecodable image, which shows no Retry.
+  //
+  // Text sends have needed this since they were built: their apparent dismiss was an accident —
+  // Retry removed the entry and then handleSend() bailed on the first line because the composer was
+  // empty. That happened to work and was never intended to be the mechanism.
+  function dismissPending(id: string) {
+    setPendingSends(p => p.filter(x => x.id !== id))
+    setPendingGroupSends(p => p.filter(x => x.id !== id))
+  }
 
   // Retry a failed provisional send: drop the failed bubble and re-run the send (the draft still
   // holds the text, since a failed send never clears it).
@@ -1313,6 +1324,7 @@ export default function ChatApp() {
               nameFor={displayName}
               onSend={handleGroupSend}
               onRetryPending={retryGroupSend}
+              onDismissPending={dismissPending}
               /* Leave (B-M1) replaces Delete as the thread's exit action: 'left' is the stronger
                  suppression (delete's "forget until re-invited" resurrects the group as a pending
                  invite on the next message) and it keeps the roster the B-M2 notice fans out to. */
@@ -1448,13 +1460,28 @@ export default function ChatApp() {
               </div>
             )}
 
-            {selectedConvo.messages.map((m) => (
-              m.payment ? (
-                <PaymentMessageCard key={m.id} message={m} />
-              ) : m.media ? (
-                /* Encrypted image (images M4): resolves itself — cache first, then the host. */
-                <MediaMessageCard key={m.id} message={m} />
-              ) : (
+            {/* Real messages and provisional bubbles in ONE chronological pass. Pending rows used to
+                render in a separate map after this one, which pinned a failed send to the bottom of
+                the thread forever — see mergeThreadItems. */}
+            {mergeThreadItems(selectedConvo.messages, pendingForPeer).map((item) => {
+              if (item.kind === 'pending') {
+                const p = item.pending
+                return (
+                  <PendingBubble
+                    key={p.id}
+                    text={p.text}
+                    status={p.status}
+                    failure={p.failure}
+                    onRetry={() => retrySend(p.id)}
+                    onDismiss={() => dismissPending(p.id)}
+                  />
+                )
+              }
+              const m = item.message
+              if (m.payment) return <PaymentMessageCard key={m.id} message={m} />
+              /* Encrypted image (images M4): resolves itself — cache first, then the host. */
+              if (m.media) return <MediaMessageCard key={m.id} message={m} />
+              return (
                 <MessageBubble
                   key={m.id}
                   text={m.plaintext}
@@ -1462,12 +1489,7 @@ export default function ChatApp() {
                   variant={isSelf ? 'self' : m.direction === 'received' ? 'received' : 'sent'}
                 />
               )
-            ))}
-
-            {/* Pending-send overlay (design lifecycle: sending → failed + Retry) */}
-            {pendingForPeer.map((p) => (
-              <PendingBubble key={p.id} text={p.text} status={p.status} failure={p.failure} onRetry={() => retrySend(p.id)} />
-            ))}
+            })}
             {/* Auto-scroll anchor */}
             <div ref={bottomRef} />
           </div>

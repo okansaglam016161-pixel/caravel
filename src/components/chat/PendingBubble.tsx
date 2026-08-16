@@ -29,16 +29,29 @@ export interface PendingSend {
   id: string
   text: string
   status: PendingStatus
+  // When the send was attempted, so the bubble can sit in CHRONOLOGICAL position rather than being
+  // pinned to the end of the thread. At the moment of failure those are the same place — this row is
+  // the newest thing there is. They only diverge once the user sends or receives something later, at
+  // which point the bubble is a historical record and claiming to be newest is simply wrong.
+  attemptedAt: number
   failure?: PendingFailure
 }
 
-export default function PendingBubble({ text, status, onRetry, failure }: {
+export default function PendingBubble({ text, status, onRetry, onDismiss, failure }: {
   text: string
   status: PendingStatus
   // Omitted when a retry would be unsafe. In groups a partial fan-out is NOT retryable — members
   // who already received the message have no way to dedup a second copy (fresh event ids per send),
   // so Retry is offered only when the send reached nobody.
   onRetry?: () => void
+  // Clears the failed bubble. THE ONLY DELIBERATE WAY OUT, and the only one for a terminal failure
+  // (an undecodable image shows no Retry at all, so without this the bubble was permanent).
+  //
+  // Deliberately explicit rather than auto-clearing on a timer or on the next successful send: an
+  // error that disappears by itself is worse than one that lingers — look away for ten seconds and
+  // the send silently never happened — and a later success has nothing to do with an earlier
+  // failure. Matches the failed-edit row on the message-editing branch, so the two converge.
+  onDismiss?: () => void
   // Present for image sends. Absent → the text-send defaults below, unchanged.
   failure?: PendingFailure
 }) {
@@ -67,6 +80,9 @@ export default function PendingBubble({ text, status, onRetry, failure }: {
               <span onClick={onRetry} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '4px 10px', borderRadius: 8, background: 'rgba(var(--danger-rgb),0.08)', border: '1px solid rgba(var(--danger-rgb),0.3)', fontSize: 11, fontWeight: 700, color: 'var(--danger-300)', cursor: 'pointer' }}>
                 <svg width={11} height={11} viewBox="0 0 24 24" fill="none" stroke="var(--danger-300)" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v5h-5" /></svg>Retry
               </span>
+            )}
+            {onDismiss && (
+              <span onClick={onDismiss} style={{ fontSize: 11, color: 'var(--text-muted-dim)', cursor: 'pointer' }}>Dismiss</span>
             )}
           </div>
           {hint && <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6, marginRight: 4, maxWidth: 280, textAlign: 'right', lineHeight: 1.45 }}>{hint}</div>}

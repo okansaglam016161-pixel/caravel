@@ -12,7 +12,7 @@ import type { CaravelMessage, Group } from '../../messaging/types'
 import Avatar from './Avatar'
 import MessageBubble from './MessageBubble'
 import MediaMessageCard from './MediaMessageCard'
-import { MONO } from './chatDisplay'
+import { mergeThreadItems, MONO } from './chatDisplay'
 import { groupGlyph } from './groupGlyph'
 import { useScrollToBottom } from './useScrollToBottom'
 import PendingBubble, { type PendingSend } from './PendingBubble'
@@ -23,7 +23,7 @@ function groupTitle(g: Group): string {
 }
 
 export default function GroupThread({
-  group, messages, pending, nameFor, onSend, onRetryPending, onLeave, onReinvite, sendNote, onPickImage,
+  group, messages, pending, nameFor, onSend, onRetryPending, onDismissPending, onLeave, onReinvite, sendNote, onPickImage,
 }: {
   group: Group
   messages: CaravelMessage[]        // this group's messages, oldest-first
@@ -31,6 +31,8 @@ export default function GroupThread({
   nameFor: (hex: string) => string  // sender display name (nickname ?? truncated npub)
   onSend: (text: string) => Promise<void>
   onRetryPending: (id: string) => void
+  // Clears a failed provisional bubble — the only way out of a terminal failure, which shows no Retry.
+  onDismissPending: (id: string) => void
   onLeave: () => void
   onReinvite: () => void   // opens the member picker (C-M2); does not send on its own
   // Honest partial-fan-out note for the composer footer, or null. Never claims delivery.
@@ -169,7 +171,23 @@ export default function GroupThread({
             <div style={{ fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.55 }}>Messages are sent to every member, end to end encrypted.</div>
           </div>
         )}
-        {messages.map((m, i) => {
+        {/* Real messages and provisional bubbles in ONE chronological pass — see mergeThreadItems.
+            A failed send used to be pinned below every later message, forever. */}
+        {mergeThreadItems(messages, pending).map((item, i, items) => {
+          if (item.kind === 'pending') {
+            const p = item.pending
+            return (
+              <PendingBubble
+                key={p.id}
+                text={p.text}
+                status={p.status}
+                failure={p.failure}
+                onRetry={() => onRetryPending(p.id)}
+                onDismiss={() => onDismissPending(p.id)}
+              />
+            )
+          }
+          const m = item.message
           // System NOTICE (B-M2) — an inline centered line, never a bubble. Visual only: the roster
           // is unchanged, so the header still counts the leaver among the members (Phase 1 has no
           // roster edit). Text is composed here; the stored row carries empty plaintext.
@@ -191,7 +209,13 @@ export default function GroupThread({
           // Group consecutive same-sender received messages: avatar + label once per run. A system
           // line BREAKS the run — otherwise the sender header would be wrongly suppressed after an
           // interruption, since prev.senderPubkeyHex still matches across the notice.
-          const prev = messages[i - 1]
+          //
+          // A PENDING bubble breaks it too, and deliberately: it is a genuine visual interruption,
+          // exactly as one of my own sent bubbles already is. Resolving `prev` to undefined for a
+          // pending item is what does it — simpler and more honest than scanning backwards past
+          // provisional rows to find the last real message.
+          const prevItem = items[i - 1]
+          const prev = prevItem?.kind === 'message' ? prevItem.message : undefined
           const firstOfRun = !prev || prev.system !== undefined || prev.direction !== 'received' || prev.senderPubkeyHex !== m.senderPubkeyHex
           return (
             <MessageBubble
@@ -205,11 +229,6 @@ export default function GroupThread({
             />
           )
         })}
-        {/* Pending-send overlay — same lifecycle and markup as the DM view. Retry is offered only
-            when the send reached nobody; a partial fan-out is not retryable (it would duplicate). */}
-        {pending.map(p => (
-          <PendingBubble key={p.id} text={p.text} status={p.status} failure={p.failure} onRetry={() => onRetryPending(p.id)} />
-        ))}
         {/* Auto-scroll anchor */}
         <div ref={bottomRef} />
       </div>

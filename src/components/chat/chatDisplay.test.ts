@@ -6,7 +6,7 @@
 // React — needs a real browser and is covered by the two-browser test instead.
 
 import { describe, expect, it } from 'vitest'
-import { mediaBoxSize } from './chatDisplay'
+import { mediaBoxSize, mergeThreadItems, type ThreadItem } from './chatDisplay'
 
 const MAX_W = 320
 const MAX_H = 400
@@ -67,5 +67,74 @@ describe('mediaBoxSize', () => {
   it('is deterministic — the loading box and the ready box are identical', () => {
     // The entire point: the size cannot depend on anything that changes between states.
     expect(box(1600, 1200)).toEqual(box(1600, 1200))
+  })
+})
+
+// ── Thread ordering (images M4 follow-up) ─────────────────────────────────────
+//
+// Pending bubbles used to render in a separate pass AFTER the messages, which pinned them to the
+// bottom of the thread. Fine while a send is in flight — it IS the newest thing — but a FAILED entry
+// lingers, and every later message pushed it further out of place until it sat below messages sent
+// long after it. These assert the ordering rule that fixes it.
+
+const m = (id: string, timestamp: number) => ({ id, timestamp })
+const p = (id: string, attemptedAt: number) => ({ id, attemptedAt })
+// Generic rather than ReturnType<typeof mergeThreadItems>, which erases the type parameters down to
+// their constraints and loses `id`.
+function ids<M extends { id: string; timestamp: number }, P extends { id: string; attemptedAt: number }>(
+  items: ThreadItem<M, P>[],
+): string[] {
+  return items.map(i => (i.kind === 'message' ? i.message : i.pending).id)
+}
+
+describe('mergeThreadItems', () => {
+  it('interleaves a failed send back into its chronological position', () => {
+    // THE BUG: without this, 'failed' renders after 'later' no matter how much later 'later' is.
+    const merged = mergeThreadItems([m('early', 100), m('later', 300)], [p('failed', 200)])
+    expect(ids(merged)).toEqual(['early', 'failed', 'later'])
+  })
+
+  it('still puts an in-flight send at the bottom, with no special-casing', () => {
+    // A 'sending' entry is by construction the newest, so one ordering rule covers both statuses.
+    const merged = mergeThreadItems([m('a', 100), m('b', 200)], [p('sending-now', 999)])
+    expect(ids(merged)).toEqual(['a', 'b', 'sending-now'])
+  })
+
+  it('orders several pending entries among several messages', () => {
+    const merged = mergeThreadItems(
+      [m('m1', 100), m('m2', 300), m('m3', 500)],
+      [p('p1', 200), p('p2', 400)],
+    )
+    expect(ids(merged)).toEqual(['m1', 'p1', 'm2', 'p2', 'm3'])
+  })
+
+  it('puts a real message before a pending one at the SAME instant', () => {
+    // Deliberate, not incidental: a real row beats a provisional one for the same moment. Relies on
+    // Array.prototype.sort being stable and messages being concatenated first.
+    expect(ids(mergeThreadItems([m('real', 500)], [p('prov', 500)]))).toEqual(['real', 'prov'])
+  })
+
+  it('tags each item so the caller can render the right component', () => {
+    const merged = mergeThreadItems([m('a', 1)], [p('b', 2)])
+    expect(merged.map(i => i.kind)).toEqual(['message', 'pending'])
+  })
+
+  it('handles either side being empty', () => {
+    expect(ids(mergeThreadItems([m('a', 1), m('b', 2)], []))).toEqual(['a', 'b'])
+    expect(ids(mergeThreadItems([], [p('x', 1)]))).toEqual(['x'])
+    expect(mergeThreadItems([], [])).toEqual([])
+  })
+
+  it('does not mutate its inputs', () => {
+    // The messages array is memoised upstream and shared; sorting it in place would corrupt it.
+    const messages = [m('b', 200), m('a', 100)]
+    const pending = [p('x', 150)]
+    mergeThreadItems(messages, pending)
+    expect(messages.map(x => x.id)).toEqual(['b', 'a'])
+    expect(pending.map(x => x.id)).toEqual(['x'])
+  })
+
+  it('sorts messages that arrive out of order', () => {
+    expect(ids(mergeThreadItems([m('late', 300), m('early', 100)], []))).toEqual(['early', 'late'])
   })
 })

@@ -69,6 +69,36 @@ export function mediaBoxSize(width: number, height: number, maxW: number, maxH: 
   return { w: Math.max(1, w), h: Math.max(1, h) }
 }
 
+// One chronologically-ordered list of a thread's real messages and its provisional (sending/failed)
+// bubbles, so both views render a single pass instead of appending pending rows at the end.
+//
+// WHY THIS EXISTS: pending bubbles used to render in a separate map AFTER the messages, which pinned
+// them to the bottom of the thread forever. Correct for an in-flight send — it IS the newest thing —
+// but a FAILED entry lingers, and every later message pushed it further out of place until it sat
+// below messages sent long after it, still claiming to be the most recent thing in the thread.
+//
+// ONE RULE COVERS BOTH STATUSES, which is why there is no special-casing here: a 'sending' entry is
+// by construction the newest, so ordering by time puts it at the bottom anyway. Only the
+// after-the-fact case changes.
+//
+// TIES: messages sort before pending at the same instant. Array.prototype.sort is stable and
+// `messages` is concatenated first, so that falls out rather than needing a comparator branch — but
+// it is deliberate, not incidental: a real row beats a provisional one for the same moment.
+export type ThreadItem<M, P> =
+  | { kind: 'message'; at: number; message: M }
+  | { kind: 'pending'; at: number; pending: P }
+
+export function mergeThreadItems<M extends { timestamp: number }, P extends { attemptedAt: number }>(
+  messages: readonly M[],
+  pending: readonly P[],
+): ThreadItem<M, P>[] {
+  const items: ThreadItem<M, P>[] = [
+    ...messages.map(message => ({ kind: 'message' as const, at: message.timestamp, message })),
+    ...pending.map(p => ({ kind: 'pending' as const, at: p.attemptedAt, pending: p })),
+  ]
+  return items.sort((a, b) => a.at - b.at)
+}
+
 // Stable avatar gradient per peer — the design's 5 avatar-token pairs (teal/slate/plum/moss/amber),
 // assigned by hash of the contact key.
 const AVATARS = [

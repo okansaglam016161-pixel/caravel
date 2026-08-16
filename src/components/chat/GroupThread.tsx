@@ -11,6 +11,7 @@ import { useState } from 'react'
 import type { CaravelMessage, Group } from '../../messaging/types'
 import Avatar from './Avatar'
 import MessageBubble from './MessageBubble'
+import MediaPlaceholder from './MediaPlaceholder'
 import { MONO } from './chatDisplay'
 import { groupGlyph } from './groupGlyph'
 import { useScrollToBottom } from './useScrollToBottom'
@@ -172,6 +173,11 @@ export default function GroupThread({
                 {nameFor(m.senderPubkeyHex)} has left the chat
               </div>
             )
+          }
+          // An encrypted image (images M3) — placeholder for now, on BOTH sides, so a captionless
+          // group image is never a blank bubble. The resolver milestone replaces this branch.
+          if (m.media) {
+            return <MediaPlaceholder key={m.id} message={m} />
           }
           if (m.direction === 'sent') {
             return <MessageBubble key={m.id} text={m.plaintext} timestamp={m.timestamp} variant="sent" />

@@ -7,7 +7,7 @@
 //   B-M1: the ⋯ menu's exit action is LEAVE (was Delete) — two-step, confirmed inline in the menu.
 //   Leave is local-only here; the outbound "X has left the chat" notice is B-M2.
 
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import type { CaravelMessage, Group } from '../../messaging/types'
 import Avatar from './Avatar'
 import MessageBubble from './MessageBubble'
@@ -23,7 +23,7 @@ function groupTitle(g: Group): string {
 }
 
 export default function GroupThread({
-  group, messages, pending, nameFor, onSend, onRetryPending, onLeave, onReinvite, sendNote,
+  group, messages, pending, nameFor, onSend, onRetryPending, onLeave, onReinvite, sendNote, onPickImage,
 }: {
   group: Group
   messages: CaravelMessage[]        // this group's messages, oldest-first
@@ -35,8 +35,14 @@ export default function GroupThread({
   onReinvite: () => void   // opens the member picker (C-M2); does not send on its own
   // Honest partial-fan-out note for the composer footer, or null. Never claims delivery.
   sendNote: { reached: number; total: number } | null
+  // ⚠️ TEMPORARY TEST HARNESS (images M4) — DELETE IN M5, along with this prop. ChatApp owns the
+  // provider, so the picked file goes back up to it; see handlePickedImage there for why this exists
+  // and what a real attach flow still needs.
+  onPickImage: (file: File | undefined) => void
 }) {
   const [draft, setDraft] = useState('')
+  // ⚠️ TEMPORARY TEST HARNESS (images M4) — DELETE IN M5.
+  const imageInputRef = useRef<HTMLInputElement | null>(null)
   const [sending, setSending] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   // Two-step leave (B-M1): the ⋯ item swaps the menu panel to an inline confirm rather than opening
@@ -211,6 +217,21 @@ export default function GroupThread({
       {/* Composer — DM compose treatment, minus the $ payment toggle (deferred). */}
       <div style={{ padding: '16px 24px 20px', borderTop: '1px solid rgba(var(--border-rgb),0.1)', flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'flex-end', gap: 12 }}>
+          {/* ⚠️ TEMPORARY TEST HARNESS (images M4) — DELETE IN M5, with the onPickImage prop. */}
+          <input
+            ref={imageInputRef}
+            type="file"
+            accept="image/*"
+            style={{ display: 'none' }}
+            onChange={e => { onPickImage(e.target.files?.[0]); if (imageInputRef.current) imageInputRef.current.value = '' }}
+          />
+          <button
+            onClick={() => imageInputRef.current?.click()}
+            title="Attach image (temporary test harness)"
+            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 46, height: 46, flexShrink: 0, borderRadius: 12, border: '1px solid rgba(var(--border-rgb),0.16)', background: 'var(--surface-inset)', cursor: 'pointer', padding: 0 }}
+          >
+            <svg width={21} height={21} viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round"><rect x={3} y={3} width={18} height={18} rx={2} /><circle cx={8.5} cy={8.5} r={1.5} /><path d="M21 15l-5-5L5 21" /></svg>
+          </button>
           <div style={{ flex: 1, display: 'flex', alignItems: 'center', padding: '13px 17px', borderRadius: 13, background: 'var(--surface-raised)', border: '1px solid rgba(var(--border-rgb),0.14)' }}>
             <textarea
               className="cv-composer"

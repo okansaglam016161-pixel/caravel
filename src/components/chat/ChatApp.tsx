@@ -21,6 +21,8 @@ import { avatarFor, initialsFor, truncNpub, bubbleTime, compactTime, MONO } from
 import Avatar from './Avatar'
 import MessageBubble from './MessageBubble'
 import MediaMessageCard from './MediaMessageCard'
+// ⚠️ TEMPORARY (images M4 test harness) — the send UI lands in M5, which owns these calls properly.
+import { sendImageToGroup, sendImageToPeer } from '../../messaging/sendMedia'
 import { groupGlyph } from './groupGlyph'
 
 // ── Conversation derivation ─────────────────────────────────────────────────────
@@ -642,6 +644,53 @@ export default function ChatApp() {
     }
   }
 
+  // ─────────────────────────────────────────────────────────────────────────────
+  // ⚠️ TEMPORARY TEST HARNESS (images M4) — DELETE IN M5.
+  //
+  // The bare minimum needed to get a REAL photo into a thread so the resolver, the object-URL
+  // lifecycle and M2's EXIF orientation can be tested on actual hardware. Constructing a File in the
+  // console is impractical, and an iPhone photo is the only way to verify orientation.
+  //
+  // Everything a real attach flow needs is deliberately absent: no preview, no progress, no caption,
+  // no provisional bubble, no cancel, no drag-and-drop, no size feedback before the fact. M5 owns all
+  // of that and should REPLACE this outright rather than build on it. Failures land in the console,
+  // which is acceptable for a harness and is not acceptable for M5.
+  //
+  // Deliberately NOT seeding the sender's blob cache with plaintextBytes here (the documented M5
+  // contract): leaving it out means the sender's own image also exercises the full
+  // download-verify-decrypt path during testing, which is more coverage, not less.
+  const imageInputRef = useRef<HTMLInputElement | null>(null)
+  const [imageBusy, setImageBusy] = useState(false)
+
+  async function handlePickedImage(file: File | undefined) {
+    if (!file || imageBusy) return
+    setImageBusy(true)
+    setSendError(null)
+    const provider = createMessagingProvider()
+    try {
+      if (!provider) throw new Error('Wallet is locked — unlock to send')
+      if (selectedGroupId && selectedGroup) {
+        const { result } = await sendImageToGroup(provider, file, selectedGroup.id, selectedGroup.members)
+        recordSentMessage(result.message)
+      } else if (selectedConvo) {
+        const peer = selectedConvo.peerHex
+        const addr = outboundAddressFor(peer)
+        const { message } = await sendImageToPeer(provider, file, peer, undefined, addr)
+        recordSentMessage(message)
+        if (addr) markSent(peer)
+      }
+    } catch (e) {
+      console.warn('[Caravel] image send failed:', e)
+      setSendError(e instanceof Error ? e.message : String(e))
+    } finally {
+      provider?.disconnect()
+      setImageBusy(false)
+      // Reset the input so picking the SAME file twice still fires a change event.
+      if (imageInputRef.current) imageInputRef.current.value = ''
+    }
+  }
+  // ───────────────────────────────────────────────────────── end test harness ──
+
   // Retry a failed provisional send: drop the failed bubble and re-run the send (the draft still
   // holds the text, since a failed send never clears it).
   function retrySend(id: string) {
@@ -1237,6 +1286,8 @@ export default function ChatApp() {
               onLeave={() => handleLeaveGroup(selectedGroup)}
               /* Re-invite (C-M2): open the picker. Sending is the modal's confirm, not this click. */
               onReinvite={() => setReinviteFor(selectedGroup.id)}
+              /* ⚠️ TEMPORARY TEST HARNESS (images M4) — DELETE IN M5. */
+              onPickImage={file => void handlePickedImage(file)}
             />
           ) : selectedConvo === null ? (
             /* Chat pane at rest (design: sail + reassurance) */
@@ -1517,6 +1568,24 @@ export default function ChatApp() {
                     style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 46, height: 46, flexShrink: 0, borderRadius: 12, border: 'none', background: 'var(--teal-grad)', cursor: payBusy ? 'default' : 'pointer', boxShadow: '0 0 18px rgba(var(--teal-500-rgb),0.28)', padding: 0 }}
                   >
                     <svg width={22} height={22} viewBox="0 0 24 24" fill="none" stroke="var(--ink-on-accent)" strokeWidth={2.3} strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>
+                  </button>
+                  {/* ⚠️ TEMPORARY TEST HARNESS (images M4) — DELETE IN M5. See handlePickedImage. */}
+                  <input
+                    ref={imageInputRef}
+                    type="file"
+                    accept="image/*"
+                    style={{ display: 'none' }}
+                    onChange={e => void handlePickedImage(e.target.files?.[0])}
+                  />
+                  <button
+                    onClick={() => imageInputRef.current?.click()}
+                    disabled={imageBusy}
+                    title="Attach image (temporary test harness)"
+                    style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 46, height: 46, flexShrink: 0, borderRadius: 12, border: '1px solid rgba(var(--border-rgb),0.16)', background: 'var(--surface-inset)', cursor: imageBusy ? 'default' : 'pointer', opacity: imageBusy ? 0.5 : 1, padding: 0 }}
+                  >
+                    {imageBusy
+                      ? <span style={{ width: 20, height: 20, borderRadius: '50%', border: '2.5px solid rgba(var(--border-rgb),0.25)', borderTopColor: 'var(--text-muted-dim)', animation: 'cv-spin 0.8s linear infinite' }} />
+                      : <svg width={21} height={21} viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round"><rect x={3} y={3} width={18} height={18} rx={2} /><circle cx={8.5} cy={8.5} r={1.5} /><path d="M21 15l-5-5L5 21" /></svg>}
                   </button>
                   <div style={{ flex: 1, display: 'flex', alignItems: 'center', padding: '13px 17px', borderRadius: 13, background: 'var(--surface-raised)', border: '1px solid rgba(var(--border-rgb),0.14)' }}>
                     <textarea

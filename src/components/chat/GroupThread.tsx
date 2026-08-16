@@ -12,7 +12,7 @@ import type { CaravelMessage, Group } from '../../messaging/types'
 import Avatar from './Avatar'
 import MessageBubble from './MessageBubble'
 import MediaMessageCard from './MediaMessageCard'
-import { mergeThreadItems, MONO } from './chatDisplay'
+import { mergeThreadItems, threadContentKey, MONO } from './chatDisplay'
 import { groupGlyph } from './groupGlyph'
 import { useScrollToBottom } from './useScrollToBottom'
 import PendingBubble, { type PendingSend } from './PendingBubble'
@@ -55,11 +55,11 @@ export default function GroupThread({
   // A roster of just me (or a placeholder with no roster yet) has nobody to re-invite.
   const canReinvite = group.members.length > 1
   // Same auto-scroll as the DM thread, from the shared hook. Keyed on group.id because this
-  // component is reused (not remounted) when switching groups; the count covers send and receive
-  // alike, including system notices, which are new rows at the bottom like any other.
-  // Pending sends count toward the scroll trigger so the provisional bubble is scrolled into view
-  // the instant it appears, rather than when the fan-out finally resolves.
-  const bottomRef = useScrollToBottom(group.id, messages.length + pending.length)
+  // component is reused (not remounted) when switching groups; the content key covers send and
+  // receive alike, including system notices, which are new rows at the bottom like any other.
+  // Pending sends are in the key so the provisional bubble is scrolled into view the instant it
+  // appears — and so the swap to the real row re-fires, which a bare count never did.
+  const bottomRef = useScrollToBottom(group.id, threadContentKey(messages, pending))
 
   // Any dismissal drops the confirm step too, so re-opening the menu always starts at step one.
   function closeMenu() { setMenuOpen(false); setConfirmLeave(false) }

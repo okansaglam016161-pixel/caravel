@@ -17,7 +17,7 @@ import { sendConfidential, tariToMicrotari, MAX_FEE } from '../../crypto/confide
 import { resolveOnsNameToHex, toOnsName, type OnsResolveErrorKind } from '../../crypto/ons'
 import { ConnectionIndicator, RelayHealthPanel } from './ConnectionStatus'
 import { usePaymentResolution } from '../../hooks/usePaymentResolution'
-import { avatarFor, initialsFor, truncNpub, bubbleTime, compactTime, mergeThreadItems, MONO } from './chatDisplay'
+import { avatarFor, initialsFor, truncNpub, bubbleTime, compactTime, mergeThreadItems, threadContentKey, MONO } from './chatDisplay'
 import Avatar from './Avatar'
 import MessageBubble from './MessageBubble'
 import MediaMessageCard from './MediaMessageCard'
@@ -881,10 +881,11 @@ export default function ChatApp() {
   // with GroupThread so the two views can't drift — see useScrollToBottom.
   const selectedPeerHex = selectedConvo?.peerHex ?? null
   // Pending sends count too, so a provisional bubble is scrolled into view as soon as it appears
-  // instead of only when the real message lands. Same rule in GroupThread — one behaviour.
+  // instead of only when the real message lands — AND so the swap to the real row re-fires, which a
+  // bare total never did. Same rule in GroupThread — one behaviour. See threadContentKey.
   const bottomRef = useScrollToBottom(
     selectedPeerHex,
-    (selectedConvo?.messages.length ?? 0) + pendingSends.filter(p => p.peerHex === selectedPeerHex).length,
+    threadContentKey(selectedConvo?.messages ?? [], pendingSends.filter(p => p.peerHex === selectedPeerHex)),
   )
 
   // Reset the payment composer when switching conversations so a half-filled payment can't carry

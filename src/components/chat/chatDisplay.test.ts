@@ -6,7 +6,7 @@
 // React — needs a real browser and is covered by the two-browser test instead.
 
 import { describe, expect, it } from 'vitest'
-import { mediaBoxSize, mergeThreadItems, type ThreadItem } from './chatDisplay'
+import { mediaBoxSize, mergeThreadItems, threadContentKey, type ThreadItem } from './chatDisplay'
 
 const MAX_W = 320
 const MAX_H = 400
@@ -136,5 +136,47 @@ describe('mergeThreadItems', () => {
 
   it('sorts messages that arrive out of order', () => {
     expect(ids(mergeThreadItems([m('late', 300), m('early', 100)], []))).toEqual(['early', 'late'])
+  })
+})
+
+describe('threadContentKey — the auto-scroll trigger', () => {
+  const send = (status: string) => ({ status })
+
+  it('CHANGES across the swap of a provisional bubble for the real row', () => {
+    // THE BUG. `messages.length + pending.length` is identical either side of a successful send, so
+    // the scroll fired for the pending bubble and never again. Text survived it because both bubbles
+    // are the same height; an image swapped a filename bubble for a card up to 400px tall.
+    const whileSending = threadContentKey(new Array(5), [send('sending')])
+    const afterSuccess = threadContentKey(new Array(6), [])
+    expect(whileSending).not.toBe(afterSuccess)
+  })
+
+  it('changes when a provisional bubble first appears', () => {
+    expect(threadContentKey(new Array(5), [])).not.toBe(threadContentKey(new Array(5), [send('sending')]))
+  })
+
+  it('changes when a send FAILS, so the taller failed bubble is scrolled into view', () => {
+    // 'sending' → 'failed' moves neither count, but the bubble grows by a label, a hint and buttons.
+    expect(threadContentKey(new Array(5), [send('sending')]))
+      .not.toBe(threadContentKey(new Array(5), [send('failed')]))
+  })
+
+  it('changes when a message is received', () => {
+    expect(threadContentKey(new Array(5), [])).not.toBe(threadContentKey(new Array(6), []))
+  })
+
+  it('is STABLE when nothing changed, so the thread is not yanked on every render', () => {
+    expect(threadContentKey(new Array(5), [send('sending')])).toBe(threadContentKey(new Array(5), [send('sending')]))
+    expect(threadContentKey([], [])).toBe(threadContentKey([], []))
+  })
+
+  it('distinguishes several pending rows from one', () => {
+    expect(threadContentKey(new Array(2), [send('sending')]))
+      .not.toBe(threadContentKey(new Array(2), [send('sending'), send('sending')]))
+  })
+
+  it('does not collide across the counts that used to sum equal', () => {
+    // 5 messages + 1 pending vs 6 messages + 0 pending summed to the same number. They must not.
+    expect(threadContentKey(new Array(5), [send('failed')])).not.toBe(threadContentKey(new Array(6), []))
   })
 })

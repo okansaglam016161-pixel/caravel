@@ -99,6 +99,25 @@ export function mergeThreadItems<M extends { timestamp: number }, P extends { at
   return items.sort((a, b) => a.at - b.at)
 }
 
+// The auto-scroll trigger for a thread: changes whenever the rendered content could have grown.
+//
+// A BARE COUNT IS NOT ENOUGH, which is what broke image sends. `messages.length + pending.length` is
+// IDENTICAL either side of a successful send — the provisional row is removed in the same commit the
+// real one is added — so the scroll fired for the pending bubble and never again. Text got away with
+// it because a provisional text bubble and a real one are the same height. An image does not: a
+// ~50px filename bubble is replaced by a card up to 400px tall, and the thread was left that far
+// short of the bottom.
+//
+// Including each pending row's STATUS also catches 'sending' → 'failed', where the bubble grows by a
+// label, a hint and its buttons — so a failure that arrives after a long upload is scrolled into
+// view rather than appearing just below the fold.
+export function threadContentKey(
+  messages: readonly unknown[],
+  pending: readonly { status: string }[],
+): string {
+  return `${messages.length}:${pending.map(p => p.status).join(',')}`
+}
+
 // Stable avatar gradient per peer — the design's 5 avatar-token pairs (teal/slate/plum/moss/amber),
 // assigned by hash of the contact key.
 const AVATARS = [

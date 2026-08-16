@@ -16,6 +16,7 @@ import { mergeThreadItems, threadContentKey, MONO } from './chatDisplay'
 import { groupGlyph } from './groupGlyph'
 import { useScrollToBottom } from './useScrollToBottom'
 import PendingBubble, { type PendingSend } from './PendingBubble'
+import AttachPreview from './AttachPreview'
 
 // A group with no real name yet (a lazy placeholder learned from a message before its definition).
 function groupTitle(g: Group): string {
@@ -23,7 +24,7 @@ function groupTitle(g: Group): string {
 }
 
 export default function GroupThread({
-  group, messages, pending, nameFor, onSend, onRetryPending, onDismissPending, onLeave, onReinvite, sendNote, onPickImage,
+  group, messages, pending, nameFor, onSend, onRetryPending, onDismissPending, onLeave, onReinvite, sendNote, onSendImage, imageStageLabel,
 }: {
   group: Group
   messages: CaravelMessage[]        // this group's messages, oldest-first
@@ -37,13 +38,18 @@ export default function GroupThread({
   onReinvite: () => void   // opens the member picker (C-M2); does not send on its own
   // Honest partial-fan-out note for the composer footer, or null. Never claims delivery.
   sendNote: { reached: number; total: number } | null
-  // ⚠️ TEMPORARY TEST HARNESS (images M4) — DELETE IN M5, along with this prop. ChatApp owns the
-  // provider, so the picked file goes back up to it; see handlePickedImage there for why this exists
-  // and what a real attach flow still needs.
-  onPickImage: (file: File | undefined) => void
+  // ChatApp owns the messaging provider, so the CONFIRMED file (post-preview) goes back up to it to
+  // be sent. Resolves when the send settles, so this composer can clear its preview.
+  onSendImage: (file: File, caption: string | undefined) => Promise<void>
+  // Which pipeline stage a running image send is in ("Preparing…" etc), or null. Owned by ChatApp,
+  // which runs the send, so both composers show the identical progress wording.
+  imageStageLabel: string | null
 }) {
   const [draft, setDraft] = useState('')
-  // ⚠️ TEMPORARY TEST HARNESS (images M4) — DELETE IN M5.
+  // ATTACH MODE (images M5) — this composer's fourth state, alongside draft/sending/menu. The picked
+  // image waits here until Send; the textarea doubles as its caption field.
+  const [attachment, setAttachment] = useState<File | null>(null)
+  const [imageBusy, setImageBusy] = useState(false)
   const imageInputRef = useRef<HTMLInputElement | null>(null)
   const [sending, setSending] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
@@ -235,19 +241,36 @@ export default function GroupThread({
 
       {/* Composer — DM compose treatment, minus the $ payment toggle (deferred). */}
       <div style={{ padding: '16px 24px 20px', borderTop: '1px solid rgba(var(--border-rgb),0.1)', flexShrink: 0 }}>
+        {attachment && (
+          <AttachPreview
+            file={attachment}
+            busy={imageBusy}
+            stageLabel={imageStageLabel}
+            onSend={() => {
+              const file = attachment
+              const caption = draft.trim()
+              setImageBusy(true)
+              void onSendImage(file, caption || undefined)
+                .then(() => { setAttachment(null); setDraft('') })
+                .finally(() => setImageBusy(false))
+            }}
+            onCancel={() => setAttachment(null)}
+          />
+        )}
         <div style={{ display: 'flex', alignItems: 'flex-end', gap: 12 }}>
-          {/* ⚠️ TEMPORARY TEST HARNESS (images M4) — DELETE IN M5, with the onPickImage prop. */}
+          {/* accept="image/*" and NEVER image/heic — see the DM composer for why. */}
           <input
             ref={imageInputRef}
             type="file"
             accept="image/*"
             style={{ display: 'none' }}
-            onChange={e => { onPickImage(e.target.files?.[0]); if (imageInputRef.current) imageInputRef.current.value = '' }}
+            onChange={e => { const picked = e.target.files?.[0]; if (picked) setAttachment(picked); e.target.value = '' }}
           />
           <button
             onClick={() => imageInputRef.current?.click()}
-            title="Attach image (temporary test harness)"
-            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 46, height: 46, flexShrink: 0, borderRadius: 12, border: '1px solid rgba(var(--border-rgb),0.16)', background: 'var(--surface-inset)', cursor: 'pointer', padding: 0 }}
+            disabled={imageBusy}
+            title="Attach an image"
+            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 46, height: 46, flexShrink: 0, borderRadius: 12, border: '1px solid rgba(var(--border-rgb),0.16)', background: 'var(--surface-inset)', cursor: imageBusy ? 'default' : 'pointer', opacity: imageBusy ? 0.5 : 1, padding: 0 }}
           >
             <svg width={21} height={21} viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round"><rect x={3} y={3} width={18} height={18} rx={2} /><circle cx={8.5} cy={8.5} r={1.5} /><path d="M21 15l-5-5L5 21" /></svg>
           </button>
@@ -257,7 +280,7 @@ export default function GroupThread({
               value={draft}
               onChange={e => setDraft(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send() } }}
-              placeholder="Message the group…"
+              placeholder={attachment ? "Add a caption…" : "Message the group…"}
               rows={1}
               maxLength={2000}
               disabled={sending}

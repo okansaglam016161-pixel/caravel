@@ -9,10 +9,11 @@
 // and corner radius — unlike a payment, an image has no per-direction CONTENT difference, so there
 // are no separate Sent/Received components.
 
-import type { ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import type { CaravelMessage, MediaRef } from '../../messaging/types'
 import { useMediaResolution } from '../../hooks/useMediaResolution'
-import { bubbleTime, mediaBoxSize, MONO } from './chatDisplay'
+import { bubbleTime, mediaBoxSize, mediaFilename, MONO } from './chatDisplay'
+import ImageLightbox from './ImageLightbox'
 
 // Stand-in for a row with no media, so the hook can be called unconditionally (rules of hooks) on a
 // path that then renders nothing. MODULE-LEVEL and frozen on purpose: an object literal built inside
@@ -66,6 +67,9 @@ export default function MediaMessageCard({ message }: { message: CaravelMessage 
   // Defensive: the dispatch sites only render this when `media` is set, but the non-null assertion
   // would be the one thing standing between a malformed row and a crashed thread.
   const { state, retry } = useMediaResolution(media ?? NO_MEDIA)
+  // Lightbox open state lives HERE, not in ChatApp — the overlay borrows this card's object URL, so
+  // it must unmount with this card. See ImageLightbox for the full reasoning.
+  const [expanded, setExpanded] = useState(false)
   if (!media) return null
 
   const sent = message.direction === 'sent'
@@ -78,7 +82,8 @@ export default function MediaMessageCard({ message }: { message: CaravelMessage 
       <img
         src={state.url}
         alt={caption || 'Image attachment'}
-        style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+        onClick={() => setExpanded(true)}
+        style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', cursor: 'zoom-in' }}
       />
     )
   } else if (state.kind === 'loading' || state.kind === 'retrying') {
@@ -112,6 +117,15 @@ export default function MediaMessageCard({ message }: { message: CaravelMessage 
   return (
     <div style={{ alignSelf: sent ? 'flex-end' : 'flex-start', maxWidth: '72%' }}>
       <Frame w={w} h={h} sent={sent}>{body}</Frame>
+      {/* Only reachable once the bytes are decrypted, so `state.url` is always a live borrow here. */}
+      {expanded && state.kind === 'ready' && (
+        <ImageLightbox
+          url={state.url}
+          filename={mediaFilename(media.mime, message.timestamp)}
+          caption={caption}
+          onClose={() => setExpanded(false)}
+        />
+      )}
       {caption && (
         <div style={{ marginTop: 7, fontSize: 14, color: 'var(--text-body)', lineHeight: 1.45, whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxWidth: w }}>
           {caption}

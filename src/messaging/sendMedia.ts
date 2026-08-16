@@ -54,7 +54,8 @@ export class MediaSendFailure extends Error {
 
 // Everything up to (but not including) the send: downscale + strip metadata → encrypt → upload.
 // Shared by the DM and group paths so a group upload can never accidentally happen per-member.
-async function prepare(file: Blob): Promise<{ media: MediaRef; plaintextBytes: ArrayBuffer }> {
+async function prepare(file: Blob, onStage?: (stage: MediaSendStage) => void): Promise<{ media: MediaRef; plaintextBytes: ArrayBuffer }> {
+  onStage?.('process')
   let processed
   try {
     processed = await processImage(file)
@@ -69,7 +70,10 @@ async function prepare(file: Blob): Promise<{ media: MediaRef; plaintextBytes: A
     })
   }
 
-  // Encrypt BEFORE upload, always: the host must never see anything but ciphertext.
+  // Encrypt BEFORE upload, always: the host must never see anything but ciphertext. Encryption is
+  // folded into the 'upload' stage rather than given its own: AES-GCM over a few hundred KB is
+  // milliseconds, so a label for it would flicker past unread.
+  onStage?.('upload')
   const enc = await encryptMedia(processed.bytes)
 
   const upload = await uploadEncryptedBlob(enc.ciphertext, enc.x)
@@ -108,8 +112,10 @@ export async function sendImageToPeer(
   peerHex: string,
   caption?: string,
   tariAddress?: string,
+  onStage?: (stage: MediaSendStage) => void,
 ): Promise<{ message: CaravelMessage; plaintextBytes: ArrayBuffer }> {
-  const { media, plaintextBytes } = await prepare(file)
+  const { media, plaintextBytes } = await prepare(file, onStage)
+  onStage?.('send')
   try {
     const message = await provider.sendMessage(peerHex, caption?.trim() || EMPTY_CAPTION, undefined, tariAddress, media)
     return { message, plaintextBytes }
@@ -127,14 +133,40 @@ export async function sendImageToGroup(
   groupId: string,
   memberPubkeysHex: string[],
   caption?: string,
+  onStage?: (stage: MediaSendStage) => void,
 ): Promise<{ result: GroupSendResult; plaintextBytes: ArrayBuffer }> {
-  const { media, plaintextBytes } = await prepare(file)
+  const { media, plaintextBytes } = await prepare(file, onStage)
+  onStage?.('send')
   try {
     const result = await provider.sendGroupMessage(groupId, memberPubkeysHex, caption?.trim() || EMPTY_CAPTION, media)
     return { result, plaintextBytes }
   } catch (e) {
     throw new MediaSendFailure({ stage: 'send', detail: e instanceof Error ? e.message : String(e) })
   }
+}
+
+// ── Progress ──────────────────────────────────────────────────────────────────
+
+// Which stage the send is in. THE SAME THREE NAMES MediaSendError uses, deliberately: one vocabulary
+// describes where a send has got to and, if it breaks, where it broke.
+export type MediaSendStage = 'process' | 'upload' | 'send'
+
+// What the provisional bubble says while a send is running.
+//
+// STAGES, NOT A PERCENTAGE — and that is a limitation of the platform, not a shortcut. `fetch` cannot
+// report upload progress at all; only XMLHttpRequest.upload can, so a real percentage would mean
+// rewriting the upload client that has been live-tested against three real hosts (CORS preflight
+// included) for a cosmetic gain. And a downscaled 1600px WebP is 200-500KB, which on any ordinary
+// connection fills a progress bar faster than the eye resolves — a bar that is always instantly full
+// tells the user less than a word saying what is actually happening.
+const STAGE_LABEL: Record<MediaSendStage, string> = {
+  process: 'Preparing…',
+  upload: 'Uploading…',
+  send: 'Sending…',
+}
+
+export function describeMediaStage(stage: MediaSendStage): string {
+  return STAGE_LABEL[stage]
 }
 
 // ── Turning a failure into something a user can act on ────────────────────────

@@ -21,8 +21,9 @@ import { avatarFor, initialsFor, truncNpub, bubbleTime, compactTime, mergeThread
 import Avatar from './Avatar'
 import MessageBubble from './MessageBubble'
 import MediaMessageCard from './MediaMessageCard'
-// ⚠️ TEMPORARY (images M4 test harness) — the send UI lands in M5, which owns these calls properly.
-import { describeMediaFailure, sendImageToGroup, sendImageToPeer } from '../../messaging/sendMedia'
+import { describeMediaFailure, describeMediaStage, sendImageToGroup, sendImageToPeer, type MediaSendStage } from '../../messaging/sendMedia'
+import { putBlob } from '../../messaging/blobCache'
+import AttachPreview from './AttachPreview'
 import { groupGlyph } from './groupGlyph'
 
 // ── Conversation derivation ─────────────────────────────────────────────────────
@@ -251,10 +252,10 @@ export default function ChatApp() {
   // Per-message send overlay (design lifecycle): provisional bubbles rendered while a plain-text
   // send is in flight, then removed once the real persisted message appears (or marked 'failed').
   // ChatApp-local only — never persisted, never on the wire; the send path itself is unchanged.
-  const [pendingSends, setPendingSends] = useState<(PendingSend & { peerHex: string; file?: File })[]>([])
+  const [pendingSends, setPendingSends] = useState<(PendingSend & { peerHex: string; file?: File; caption?: string })[]>([])
   // Group equivalent, keyed on groupId (the parallel to pendingSends' peerHex). Same lifecycle:
   // provisional bubble before the fan-out resolves, removed on success, marked failed on throw.
-  const [pendingGroupSends, setPendingGroupSends] = useState<(PendingSend & { groupId: string; file?: File })[]>([])
+  const [pendingGroupSends, setPendingGroupSends] = useState<(PendingSend & { groupId: string; file?: File; caption?: string })[]>([])
   // Ephemeral, honest partial-delivery note for the group composer footer: a fan-out can reach some
   // members and not others, and `membersReached` is RELAY ACCEPTANCE, not receipt — so this says
   // "reached", never "delivered". React state only; nothing is persisted per message (a durable
@@ -262,6 +263,11 @@ export default function ChatApp() {
   const [groupSendNote, setGroupSendNote] = useState<{ groupId: string; reached: number; total: number } | null>(null)
 
   // Payment (TARI) composer state.
+  // ATTACH MODE (images M5): the picked-but-not-yet-sent image. A FIFTH exclusive composer state
+  // alongside normal / paymentMode / confirming — attaching while composing a payment would have the
+  // two fighting over the same textarea, which in attach mode is the caption field.
+  const [attachment, setAttachment] = useState<File | null>(null)
+  const imageInputRef = useRef<HTMLInputElement | null>(null)
   const [paymentMode, setPaymentMode] = useState(false)
   const [payAmount, setPayAmount] = useState('')       // tTARI, as typed
   const [payAddress, setPayAddress] = useState('')     // recipient otl_esm_ (manual — see caveat)
@@ -642,84 +648,104 @@ export default function ChatApp() {
     }
   }
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  // ⚠️ TEMPORARY TEST HARNESS (images M4) — DELETE IN M5.
+  // ── Image sending (images M5) ────────────────────────────────────────────────
   //
-  // The bare minimum needed to get a REAL photo into a thread so the resolver, the object-URL
-  // lifecycle and M2's EXIF orientation can be tested on actual hardware. Constructing a File in the
-  // console is impractical, and an iPhone photo is the only way to verify orientation.
+  // ChatApp owns the provider, so it owns the send for BOTH threads: the DM composer calls this
+  // directly, and GroupThread hands its picked file up via onSendImage.
   //
-  // Everything a real attach flow needs is deliberately absent: no preview, no progress, no caption,
-  // no provisional bubble, no cancel, no drag-and-drop, no size feedback before the fact. M5 owns all
-  // of that and should REPLACE this outright rather than build on it. Failures land in the console,
-  // which is acceptable for a harness and is not acceptable for M5.
-  //
-  // Deliberately NOT seeding the sender's blob cache with plaintextBytes here (the documented M5
-  // contract): leaving it out means the sender's own image also exercises the full
-  // download-verify-decrypt path during testing, which is more coverage, not less.
-  const imageInputRef = useRef<HTMLInputElement | null>(null)
+  // An image send gets the SAME provisional bubble a text send has always had — 'sending' (labelled
+  // with the pipeline stage), then either the real row or a failed bubble carrying stage-specific
+  // copy and, only where it could work, a Retry. The File rides on the pending entry so Retry can
+  // re-run it. ChatApp-local state only: never persisted, never on the wire.
   const [imageBusy, setImageBusy] = useState(false)
+  // The current pipeline stage, shown on the preview panel while a send runs. Null when idle.
+  const [imageStage, setImageStage] = useState<string | null>(null)
 
-  // An image send gets the SAME provisional bubble a text send has always had — 'sending', then
-  // either the real row or a failed bubble carrying stage-specific copy and (only where it could
-  // work) a Retry. This is the error surface that actually renders; the first cut of this harness
-  // relied on a `sendError` state that had been dead since the thread redesign, so a failed image
-  // produced nothing at all on screen.
-  //
-  // The File rides on the pending entry so Retry can re-run the send. ChatApp-local state only:
-  // never persisted, never on the wire.
-  async function handlePickedImage(file: File | undefined) {
-    if (!file || imageBusy) return
+  async function sendImage(file: File, caption: string | undefined, target: { groupId: string; members: string[] } | { peerHex: string }) {
+    if (imageBusy) return
     setImageBusy(true)
     const tempId = `img-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
-    const inGroup = !!(selectedGroupId && selectedGroup)
-    const groupId = selectedGroup?.id
-    const peerHex = selectedConvo?.peerHex
-    if (!inGroup && !peerHex) { setImageBusy(false); return }
+    const inGroup = 'groupId' in target
+    // Stage labels ride on the provisional bubble's text so the user can see WHERE a slow send is —
+    // preparing a large photo, uploading, or waiting on relays are very different waits.
+    const setStage = (stage: MediaSendStage) => {
+      const words = describeMediaStage(stage)
+      setImageStage(words)
+      const label = `${file.name} · ${words}`
+      if (inGroup) setPendingGroupSends(p => p.map(x => x.id === tempId ? { ...x, text: label } : x))
+      else setPendingSends(p => p.map(x => x.id === tempId ? { ...x, text: label } : x))
+    }
 
-    // Provisional bubble immediately, in whichever thread we are in.
-    if (inGroup) setPendingGroupSends(p => [...p, { id: tempId, groupId: groupId!, text: file.name, status: 'sending', attemptedAt: Date.now(), file }])
-    else setPendingSends(p => [...p, { id: tempId, peerHex: peerHex!, text: file.name, status: 'sending', attemptedAt: Date.now(), file }])
+    if (inGroup) setPendingGroupSends(p => [...p, { id: tempId, groupId: target.groupId, text: file.name, status: 'sending', attemptedAt: Date.now(), file, caption }])
+    else setPendingSends(p => [...p, { id: tempId, peerHex: target.peerHex, text: file.name, status: 'sending', attemptedAt: Date.now(), file, caption }])
 
     const provider = createMessagingProvider()
     try {
       if (!provider) throw new Error('Wallet is locked — unlock to send')
       if (inGroup) {
-        const { result } = await sendImageToGroup(provider, file, groupId!, selectedGroup!.members)
+        const { result, plaintextBytes } = await sendImageToGroup(provider, file, target.groupId, target.members, caption, setStage)
         recordSentMessage(result.message)
+        seedOwnImage(result.message, plaintextBytes)
         setPendingGroupSends(p => p.filter(x => x.id !== tempId))
       } else {
-        const addr = outboundAddressFor(peerHex!)
-        const { message } = await sendImageToPeer(provider, file, peerHex!, undefined, addr)
+        const addr = outboundAddressFor(target.peerHex)
+        const { message, plaintextBytes } = await sendImageToPeer(provider, file, target.peerHex, caption, addr, setStage)
         recordSentMessage(message)
-        if (addr) markSent(peerHex!)
+        seedOwnImage(message, plaintextBytes)
+        if (addr) markSent(target.peerHex)
         setPendingSends(p => p.filter(x => x.id !== tempId))
       }
     } catch (e) {
       // Logged for diagnosis AND surfaced on the bubble — the console alone is not a user interface.
       console.warn('[Caravel] image send failed:', e)
       const failure = describeMediaFailure(e, file)
-      if (inGroup) setPendingGroupSends(p => p.map(x => x.id === tempId ? { ...x, status: 'failed', failure } : x))
-      else setPendingSends(p => p.map(x => x.id === tempId ? { ...x, status: 'failed', failure } : x))
+      const restore = (x: { id: string }) => x.id === tempId
+      if (inGroup) setPendingGroupSends(p => p.map(x => restore(x) ? { ...x, text: file.name, status: 'failed', failure } : x))
+      else setPendingSends(p => p.map(x => restore(x) ? { ...x, text: file.name, status: 'failed', failure } : x))
     } finally {
       provider?.disconnect()
       setImageBusy(false)
-      // Reset the input so picking the SAME file twice still fires a change event.
-      if (imageInputRef.current) imageInputRef.current.value = ''
+      setImageStage(null)
     }
+  }
+
+  // SENDER-SEED (the M4 deferral, contract documented at both ends). We already hold the decrypted
+  // bytes we just encrypted and uploaded, so writing them straight into the blob cache means our own
+  // image renders instantly from cache instead of round-tripping our own upload back from the host.
+  //
+  // Fire-and-forget and idempotent: the resolver reads the same cache first, and a `put` on the same
+  // key at worst overwrites identical bytes.
+  function seedOwnImage(message: CaravelMessage, plaintextBytes: ArrayBuffer) {
+    if (!nostrPubkeyHex || !message.media) return
+    void putBlob(nostrPubkeyHex, message.media.x, plaintextBytes, message.media.mime)
+  }
+
+  // Picked from the DM composer. GroupThread has its own picker and routes through onSendImage.
+  async function sendImageToSelectedPeer(file: File, caption: string | undefined) {
+    if (!selectedConvo) return
+    await sendImage(file, caption, { peerHex: selectedConvo.peerHex })
   }
 
   // Retry a failed image send by re-running it with the File kept on the pending entry. Only
   // reachable where describeMediaFailure marked the failure retryable — an undecodable file or an
   // over-cap one shows no Retry at all, because a second attempt gives the identical result.
   function retryImage(id: string) {
-    const entry = [...pendingSends, ...pendingGroupSends].find(x => x.id === id)
+    const dm = pendingSends.find(x => x.id === id)
+    const grp = pendingGroupSends.find(x => x.id === id)
+    const entry = dm ?? grp
     if (!entry?.file) return
+    // Re-target from the entry itself rather than from the currently-open thread: a retry must go
+    // back where it was attempted even if the user has since switched conversations.
+    const group = grp ? groups.find(g => g.id === grp.groupId) : undefined
+    if (grp && !group) return
     setPendingSends(p => p.filter(x => x.id !== id))
     setPendingGroupSends(p => p.filter(x => x.id !== id))
-    void handlePickedImage(entry.file)
+    // The caption rides on the entry too — a retry that silently dropped it would send a different
+    // message from the one the user composed.
+    void sendImage(entry.file, entry.caption, grp
+      ? { groupId: group!.id, members: group!.members }
+      : { peerHex: dm!.peerHex })
   }
-  // ───────────────────────────────────────────────────────── end test harness ──
 
   // Clear a failed provisional bubble. The ONLY deliberate way out, and the only one at all for a
   // terminal failure such as an undecodable image, which shows no Retry.
@@ -1332,8 +1358,10 @@ export default function ChatApp() {
               onLeave={() => handleLeaveGroup(selectedGroup)}
               /* Re-invite (C-M2): open the picker. Sending is the modal's confirm, not this click. */
               onReinvite={() => setReinviteFor(selectedGroup.id)}
-              /* ⚠️ TEMPORARY TEST HARNESS (images M4) — DELETE IN M5. */
-              onPickImage={file => void handlePickedImage(file)}
+              /* GroupThread owns its own composer + preview; ChatApp owns the provider, so the
+                 confirmed file comes back up here to be sent. */
+              onSendImage={(file, caption) => sendImage(file, caption, { groupId: selectedGroup.id, members: selectedGroup.members })}
+              imageStageLabel={imageStage}
             />
           ) : selectedConvo === null ? (
             /* Chat pane at rest (design: sail + reassurance) */
@@ -1614,6 +1642,24 @@ export default function ChatApp() {
                 </div>
               )}
 
+              {/* Picked image, awaiting Send (images M5) — same slot the payment card uses. */}
+              {attachment && !paymentMode && !confirming && (
+                <AttachPreview
+                  file={attachment}
+                  busy={imageBusy}
+                  stageLabel={imageStage}
+                  onSend={() => {
+                    const file = attachment
+                    const caption = draft.trim()
+                    void sendImageToSelectedPeer(file, caption || undefined).then(() => {
+                      setAttachment(null)
+                      setDraft('')
+                    })
+                  }}
+                  onCancel={() => setAttachment(null)}
+                />
+              )}
+
               {/* Text composer row (design) — TARI toggle + input + send. Emoji button removed. */}
               {!paymentMode && !confirming && (
                 <div style={{ display: 'flex', alignItems: 'flex-end', gap: 12 }}>
@@ -1625,23 +1671,28 @@ export default function ChatApp() {
                   >
                     <svg width={22} height={22} viewBox="0 0 24 24" fill="none" stroke="var(--ink-on-accent)" strokeWidth={2.3} strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>
                   </button>
-                  {/* ⚠️ TEMPORARY TEST HARNESS (images M4) — DELETE IN M5. See handlePickedImage. */}
+                  {/* accept="image/*" and NEVER image/heic: iOS converts a picked HEIC to JPEG for
+                      us, but Safari 17+ inverts that if heic is listed explicitly — it then converts
+                      JPEGs TO heic, which no desktop browser can decode. */}
                   <input
                     ref={imageInputRef}
                     type="file"
                     accept="image/*"
                     style={{ display: 'none' }}
-                    onChange={e => void handlePickedImage(e.target.files?.[0])}
+                    onChange={e => {
+                      const picked = e.target.files?.[0]
+                      if (picked) setAttachment(picked)
+                      // Reset so picking the SAME file again still fires a change event.
+                      e.target.value = ''
+                    }}
                   />
                   <button
                     onClick={() => imageInputRef.current?.click()}
                     disabled={imageBusy}
-                    title="Attach image (temporary test harness)"
+                    title="Attach an image"
                     style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 46, height: 46, flexShrink: 0, borderRadius: 12, border: '1px solid rgba(var(--border-rgb),0.16)', background: 'var(--surface-inset)', cursor: imageBusy ? 'default' : 'pointer', opacity: imageBusy ? 0.5 : 1, padding: 0 }}
                   >
-                    {imageBusy
-                      ? <span style={{ width: 20, height: 20, borderRadius: '50%', border: '2.5px solid rgba(var(--border-rgb),0.25)', borderTopColor: 'var(--text-muted-dim)', animation: 'cv-spin 0.8s linear infinite' }} />
-                      : <svg width={21} height={21} viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round"><rect x={3} y={3} width={18} height={18} rx={2} /><circle cx={8.5} cy={8.5} r={1.5} /><path d="M21 15l-5-5L5 21" /></svg>}
+                    <svg width={21} height={21} viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round"><rect x={3} y={3} width={18} height={18} rx={2} /><circle cx={8.5} cy={8.5} r={1.5} /><path d="M21 15l-5-5L5 21" /></svg>
                   </button>
                   <div style={{ flex: 1, display: 'flex', alignItems: 'center', padding: '13px 17px', borderRadius: 13, background: 'var(--surface-raised)', border: '1px solid rgba(var(--border-rgb),0.14)' }}>
                     <textarea
@@ -1650,7 +1701,7 @@ export default function ChatApp() {
                       value={draft}
                       onChange={e => setDraft(e.target.value)}
                       onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onComposerSend() } }}
-                      placeholder="Write an encrypted message…"
+                      placeholder={attachment ? "Add a caption…" : "Write an encrypted message…"}
                       rows={1}
                       maxLength={MAX_MESSAGE_LEN}
                       disabled={inputsDisabled}

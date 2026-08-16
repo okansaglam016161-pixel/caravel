@@ -6,7 +6,7 @@
 // React — needs a real browser and is covered by the two-browser test instead.
 
 import { describe, expect, it } from 'vitest'
-import { mediaBoxSize, mergeThreadItems, threadContentKey, type ThreadItem } from './chatDisplay'
+import { mediaBoxSize, mediaFilename, mergeThreadItems, threadContentKey, type ThreadItem } from './chatDisplay'
 
 const MAX_W = 320
 const MAX_H = 400
@@ -178,5 +178,50 @@ describe('threadContentKey — the auto-scroll trigger', () => {
   it('does not collide across the counts that used to sum equal', () => {
     // 5 messages + 1 pending vs 6 messages + 0 pending summed to the same number. They must not.
     expect(threadContentKey(new Array(5), [send('failed')])).not.toBe(threadContentKey(new Array(6), []))
+  })
+})
+
+describe('mediaFilename', () => {
+  // 2026-08-16 21:03:07 local
+  const TS = new Date(2026, 7, 16, 21, 3, 7).getTime()
+
+  it('names a file from the message timestamp and the MIME type', () => {
+    expect(mediaFilename('image/webp', TS)).toBe('caravel-2026-08-16-210307.webp')
+  })
+
+  it('maps each supported MIME to its conventional extension', () => {
+    expect(mediaFilename('image/jpeg', TS)).toMatch(/\.jpg$/)   // .jpg, not .jpeg
+    expect(mediaFilename('image/png', TS)).toMatch(/\.png$/)
+    expect(mediaFilename('image/gif', TS)).toMatch(/\.gif$/)
+  })
+
+  it('is case-insensitive about the MIME type', () => {
+    expect(mediaFilename('IMAGE/WEBP', TS)).toMatch(/\.webp$/)
+  })
+
+  it('falls back to a neutral extension for an unknown or missing type', () => {
+    // A ref can carry application/octet-stream (extractMedia's default) — better a generic name than
+    // a wrong one claiming to be a webp.
+    expect(mediaFilename('application/octet-stream', TS)).toMatch(/\.img$/)
+    expect(mediaFilename('', TS)).toMatch(/\.img$/)
+  })
+
+  it('is STABLE for the same message — saving twice offers the same name', () => {
+    // Derived from the message timestamp, not from Date.now(), which is the whole point.
+    expect(mediaFilename('image/webp', TS)).toBe(mediaFilename('image/webp', TS))
+  })
+
+  it('zero-pads so names sort chronologically in a file listing', () => {
+    const early = new Date(2026, 0, 5, 4, 5, 6).getTime()
+    expect(mediaFilename('image/webp', early)).toBe('caravel-2026-01-05-040506.webp')
+  })
+
+  it('contains nothing hostile to a filesystem', () => {
+    // No slashes, colons or spaces — a colon alone would break the save on macOS.
+    expect(mediaFilename('image/webp', TS)).toMatch(/^[A-Za-z0-9._-]+$/)
+  })
+
+  it('distinguishes two images sent a second apart', () => {
+    expect(mediaFilename('image/webp', TS)).not.toBe(mediaFilename('image/webp', TS + 1000))
   })
 })

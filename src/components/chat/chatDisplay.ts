@@ -118,6 +118,31 @@ export function threadContentKey(
   return `${messages.length}:${pending.map(p => p.status).join(',')}`
 }
 
+// Filename offered when saving an image out of the lightbox (images M5).
+//
+// The decrypted bytes have no name of their own — the original filename is deliberately never sent
+// (it would leak "IMG_4821.HEIC" or worse to the recipient, and the whole pipeline re-encodes to a
+// new format anyway). So one is composed from the message's own timestamp, which is stable: saving
+// the same image twice offers the same name rather than a new one each second.
+//
+// Extension comes from the POST-processing MIME, since that is what the bytes actually are.
+const EXTENSION_BY_MIME: Record<string, string> = {
+  'image/webp': 'webp',
+  'image/jpeg': 'jpg',
+  'image/png': 'png',
+  'image/gif': 'gif',
+}
+
+export function mediaFilename(mime: string, timestamp: number): string {
+  const ext = EXTENSION_BY_MIME[(mime || '').toLowerCase()] ?? 'img'
+  const d = new Date(timestamp)
+  // Local time, not ISO/UTC: the name should match when the user remembers receiving it. Padded so
+  // names sort correctly in a file listing.
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const stamp = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`
+  return `caravel-${stamp}.${ext}`
+}
+
 // Stable avatar gradient per peer — the design's 5 avatar-token pairs (teal/slate/plum/moss/amber),
 // assigned by hash of the contact key.
 const AVATARS = [

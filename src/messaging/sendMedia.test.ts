@@ -10,10 +10,12 @@ import { describe, expect, it } from 'vitest'
 import {
   MediaSendFailure,
   describeMediaFailure,
+  describeMediaStage,
   isHeicFile,
   isRetryableMediaFailure,
   mediaBlobKeys,
   type MediaSendError,
+  type MediaSendStage,
 } from './sendMedia'
 import type { CaravelMessage, MediaRef } from './types'
 
@@ -205,5 +207,22 @@ describe('describeMediaFailure', () => {
       expect(describeMediaFailure(fail(info)).label.length).toBeGreaterThan(0)
     }
     expect(describeMediaFailure('not even an error').label.length).toBeGreaterThan(0)
+  })
+})
+
+describe('describeMediaStage', () => {
+  it('names each pipeline stage in words a user can act on', () => {
+    expect(describeMediaStage('process')).toBe('Preparing…')
+    expect(describeMediaStage('upload')).toBe('Uploading…')
+    expect(describeMediaStage('send')).toBe('Sending…')
+  })
+
+  it('covers every stage the failure type uses — one vocabulary for both', () => {
+    // MediaSendError's stages and MediaSendStage are deliberately the same three names, so progress
+    // and failure describe the pipeline identically. A stage without a label would be a gap.
+    const stages: MediaSendStage[] = ['process', 'upload', 'send']
+    for (const stage of stages) {
+      expect(describeMediaStage(stage).length).toBeGreaterThan(0)
+    }
   })
 })

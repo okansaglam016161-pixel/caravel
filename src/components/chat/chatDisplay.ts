@@ -40,6 +40,35 @@ export function bubbleTime(ts: number): string {
   return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
+// The on-screen box for an image attachment (images M4): fit (width × height) inside maxW × maxH,
+// preserving aspect ratio.
+//
+// This is the spine of the media card, not a cosmetic detail. The SAME box is rendered in every
+// state — loading, retrying, ready, failed — using dimensions recorded at send time, so the decoded
+// image drops into space already reserved. Without it, a thread of loading images would jerk the
+// scroll position every time one resolved.
+//
+// Falls back to 4:3 for a ref carrying no dimensions: extractMedia deliberately lets those through,
+// since a missing width does not stop an image being fetched and decrypted.
+export function mediaBoxSize(width: number, height: number, maxW: number, maxH: number): { w: number; h: number } {
+  // Either dimension missing means we know nothing about the shape, so fall back to a FULL-SIZE 4:3
+  // box rather than to the literal numbers 4 and 3 — which would reserve a four-pixel box and defeat
+  // the whole purpose. (Both are defaulted together by extractMedia, but a half-valid pair must not
+  // produce a nonsense aspect either.)
+  const known = Number.isFinite(width) && width > 0 && Number.isFinite(height) && height > 0
+  const srcW = known ? width : maxW
+  const srcH = known ? height : (maxW * 3) / 4
+  let w = Math.min(maxW, srcW)
+  let h = Math.round((w * srcH) / srcW)
+  if (h > maxH) {
+    h = maxH
+    w = Math.round((h * srcW) / srcH)
+  }
+  // Floors of 1: an extreme aspect ratio must never round a side to zero, which would collapse the
+  // box and reintroduce the layout jump this function exists to prevent.
+  return { w: Math.max(1, w), h: Math.max(1, h) }
+}
+
 // Stable avatar gradient per peer — the design's 5 avatar-token pairs (teal/slate/plum/moss/amber),
 // assigned by hash of the contact key.
 const AVATARS = [

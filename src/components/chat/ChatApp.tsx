@@ -20,7 +20,7 @@ import { usePaymentResolution } from '../../hooks/usePaymentResolution'
 import { avatarFor, initialsFor, truncNpub, bubbleTime, compactTime, MONO } from './chatDisplay'
 import Avatar from './Avatar'
 import MessageBubble from './MessageBubble'
-import MediaPlaceholder from './MediaPlaceholder'
+import MediaMessageCard from './MediaMessageCard'
 import { groupGlyph } from './groupGlyph'
 
 // ── Conversation derivation ─────────────────────────────────────────────────────
@@ -1368,8 +1368,8 @@ export default function ChatApp() {
               m.payment ? (
                 <PaymentMessageCard key={m.id} message={m} />
               ) : m.media ? (
-                /* images M3 — placeholder only; the resolver milestone replaces this branch. */
-                <MediaPlaceholder key={m.id} message={m} />
+                /* Encrypted image (images M4): resolves itself — cache first, then the host. */
+                <MediaMessageCard key={m.id} message={m} />
               ) : (
                 <MessageBubble
                   key={m.id}

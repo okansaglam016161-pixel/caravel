@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { verifyEvent } from 'nostr-tools/pure'
-import { buildUploadAuth, candidateUrls, isRetryableStatus } from './blossomClient'
+import { buildUploadAuth, candidateUrls, isRetryableStatus, isTerminalDownloadStatus } from './blossomClient'
 import { targetDimensions, MAX_EDGE_PX } from './imageProcess'
 import { b64Decode } from './base64'
 
@@ -98,6 +98,26 @@ describe('isRetryableStatus', () => {
     expect(isRetryableStatus(401)).toBe(false)
     expect(isRetryableStatus(415)).toBe(false)   // the ecosystem's usual ciphertext rejection
     expect(isRetryableStatus(200)).toBe(false)
+  })
+})
+
+describe('isTerminalDownloadStatus — decides Retry vs "no longer available"', () => {
+  it('treats every permanent outcome as terminal', () => {
+    // Each of these returns the identical answer on a second attempt, so a Retry button would be a
+    // lie: gone means every host was already tried, corrupt/undecryptable are facts about the bytes
+    // and the key, too_large is a fact about the blob.
+    expect(isTerminalDownloadStatus('gone')).toBe(true)
+    expect(isTerminalDownloadStatus('corrupt')).toBe(true)
+    expect(isTerminalDownloadStatus('undecryptable')).toBe(true)
+    expect(isTerminalDownloadStatus('too_large')).toBe(true)
+  })
+
+  it('treats a network failure as retryable — the only outcome that is a moment, not a fact', () => {
+    expect(isTerminalDownloadStatus('network_error')).toBe(false)
+  })
+
+  it('does not classify success as a failure', () => {
+    expect(isTerminalDownloadStatus('ok')).toBe(false)
   })
 })
 

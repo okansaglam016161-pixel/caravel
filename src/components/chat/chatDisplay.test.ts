@@ -1,0 +1,71 @@
+// Tests for the media box geometry (images M4).
+//
+// This is the one piece of the render path that is both pure and load-bearing: the same box is drawn
+// in every state, so if it computes a different size once the image is ready, the thread jumps under
+// the user's scroll. Everything else about the card — object URLs, <img> decode, IndexedDB through
+// React — needs a real browser and is covered by the two-browser test instead.
+
+import { describe, expect, it } from 'vitest'
+import { mediaBoxSize } from './chatDisplay'
+
+const MAX_W = 320
+const MAX_H = 400
+const box = (w: number, h: number) => mediaBoxSize(w, h, MAX_W, MAX_H)
+
+describe('mediaBoxSize', () => {
+  it('fits a landscape image to the width bound, preserving aspect', () => {
+    expect(box(1600, 1200)).toEqual({ w: 320, h: 240 })
+  })
+
+  it('fits a portrait image to the HEIGHT bound when the aspect demands it', () => {
+    // 1200x1600 scaled to w=320 would be h=427, past the 400 ceiling — so height binds instead.
+    const { w, h } = box(1200, 1600)
+    expect(h).toBe(400)
+    expect(w).toBe(300)
+  })
+
+  it('never exceeds either bound, for any plausible photo shape', () => {
+    for (const [w0, h0] of [[4000, 3000], [3000, 4000], [1000, 1000], [5000, 400], [400, 5000]]) {
+      const { w, h } = box(w0, h0)
+      expect(w).toBeLessThanOrEqual(MAX_W)
+      expect(h).toBeLessThanOrEqual(MAX_H)
+    }
+  })
+
+  it('preserves the aspect ratio within a pixel of rounding', () => {
+    const { w, h } = box(1600, 1200)
+    expect(Math.abs(w / h - 1600 / 1200)).toBeLessThan(0.01)
+  })
+
+  it('never upscales a small image', () => {
+    expect(box(120, 90)).toEqual({ w: 120, h: 90 })
+  })
+
+  it('falls back to 4:3 for a ref with no dimensions', () => {
+    // extractMedia lets a dimensionless ref through — a missing width does not stop an image being
+    // fetched and decrypted, so it must still get a sensible box.
+    expect(box(0, 0)).toEqual({ w: 320, h: 240 })
+    expect(box(-5, 100)).toEqual({ w: 320, h: 240 })
+    expect(box(NaN, NaN)).toEqual({ w: 320, h: 240 })
+  })
+
+  it('never collapses a side to zero on an extreme aspect ratio', () => {
+    // A 5000x3 banner: naive rounding gives a zero-height box, which would collapse the frame and
+    // reintroduce exactly the layout jump this function prevents.
+    const wide = box(5000, 3)
+    expect(wide.h).toBeGreaterThanOrEqual(1)
+    const tall = box(3, 5000)
+    expect(tall.w).toBeGreaterThanOrEqual(1)
+  })
+
+  it('returns whole pixels', () => {
+    const { w, h } = box(1999, 1001)
+    expect(Number.isInteger(w)).toBe(true)
+    expect(Number.isInteger(h)).toBe(true)
+  })
+
+  it('is deterministic — the loading box and the ready box are identical', () => {
+    // The entire point: the size cannot depend on anything that changes between states.
+    expect(box(1600, 1200)).toEqual(box(1600, 1200))
+  })
+})

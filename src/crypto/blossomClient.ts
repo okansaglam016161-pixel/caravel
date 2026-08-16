@@ -45,6 +45,23 @@ export type DownloadResult =
 
 // ── Pure helpers (unit-tested; no network) ────────────────────────────────────
 
+// Is this download outcome permanent, or worth trying again?
+//
+// Extracted and exported rather than left as a `switch` inside the resolver's effect, precisely so
+// it can be asserted directly: it is the rule that decides whether a user sees a Retry button or a
+// final "no longer available", and getting it backwards produces either a button that can never work
+// or a spinner that retries forever.
+//
+// Every terminal case returns the identical answer on a second attempt:
+//   gone          — every host was already tried, by URL and by content address
+//   corrupt       — the bytes do not hash to what the sender published; refetching gets them again
+//   undecryptable — the blob is right and the key is wrong; no host can fix that
+//   too_large     — the blob is bigger than the cap; it will still be next time
+// Only network_error is a moment in time rather than a fact about the blob.
+export function isTerminalDownloadStatus(status: DownloadResult['status']): boolean {
+  return status === 'gone' || status === 'corrupt' || status === 'undecryptable' || status === 'too_large'
+}
+
 // Every address this blob could live at, primary URL first. Blossom is CONTENT-ADDRESSED — the same
 // bytes have the same `<host>/<sha256>` address on every server — so a blob that has vanished from
 // the host named in the message may still be served by another. That is a free durability hedge

@@ -11,7 +11,7 @@ import { useState } from 'react'
 import type { CaravelMessage, Group } from '../../messaging/types'
 import Avatar from './Avatar'
 import MessageBubble from './MessageBubble'
-import MediaPlaceholder from './MediaPlaceholder'
+import MediaMessageCard from './MediaMessageCard'
 import { MONO } from './chatDisplay'
 import { groupGlyph } from './groupGlyph'
 import { useScrollToBottom } from './useScrollToBottom'
@@ -174,10 +174,10 @@ export default function GroupThread({
               </div>
             )
           }
-          // An encrypted image (images M3) — placeholder for now, on BOTH sides, so a captionless
-          // group image is never a blank bubble. The resolver milestone replaces this branch.
+          // An encrypted image (images M4). Same component and same resolver as the DM thread, on
+          // both sides — a group image is fetched and decrypted per member, from one upload.
           if (m.media) {
-            return <MediaPlaceholder key={m.id} message={m} />
+            return <MediaMessageCard key={m.id} message={m} />
           }
           if (m.direction === 'sent') {
             return <MessageBubble key={m.id} text={m.plaintext} timestamp={m.timestamp} variant="sent" />

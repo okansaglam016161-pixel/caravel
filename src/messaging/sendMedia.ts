@@ -23,7 +23,7 @@
 // should surface the send failure exactly as it would for a failed text message — and must NOT add a
 // scary payment-style warning about the uploaded blob.
 
-import { processImage } from '../crypto/imageProcess'
+import { ImageTooLargeError, processImage } from '../crypto/imageProcess'
 import { encryptMedia } from '../crypto/mediaCrypto'
 import { uploadEncryptedBlob } from '../crypto/blossomClient'
 import type { CaravelMessage, GroupSendResult, MediaRef, MessagingProvider } from './types'
@@ -32,12 +32,13 @@ import type { CaravelMessage, GroupSendResult, MediaRef, MessagingProvider } fro
 // same floor wrapGroupLeave and the address control message already use.
 const EMPTY_CAPTION = ' '
 
-// Why a send failed, for a UI that has to say something useful. Distinguishes the stages because
-// they need different words: "that image is too big" is the user's problem to fix, whereas "no host
-// accepted it" is ours.
+// Why a send failed, for a UI that has to say something useful. Distinguishes the stages AND the
+// reason within a stage, because they need different words and different affordances: "that image is
+// too big" is the user's problem to fix, "no host accepted it" is ours, and only some of them are
+// worth a Retry button.
 export type MediaSendError =
-  | { stage: 'process'; detail: string }   // too large, unreadable, or not an image
-  | { stage: 'upload'; detail: string }    // no host took the ciphertext, or the network is down
+  | { stage: 'process'; reason: 'too_large' | 'undecodable'; detail: string }
+  | { stage: 'upload'; reason: 'too_large' | 'rejected' | 'network_error'; detail: string }
   | { stage: 'send'; detail: string }      // uploaded fine; the gift wrap did not reach a relay
 
 export class MediaSendFailure extends Error {
@@ -58,7 +59,14 @@ async function prepare(file: Blob): Promise<{ media: MediaRef; plaintextBytes: A
   try {
     processed = await processImage(file)
   } catch (e) {
-    throw new MediaSendFailure({ stage: 'process', detail: e instanceof Error ? e.message : String(e) })
+    // The two process failures need different words: a file over the size cap is the user's to fix,
+    // while an undecodable one usually means the browser lacks a codec (HEIC on anything that isn't
+    // Safari or Chrome-on-macOS) and no amount of retrying will help.
+    throw new MediaSendFailure({
+      stage: 'process',
+      reason: e instanceof ImageTooLargeError ? 'too_large' : 'undecodable',
+      detail: e instanceof Error ? e.message : String(e),
+    })
   }
 
   // Encrypt BEFORE upload, always: the host must never see anything but ciphertext.
@@ -66,10 +74,11 @@ async function prepare(file: Blob): Promise<{ media: MediaRef; plaintextBytes: A
 
   const upload = await uploadEncryptedBlob(enc.ciphertext, enc.x)
   if (upload.status !== 'ok') {
-    const detail = upload.status === 'too_large'
-      ? `encrypted image is ${upload.bytes} bytes`
-      : upload.detail
-    throw new MediaSendFailure({ stage: 'upload', detail })
+    throw new MediaSendFailure({
+      stage: 'upload',
+      reason: upload.status,
+      detail: upload.status === 'too_large' ? `encrypted image is ${upload.bytes} bytes` : upload.detail,
+    })
   }
 
   return {
@@ -126,6 +135,81 @@ export async function sendImageToGroup(
   } catch (e) {
     throw new MediaSendFailure({ stage: 'send', detail: e instanceof Error ? e.message : String(e) })
   }
+}
+
+// ── Turning a failure into something a user can act on ────────────────────────
+
+// Is this a HEIC/HEIF file? Checks the MIME type AND the extension, because `file.type` comes back
+// blank on some platforms and browsers — trusting it alone is how a HEIC gets reported as a generic
+// unreadable file with no useful advice.
+//
+// DELIBERATELY NOT AN ALLOWLIST. Nothing anywhere refuses a file for being HEIC; the pipeline simply
+// tries to decode everything and this only supplies a better EXPLANATION when the decode fails. A
+// browser that can decode HEIC (Safari, Chrome on macOS, which delegate to the system codec) sails
+// straight through and never reaches this.
+export function isHeicFile(name: string, type: string): boolean {
+  const t = (type || '').toLowerCase()
+  if (t.startsWith('image/heic') || t.startsWith('image/heif')) return true
+  return /\.(heic|heif)$/i.test(name || '')
+}
+
+export interface MediaFailureCopy {
+  label: string          // short, shown in red on the failed bubble
+  hint: string | null    // the actionable line beneath it, or null when there is nothing to add
+  retryable: boolean     // false hides Retry — offering a button that cannot work is worse than none
+}
+
+// Is retrying this failure capable of a different outcome?
+//
+// Same principle as isTerminalDownloadStatus on the receive side: a Retry button that cannot change
+// anything is a lie. A file the browser cannot decode, or one over the size cap, will fail
+// identically forever; a host that refused the ciphertext will refuse it again. Only genuine network
+// trouble and a failed relay publish are worth another go.
+export function isRetryableMediaFailure(info: MediaSendError): boolean {
+  if (info.stage === 'process') return false
+  if (info.stage === 'upload') return info.reason === 'network_error'
+  return true   // 'send' — the blob is up; only the gift wrap failed to reach a relay
+}
+
+// Human copy for a failed image send.
+//
+// `file` is optional and used only to recognise HEIC. Passing it turns the single most likely real
+// failure — an iPhone photo on a browser with no HEVC licence — from "couldn't prepare this image"
+// into advice the user can act on immediately.
+export function describeMediaFailure(err: unknown, file?: { name: string; type: string }): MediaFailureCopy {
+  if (!(err instanceof MediaSendFailure)) {
+    return { label: 'Couldn’t send the image', hint: null, retryable: true }
+  }
+  const info = err.info
+  const retryable = isRetryableMediaFailure(info)
+
+  if (info.stage === 'process') {
+    if (info.reason === 'too_large') {
+      // ImageTooLargeError's message is already human ("Image is 24.3MB — the limit is 20MB").
+      return { label: 'Image is too large', hint: info.detail, retryable }
+    }
+    if (file && isHeicFile(file.name, file.type)) {
+      return {
+        label: 'Couldn’t prepare the image',
+        hint: 'This image format isn’t supported by your browser. Try a JPEG or PNG.',
+        retryable,
+      }
+    }
+    return { label: 'Couldn’t prepare the image', hint: 'This file couldn’t be read as an image.', retryable }
+  }
+
+  if (info.stage === 'upload') {
+    if (info.reason === 'too_large') return { label: 'Image is too large to upload', hint: info.detail, retryable }
+    if (info.reason === 'rejected') {
+      return { label: 'Couldn’t upload the image', hint: 'No image host accepted it.', retryable }
+    }
+    return { label: 'Couldn’t upload the image', hint: 'The image host couldn’t be reached.', retryable }
+  }
+
+  // 'send'. Deliberately says NOTHING about the blob already sitting on the host: nobody can decrypt
+  // it (the key never left this device) and it will be evicted in time, so mentioning it would raise
+  // an alarm about something harmless. See the orphan note at the top of this file.
+  return { label: 'Couldn’t send the image', hint: null, retryable }
 }
 
 // The blob-cache keys for a set of messages — the harvest the delete paths need.

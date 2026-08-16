@@ -208,7 +208,7 @@ export default function GroupThread({
         {/* Pending-send overlay — same lifecycle and markup as the DM view. Retry is offered only
             when the send reached nobody; a partial fan-out is not retryable (it would duplicate). */}
         {pending.map(p => (
-          <PendingBubble key={p.id} text={p.text} status={p.status} onRetry={() => onRetryPending(p.id)} />
+          <PendingBubble key={p.id} text={p.text} status={p.status} failure={p.failure} onRetry={() => onRetryPending(p.id)} />
         ))}
         {/* Auto-scroll anchor */}
         <div ref={bottomRef} />

@@ -22,7 +22,7 @@ import Avatar from './Avatar'
 import MessageBubble from './MessageBubble'
 import MediaMessageCard from './MediaMessageCard'
 // ⚠️ TEMPORARY (images M4 test harness) — the send UI lands in M5, which owns these calls properly.
-import { sendImageToGroup, sendImageToPeer } from '../../messaging/sendMedia'
+import { describeMediaFailure, sendImageToGroup, sendImageToPeer } from '../../messaging/sendMedia'
 import { groupGlyph } from './groupGlyph'
 
 // ── Conversation derivation ─────────────────────────────────────────────────────
@@ -248,14 +248,13 @@ export default function ChatApp() {
   // Composer state.
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
-  const [sendError, setSendError] = useState<string | null>(null)
   // Per-message send overlay (design lifecycle): provisional bubbles rendered while a plain-text
   // send is in flight, then removed once the real persisted message appears (or marked 'failed').
   // ChatApp-local only — never persisted, never on the wire; the send path itself is unchanged.
-  const [pendingSends, setPendingSends] = useState<(PendingSend & { peerHex: string })[]>([])
+  const [pendingSends, setPendingSends] = useState<(PendingSend & { peerHex: string; file?: File })[]>([])
   // Group equivalent, keyed on groupId (the parallel to pendingSends' peerHex). Same lifecycle:
   // provisional bubble before the fan-out resolves, removed on success, marked failed on throw.
-  const [pendingGroupSends, setPendingGroupSends] = useState<(PendingSend & { groupId: string })[]>([])
+  const [pendingGroupSends, setPendingGroupSends] = useState<(PendingSend & { groupId: string; file?: File })[]>([])
   // Ephemeral, honest partial-delivery note for the group composer footer: a fan-out can reach some
   // members and not others, and `membersReached` is RELAY ACCEPTANCE, not receipt — so this says
   // "reached", never "delivered". React state only; nothing is persisted per message (a durable
@@ -456,6 +455,7 @@ export default function ChatApp() {
   function retryGroupSend(id: string) {
     const entry = pendingGroupSends.find(x => x.id === id)
     if (!entry) return
+    if (entry.file) { retryImage(id); return }   // image entry — re-run the image path
     const group = groups.find(g => g.id === entry.groupId)
     if (!group) return
     setPendingGroupSends(p => p.filter(x => x.id !== id))
@@ -615,7 +615,6 @@ export default function ChatApp() {
     const text = draft.trim()
     if (!text || !selectedConvo || sending) return
     setSending(true)
-    setSendError(null)
     const peer = selectedConvo.peerHex
     // Overlay (flag 1): show a provisional "sending" bubble immediately. Additive — the send path
     // below is unchanged.
@@ -637,7 +636,6 @@ export default function ChatApp() {
       // The design's failed bubble shows only "Couldn't send" + Retry (no raw string), so log the
       // underlying relay error here — a systematic failure stays diagnosable in the console.
       console.warn('[Caravel] message send failed:', e)
-      setSendError(e instanceof Error ? e.message : String(e))
       setPendingSends(p => p.map(x => x.id === tempId ? { ...x, status: 'failed' } : x))  // failed bubble + Retry; draft kept
     } finally {
       setSending(false)
@@ -662,26 +660,47 @@ export default function ChatApp() {
   const imageInputRef = useRef<HTMLInputElement | null>(null)
   const [imageBusy, setImageBusy] = useState(false)
 
+  // An image send gets the SAME provisional bubble a text send has always had — 'sending', then
+  // either the real row or a failed bubble carrying stage-specific copy and (only where it could
+  // work) a Retry. This is the error surface that actually renders; the first cut of this harness
+  // relied on a `sendError` state that had been dead since the thread redesign, so a failed image
+  // produced nothing at all on screen.
+  //
+  // The File rides on the pending entry so Retry can re-run the send. ChatApp-local state only:
+  // never persisted, never on the wire.
   async function handlePickedImage(file: File | undefined) {
     if (!file || imageBusy) return
     setImageBusy(true)
-    setSendError(null)
+    const tempId = `img-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+    const inGroup = !!(selectedGroupId && selectedGroup)
+    const groupId = selectedGroup?.id
+    const peerHex = selectedConvo?.peerHex
+    if (!inGroup && !peerHex) { setImageBusy(false); return }
+
+    // Provisional bubble immediately, in whichever thread we are in.
+    if (inGroup) setPendingGroupSends(p => [...p, { id: tempId, groupId: groupId!, text: file.name, status: 'sending', file }])
+    else setPendingSends(p => [...p, { id: tempId, peerHex: peerHex!, text: file.name, status: 'sending', file }])
+
     const provider = createMessagingProvider()
     try {
       if (!provider) throw new Error('Wallet is locked — unlock to send')
-      if (selectedGroupId && selectedGroup) {
-        const { result } = await sendImageToGroup(provider, file, selectedGroup.id, selectedGroup.members)
+      if (inGroup) {
+        const { result } = await sendImageToGroup(provider, file, groupId!, selectedGroup!.members)
         recordSentMessage(result.message)
-      } else if (selectedConvo) {
-        const peer = selectedConvo.peerHex
-        const addr = outboundAddressFor(peer)
-        const { message } = await sendImageToPeer(provider, file, peer, undefined, addr)
+        setPendingGroupSends(p => p.filter(x => x.id !== tempId))
+      } else {
+        const addr = outboundAddressFor(peerHex!)
+        const { message } = await sendImageToPeer(provider, file, peerHex!, undefined, addr)
         recordSentMessage(message)
-        if (addr) markSent(peer)
+        if (addr) markSent(peerHex!)
+        setPendingSends(p => p.filter(x => x.id !== tempId))
       }
     } catch (e) {
+      // Logged for diagnosis AND surfaced on the bubble — the console alone is not a user interface.
       console.warn('[Caravel] image send failed:', e)
-      setSendError(e instanceof Error ? e.message : String(e))
+      const failure = describeMediaFailure(e, file)
+      if (inGroup) setPendingGroupSends(p => p.map(x => x.id === tempId ? { ...x, status: 'failed', failure } : x))
+      else setPendingSends(p => p.map(x => x.id === tempId ? { ...x, status: 'failed', failure } : x))
     } finally {
       provider?.disconnect()
       setImageBusy(false)
@@ -689,11 +708,25 @@ export default function ChatApp() {
       if (imageInputRef.current) imageInputRef.current.value = ''
     }
   }
+
+  // Retry a failed image send by re-running it with the File kept on the pending entry. Only
+  // reachable where describeMediaFailure marked the failure retryable — an undecodable file or an
+  // over-cap one shows no Retry at all, because a second attempt gives the identical result.
+  function retryImage(id: string) {
+    const entry = [...pendingSends, ...pendingGroupSends].find(x => x.id === id)
+    if (!entry?.file) return
+    setPendingSends(p => p.filter(x => x.id !== id))
+    setPendingGroupSends(p => p.filter(x => x.id !== id))
+    void handlePickedImage(entry.file)
+  }
   // ───────────────────────────────────────────────────────── end test harness ──
 
   // Retry a failed provisional send: drop the failed bubble and re-run the send (the draft still
   // holds the text, since a failed send never clears it).
   function retrySend(id: string) {
+    // An image entry carries its File — re-run the image path rather than re-reading the composer
+    // draft, which has nothing to do with it.
+    if (pendingSends.find(x => x.id === id)?.file) { retryImage(id); return }
     setPendingSends(p => p.filter(x => x.id !== id))
     handleSend()
   }
@@ -1433,7 +1466,7 @@ export default function ChatApp() {
 
             {/* Pending-send overlay (design lifecycle: sending → failed + Retry) */}
             {pendingForPeer.map((p) => (
-              <PendingBubble key={p.id} text={p.text} status={p.status} onRetry={() => retrySend(p.id)} />
+              <PendingBubble key={p.id} text={p.text} status={p.status} failure={p.failure} onRetry={() => retrySend(p.id)} />
             ))}
             {/* Auto-scroll anchor */}
             <div ref={bottomRef} />
@@ -1523,7 +1556,7 @@ export default function ChatApp() {
                     </div>
                   )}
                   {/* note (dashed) */}
-                  <textarea value={draft} onChange={e => { setDraft(e.target.value); if (sendError) setSendError(null) }} placeholder="Add a note (optional)…" rows={1} maxLength={MAX_MESSAGE_LEN} style={{ display: 'block', width: '100%', boxSizing: 'border-box', padding: '12px 14px', borderRadius: 11, background: 'var(--surface-raised)', border: '1px dashed rgba(var(--teal-500-rgb),0.24)', fontSize: 13, color: 'var(--text-note)', fontStyle: draft ? 'normal' : 'italic', outline: 'none', resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.4, marginBottom: 14 }} />
+                  <textarea value={draft} onChange={e => setDraft(e.target.value)} placeholder="Add a note (optional)…" rows={1} maxLength={MAX_MESSAGE_LEN} style={{ display: 'block', width: '100%', boxSizing: 'border-box', padding: '12px 14px', borderRadius: 11, background: 'var(--surface-raised)', border: '1px dashed rgba(var(--teal-500-rgb),0.24)', fontSize: 13, color: 'var(--text-note)', fontStyle: draft ? 'normal' : 'italic', outline: 'none', resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.4, marginBottom: 14 }} />
                   {/* buttons */}
                   <div style={{ display: 'flex', gap: 10 }}>
                     <button onClick={toggleTari} style={{ flex: '0 0 120px', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 12, borderRadius: 11, border: '1px solid rgba(var(--border-rgb),0.2)', background: 'transparent', color: 'var(--text-muted)', fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
@@ -1592,7 +1625,7 @@ export default function ChatApp() {
                       ref={composerRef}
                       className="cv-composer"
                       value={draft}
-                      onChange={e => { setDraft(e.target.value); if (sendError) setSendError(null) }}
+                      onChange={e => setDraft(e.target.value)}
                       onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onComposerSend() } }}
                       placeholder="Write an encrypted message…"
                       rows={1}

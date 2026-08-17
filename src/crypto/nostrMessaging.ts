@@ -262,8 +262,95 @@ interface PublishResult {
   error?: string
 }
 
+// ── Per-relay publish retry ────────────────────────────────────────────────────
+//
+// THE BUG THIS FIXES: dialling our relays fails roughly 30% of the time (measured: 5/8 sequential,
+// 6-7/8 concurrent, per relay), and until now an ordinary message got exactly ONE attempt per relay.
+// Relays do not federate, so a wrap that lands on only one relay is deliverable only to members
+// currently live on that relay. A DM needs one sender/peer overlap and mostly survives; a group needs
+// N independent overlaps, so P(everyone receives) fell off geometrically — the intermittent,
+// asymmetric, self-healing partial delivery in docs/KNOWN_ISSUES.md.
+//
+// Control messages already had this protection (publishControl's bounded retry). Ordinary messages
+// did not. This closes that gap at the level where every send path shares it.
+//
+// A RETRY IS A FRESH DIAL — deliberately. Reusing the provider's live, heartbeat-monitored sockets is
+// the better fix and is DEFERRED: it couples publish failures to the subscription socket and requires
+// routing sends through the live provider instead of the throwaway one every call site builds today.
+// Nothing here touches sockets that anyone else holds.
+const PUBLISH_ATTEMPTS = 3
+// Base backoff, jittered to 0.5x-1.5x. Jitter is cheap insurance rather than a fix for a measured
+// problem: a group send fires N publishes at once, and unjittered retries would all re-dial the same
+// relay on the same tick. (The measurements showed concurrency is NOT what makes dials fail, so this
+// is not load-shedding — it just avoids manufacturing a synchronised herd.)
+const PUBLISH_RETRY_BACKOFF_MS = 400
+// Don't start another attempt without enough budget for it to plausibly finish. Below this, a retry
+// would burn the remaining time on a dial that cannot complete and report a timeout instead of the
+// real error.
+const MIN_ATTEMPT_BUDGET_MS = 1_500
+
+export interface RetryPlan {
+  retry: boolean
+  backoffMs: number
+  /** Connect timeout for the next attempt — never more than the caller's normal budget, and never
+   *  more than the time actually left. */
+  budgetMs: number
+}
+
+// Should this relay be tried again, and with what backoff and connect budget?
+//
+// Extracted and exported purely so the policy can be asserted directly: it decides how hard we try to
+// deliver a message, and "retries silently stopped after one" is exactly the kind of regression that
+// hides for months. `jitter01` is injected rather than read from Math.random() so tests are
+// deterministic.
+export function planPublishRetry(
+  attemptsMade: number,
+  maxAttempts: number,
+  remainingMs: number,
+  baseBackoffMs: number,
+  jitter01: number,
+  maxBudgetMs: number,
+): RetryPlan {
+  const backoffMs = Math.round(baseBackoffMs * (0.5 + Math.max(0, Math.min(1, jitter01))))
+  if (attemptsMade >= maxAttempts) return { retry: false, backoffMs, budgetMs: 0 }
+  const afterBackoff = remainingMs - backoffMs
+  if (afterBackoff < MIN_ATTEMPT_BUDGET_MS) return { retry: false, backoffMs, budgetMs: 0 }
+  return { retry: true, backoffMs, budgetMs: Math.min(maxBudgetMs, afterBackoff) }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+// ONE attempt at one relay: fresh socket, publish, close. Extracted so the retry loop below reads as
+// policy rather than plumbing. `publishTimeout` is set on THIS instance only — no shared mutable
+// state, because the socket is created and discarded here.
+async function publishOnce(
+  url: string,
+  giftWrap: NostrEvent,
+  connectTimeoutMs: number,
+  publishTimeout: number,
+): Promise<{ ok: boolean; error?: string }> {
+  const relay = new Relay(url)
+  relay.publishTimeout = publishTimeout
+  try {
+    await relay.connect({ timeout: connectTimeoutMs })
+    await relay.publish(giftWrap)
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) }
+  } finally {
+    relay.close()
+  }
+}
+
 // Publishes a gift wrap to each relay in parallel. Each relay gets its own connection with an
-// explicit connect timeout and publish timeout. Connections are closed in finally.
+// explicit connect timeout and publish timeout, and — since the partial-delivery fix — a bounded
+// per-relay RETRY (see PUBLISH_ATTEMPTS). Connections are closed in finally.
+//
+// Per relay the result is still ONE PublishResult: ok if ANY of its attempts succeeded. The
+// resolve-on-first-accept behaviour ACROSS relays below is unchanged, and so is `membersReached`'s
+// "≥1 relay accepted" meaning at the call sites — making that count honest is a separate pass.
 //
 // `connectTimeoutMs` is passed in rather than derived from `timeoutMs` by a ratio. It used to be
 // `timeoutMs * 0.45` — 4.5s — while the subscription's own connect budget was a named 10s constant,
@@ -287,16 +374,36 @@ export async function publishGiftWrap(
   const publishTimeout = Math.floor(timeoutMs * 0.9)
 
   const attempts = relayUrls.map(async (url): Promise<PublishResult> => {
-    const relay = new Relay(url)
-    relay.publishTimeout = publishTimeout
-    try {
-      await relay.connect({ timeout: connectTimeoutMs })
-      await relay.publish(giftWrap)
-      return { relay: url, ok: true }
-    } catch (e) {
-      return { relay: url, ok: false, error: e instanceof Error ? e.message : String(e) }
-    } finally {
-      relay.close()
+    const started = Date.now()
+    // THE LATENCY INVARIANT: a relay's whole retry sequence gets the budget ONE attempt could already
+    // have consumed (a full dial plus a full publish). So retries never extend the worst case — they
+    // only spend time a FAST failure left unspent, which is the common case (a refused dial returns in
+    // milliseconds, and that is precisely the failure worth retrying). A relay that burns its budget
+    // on one timeout gets no second attempt, exactly as today.
+    const relayBudgetMs = connectTimeoutMs + publishTimeout
+    let attemptConnectTimeout = connectTimeoutMs
+    let attemptsMade = 0
+    let lastError = 'no attempt made'
+
+    for (;;) {
+      const result = await publishOnce(url, giftWrap, attemptConnectTimeout, publishTimeout)
+      attemptsMade++
+      if (result.ok) return { relay: url, ok: true }
+      lastError = result.error ?? 'rejected'
+
+      const plan = planPublishRetry(
+        attemptsMade,
+        PUBLISH_ATTEMPTS,
+        relayBudgetMs - (Date.now() - started),
+        PUBLISH_RETRY_BACKOFF_MS,
+        Math.random(),
+        connectTimeoutMs,
+      )
+      if (!plan.retry) {
+        return { relay: url, ok: false, error: `${lastError} (${attemptsMade} attempt${attemptsMade === 1 ? '' : 's'})` }
+      }
+      await sleep(plan.backoffMs)
+      attemptConnectTimeout = plan.budgetMs
     }
   })
 

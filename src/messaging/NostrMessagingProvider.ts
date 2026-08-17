@@ -139,7 +139,7 @@ export class NostrMessagingProvider implements MessagingProvider {
   }
 
   async sendMessage(recipientPubkeyHex: string, plaintext: string, payment?: PaymentRef, tariAddress?: string): Promise<CaravelMessage> {
-    const wrapped = wrapMessage(this.secretKey, recipientPubkeyHex, plaintext, payment, tariAddress)
+    const wrapped = wrapMessage(this.secretKey, recipientPubkeyHex, plaintext, { payment, tariAddress })
     const results = await publishGiftWrap(wrapped, [...this.relayUrls], PUBLISH_TIMEOUT_MS, CONNECT_TIMEOUT_MS)
 
     const anyOk = results.some(r => r.ok)
@@ -164,7 +164,7 @@ export class NostrMessagingProvider implements MessagingProvider {
   // payment and no note; the recipient extracts + stores the address and renders nothing. Returns
   // true if at least one relay accepted, so the caller can mark the address as delivered.
   async sendContactAddress(recipientPubkeyHex: string, tariAddress: string): Promise<boolean> {
-    const wrapped = wrapMessage(this.secretKey, recipientPubkeyHex, ' ', undefined, tariAddress)
+    const wrapped = wrapMessage(this.secretKey, recipientPubkeyHex, ' ', { tariAddress })
     const results = await publishGiftWrap(wrapped, [...this.relayUrls], PUBLISH_TIMEOUT_MS, CONNECT_TIMEOUT_MS)
     return results.some(r => r.ok)
   }
@@ -177,7 +177,7 @@ export class NostrMessagingProvider implements MessagingProvider {
     const recipients = memberPubkeysHex.filter(m => m && m !== this.pubkeyHex)
     let membersReached = 0
     await Promise.all(recipients.map(async member => {
-      const wrapped = wrapMessage(this.secretKey, member, plaintext, undefined, undefined, groupId)
+      const wrapped = wrapMessage(this.secretKey, member, plaintext, { groupId })
       const results = await publishGiftWrap(wrapped, [...this.relayUrls], PUBLISH_TIMEOUT_MS, CONNECT_TIMEOUT_MS)
       if (results.some(r => r.ok)) membersReached++
     }))

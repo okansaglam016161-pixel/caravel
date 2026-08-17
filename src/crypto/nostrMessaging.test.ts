@@ -7,7 +7,8 @@
 // bug while every other test stayed green.
 
 import { describe, expect, it } from 'vitest'
-import { planPublishRetry } from './nostrMessaging'
+import { generateSecretKey, getPublicKey } from 'nostr-tools/pure'
+import { planPublishRetry, unwrapMessage, wrapMessage } from './nostrMessaging'
 
 // The real call site's values: 3 attempts, 400ms base backoff, a 10s connect budget, and a per-relay
 // budget of connectTimeout + publishTimeout = 10_000 + 9_000.
@@ -102,5 +103,99 @@ describe('planPublishRetry — how hard we try to deliver', () => {
     let remaining = BUDGET
     remaining -= 19_000          // a full dial + publish timeout
     expect(plan(1, remaining).retry).toBe(false)
+  })
+})
+
+// ── wrapMessage: the options object ────────────────────────────────────────────────────────────────
+//
+// These pin BEHAVIOUR PRESERVATION across the positional → options-object refactor. The refactor
+// changed the call shape only; every tag this function has ever emitted must still be emitted, in the
+// same order, under the same conditions.
+//
+// They also guard the reason the refactor happened. `tariAddress` and `groupId` are both `string`, so
+// under the old positional signature a transposed argument was invisible to tsc AND to any test that
+// only checked "a tag is present". Each assertion below therefore checks the value landed under the
+// RIGHT key — that is the whole failure class the options object exists to remove, and a test that
+// merely counted tags would not catch a regression back into it.
+//
+// Asserted through unwrapMessage rather than by inspecting the encrypted event, because the round trip
+// is the contract callers actually depend on.
+
+const sender = generateSecretKey()
+const recipient = generateSecretKey()
+const recipientPub = getPublicKey(recipient)
+
+const roundTrip = (plaintext: string, opts?: Parameters<typeof wrapMessage>[3]) =>
+  unwrapMessage(recipient, wrapMessage(sender, recipientPub, plaintext, opts))
+
+describe('wrapMessage — options object', () => {
+  it('with NO options, carries only the p tag — a plain message is unchanged', () => {
+    const out = roundTrip('hello')
+    expect(out.plaintext).toBe('hello')
+    expect(out.payment).toBeUndefined()
+    expect(out.tariAddress).toBeUndefined()
+    expect(out.groupId).toBeUndefined()
+  })
+
+  it('omitting the options argument entirely is the same as passing {}', () => {
+    // The default `= {}` must not require callers to pass anything.
+    const bare = unwrapMessage(recipient, wrapMessage(sender, recipientPub, 'hi'))
+    expect(bare.plaintext).toBe('hi')
+    expect(bare.groupId).toBeUndefined()
+  })
+
+  it('payment rides on the wire as utxoId only', () => {
+    const out = roundTrip('paid', { payment: { utxoId: 'utxo-abc' } })
+    expect(out.payment).toEqual({ utxoId: 'utxo-abc' })
+    expect(out.plaintext).toBe('paid')
+  })
+
+  it('tariAddress lands under tariAddress, NOT groupId', () => {
+    // The transposition the old positional signature could not rule out.
+    const out = roundTrip(' ', { tariAddress: 'otl_esm_abc' })
+    expect(out.tariAddress).toBe('otl_esm_abc')
+    expect(out.groupId).toBeUndefined()
+  })
+
+  it('groupId lands under groupId, NOT tariAddress', () => {
+    const out = roundTrip('group msg', { groupId: 'group-1' })
+    expect(out.groupId).toBe('group-1')
+    expect(out.tariAddress).toBeUndefined()
+  })
+
+  it('all three options together each land under their own key', () => {
+    const out = roundTrip('everything', {
+      payment: { utxoId: 'utxo-1' },
+      tariAddress: 'otl_esm_xyz',
+      groupId: 'group-9',
+    })
+    expect(out.payment).toEqual({ utxoId: 'utxo-1' })
+    expect(out.tariAddress).toBe('otl_esm_xyz')
+    expect(out.groupId).toBe('group-9')
+    expect(out.plaintext).toBe('everything')
+  })
+
+  it('key order in the literal does not affect the result', () => {
+    // Positional order mattered; key order must not. This is the property that makes a merge
+    // resolution safe to do as a union of keys.
+    const a = roundTrip('x', { payment: { utxoId: 'u' }, groupId: 'g', tariAddress: 't' })
+    const b = roundTrip('x', { tariAddress: 't', payment: { utxoId: 'u' }, groupId: 'g' })
+    expect(a.payment).toEqual(b.payment)
+    expect(a.tariAddress).toBe(b.tariAddress)
+    expect(a.groupId).toBe(b.groupId)
+  })
+
+  it('an explicitly undefined key behaves as absent', () => {
+    // Call sites that pass a possibly-undefined variable (sendMessage does exactly this with
+    // `payment`) must not produce an empty or malformed tag.
+    const out = roundTrip('maybe', { payment: undefined, tariAddress: undefined, groupId: 'g' })
+    expect(out.payment).toBeUndefined()
+    expect(out.tariAddress).toBeUndefined()
+    expect(out.groupId).toBe('g')
+  })
+
+  it('preserves the sender identity through the seal', () => {
+    const out = roundTrip('who sent this', { groupId: 'g' })
+    expect(out.senderPubkeyHex).toBe(getPublicKey(sender))
   })
 })

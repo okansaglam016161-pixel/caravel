@@ -133,18 +133,41 @@ function extractTariAddress(tags: string[][] | undefined): string | undefined {
   return undefined
 }
 
-// Wraps plaintext (and an optional payment reference) for the recipient. Builds the kind-14
-// rumor ourselves — including the required ["p", recipient] tag and, when present, the
-// caravel-payment tag — then hands it to nip59.wrapEvent, which seals and gift-wraps it with
-// the library's own crypto. A message with no payment produces a rumor identical to before.
+// Everything a rumor can optionally carry, as KEYS rather than positional parameters.
+//
+// WHY AN OBJECT AND NOT A POSITIONAL TAIL: `tariAddress` and `groupId` are both `string`, so a
+// positional slip between them is INVISIBLE TO THE TYPE CHECKER. Dropping one `undefined` from a
+// call like `wrapMessage(sk, pk, text, payment, tariAddress, groupId)` silently lands the address in
+// the group slot — tagging a DM as a group message, with tsc silent and no test failing. Every
+// optional added here would have made that worse: each new same-typed field multiplies the number of
+// adjacent positions that can be transposed without complaint.
+//
+// With keys, that failure class does not exist. A mistake is either a MISSING key (the feature is
+// simply off, and visibly so) or an UNKNOWN key (a compile error). Neither can silently bind a value
+// to the wrong meaning.
+//
+// It is also the extension point: a new capability adds a KEY here and a guard in wrapMessage, which
+// two branches can do independently without competing for the same argument position.
+export interface WrapMessageOptions {
+  payment?: PaymentRef
+  tariAddress?: string
+  groupId?: string
+}
+
+// Wraps plaintext (and any optional tags) for the recipient. Builds the kind-14 rumor ourselves —
+// including the required ["p", recipient] tag and, when present, the caravel-* tags — then hands it
+// to nip59.wrapEvent, which seals and gift-wraps it with the library's own crypto. A message with no
+// options produces a rumor carrying only the ["p", recipient] tag, identical to before.
 export function wrapMessage(
   senderSecretKey: Uint8Array,
   recipientPubkeyHex: string,
   plaintext: string,
-  payment?: PaymentRef,
-  tariAddress?: string,
-  groupId?: string
+  opts: WrapMessageOptions = {}
 ): NostrEvent {
+  const { payment, tariAddress, groupId } = opts
+  // Tag order is preserved exactly as it was under the positional signature. Readers match on
+  // tag[0] so order does not affect parsing, but keeping it identical means this refactor changes
+  // the call shape and nothing about the bytes on the wire.
   const tags: string[][] = [['p', recipientPubkeyHex]]
   if (payment) tags.push([PAYMENT_TAG, PAYMENT_TAG_VERSION, payment.utxoId])
   if (tariAddress) tags.push([ADDRESS_TAG, ADDRESS_TAG_VERSION, tariAddress])

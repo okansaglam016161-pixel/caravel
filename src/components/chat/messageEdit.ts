@@ -37,6 +37,14 @@ export type EditFlightMap = Record<string, EditFlight>
 //                       absent rather than shown disabled.
 //   !payment          — payment rows render as PaymentMessageCard and never reach MessageBubble;
 //                       asserted anyway so the rule reads completely in one place.
+//   !media            — an image row is NOT editable. Editing replaces `plaintext`, which on a media
+//                       row is only the CAPTION, so an edit would silently rewrite the caption while
+//                       the image stayed — a confusing half-edit with no way to express the intent.
+//                       Both threads also return <MediaMessageCard/> before the editable branch, so
+//                       this is the predicate half of a rule enforced in two places. It is asserted
+//                       here rather than left to the render guard alone because canEditMessage is the
+//                       single source of truth for "is this editable", and the two halves disagreeing
+//                       is exactly how a media row would regain the pencil after a future refactor.
 //
 // Not checked here, deliberately: whether the row's GROUP is still active. That is a send-time
 // concern with a different answer (WalletContext.editMessage refuses a non-active group), and a
@@ -46,6 +54,7 @@ export function canEditMessage(m: CaravelMessage): boolean {
     && !m.system
     && !!m.logicalId
     && !m.payment
+    && !m.media
 }
 
 // True when the edit is worth sending: non-empty after trimming, and actually different from what

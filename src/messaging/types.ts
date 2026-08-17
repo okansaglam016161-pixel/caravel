@@ -29,6 +29,36 @@ export interface LocalPaymentMeta {
   txId: string
 }
 
+// An encrypted image attachment (images M3). Everything a recipient needs to fetch, verify, decrypt
+// and lay out the image — and nothing else. Travels inside the gift wrap, so the key never touches a
+// relay or the blob host in the clear.
+//
+// NO LOCAL-ONLY COUNTERPART, deliberately — this does NOT mirror PaymentRef/LocalPaymentMeta. That
+// split exists for one specific reason: a payment's amount is confidential and CANNOT be
+// transmitted, yet the sender must still render it. Media has no such field — everything the sender
+// needs is already here, and the sender can seed the blob cache from the plaintext it holds at send
+// time. An empty parallel structure added for symmetry would be speculation.
+export interface MediaRef {
+  url: string      // where the ciphertext was uploaded; a host may serve from a CDN domain
+  key: string      // base64, AES-256-GCM content key. Fresh per image, never reused.
+  nonce: string    // base64, 96-bit
+  mime: string     // the PRE-encryption type, e.g. image/webp — what the bytes become once decrypted
+  // sha256 hex of the CIPHERTEXT. Three jobs: the Blossom content address (so the blob is findable on
+  // any host, not just `url`), the verify-before-decrypt check, and the blob-cache key.
+  //
+  // The CACHE KEY IS `x` AND NOT `ox`, which is a security choice rather than a style one. Keying on
+  // `ox` would dedupe the decrypted cache across re-sends of the same image, but `ox` is never
+  // verified: a sender could claim ox = H while shipping different bytes, poisoning the entry a later
+  // legitimate message with a genuine ox = H would read. `x` is checked before we decrypt, so a key
+  // derived from it always names bytes we actually validated.
+  x: string
+  ox: string       // sha256 hex of the PLAINTEXT. Carried for integrity/provenance; never gated on
+                   // (the GCM tag already authenticates) and never used as a cache key — see above.
+  width: number    // post-downscale pixel dimensions, so a placeholder can reserve the right space
+  height: number   // before any bytes arrive — no layout jump when the image lands
+  size: number     // ciphertext bytes
+}
+
 export interface CaravelMessage {
   id: string               // unique per message — use the gift wrap event id
   senderPubkeyHex: string
@@ -84,6 +114,12 @@ export interface CaravelMessage {
   // never rendered: it exists so addReceivedMessage's self-echo suppressor, which matches on
   // content, can still recognise a late echo carrying the pre-edit text. See messageStore.
   preEditPlaintext?: string
+
+  // ── Image attachments (images M3) ─────────────────────────────────────────────
+  // Present when the message carried a caravel-media tag: an encrypted image attachment.
+  // `plaintext` is the CAPTION and may be blank — a media message is an ordinary message that also
+  // has an image, not a control message, so it persists, orders and gates exactly like any other row.
+  media?: MediaRef
 }
 
 // ── Groups (Phase 1: fan-out, in-message roster, fixed membership) ──────────────
@@ -134,7 +170,9 @@ export interface MessagingProvider {
   // can record it immediately without waiting for an echo from the relay.
   // Optional tags ride on the rumor: a payment reference (PaymentRef) and/or MY Tari address
   // (piggybacked for self-healing address exchange — see M9.0d).
-  sendMessage(recipientPubkeyHex: string, plaintext: string, payment?: PaymentRef, tariAddress?: string): Promise<CaravelMessage>
+  // `media` (images M3) attaches an already-uploaded encrypted image; `plaintext` is then its
+  // caption and may be a single space. Uploading is NOT the provider's job — see sendMedia.ts.
+  sendMessage(recipientPubkeyHex: string, plaintext: string, payment?: PaymentRef, tariAddress?: string, media?: MediaRef): Promise<CaravelMessage>
 
   // Send a dedicated, silent Tari-address control message (M9.0d). Carries only the address tag
   // over an empty-content rumor, so the recipient stores the address without a chat bubble.
@@ -162,7 +200,9 @@ export interface MessagingProvider {
   // Group message (Phase 1): fan out one NIP-17 gift wrap per member (roster minus self), each
   // tagged with the group id. Returns the local 'sent' record + a relays-reached tally (NOT a
   // delivery receipt). Throws only if no member's wrap reached any relay.
-  sendGroupMessage(groupId: string, memberPubkeysHex: string[], plaintext: string): Promise<GroupSendResult>
+  // `media` (images M3): the blob is uploaded ONCE beforehand and the identical reference goes to
+  // every member, so roster size costs wraps, not uploads.
+  sendGroupMessage(groupId: string, memberPubkeysHex: string[], plaintext: string, media?: MediaRef): Promise<GroupSendResult>
 
   // Group definition control message: fan out the group's { name, roster } to its members (minus
   // self) so their clients learn the group exists. Empty-of-prose → no chat bubble on receipt.

@@ -17,10 +17,14 @@ import { sendConfidential, tariToMicrotari, MAX_FEE } from '../../crypto/confide
 import { resolveOnsNameToHex, toOnsName, type OnsResolveErrorKind } from '../../crypto/ons'
 import { ConnectionIndicator, RelayHealthPanel } from './ConnectionStatus'
 import { usePaymentResolution } from '../../hooks/usePaymentResolution'
-import { avatarFor, initialsFor, truncNpub, bubbleTime, compactTime, MONO } from './chatDisplay'
+import { avatarFor, initialsFor, truncNpub, bubbleTime, compactTime, mergeThreadItems, threadContentKey, MONO } from './chatDisplay'
 import Avatar from './Avatar'
 import MessageBubble from './MessageBubble'
 import { beginFlight, canEditMessage, displayTextFor, flightFor, isEditSubmittable, settleFlight, clearFlight, type EditFlightMap } from './messageEdit'
+import MediaMessageCard from './MediaMessageCard'
+import { describeMediaFailure, describeMediaStage, sendImageToGroup, sendImageToPeer, type MediaSendStage } from '../../messaging/sendMedia'
+import { putBlob } from '../../messaging/blobCache'
+import AttachPreview from './AttachPreview'
 import { groupGlyph } from './groupGlyph'
 
 // ── Conversation derivation ─────────────────────────────────────────────────────
@@ -246,14 +250,13 @@ export default function ChatApp() {
   // Composer state.
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
-  const [sendError, setSendError] = useState<string | null>(null)
   // Per-message send overlay (design lifecycle): provisional bubbles rendered while a plain-text
   // send is in flight, then removed once the real persisted message appears (or marked 'failed').
   // ChatApp-local only — never persisted, never on the wire; the send path itself is unchanged.
-  const [pendingSends, setPendingSends] = useState<(PendingSend & { peerHex: string })[]>([])
+  const [pendingSends, setPendingSends] = useState<(PendingSend & { peerHex: string; file?: File; caption?: string })[]>([])
   // Group equivalent, keyed on groupId (the parallel to pendingSends' peerHex). Same lifecycle:
   // provisional bubble before the fan-out resolves, removed on success, marked failed on throw.
-  const [pendingGroupSends, setPendingGroupSends] = useState<(PendingSend & { groupId: string })[]>([])
+  const [pendingGroupSends, setPendingGroupSends] = useState<(PendingSend & { groupId: string; file?: File; caption?: string })[]>([])
   // EDIT MODE (M3). The FOURTH exclusive composer state, alongside normal / paymentMode / confirming
   // — all four bind `draft`, so entering one while another is active would have them fight over the
   // same textarea. `stashedDraft` holds whatever the user had half-typed, restored verbatim on
@@ -279,6 +282,11 @@ export default function ChatApp() {
   const [groupSendNote, setGroupSendNote] = useState<{ groupId: string; kind: 'send' | 'edit'; reached: number; total: number } | null>(null)
 
   // Payment (TARI) composer state.
+  // ATTACH MODE (images M5): the picked-but-not-yet-sent image. A FIFTH exclusive composer state
+  // alongside normal / paymentMode / confirming — attaching while composing a payment would have the
+  // two fighting over the same textarea, which in attach mode is the caption field.
+  const [attachment, setAttachment] = useState<File | null>(null)
+  const imageInputRef = useRef<HTMLInputElement | null>(null)
   const [paymentMode, setPaymentMode] = useState(false)
   const [payAmount, setPayAmount] = useState('')       // tTARI, as typed
   const [payAddress, setPayAddress] = useState('')     // recipient otl_esm_ (manual — see caveat)
@@ -433,7 +441,7 @@ export default function ChatApp() {
   // offered, and the shortfall is reported honestly in the composer footer instead.
   async function sendToGroup(groupId: string, members: string[], text: string) {
     const tempId = `gpending-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
-    setPendingGroupSends(p => [...p, { id: tempId, groupId, text, status: 'sending' }])
+    setPendingGroupSends(p => [...p, { id: tempId, groupId, text, status: 'sending', attemptedAt: Date.now() }])
     setGroupSendNote(null)
     try {
       const provider = createMessagingProvider()
@@ -472,6 +480,7 @@ export default function ChatApp() {
   function retryGroupSend(id: string) {
     const entry = pendingGroupSends.find(x => x.id === id)
     if (!entry) return
+    if (entry.file) { retryImage(id); return }   // image entry — re-run the image path
     const group = groups.find(g => g.id === entry.groupId)
     if (!group) return
     setPendingGroupSends(p => p.filter(x => x.id !== id))
@@ -631,12 +640,11 @@ export default function ChatApp() {
     const text = draft.trim()
     if (!text || !selectedConvo || sending || editing) return
     setSending(true)
-    setSendError(null)
     const peer = selectedConvo.peerHex
     // Overlay (flag 1): show a provisional "sending" bubble immediately. Additive — the send path
     // below is unchanged.
     const tempId = `pending-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
-    setPendingSends(p => [...p, { id: tempId, peerHex: peer, text, status: 'sending' }])
+    setPendingSends(p => [...p, { id: tempId, peerHex: peer, text, status: 'sending', attemptedAt: Date.now() }])
     try {
       const provider = createMessagingProvider()
       // Locked wallet → null. Surface a clear reason rather than leaking a null-reference error.
@@ -653,16 +661,128 @@ export default function ChatApp() {
       // The design's failed bubble shows only "Couldn't send" + Retry (no raw string), so log the
       // underlying relay error here — a systematic failure stays diagnosable in the console.
       console.warn('[Caravel] message send failed:', e)
-      setSendError(e instanceof Error ? e.message : String(e))
       setPendingSends(p => p.map(x => x.id === tempId ? { ...x, status: 'failed' } : x))  // failed bubble + Retry; draft kept
     } finally {
       setSending(false)
     }
   }
 
+  // ── Image sending (images M5) ────────────────────────────────────────────────
+  //
+  // ChatApp owns the provider, so it owns the send for BOTH threads: the DM composer calls this
+  // directly, and GroupThread hands its picked file up via onSendImage.
+  //
+  // An image send gets the SAME provisional bubble a text send has always had — 'sending' (labelled
+  // with the pipeline stage), then either the real row or a failed bubble carrying stage-specific
+  // copy and, only where it could work, a Retry. The File rides on the pending entry so Retry can
+  // re-run it. ChatApp-local state only: never persisted, never on the wire.
+  const [imageBusy, setImageBusy] = useState(false)
+  // The current pipeline stage, shown on the preview panel while a send runs. Null when idle.
+  const [imageStage, setImageStage] = useState<string | null>(null)
+
+  async function sendImage(file: File, caption: string | undefined, target: { groupId: string; members: string[] } | { peerHex: string }) {
+    if (imageBusy) return
+    setImageBusy(true)
+    const tempId = `img-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+    const inGroup = 'groupId' in target
+    // Stage labels ride on the provisional bubble's text so the user can see WHERE a slow send is —
+    // preparing a large photo, uploading, or waiting on relays are very different waits.
+    const setStage = (stage: MediaSendStage) => {
+      const words = describeMediaStage(stage)
+      setImageStage(words)
+      const label = `${file.name} · ${words}`
+      if (inGroup) setPendingGroupSends(p => p.map(x => x.id === tempId ? { ...x, text: label } : x))
+      else setPendingSends(p => p.map(x => x.id === tempId ? { ...x, text: label } : x))
+    }
+
+    if (inGroup) setPendingGroupSends(p => [...p, { id: tempId, groupId: target.groupId, text: file.name, status: 'sending', attemptedAt: Date.now(), file, caption }])
+    else setPendingSends(p => [...p, { id: tempId, peerHex: target.peerHex, text: file.name, status: 'sending', attemptedAt: Date.now(), file, caption }])
+
+    const provider = createMessagingProvider()
+    try {
+      if (!provider) throw new Error('Wallet is locked — unlock to send')
+      if (inGroup) {
+        const { result, plaintextBytes } = await sendImageToGroup(provider, file, target.groupId, target.members, caption, setStage)
+        recordSentMessage(result.message)
+        seedOwnImage(result.message, plaintextBytes)
+        setPendingGroupSends(p => p.filter(x => x.id !== tempId))
+      } else {
+        const addr = outboundAddressFor(target.peerHex)
+        const { message, plaintextBytes } = await sendImageToPeer(provider, file, target.peerHex, caption, addr, setStage)
+        recordSentMessage(message)
+        seedOwnImage(message, plaintextBytes)
+        if (addr) markSent(target.peerHex)
+        setPendingSends(p => p.filter(x => x.id !== tempId))
+      }
+    } catch (e) {
+      // Logged for diagnosis AND surfaced on the bubble — the console alone is not a user interface.
+      console.warn('[Caravel] image send failed:', e)
+      const failure = describeMediaFailure(e, file)
+      const restore = (x: { id: string }) => x.id === tempId
+      if (inGroup) setPendingGroupSends(p => p.map(x => restore(x) ? { ...x, text: file.name, status: 'failed', failure } : x))
+      else setPendingSends(p => p.map(x => restore(x) ? { ...x, text: file.name, status: 'failed', failure } : x))
+    } finally {
+      provider?.disconnect()
+      setImageBusy(false)
+      setImageStage(null)
+    }
+  }
+
+  // SENDER-SEED (the M4 deferral, contract documented at both ends). We already hold the decrypted
+  // bytes we just encrypted and uploaded, so writing them straight into the blob cache means our own
+  // image renders instantly from cache instead of round-tripping our own upload back from the host.
+  //
+  // Fire-and-forget and idempotent: the resolver reads the same cache first, and a `put` on the same
+  // key at worst overwrites identical bytes.
+  function seedOwnImage(message: CaravelMessage, plaintextBytes: ArrayBuffer) {
+    if (!nostrPubkeyHex || !message.media) return
+    void putBlob(nostrPubkeyHex, message.media.x, plaintextBytes, message.media.mime)
+  }
+
+  // Picked from the DM composer. GroupThread has its own picker and routes through onSendImage.
+  async function sendImageToSelectedPeer(file: File, caption: string | undefined) {
+    if (!selectedConvo) return
+    await sendImage(file, caption, { peerHex: selectedConvo.peerHex })
+  }
+
+  // Retry a failed image send by re-running it with the File kept on the pending entry. Only
+  // reachable where describeMediaFailure marked the failure retryable — an undecodable file or an
+  // over-cap one shows no Retry at all, because a second attempt gives the identical result.
+  function retryImage(id: string) {
+    const dm = pendingSends.find(x => x.id === id)
+    const grp = pendingGroupSends.find(x => x.id === id)
+    const entry = dm ?? grp
+    if (!entry?.file) return
+    // Re-target from the entry itself rather than from the currently-open thread: a retry must go
+    // back where it was attempted even if the user has since switched conversations.
+    const group = grp ? groups.find(g => g.id === grp.groupId) : undefined
+    if (grp && !group) return
+    setPendingSends(p => p.filter(x => x.id !== id))
+    setPendingGroupSends(p => p.filter(x => x.id !== id))
+    // The caption rides on the entry too — a retry that silently dropped it would send a different
+    // message from the one the user composed.
+    void sendImage(entry.file, entry.caption, grp
+      ? { groupId: group!.id, members: group!.members }
+      : { peerHex: dm!.peerHex })
+  }
+
+  // Clear a failed provisional bubble. The ONLY deliberate way out, and the only one at all for a
+  // terminal failure such as an undecodable image, which shows no Retry.
+  //
+  // Text sends have needed this since they were built: their apparent dismiss was an accident —
+  // Retry removed the entry and then handleSend() bailed on the first line because the composer was
+  // empty. That happened to work and was never intended to be the mechanism.
+  function dismissPending(id: string) {
+    setPendingSends(p => p.filter(x => x.id !== id))
+    setPendingGroupSends(p => p.filter(x => x.id !== id))
+  }
+
   // Retry a failed provisional send: drop the failed bubble and re-run the send (the draft still
   // holds the text, since a failed send never clears it).
   function retrySend(id: string) {
+    // An image entry carries its File — re-run the image path rather than re-reading the composer
+    // draft, which has nothing to do with it.
+    if (pendingSends.find(x => x.id === id)?.file) { retryImage(id); return }
     setPendingSends(p => p.filter(x => x.id !== id))
     handleSend()
   }
@@ -672,11 +792,15 @@ export default function ChatApp() {
   // Load a message into the composer. Refused while any other composer state owns the draft
   // (payment compose / confirm) or while a send is in flight — all of them bind the same textarea.
   function beginEdit(logicalId: string, currentText: string) {
-    if (paymentMode || confirming || sending || payBusy) return
+    // `attachment` belongs in this list for the same reason as the others, and it is the one neither
+    // feature branch could have added alone: attach mode uses this same textarea as the image's
+    // CAPTION field while edit mode uses it as the EDIT field, both bound to `draft`. With an image
+    // picked, starting an edit would have the caption and the edit text overwrite each other and
+    // Save/Send act on whichever won — silently, with nothing thrown and nothing failing to compile.
+    if (paymentMode || confirming || sending || payBusy || attachment) return
     setStashedDraft(editing ? stashedDraft : draft)   // don't clobber the stash when re-targeting
     setEditing({ logicalId, original: currentText })
     setDraft(currentText)
-    setSendError(null)
     composerRef.current?.focus()
   }
 
@@ -874,15 +998,27 @@ export default function ChatApp() {
   // with GroupThread so the two views can't drift — see useScrollToBottom.
   const selectedPeerHex = selectedConvo?.peerHex ?? null
   // Pending sends count too, so a provisional bubble is scrolled into view as soon as it appears
-  // instead of only when the real message lands. Same rule in GroupThread — one behaviour.
+  // instead of only when the real message lands — AND so the swap to the real row re-fires, which a
+  // bare total never did. Same rule in GroupThread — one behaviour. See threadContentKey.
   const bottomRef = useScrollToBottom(
     selectedPeerHex,
-    (selectedConvo?.messages.length ?? 0) + pendingSends.filter(p => p.peerHex === selectedPeerHex).length,
+    threadContentKey(selectedConvo?.messages ?? [], pendingSends.filter(p => p.peerHex === selectedPeerHex)),
   )
 
   // Reset the payment composer when switching conversations so a half-filled payment can't carry
   // across to a different peer. The must-acknowledge alert banner is intentionally NOT reset here.
+  //
+  // `attachment` belongs in here for the same reason, and more urgently (images M5): a picked photo
+  // left mounted across a thread switch would sit in the new conversation's composer, and pressing
+  // Send would deliver it TO THE WRONG PERSON. That is a privacy failure, not a UI wrinkle.
+  //
+  // Switching between a DM and a GROUP does not necessarily change selectedPeerHex — but it does not
+  // need to: the DM composer is not rendered while a group thread is open (the right pane renders one
+  // or the other), so the preview is unmounted and its object URL revoked, and coming back lands on
+  // the SAME peer it was picked for. Only a change of peer can misdirect a send, and that is exactly
+  // what this dependency tracks.
   useEffect(() => {
+    setAttachment(null)
     setPaymentMode(false)
     setConfirming(false)
     setPayError(null)
@@ -1331,12 +1467,17 @@ export default function ChatApp() {
               onSaveEdit={runEdit}
               onRetryEdit={retryEdit}
               onDismissEdit={(logicalId) => setEditFlights(x => clearFlight(x, logicalId))}
+              onDismissPending={dismissPending}
               /* Leave (B-M1) replaces Delete as the thread's exit action: 'left' is the stronger
                  suppression (delete's "forget until re-invited" resurrects the group as a pending
                  invite on the next message) and it keeps the roster the B-M2 notice fans out to. */
               onLeave={() => handleLeaveGroup(selectedGroup)}
               /* Re-invite (C-M2): open the picker. Sending is the modal's confirm, not this click. */
               onReinvite={() => setReinviteFor(selectedGroup.id)}
+              /* GroupThread owns its own composer + preview; ChatApp owns the provider, so the
+                 confirmed file comes back up here to be sent. */
+              onSendImage={(file, caption) => sendImage(file, caption, { groupId: selectedGroup.id, members: selectedGroup.members })}
+              imageStageLabel={imageStage}
             />
           ) : selectedConvo === null ? (
             /* Chat pane at rest (design: sail + reassurance) */
@@ -1464,8 +1605,27 @@ export default function ChatApp() {
               </div>
             )}
 
-            {selectedConvo.messages.map((m) => {
+            {/* Real messages and provisional bubbles in ONE chronological pass. Pending rows used to
+                render in a separate map after this one, which pinned a failed send to the bottom of
+                the thread forever — see mergeThreadItems. */}
+            {mergeThreadItems(selectedConvo.messages, pendingForPeer).map((item) => {
+              if (item.kind === 'pending') {
+                const p = item.pending
+                return (
+                  <PendingBubble
+                    key={p.id}
+                    text={p.text}
+                    status={p.status}
+                    failure={p.failure}
+                    onRetry={() => retrySend(p.id)}
+                    onDismiss={() => dismissPending(p.id)}
+                  />
+                )
+              }
+              const m = item.message
               if (m.payment) return <PaymentMessageCard key={m.id} message={m} />
+              /* Encrypted image (images M4): resolves itself — cache first, then the host. */
+              if (m.media) return <MediaMessageCard key={m.id} message={m} />
               const flight = flightFor(m, editFlights)
               const editable = canEditMessage(m)
               return (
@@ -1507,11 +1667,6 @@ export default function ChatApp() {
                 </Fragment>
               )
             })}
-
-            {/* Pending-send overlay (design lifecycle: sending → failed + Retry) */}
-            {pendingForPeer.map((p) => (
-              <PendingBubble key={p.id} text={p.text} status={p.status} onRetry={() => retrySend(p.id)} />
-            ))}
             {/* Auto-scroll anchor */}
             <div ref={bottomRef} />
           </div>
@@ -1605,7 +1760,7 @@ export default function ChatApp() {
                     </div>
                   )}
                   {/* note (dashed) */}
-                  <textarea value={draft} onChange={e => { setDraft(e.target.value); if (sendError) setSendError(null) }} placeholder="Add a note (optional)…" rows={1} maxLength={MAX_MESSAGE_LEN} style={{ display: 'block', width: '100%', boxSizing: 'border-box', padding: '12px 14px', borderRadius: 11, background: 'var(--surface-raised)', border: '1px dashed rgba(var(--teal-500-rgb),0.24)', fontSize: 13, color: 'var(--text-note)', fontStyle: draft ? 'normal' : 'italic', outline: 'none', resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.4, marginBottom: 14 }} />
+                  <textarea value={draft} onChange={e => setDraft(e.target.value)} placeholder="Add a note (optional)…" rows={1} maxLength={MAX_MESSAGE_LEN} style={{ display: 'block', width: '100%', boxSizing: 'border-box', padding: '12px 14px', borderRadius: 11, background: 'var(--surface-raised)', border: '1px dashed rgba(var(--teal-500-rgb),0.24)', fontSize: 13, color: 'var(--text-note)', fontStyle: draft ? 'normal' : 'italic', outline: 'none', resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.4, marginBottom: 14 }} />
                   {/* buttons */}
                   <div style={{ display: 'flex', gap: 10 }}>
                     <button onClick={toggleTari} style={{ flex: '0 0 120px', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 12, borderRadius: 11, border: '1px solid rgba(var(--border-rgb),0.2)', background: 'transparent', color: 'var(--text-muted)', fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
@@ -1652,6 +1807,24 @@ export default function ChatApp() {
                 </div>
               )}
 
+              {/* Picked image, awaiting Send (images M5) — same slot the payment card uses. */}
+              {attachment && !paymentMode && !confirming && (
+                <AttachPreview
+                  file={attachment}
+                  busy={imageBusy}
+                  stageLabel={imageStage}
+                  onSend={() => {
+                    const file = attachment
+                    const caption = draft.trim()
+                    void sendImageToSelectedPeer(file, caption || undefined).then(() => {
+                      setAttachment(null)
+                      setDraft('')
+                    })
+                  }}
+                  onCancel={() => setAttachment(null)}
+                />
+              )}
+
               {/* Text composer row (design) — TARI toggle + input + send. Emoji button removed. */}
               {!paymentMode && !confirming && (
                 <div style={{ display: 'flex', alignItems: 'flex-end', gap: 12 }}>
@@ -1663,12 +1836,35 @@ export default function ChatApp() {
                   >
                     <svg width={22} height={22} viewBox="0 0 24 24" fill="none" stroke="var(--ink-on-accent)" strokeWidth={2.3} strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>
                   </button>
+                  {/* accept="image/*" and NEVER image/heic: iOS converts a picked HEIC to JPEG for
+                      us, but Safari 17+ inverts that if heic is listed explicitly — it then converts
+                      JPEGs TO heic, which no desktop browser can decode. */}
+                  <input
+                    ref={imageInputRef}
+                    type="file"
+                    accept="image/*"
+                    style={{ display: 'none' }}
+                    onChange={e => {
+                      const picked = e.target.files?.[0]
+                      if (picked) setAttachment(picked)
+                      // Reset so picking the SAME file again still fires a change event.
+                      e.target.value = ''
+                    }}
+                  />
+                  <button
+                    onClick={() => imageInputRef.current?.click()}
+                    disabled={imageBusy}
+                    title="Attach an image"
+                    style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 46, height: 46, flexShrink: 0, borderRadius: 12, border: '1px solid rgba(var(--border-rgb),0.16)', background: 'var(--surface-inset)', cursor: imageBusy ? 'default' : 'pointer', opacity: imageBusy ? 0.5 : 1, padding: 0 }}
+                  >
+                    <svg width={21} height={21} viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round"><rect x={3} y={3} width={18} height={18} rx={2} /><circle cx={8.5} cy={8.5} r={1.5} /><path d="M21 15l-5-5L5 21" /></svg>
+                  </button>
                   <div style={{ flex: 1, display: 'flex', alignItems: 'center', padding: '13px 17px', borderRadius: 13, background: 'var(--surface-raised)', border: '1px solid rgba(var(--border-rgb),0.14)' }}>
                     <textarea
                       ref={composerRef}
                       className="cv-composer"
                       value={draft}
-                      onChange={e => { setDraft(e.target.value); if (sendError) setSendError(null) }}
+                        onChange={e => setDraft(e.target.value)}
                       onKeyDown={e => {
                         if (e.key === 'Escape' && editing) { e.preventDefault(); cancelEdit(); return }
                         if (e.key === 'Enter' && !e.shiftKey) {
@@ -1676,7 +1872,7 @@ export default function ChatApp() {
                           if (editing) void saveEdit(); else onComposerSend()
                         }
                       }}
-                      placeholder={editing ? 'Edit your message…' : 'Write an encrypted message…'}
+                        placeholder={editing ? 'Edit your message…' : attachment ? 'Add a caption…' : 'Write an encrypted message…'}
                       rows={1}
                       maxLength={MAX_MESSAGE_LEN}
                       disabled={inputsDisabled}

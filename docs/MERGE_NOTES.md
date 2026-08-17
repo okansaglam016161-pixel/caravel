@@ -105,17 +105,35 @@ binding a value to the wrong meaning. Under the old positional signature `tariAd
 `logicalId` were **all `string`**, so a transposition was invisible to `tsc`.
 
 **Call-site volume:** 3 production sites per branch (all in `NostrMessagingProvider.ts`) plus
-**12 test call sites per branch** — the test file is the bulk of the mechanical work.
+**2 test calls on `edit-messages` and 6 on `image-attachments`** — 8 in total, not the 24 an earlier
+draft of this file claimed. That figure came from grepping `wrapMessage(`, which also matches
+`unwrapMessage(`; the real mechanical load is small.
 
-### The cross-feature rules git DOES surface
+### The media-is-not-editable rules — ONE surfaces, ONE DOES NOT
 
-These *were* real conflicts, so the merge will surface them again and they need no checklist — listed
-only so nobody re-derives them:
+**Corrected during the real merge.** These were previously recorded together as "git surfaces both".
+That is wrong, and the half that does not surface is the dangerous one:
 
-- `!m.media` in `canEditMessage` (`messageEdit.ts`) — an image row is not editable, because editing
-  replaces `plaintext`, which on a media row is only the caption.
-- `if (m.media) return <MediaMessageCard/>` before the editable branch in **both** threads' render
-  dispatch — the structural half of the same guard.
+- **`if (m.media) return <MediaMessageCard/>` before the editable branch — SURFACES.** Both threads'
+  render dispatch is a genuine conflict (the two branches restructured the same loop), so resolving it
+  forces you to place the media guard consciously.
+
+- **`!m.media` in `canEditMessage` (`messageEdit.ts`) — DOES **NOT** SURFACE. Add it by hand.**
+  `messageEdit.ts` exists ONLY on `edit-messages`; `image-attachments` has no such file, so there is
+  nothing for git to conflict with. The file auto-merges whole and the predicate arrives as
+
+  ```ts
+  return m.direction === 'sent' && !m.system && !!m.logicalId && !m.payment   // ← no !m.media
+  ```
+
+  **Symptom if missed:** an image row keeps its edit pencil. Editing it rewrites `plaintext`, which on
+  a media row is only the CAPTION — so the caption silently changes while the image stays. Nothing
+  throws, nothing fails to compile, no test catches it. This is a THIRD silent fix, alongside items 1
+  and 2 above.
+
+  The structural guard alone is not sufficient cover: it stops a media row *rendering* as an editable
+  bubble, but `canEditMessage` is also consumed elsewhere, and leaving the predicate wrong leaves the
+  two halves disagreeing about what is editable.
 
 ---
 

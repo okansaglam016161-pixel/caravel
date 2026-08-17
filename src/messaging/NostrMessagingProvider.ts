@@ -1,7 +1,7 @@
 import type { NostrEvent, Filter } from 'nostr-tools'
 import { Relay, type Subscription } from 'nostr-tools/relay'
 import { wrapMessage, wrapGroupDefinition, wrapGroupLeave, wrapEdit, unwrapMessage, publishGiftWrap, newLogicalId } from '../crypto/nostrMessaging'
-import type { CaravelMessage, GroupDef, GroupSendResult, MessagingConnectionStatus, MessagingProvider, PaymentRef, RelayState } from './types'
+import type { CaravelMessage, GroupDef, GroupSendResult, MediaRef, MessagingConnectionStatus, MessagingProvider, PaymentRef, RelayState } from './types'
 
 function hexToBytes(hex: string): Uint8Array {
   const arr = new Uint8Array(hex.length / 2)
@@ -142,11 +142,15 @@ export class NostrMessagingProvider implements MessagingProvider {
     }
   }
 
-  async sendMessage(recipientPubkeyHex: string, plaintext: string, payment?: PaymentRef, tariAddress?: string): Promise<CaravelMessage> {
+  // `media` (images M3) attaches an already-uploaded encrypted image. The provider deliberately knows
+  // NOTHING about Blossom: uploading happens before this is called, in messaging/sendMedia.ts, the
+  // same way submitPayment settles an on-chain transaction before sending a message that references
+  // it. This just carries the reference.
+  async sendMessage(recipientPubkeyHex: string, plaintext: string, payment?: PaymentRef, tariAddress?: string, media?: MediaRef): Promise<CaravelMessage> {
     // M2: mint the logical id BEFORE wrapping and keep it on the local row, so sender and recipient
     // store the same handle for this message and an edit can name it.
     const logicalId = newLogicalId()
-    const wrapped = wrapMessage(this.secretKey, recipientPubkeyHex, plaintext, { payment, tariAddress, logicalId })
+    const wrapped = wrapMessage(this.secretKey, recipientPubkeyHex, plaintext, { payment, tariAddress, logicalId, media })
     const results = await publishGiftWrap(wrapped, [...this.relayUrls], PUBLISH_TIMEOUT_MS, CONNECT_TIMEOUT_MS)
 
     const anyOk = results.some(r => r.ok)
@@ -164,6 +168,7 @@ export class NostrMessagingProvider implements MessagingProvider {
       direction: 'sent',
       payment,
       logicalId,
+      ...(media ? { media } : {}),
     }
   }
 
@@ -227,7 +232,12 @@ export class NostrMessagingProvider implements MessagingProvider {
   // instead — Caravel never self-wraps, so there is no cross-device echo; see messageStore). The
   // returned count is RELAY ACCEPTANCE, not delivery — a member accepted-for-propagation may still
   // never receive it. Throws only if no member's wrap reached any relay at all.
-  async sendGroupMessage(groupId: string, memberPubkeysHex: string[], plaintext: string): Promise<GroupSendResult> {
+  //
+  // `media` (images M3): ONE upload, N wraps. The blob is uploaded once before this is called and the
+  // SAME reference — same url, same key, same nonce, same hash — goes to every member, so the group
+  // costs one upload no matter how large the roster. (Each member does fetch it independently, so it
+  // is N downloads from the host; see the durability note in config/blossom.ts.)
+  async sendGroupMessage(groupId: string, memberPubkeysHex: string[], plaintext: string, media?: MediaRef): Promise<GroupSendResult> {
     const recipients = memberPubkeysHex.filter(m => m && m !== this.pubkeyHex)
     // ONE logical id for the whole fan-out (M2): every member's wrap carries the same value, so all
     // N copies plus our local row name the same logical message. This is exactly what `id` cannot
@@ -236,7 +246,7 @@ export class NostrMessagingProvider implements MessagingProvider {
     const logicalId = newLogicalId()
     let membersReached = 0
     await Promise.all(recipients.map(async member => {
-      const wrapped = wrapMessage(this.secretKey, member, plaintext, { groupId, logicalId })
+      const wrapped = wrapMessage(this.secretKey, member, plaintext, { groupId, logicalId, media })
       const results = await publishGiftWrap(wrapped, [...this.relayUrls], PUBLISH_TIMEOUT_MS, CONNECT_TIMEOUT_MS)
       if (results.some(r => r.ok)) membersReached++
     }))
@@ -254,6 +264,7 @@ export class NostrMessagingProvider implements MessagingProvider {
       direction: 'sent',
       groupId,
       logicalId,
+      ...(media ? { media } : {}),
     }
     return { message, memberCount: recipients.length, membersReached }
   }
@@ -557,7 +568,7 @@ export class NostrMessagingProvider implements MessagingProvider {
     if (this.seen.has(event.id)) return
     this.seen.add(event.id)
     try {
-      const { senderPubkeyHex, plaintext, payment, tariAddress, groupId, groupDef, groupLeave, groupReinvite, logicalId, edit } = unwrapMessage(this.secretKey, event)
+      const { senderPubkeyHex, plaintext, payment, tariAddress, groupId, groupDef, groupLeave, groupReinvite, logicalId, edit, media } = unwrapMessage(this.secretKey, event)
 
       // A group DEFINITION is a control message (no chat bubble): hand it to the group callback and
       // stop. The gate (accept only from known contacts) lives with the callback, which has the
@@ -609,7 +620,13 @@ export class NostrMessagingProvider implements MessagingProvider {
         this.onContactAddressCallback?.(senderPubkeyHex, tariAddress)
         // Dedicated silent control message: address tag over empty content → no bubble.
         // A piggybacked address (address tag on a real message) has content and renders below.
-        if (plaintext.trim() === '') return
+        //
+        // `&& !media` (images M3) is load-bearing, not defensive. Empty content stopped meaning
+        // "nothing to show" the moment images arrived: a CAPTIONLESS image sends a single space (the
+        // NIP-44 one-byte floor), which trims to empty — so without this clause, the very first image
+        // sent to a new peer would piggyback the address, hit this return, and be SILENTLY DROPPED.
+        // `!payment` guards the same shape for a payment with no note.
+        if (plaintext.trim() === '' && !media && !payment) return
       }
 
       const msg: CaravelMessage = {
@@ -624,6 +641,12 @@ export class NostrMessagingProvider implements MessagingProvider {
         ...(groupId ? { groupId } : {}),
         // M2: absent on messages from a pre-M2 sender, which are therefore not editable.
         ...(logicalId ? { logicalId } : {}),
+        // An encrypted image (images M3). Note there is deliberately NO early-return intercept for
+        // media above, unlike groupDef/groupLeave: those are CONTROL messages with nothing to store,
+        // whereas a media message is an ordinary message that also has an image. Falling through here
+        // is what gives it the known-contact gate, the left-group drop, tombstoning, group routing and
+        // persistence for free — intercepting it would mean reimplementing every one of them.
+        ...(media ? { media } : {}),
       }
       this.onMessageCallback?.(msg)
     } catch (e) {

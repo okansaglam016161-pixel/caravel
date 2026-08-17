@@ -2,7 +2,7 @@ import type { NostrEvent } from 'nostr-tools'
 import { wrapEvent } from 'nostr-tools/nip59'
 import { getConversationKey, decrypt } from 'nostr-tools/nip44'
 import { Relay } from 'nostr-tools/relay'
-import type { PaymentRef, GroupDef } from '../messaging/types'
+import type { PaymentRef, GroupDef, MediaRef } from '../messaging/types'
 
 // NIP-17 gift-wrap: https://github.com/nostr-protocol/nips/blob/master/17.md
 // Wraps a plaintext message in three layers: rumor (kind 14) → seal (kind 13, NIP-44) →
@@ -108,6 +108,77 @@ function extractEdit(tags: string[][] | undefined): { targetLogicalId: string; r
     const revision = Number(rawRevision)
     if (!Number.isSafeInteger(revision)) return undefined
     return { targetLogicalId, revision }
+  }
+  return undefined
+}
+
+// Caravel encrypted-image tag (images M3) — same seal-protected, versioned pattern as its siblings.
+//   ["caravel-media","v1","<MediaRef as JSON>"]
+//
+// THE PAYLOAD IS JSON IN THE TAG VALUE, not spread across positional tag elements and not placed in
+// the rumor content. Both alternatives were worse:
+//   - positional (["caravel-media","v1",url,key,nonce,mime,x,ox,w,h,size]) is an eleven-element tag
+//     nobody can read, where adding a field later (blurhash) is a breaking index change;
+//   - JSON in `content` is how caravel-group-def carries its payload, but a group def is a CONTROL
+//     message with nothing to say. A media message is an ORDINARY message that also has an image, so
+//     `content` belongs to the CAPTION. Putting the ref there would evict the caption.
+// Keeping the ref as one self-describing JSON value preserves the [NAME, VERSION, value] shape every
+// other Caravel tag uses, and makes future fields additive with no version bump.
+//
+// The whole thing rides inside the seal, so the decryption key is invisible to relays AND to the blob
+// host — the host holds ciphertext it can never read, which is what makes third-party hosting
+// compatible with end-to-end encryption.
+const MEDIA_TAG = 'caravel-media'
+const MEDIA_VERSION = 'v1'
+
+// Upper bound on the media JSON from an untrusted peer. A real ref is ~400 bytes (url ~90, key 44,
+// nonce 16, x/ox 128, the rest small); 4KB leaves generous room for future fields while stopping a
+// peer from pushing an unbounded string into localStorage. Same reasoning as the length bounds on
+// the other attacker-controlled tag values.
+const MAX_MEDIA_JSON_LEN = 4096
+
+// Pulls the encrypted-image reference out of a rumor's tags (images M3).
+//
+// Every field is validated. An unknown version, malformed JSON, a missing or blank required field, a
+// non-finite dimension or an oversized value ALL degrade to undefined — which routes the rumor down
+// the ordinary message path, so it renders as a plain (captioned) message rather than as a
+// half-populated ref the resolver would then fail on. Same discipline as extractPaymentRef: a reader
+// that doesn't fully understand a tag must ignore it, never guess at it.
+function extractMedia(tags: string[][] | undefined): MediaRef | undefined {
+  if (!tags) return undefined
+  for (const tag of tags) {
+    if (tag[0] !== MEDIA_TAG) continue
+    if (tag[1] !== MEDIA_VERSION) return undefined
+    const raw = tag[2]
+    if (typeof raw !== 'string' || raw.length === 0 || raw.length > MAX_MEDIA_JSON_LEN) return undefined
+    try {
+      const parsed = JSON.parse(raw) as Partial<Record<keyof MediaRef, unknown>>
+      const str = (v: unknown) => (typeof v === 'string' && v.length > 0 ? v : undefined)
+      const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : undefined)
+
+      const url = str(parsed.url)
+      const key = str(parsed.key)
+      const nonce = str(parsed.nonce)
+      const x = str(parsed.x)
+      const ox = str(parsed.ox)
+      const mime = str(parsed.mime)
+      const width = num(parsed.width)
+      const height = num(parsed.height)
+      const size = num(parsed.size)
+      // url/key/nonce/x are load-bearing: without any one of them the image cannot be fetched,
+      // decrypted or verified, so a ref missing one is not a degraded ref — it is not a ref.
+      if (!url || !key || !nonce || !x) return undefined
+      return {
+        url, key, nonce, x,
+        ox: ox ?? '',
+        mime: mime ?? 'application/octet-stream',
+        width: width ?? 0,
+        height: height ?? 0,
+        size: size ?? 0,
+      }
+    } catch {
+      return undefined
+    }
   }
   return undefined
 }
@@ -220,6 +291,10 @@ export interface WrapMessageOptions {
   // M2. Pass it for real messages (DM + group) and OMIT it for the silent address control message,
   // which creates no row and therefore has nothing to edit.
   logicalId?: string
+  // images M3. When present, `plaintext` is the image's CAPTION and may be a single space — the same
+  // one-byte floor wrapGroupLeave and the address control message use, since NIP-44 requires at least
+  // one byte of content.
+  media?: MediaRef
 }
 
 // Wraps plaintext (and any optional tags) for the recipient. Builds the kind-14 rumor ourselves —
@@ -232,7 +307,7 @@ export function wrapMessage(
   plaintext: string,
   opts: WrapMessageOptions = {}
 ): NostrEvent {
-  const { payment, tariAddress, groupId, logicalId } = opts
+  const { payment, tariAddress, groupId, logicalId, media } = opts
   // Tag order is preserved exactly as it was under the positional signature. Readers match on
   // tag[0] so order does not affect parsing, but keeping it identical means this refactor changes
   // the call shape and nothing about the bytes on the wire.
@@ -241,6 +316,7 @@ export function wrapMessage(
   if (tariAddress) tags.push([ADDRESS_TAG, ADDRESS_TAG_VERSION, tariAddress])
   if (groupId) tags.push([GROUP_TAG, GROUP_TAG_VERSION, groupId])
   if (logicalId) tags.push([MSGID_TAG, MSGID_VERSION, logicalId])
+  if (media) tags.push([MEDIA_TAG, MEDIA_VERSION, JSON.stringify(media)])
   const rumor = {
     kind: KIND_PRIVATE_DM,
     created_at: Math.round(Date.now() / 1000),
@@ -333,7 +409,7 @@ export function wrapEdit(
 export function unwrapMessage(
   recipientSecretKey: Uint8Array,
   giftWrapEvent: NostrEvent
-): { senderPubkeyHex: string; plaintext: string; payment?: PaymentRef; tariAddress?: string; groupId?: string; groupDef?: GroupDef; groupLeave?: boolean; groupReinvite?: boolean; logicalId?: string; edit?: { targetLogicalId: string; revision: number } } {
+): { senderPubkeyHex: string; plaintext: string; payment?: PaymentRef; tariAddress?: string; groupId?: string; groupDef?: GroupDef; groupLeave?: boolean; groupReinvite?: boolean; logicalId?: string; edit?: { targetLogicalId: string; revision: number }; media?: MediaRef } {
   // Layer 1: decrypt gift wrap (kind 1059) → seal (kind 13)
   const sealKey = getConversationKey(recipientSecretKey, giftWrapEvent.pubkey)
   const seal = JSON.parse(decrypt(giftWrapEvent.content, sealKey)) as {
@@ -369,6 +445,7 @@ export function unwrapMessage(
     groupReinvite: extractGroupReinvite(rumor.tags),
     logicalId: extractMsgId(rumor.tags),
     edit: extractEdit(rumor.tags),
+    media: extractMedia(rumor.tags),
   }
 }
 

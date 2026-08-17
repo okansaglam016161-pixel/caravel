@@ -75,6 +75,8 @@ docs/DERIVATION.md   How the wallet + Nostr identities derive from one BIP-39 ph
 
 - [`docs/DERIVATION.md`](docs/DERIVATION.md) — key derivation: how the Tari wallet and Nostr
   identity both come from the same 24-word phrase.
+- [`docs/KNOWN_ISSUES.md`](docs/KNOWN_ISSUES.md) — confirmed defects that are diagnosed but not yet
+  fixed, including what was ruled out, so a fix doesn't repeat the investigation.
 
 ## Status & security
 

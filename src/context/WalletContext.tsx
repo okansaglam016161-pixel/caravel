@@ -22,6 +22,8 @@ import { loadSeenDefIdSet, recordSeenDef } from '../messaging/seenDefStore'
 import type { Group } from '../messaging/types'
 import { loadTombstoneIdSet, recordTombstones } from '../messaging/tombstoneStore'
 import { removeResolvedAmounts } from '../messaging/paymentResolutionStore'
+import { deleteBlobs } from '../messaging/blobCache'
+import { mediaBlobKeys } from '../messaging/sendMedia'
 import { loadContacts, setContactState, removeContact, type ContactMap } from '../messaging/contactStore'
 import { loadTariAddresses, setTariAddress, type TariAddressMap } from '../messaging/tariAddressStore'
 import { DEFAULT_RELAYS } from '../config/relays'
@@ -558,6 +560,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     )
     const ids = inConvo.map(m => m.id)
     const utxoIds = inConvo.map(m => m.payment?.utxoId).filter((x): x is string => !!x)
+    // Cached image blobs for this conversation (images M3, closing the M1 deferral). Harvested from
+    // the doomed rows BEFORE they are removed, exactly as utxoIds are.
+    const blobKeys = mediaBlobKeys(inConvo)
 
     // 1) Tombstone FIRST — persist + block the live subscription immediately.
     recordTombstones(pubkeyHex, ids)
@@ -567,6 +572,10 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     //    known-peers set) so a later message from them arrives as a FRESH pending request — this
     //    unifies delete and decline (hide-and-forget).
     removeResolvedAmounts(pubkeyHex, utxoIds)
+    // FIRE-AND-FORGET: the blob cache is async (IndexedDB) while this function is synchronous, and it
+    // is non-authoritative anyway — a purge that fails leaves unreachable bytes the browser evicts,
+    // never a broken delete. So delete returns before the blobs are gone, deliberately.
+    void deleteBlobs(pubkeyHex, blobKeys)
     knownPeersRef.current.delete(peerHex)
     setContacts(prev => removeContact(pubkeyHex, prev, peerHex))
     setContactAddresses(prev => setTariAddress(pubkeyHex, prev, peerHex, '', 'manual'))  // blank → clear
@@ -681,9 +690,15 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     const pubkeyHex = nostrPubkeyHex
     if (!pubkeyHex) return
     // Tombstone the group's MESSAGE ids so the backfill replay can't re-add them.
-    const ids = messages.filter(m => m.groupId === groupId).map(m => m.id)
+    const inGroup = messages.filter(m => m.groupId === groupId)
+    const ids = inGroup.map(m => m.id)
     recordTombstones(pubkeyHex, ids)
     for (const id of ids) tombstonesRef.current.add(id)
+    // Purge this group's cached image blobs (images M3). DELETE ONLY — leaveGroup and declineGroup
+    // are non-destructive (they KEEP the messages, hidden by state, so a re-invite reads as old
+    // thread + gap + new), and purging there would leave that preserved history with permanently
+    // broken images.
+    void deleteBlobs(pubkeyHex, mediaBlobKeys(inGroup))
     // A DEFINITION creates no stored message, so message-id tombstones can't cover it — suppress by
     // GROUP ID instead: onGroupDefinition drops a replayed def for a deleted, still-absent group.
     // Works for every group (legacy included); a genuine new message still re-materialises it.

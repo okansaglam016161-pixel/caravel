@@ -40,6 +40,109 @@ export function bubbleTime(ts: number): string {
   return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
+// The on-screen box for an image attachment (images M4): fit (width × height) inside maxW × maxH,
+// preserving aspect ratio.
+//
+// This is the spine of the media card, not a cosmetic detail. The SAME box is rendered in every
+// state — loading, retrying, ready, failed — using dimensions recorded at send time, so the decoded
+// image drops into space already reserved. Without it, a thread of loading images would jerk the
+// scroll position every time one resolved.
+//
+// Falls back to 4:3 for a ref carrying no dimensions: extractMedia deliberately lets those through,
+// since a missing width does not stop an image being fetched and decrypted.
+export function mediaBoxSize(width: number, height: number, maxW: number, maxH: number): { w: number; h: number } {
+  // Either dimension missing means we know nothing about the shape, so fall back to a FULL-SIZE 4:3
+  // box rather than to the literal numbers 4 and 3 — which would reserve a four-pixel box and defeat
+  // the whole purpose. (Both are defaulted together by extractMedia, but a half-valid pair must not
+  // produce a nonsense aspect either.)
+  const known = Number.isFinite(width) && width > 0 && Number.isFinite(height) && height > 0
+  const srcW = known ? width : maxW
+  const srcH = known ? height : (maxW * 3) / 4
+  let w = Math.min(maxW, srcW)
+  let h = Math.round((w * srcH) / srcW)
+  if (h > maxH) {
+    h = maxH
+    w = Math.round((h * srcW) / srcH)
+  }
+  // Floors of 1: an extreme aspect ratio must never round a side to zero, which would collapse the
+  // box and reintroduce the layout jump this function exists to prevent.
+  return { w: Math.max(1, w), h: Math.max(1, h) }
+}
+
+// One chronologically-ordered list of a thread's real messages and its provisional (sending/failed)
+// bubbles, so both views render a single pass instead of appending pending rows at the end.
+//
+// WHY THIS EXISTS: pending bubbles used to render in a separate map AFTER the messages, which pinned
+// them to the bottom of the thread forever. Correct for an in-flight send — it IS the newest thing —
+// but a FAILED entry lingers, and every later message pushed it further out of place until it sat
+// below messages sent long after it, still claiming to be the most recent thing in the thread.
+//
+// ONE RULE COVERS BOTH STATUSES, which is why there is no special-casing here: a 'sending' entry is
+// by construction the newest, so ordering by time puts it at the bottom anyway. Only the
+// after-the-fact case changes.
+//
+// TIES: messages sort before pending at the same instant. Array.prototype.sort is stable and
+// `messages` is concatenated first, so that falls out rather than needing a comparator branch — but
+// it is deliberate, not incidental: a real row beats a provisional one for the same moment.
+export type ThreadItem<M, P> =
+  | { kind: 'message'; at: number; message: M }
+  | { kind: 'pending'; at: number; pending: P }
+
+export function mergeThreadItems<M extends { timestamp: number }, P extends { attemptedAt: number }>(
+  messages: readonly M[],
+  pending: readonly P[],
+): ThreadItem<M, P>[] {
+  const items: ThreadItem<M, P>[] = [
+    ...messages.map(message => ({ kind: 'message' as const, at: message.timestamp, message })),
+    ...pending.map(p => ({ kind: 'pending' as const, at: p.attemptedAt, pending: p })),
+  ]
+  return items.sort((a, b) => a.at - b.at)
+}
+
+// The auto-scroll trigger for a thread: changes whenever the rendered content could have grown.
+//
+// A BARE COUNT IS NOT ENOUGH, which is what broke image sends. `messages.length + pending.length` is
+// IDENTICAL either side of a successful send — the provisional row is removed in the same commit the
+// real one is added — so the scroll fired for the pending bubble and never again. Text got away with
+// it because a provisional text bubble and a real one are the same height. An image does not: a
+// ~50px filename bubble is replaced by a card up to 400px tall, and the thread was left that far
+// short of the bottom.
+//
+// Including each pending row's STATUS also catches 'sending' → 'failed', where the bubble grows by a
+// label, a hint and its buttons — so a failure that arrives after a long upload is scrolled into
+// view rather than appearing just below the fold.
+export function threadContentKey(
+  messages: readonly unknown[],
+  pending: readonly { status: string }[],
+): string {
+  return `${messages.length}:${pending.map(p => p.status).join(',')}`
+}
+
+// Filename offered when saving an image out of the lightbox (images M5).
+//
+// The decrypted bytes have no name of their own — the original filename is deliberately never sent
+// (it would leak "IMG_4821.HEIC" or worse to the recipient, and the whole pipeline re-encodes to a
+// new format anyway). So one is composed from the message's own timestamp, which is stable: saving
+// the same image twice offers the same name rather than a new one each second.
+//
+// Extension comes from the POST-processing MIME, since that is what the bytes actually are.
+const EXTENSION_BY_MIME: Record<string, string> = {
+  'image/webp': 'webp',
+  'image/jpeg': 'jpg',
+  'image/png': 'png',
+  'image/gif': 'gif',
+}
+
+export function mediaFilename(mime: string, timestamp: number): string {
+  const ext = EXTENSION_BY_MIME[(mime || '').toLowerCase()] ?? 'img'
+  const d = new Date(timestamp)
+  // Local time, not ISO/UTC: the name should match when the user remembers receiving it. Padded so
+  // names sort correctly in a file listing.
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const stamp = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`
+  return `caravel-${stamp}.${ext}`
+}
+
 // Stable avatar gradient per peer — the design's 5 avatar-token pairs (teal/slate/plum/moss/amber),
 // assigned by hash of the contact key.
 const AVATARS = [

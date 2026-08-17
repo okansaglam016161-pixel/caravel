@@ -1,0 +1,103 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Blossom browser probe</title>
+<style>
+  body { background:#0A0E17; color:#E4EAF4; font:14px/1.6 ui-monospace,monospace; padding:24px; }
+  h1 { font-size:15px; color:#2DE0C6; }
+  .row { margin:14px 0; padding:12px; border:1px solid rgba(120,150,210,.2); border-radius:8px; }
+  .ok { color:#2DE0C6; } .bad { color:#FF6B6B; } .dim { color:#8A97B4; }
+</style>
+</head>
+<body>
+<h1>BLOSSOM BROWSER PROBE — real origin, real CORS preflight</h1>
+<div class="dim">Origin: <span id="origin"></span></div>
+<div id="out"></div>
+
+<!--
+  The DEFINITIVE half of the M2 host probe. The Node pass (blossom-probe.mjs) established which
+  hosts accept an opaque AES-GCM ciphertext at all; it cannot answer whether the browser will let
+  us talk to them, because Node does not enforce CORS.
+
+  This matters specifically because a PUT carrying an Authorization header is never a "simple
+  request" — the browser MUST send an OPTIONS preflight first and refuse the PUT unless the
+  response allows the method, the origin, and the Authorization header. A host can pass the Node
+  probe and still fail here, which would mean uploads work from a script and fail in the app.
+-->
+<script type="module">
+import { finalizeEvent, generateSecretKey } from 'nostr-tools/pure'
+
+document.getElementById('origin').textContent = location.origin
+const out = document.getElementById('out')
+
+const HOSTS = ['https://nostr.download', 'https://cdn.hzrd149.com', 'https://files.sovbit.host']
+
+const hex = b => [...new Uint8Array(b)].map(x => x.toString(16).padStart(2, '0')).join('')
+const sha256 = async b => hex(await crypto.subtle.digest('SHA-256', b))
+const b64url = s => btoa(String.fromCharCode(...new TextEncoder().encode(s)))
+  .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+
+async function ciphertext() {
+  const keyBytes = crypto.getRandomValues(new Uint8Array(32))
+  const nonce = crypto.getRandomValues(new Uint8Array(12))
+  const key = await crypto.subtle.importKey('raw', keyBytes, 'AES-GCM', false, ['encrypt', 'decrypt'])
+  const plaintext = crypto.getRandomValues(new Uint8Array(4096))
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: nonce }, key, plaintext))
+  return { ct, key, nonce, plaintext }
+}
+
+function token(digest) {
+  const sk = generateSecretKey()
+  const now = Math.floor(Date.now() / 1000)
+  const ev = finalizeEvent({
+    kind: 24242, created_at: now, content: 'Upload encrypted image',
+    tags: [['t', 'upload'], ['expiration', String(now + 300)], ['x', digest]],
+  }, sk)
+  return b64url(JSON.stringify(ev))
+}
+
+for (const host of HOSTS) {
+  const div = document.createElement('div')
+  div.className = 'row'
+  div.innerHTML = `<b>${host}</b><br><span class="dim">probing…</span>`
+  out.appendChild(div)
+  const log = []
+  try {
+    const { ct, key, nonce, plaintext } = await ciphertext()
+    const digest = await sha256(ct)
+
+    // The PUT the browser will actually make — preflight and all.
+    const up = await fetch(`${host}/upload`, {
+      method: 'PUT',
+      headers: { Authorization: `Nostr ${token(digest)}`, 'Content-Type': 'application/octet-stream' },
+      body: ct,
+    })
+    log.push(`upload   : ${up.status} ${up.ok ? 'OK' : 'FAIL'}`)
+    if (!up.ok) throw new Error(`upload ${up.status}`)
+    const desc = await up.json().catch(() => ({}))
+    const url = desc.url ?? `${host}/${digest}`
+    log.push(`url      : ${url}`)
+
+    // Download it back, verify byte-exactness, then actually decrypt — the full round trip the app
+    // will perform, including the CORS-gated cross-origin GET.
+    const down = await fetch(url)
+    log.push(`download : ${down.status}`)
+    const back = new Uint8Array(await down.arrayBuffer())
+    const byteExact = (await sha256(back)) === digest
+    log.push(`byteExact: ${byteExact}`)
+    const dec = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: nonce }, key, back))
+    const match = dec.length === plaintext.length && dec.every((v, i) => v === plaintext[i])
+    log.push(`decrypt  : ${match ? 'PLAINTEXT MATCHES' : 'MISMATCH'}`)
+    div.innerHTML = `<b class="ok">✅ ${host}</b><br>` + log.join('<br>')
+  } catch (e) {
+    // A CORS failure surfaces here as an opaque "Failed to fetch" — that IS the signal.
+    log.push(`<span class="bad">ERROR: ${e.message}</span>`)
+    div.innerHTML = `<b class="bad">❌ ${host}</b><br>` + log.join('<br>')
+  }
+}
+const done = document.createElement('div')
+done.id = 'probe-done'
+done.textContent = 'PROBE COMPLETE'
+out.appendChild(done)
+</script>
+</body>
+</html>

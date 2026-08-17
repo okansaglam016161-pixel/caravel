@@ -13,15 +13,17 @@
 //   keyed by logicalId, must survive a thread switch), while which bubble is loaded into the
 //   composer is local, because the composer itself is local.
 
-import { Fragment, useEffect, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import type { CaravelMessage, Group } from '../../messaging/types'
 import Avatar from './Avatar'
 import MessageBubble from './MessageBubble'
-import { MONO } from './chatDisplay'
+import MediaMessageCard from './MediaMessageCard'
+import { mergeThreadItems, threadContentKey, MONO } from './chatDisplay'
 import { groupGlyph } from './groupGlyph'
 import { useScrollToBottom } from './useScrollToBottom'
 import PendingBubble, { type PendingSend } from './PendingBubble'
 import { canEditMessage, displayTextFor, flightFor, isEditSubmittable, type EditFlightMap } from './messageEdit'
+import AttachPreview from './AttachPreview'
 
 // A group with no real name yet (a lazy placeholder learned from a message before its definition).
 function groupTitle(g: Group): string {
@@ -29,7 +31,7 @@ function groupTitle(g: Group): string {
 }
 
 export default function GroupThread({
-  group, messages, pending, nameFor, onSend, onRetryPending, onLeave, onReinvite, sendNote,
+  group, messages, pending, nameFor, onSend, onRetryPending, onDismissPending, onLeave, onReinvite, sendNote, onSendImage, imageStageLabel,
   editFlights, onSaveEdit, onRetryEdit, onDismissEdit,
 }: {
   group: Group
@@ -38,6 +40,8 @@ export default function GroupThread({
   nameFor: (hex: string) => string  // sender display name (nickname ?? truncated npub)
   onSend: (text: string) => Promise<void>
   onRetryPending: (id: string) => void
+  // Clears a failed provisional bubble — the only way out of a terminal failure, which shows no Retry.
+  onDismissPending: (id: string) => void
   onLeave: () => void
   onReinvite: () => void   // opens the member picker (C-M2); does not send on its own
   // Honest partial-fan-out note for the composer footer, or null. Never claims delivery.
@@ -52,8 +56,19 @@ export default function GroupThread({
   onSaveEdit: (logicalId: string, text: string) => Promise<void>
   onRetryEdit: (logicalId: string) => void
   onDismissEdit: (logicalId: string) => void
+  // ChatApp owns the messaging provider, so the CONFIRMED file (post-preview) goes back up to it to
+  // be sent. Resolves when the send settles, so this composer can clear its preview.
+  onSendImage: (file: File, caption: string | undefined) => Promise<void>
+  // Which pipeline stage a running image send is in ("Preparing…" etc), or null. Owned by ChatApp,
+  // which runs the send, so both composers show the identical progress wording.
+  imageStageLabel: string | null
 }) {
   const [draft, setDraft] = useState('')
+  // ATTACH MODE (images M5) — this composer's fourth state, alongside draft/sending/menu. The picked
+  // image waits here until Send; the textarea doubles as its caption field.
+  const [attachment, setAttachment] = useState<File | null>(null)
+  const [imageBusy, setImageBusy] = useState(false)
+  const imageInputRef = useRef<HTMLInputElement | null>(null)
   const [sending, setSending] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   // EDIT MODE (M4) — the group mirror of ChatApp's fourth composer state, minus the payment
@@ -72,11 +87,19 @@ export default function GroupThread({
   // A roster of just me (or a placeholder with no roster yet) has nobody to re-invite.
   const canReinvite = group.members.length > 1
   // Same auto-scroll as the DM thread, from the shared hook. Keyed on group.id because this
-  // component is reused (not remounted) when switching groups; the count covers send and receive
-  // alike, including system notices, which are new rows at the bottom like any other.
-  // Pending sends count toward the scroll trigger so the provisional bubble is scrolled into view
-  // the instant it appears, rather than when the fan-out finally resolves.
-  const bottomRef = useScrollToBottom(group.id, messages.length + pending.length)
+  // component is reused (not remounted) when switching groups; the content key covers send and
+  // receive alike, including system notices, which are new rows at the bottom like any other.
+  // Pending sends are in the key so the provisional bubble is scrolled into view the instant it
+  // appears — and so the swap to the real row re-fires, which a bare count never did.
+  const bottomRef = useScrollToBottom(group.id, threadContentKey(messages, pending))
+
+  // MANDATORY reset on group switch (images M5). This component is REUSED, not remounted, when the
+  // selected group changes — the same reason useScrollToBottom is keyed on group.id — so without this
+  // a picked photo would stay in the composer and Send would fan it out TO THE WRONG ROSTER. That is
+  // a privacy failure, not a UI wrinkle, which is why it sits beside the group id rather than being
+  // left to the component's lifecycle. Clearing `attachment` unmounts AttachPreview, which is also
+  // what revokes its object URL.
+  useEffect(() => { setAttachment(null) }, [group.id])
 
   // Any dismissal drops the confirm step too, so re-opening the menu always starts at step one.
   function closeMenu() { setMenuOpen(false); setConfirmLeave(false) }
@@ -91,7 +114,9 @@ export default function GroupThread({
 
   // Load a message into the composer. Refused while a send is in flight — both bind this textarea.
   function beginEdit(logicalId: string, currentText: string) {
-    if (sending) return
+    // `|| attachment` for the same reason as the DM composer: attach mode uses this textarea as the
+    // image's CAPTION field and edit mode uses it as the EDIT field, both bound to `draft`.
+    if (sending || attachment) return
     setStashedDraft(editing ? stashedDraft : draft)   // don't clobber the stash when re-targeting
     setEditing({ logicalId, original: currentText })
     setDraft(currentText)
@@ -227,7 +252,23 @@ export default function GroupThread({
             <div style={{ fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.55 }}>Messages are sent to every member, end to end encrypted.</div>
           </div>
         )}
-        {messages.map((m, i) => {
+        {/* Real messages and provisional bubbles in ONE chronological pass — see mergeThreadItems.
+            A failed send used to be pinned below every later message, forever. */}
+        {mergeThreadItems(messages, pending).map((item, i, items) => {
+          if (item.kind === 'pending') {
+            const p = item.pending
+            return (
+              <PendingBubble
+                key={p.id}
+                text={p.text}
+                status={p.status}
+                failure={p.failure}
+                onRetry={() => onRetryPending(p.id)}
+                onDismiss={() => onDismissPending(p.id)}
+              />
+            )
+          }
+          const m = item.message
           // System NOTICE (B-M2) — an inline centered line, never a bubble. Visual only: the roster
           // is unchanged, so the header still counts the leaver among the members (Phase 1 has no
           // roster edit). Text is composed here; the stored row carries empty plaintext.
@@ -237,6 +278,11 @@ export default function GroupThread({
                 {nameFor(m.senderPubkeyHex)} has left the chat
               </div>
             )
+          }
+          // An encrypted image (images M4). Same component and same resolver as the DM thread, on
+          // both sides — a group image is fetched and decrypted per member, from one upload.
+          if (m.media) {
+            return <MediaMessageCard key={m.id} message={m} />
           }
           if (m.direction === 'sent') {
             // My own group message: the same edit affordance the DM thread offers, on the same
@@ -285,7 +331,13 @@ export default function GroupThread({
           // Group consecutive same-sender received messages: avatar + label once per run. A system
           // line BREAKS the run — otherwise the sender header would be wrongly suppressed after an
           // interruption, since prev.senderPubkeyHex still matches across the notice.
-          const prev = messages[i - 1]
+          //
+          // A PENDING bubble breaks it too, and deliberately: it is a genuine visual interruption,
+          // exactly as one of my own sent bubbles already is. Resolving `prev` to undefined for a
+          // pending item is what does it — simpler and more honest than scanning backwards past
+          // provisional rows to find the last real message.
+          const prevItem = items[i - 1]
+          const prev = prevItem?.kind === 'message' ? prevItem.message : undefined
           const firstOfRun = !prev || prev.system !== undefined || prev.direction !== 'received' || prev.senderPubkeyHex !== m.senderPubkeyHex
           return (
             <MessageBubble
@@ -303,11 +355,6 @@ export default function GroupThread({
             />
           )
         })}
-        {/* Pending-send overlay — same lifecycle and markup as the DM view. Retry is offered only
-            when the send reached nobody; a partial fan-out is not retryable (it would duplicate). */}
-        {pending.map(p => (
-          <PendingBubble key={p.id} text={p.text} status={p.status} onRetry={() => onRetryPending(p.id)} />
-        ))}
         {/* Auto-scroll anchor */}
         <div ref={bottomRef} />
       </div>
@@ -327,7 +374,39 @@ export default function GroupThread({
           </div>
         )}
 
+        {attachment && (
+          <AttachPreview
+            file={attachment}
+            busy={imageBusy}
+            stageLabel={imageStageLabel}
+            onSend={() => {
+              const file = attachment
+              const caption = draft.trim()
+              setImageBusy(true)
+              void onSendImage(file, caption || undefined)
+                .then(() => { setAttachment(null); setDraft('') })
+                .finally(() => setImageBusy(false))
+            }}
+            onCancel={() => setAttachment(null)}
+          />
+        )}
         <div style={{ display: 'flex', alignItems: 'flex-end', gap: 12 }}>
+          {/* accept="image/*" and NEVER image/heic — see the DM composer for why. */}
+          <input
+            ref={imageInputRef}
+            type="file"
+            accept="image/*"
+            style={{ display: 'none' }}
+            onChange={e => { const picked = e.target.files?.[0]; if (picked) setAttachment(picked); e.target.value = '' }}
+          />
+          <button
+            onClick={() => imageInputRef.current?.click()}
+            disabled={imageBusy}
+            title="Attach an image"
+            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 46, height: 46, flexShrink: 0, borderRadius: 12, border: '1px solid rgba(var(--border-rgb),0.16)', background: 'var(--surface-inset)', cursor: imageBusy ? 'default' : 'pointer', opacity: imageBusy ? 0.5 : 1, padding: 0 }}
+          >
+            <svg width={21} height={21} viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round"><rect x={3} y={3} width={18} height={18} rx={2} /><circle cx={8.5} cy={8.5} r={1.5} /><path d="M21 15l-5-5L5 21" /></svg>
+          </button>
           <div style={{ flex: 1, display: 'flex', alignItems: 'center', padding: '13px 17px', borderRadius: 13, background: 'var(--surface-raised)', border: '1px solid rgba(var(--border-rgb),0.14)' }}>
             <textarea
               className="cv-composer"
@@ -340,7 +419,7 @@ export default function GroupThread({
                   if (editing) void saveEdit(); else void send()
                 }
               }}
-              placeholder={editing ? 'Edit your message…' : 'Message the group…'}
+                  placeholder={editing ? 'Edit your message…' : attachment ? 'Add a caption…' : 'Message the group…'}
               rows={1}
               maxLength={2000}
               disabled={sending}

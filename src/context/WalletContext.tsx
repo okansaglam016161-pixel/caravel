@@ -15,7 +15,7 @@ import { scanWallet, type ScannedUtxo, type ScanProgress } from '../crypto/walle
 import { loadHistory, addSent, type SentEntry, type NewSentParams } from '../crypto/txHistory'
 import { NostrMessagingProvider } from '../messaging/NostrMessagingProvider'
 import type { MessagingProvider, MessagingConnectionStatus, CaravelMessage, RelayState } from '../messaging/types'
-import { loadMessages, addReceivedMessage, addSentMessage, deletePeerMessages, deleteGroupMessages } from '../messaging/messageStore'
+import { loadMessages, addReceivedMessage, addSentMessage, deletePeerMessages, deleteGroupMessages, applyEditByLogicalId, editReachOk, editTargetsLeftGroup, nextRevision } from '../messaging/messageStore'
 import { loadGroups, addOrUpdateGroup, ensureGroup, setGroupState, hasGroup, getGroupState, deleteGroup as removeGroupFromStore } from '../messaging/groupStore'
 import { loadDeletedGroupIdSet, recordDeletedGroup, clearDeletedGroup } from '../messaging/deletedGroupStore'
 import { loadSeenDefIdSet, recordSeenDef } from '../messaging/seenDefStore'
@@ -50,6 +50,20 @@ const SCAN_IDLE: ScanState = {
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
+
+// The outcome of editMessage (M4). Widened from a bare boolean when group editing landed: a group
+// edit is a FAN-OUT, so "it worked" is not one bit of information — reaching 1 of 5 members and
+// reaching 5 of 5 are both `ok`, and collapsing them would leave the sender's UI quietly implying
+// full delivery. The counts let the caller report the shortfall honestly.
+//
+// memberCount/membersReached are GROUP-ONLY and absent on a DM result: a DM has a single recipient,
+// so there is no partial reach to describe (`ok` already says whether a relay accepted).
+// Both counts are RELAY ACCEPTANCE, never delivery — same caveat as GroupSendResult.
+export interface EditResult {
+  ok: boolean
+  memberCount?: number
+  membersReached?: number
+}
 
 export interface WalletCtx {
   walletExists: boolean
@@ -116,6 +130,13 @@ export interface WalletCtx {
    *  resurrect them), then clear its messages + resolved payment amounts + contact record. Also
    *  the decline path — local-only. */
   deleteConversation: (peerHex: string) => void
+  /** Edit an already-sent message — DM or group (M4): publish the edit, then apply it locally IF it
+   *  got far enough (a relay accepted for a DM; at least one member was reached for a group).
+   *  `ok` is false when the message can't be edited (not ours, no logicalId, a system row, empty
+   *  text, a group that is gone or not active) or nothing accepted at all.
+   *  The counts are GROUP-ONLY and absent for a DM, which has no such thing as partial reach.
+   *  Best-effort throughout — see MessagingProvider.sendEdit / sendGroupEdit. */
+  editMessage: (logicalId: string, newText: string) => Promise<EditResult>
   /** Factory: returns a ready-to-use MessagingProvider backed by the current identity,
    *  or null if the wallet is locked. The secret key stays inside the closure — callers
    *  receive a working provider but never see the raw key. */
@@ -384,6 +405,28 @@ export function WalletProvider({ children }: { children: ReactNode }) {
           // `reinvite` (Phase C) is the one exception, and only for state === 'left' → 'pending'.
           return addOrUpdateGroup(pubkeyHex, prev, def, 'pending', { reinvite: lifting })
         })
+      },
+      // Inbound EDIT (M2/M4). Almost every check lives in the store, and the one that matters most is
+      // AUTHORSHIP — applyEdit refuses unless this authenticated sender (seal.pubkey, verified against
+      // the rumor pubkey in unwrapMessage) is the original message's sender. So an edit naming a
+      // message we don't have, one we deleted, one from someone else, or one carrying a stale revision
+      // all resolve to the same thing: the array comes back unchanged, by reference.
+      //
+      // That authorship guard is also what makes a GROUP edit safe (M4): every member legitimately
+      // learns the logicalId of every group message, so a member CAN address an edit at another
+      // member's message — and every recipient, including the original author, rejects it here.
+      //
+      // The ONE gate the store cannot make is the group-lifecycle one, added in M4. An edit carries no
+      // group tag on the wire, so this is keyed on the target row we already hold — see
+      // editTargetsLeftGroup. Without it a LEFT group would keep mutating: leave/decline are
+      // non-destructive, so its rows are still here, and an edit would rewrite hidden history in a
+      // group whose contract (B-M2) is that nothing about it touches the store again. A DELETED
+      // group's rows are gone, so that case is already the unknown-logicalId no-op.
+      (senderPubkeyHex, targetLogicalId, newText, revision) => {
+        setMessages(prev => {
+          if (editTargetsLeftGroup(prev, targetLogicalId, leftGroupsRef.current)) return prev
+          return applyEditByLogicalId(pubkeyHex, prev, targetLogicalId, newText, revision, senderPubkeyHex)
+        })
       }
     )
   }, [])
@@ -539,6 +582,74 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     return new NostrMessagingProvider(secretHex, nostrPubkeyHex, DEFAULT_RELAYS)
   }, [nostrPubkeyHex])
 
+  // Edit an already-sent message — DM (M2) or GROUP (M4). SEND FIRST, apply locally only once the
+  // edit got far enough, so a send that went nowhere never leaves this device reading text nobody
+  // else will ever see. (M3's UI is optimistic ON TOP of this: the bubble shows the new text while
+  // the publish is outstanding and snaps back if this resolves !ok. The STORE is still only written
+  // here, on success.)
+  //
+  // The destination is DERIVED from stored state rather than passed in, so this can't be called with
+  // a mismatched (message, recipient) pair: a DM takes the row's recipient, a group takes the CURRENT
+  // roster of the row's group. Both refuse rather than guess when that state is missing.
+  //
+  // Group editing needed no data migration — sendGroupMessage has minted and carried a shared
+  // logicalId on every copy since M2; M4 only added the fan-out that names it.
+  const editMessage = useCallback(async (logicalId: string, newText: string): Promise<EditResult> => {
+    const pubkeyHex = nostrPubkeyHex
+    if (!pubkeyHex || !logicalId) return { ok: false }
+    const text = newText.trim()
+    if (!text) return { ok: false }
+
+    const row = messages.find(m => m.logicalId === logicalId)
+    if (!row) return { ok: false }
+    if (row.direction !== 'sent') return { ok: false }   // only my own message — see canEditMessage
+    if (row.system) return { ok: false }                 // never a system notice
+
+    // One past whatever has been applied. Derived from stored state, so a failed send that is
+    // retried recomputes the SAME number rather than drifting; a stale read is a benign no-op
+    // because the recipient's strictly-newer guard rejects a duplicate revision.
+    const revision = nextRevision(messages, logicalId)
+
+    // GROUP: fan the edit out to the roster, exactly as the message itself was fanned out.
+    if (row.groupId) {
+      // Gated to an ACTIVE group, matching leaveGroup/reinviteGroup: a group that is gone, declined
+      // or left has no roster to address and is not a thread you should be editing into. (No UI can
+      // reach this — a non-active group renders no thread — but the context must not depend on that.)
+      const group = groups.find(g => g.id === row.groupId)
+      if (!group || group.state !== 'active') return { ok: false }
+
+      const provider = createMessagingProvider()
+      if (!provider) return { ok: false }
+      try {
+        const { memberCount, membersReached } = await provider.sendGroupEdit(group.id, group.members, logicalId, text, revision)
+        // TOTAL failure only. Reaching some members is the same best-effort outcome a group message
+        // has: those members are already showing the new text, so refusing to apply locally would
+        // put THIS device out of step with them. The shortfall is reported by the caller instead.
+        const ok = editReachOk(memberCount, membersReached)
+        if (!ok) return { ok, memberCount, membersReached }
+        setMessages(prev => applyEditByLogicalId(pubkeyHex, prev, logicalId, text, revision, pubkeyHex))
+        return { ok, memberCount, membersReached }
+      } finally {
+        provider.disconnect()
+      }
+    }
+
+    // DM: single recipient, single relay-acceptance bit.
+    const recipient = row.recipientPubkeyHex
+    if (!recipient) return { ok: false }
+
+    const provider = createMessagingProvider()
+    if (!provider) return { ok: false }
+    try {
+      const ok = await provider.sendEdit(recipient, logicalId, text, revision)
+      if (!ok) return { ok: false }
+      setMessages(prev => applyEditByLogicalId(pubkeyHex, prev, logicalId, text, revision, pubkeyHex))
+      return { ok: true }
+    } finally {
+      provider.disconnect()
+    }
+  }, [nostrPubkeyHex, messages, groups, createMessagingProvider])
+
   // Create a group locally (random 32-byte id, self included in the roster) and fan its definition
   // out to the other members so their clients learn it. Delivery is best-effort (relays-reached, not
   // a receipt) and never blocks creation. Members are already my contacts, so their gate accepts me.
@@ -658,7 +769,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       messagingStatus, messages,
       generateMnemonic, createWallet, unlock, restore, lock, getMnemonic, rescan, recordSent,
       recordSentMessage, contacts, acceptContact, contactAddresses, setManualTariAddress,
-      deleteConversation, createMessagingProvider, getRelayStates, reconnectAll,
+      deleteConversation, editMessage, createMessagingProvider, getRelayStates, reconnectAll,
       balanceHidden, setBalanceHidden,
       groups, createGroup, deleteGroup, acceptGroup, declineGroup, leaveGroup, reinviteGroup,
     }}>

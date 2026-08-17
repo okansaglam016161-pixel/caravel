@@ -130,6 +130,20 @@ a:hover { color: var(--accL); }
 .cv-step:hover { border-color: rgba(var(--accRGB), 0.4) !important; }
 .cv-conv:hover { background: #10161F; }
 
+/* Chat composer + per-message edit affordance (M3/M4). Shared by BOTH chat views — the DM thread in
+   ChatApp and the group thread in GroupThread — which is exactly why they live here rather than in a
+   <style> element inside one of them. They used to sit in ChatApp's DM composer branch, which React
+   unmounts whenever a group is selected: the group pencil then had no opacity:0 rule and sat visible
+   at rest, and the group composer's placeholder fell back to the browser default. A rule that two
+   mutually-exclusive subtrees both depend on cannot be owned by either one. */
+.cv-composer::placeholder { color: var(--text-faint-dim); }
+.cv-msg-edit { opacity: 0; transition: opacity 0.15s; }
+/* Revealed by hovering the bubble's action row (MessageBubble wraps actions + bubble in it), or by
+   keyboard focus — the affordance must be reachable without a pointer. */
+.cv-msg-actionrow:hover .cv-msg-edit { opacity: 1; }
+.cv-msg-edit:focus-visible { opacity: 1; }
+.cv-msg-edit:hover { color: var(--text-primary); border-color: rgba(var(--teal-500-rgb), 0.4); }
+
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-thumb { background: rgba(120,150,210,0.2); border-radius: 4px; }
 

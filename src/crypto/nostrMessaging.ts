@@ -47,6 +47,71 @@ const GROUP_LEAVE_VERSION = 'v1'
 const GROUP_REINVITE_TAG = 'caravel-group-reinvite'
 const GROUP_REINVITE_VERSION = 'v1'
 
+// Caravel message-identity + edit tags (M2) — same seal-protected, versioned pattern.
+//   ["caravel-msgid","v1","<32-hex>"]   the message's stable LOGICAL id, generated once per logical
+//     message at send time and copied onto every wrap of it. `id` cannot serve this purpose: a group
+//     send fans out N wraps with N distinct event ids and keeps a synthetic local id, so sender and
+//     recipients would never agree on a name. This is the handle an edit points at.
+//   ["caravel-edit","v1","<target-logical-id>","<revision>"]   this rumor REPLACES the text of the
+//     message with that logical id. The new text is the rumor CONTENT, not a tag field, so a client
+//     that doesn't know the tag shows the corrected text as an ordinary message rather than nothing.
+//     `revision` is a positive integer, strictly increasing per message — event time cannot order
+//     edits because gift wraps fuzz created_at by up to 2 days (see CaravelMessage.timestamp).
+//     The editor's identity is NOT in the payload: it is seal.pubkey, authenticated by the NIP-17
+//     invariant enforced in unwrapMessage, and the receiver checks it against the original sender.
+const MSGID_TAG = 'caravel-msgid'
+const MSGID_VERSION = 'v1'
+const EDIT_TAG = 'caravel-edit'
+const EDIT_VERSION = 'v1'
+
+// Upper bound on an id arriving from an untrusted peer. We mint 32 hex chars; the slack leaves room
+// for a future format without letting a peer push an unbounded string into localStorage.
+const MAX_LOGICAL_ID_LEN = 64
+
+// A fresh logical message id: 16 random bytes as hex. Generated ONCE per logical message — for a
+// group fan-out (M4) the same value goes on all N wraps, which is the whole point of the field.
+export function newLogicalId(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(16))
+  let hex = ''
+  for (const b of bytes) hex += b.toString(16).padStart(2, '0')
+  return hex
+}
+
+// Pulls the logical message id out of a rumor's tags (same version discipline as its siblings,
+// plus a length bound since this value is attacker-controlled).
+function extractMsgId(tags: string[][] | undefined): string | undefined {
+  if (!tags) return undefined
+  for (const tag of tags) {
+    if (tag[0] !== MSGID_TAG) continue
+    if (tag[1] !== MSGID_VERSION) return undefined
+    const id = tag[2]
+    if (typeof id !== 'string' || id.length === 0 || id.length > MAX_LOGICAL_ID_LEN) return undefined
+    return id
+  }
+  return undefined
+}
+
+// Pulls an edit instruction out of a rumor's tags. Everything is validated: an unknown version, a
+// missing/oversized target, or a revision that isn't a positive integer all degrade to undefined,
+// which routes the rumor down the ORDINARY message path (it shows as a plain message) rather than
+// being half-applied. Deliberately strict on the revision string — a lenient Number() would accept
+// " 1 ", "1e3" and "0x2", and revision is the field that decides which edit wins.
+function extractEdit(tags: string[][] | undefined): { targetLogicalId: string; revision: number } | undefined {
+  if (!tags) return undefined
+  for (const tag of tags) {
+    if (tag[0] !== EDIT_TAG) continue
+    if (tag[1] !== EDIT_VERSION) return undefined
+    const targetLogicalId = tag[2]
+    const rawRevision = tag[3]
+    if (typeof targetLogicalId !== 'string' || targetLogicalId.length === 0 || targetLogicalId.length > MAX_LOGICAL_ID_LEN) return undefined
+    if (typeof rawRevision !== 'string' || !/^[1-9][0-9]*$/.test(rawRevision)) return undefined
+    const revision = Number(rawRevision)
+    if (!Number.isSafeInteger(revision)) return undefined
+    return { targetLogicalId, revision }
+  }
+  return undefined
+}
+
 // Pulls the group id out of a rumor's tags (version-checked, like extractPaymentRef).
 function extractGroupId(tags: string[][] | undefined): string | undefined {
   if (!tags) return undefined
@@ -152,6 +217,9 @@ export interface WrapMessageOptions {
   payment?: PaymentRef
   tariAddress?: string
   groupId?: string
+  // M2. Pass it for real messages (DM + group) and OMIT it for the silent address control message,
+  // which creates no row and therefore has nothing to edit.
+  logicalId?: string
 }
 
 // Wraps plaintext (and any optional tags) for the recipient. Builds the kind-14 rumor ourselves —
@@ -164,7 +232,7 @@ export function wrapMessage(
   plaintext: string,
   opts: WrapMessageOptions = {}
 ): NostrEvent {
-  const { payment, tariAddress, groupId } = opts
+  const { payment, tariAddress, groupId, logicalId } = opts
   // Tag order is preserved exactly as it was under the positional signature. Readers match on
   // tag[0] so order does not affect parsing, but keeping it identical means this refactor changes
   // the call shape and nothing about the bytes on the wire.
@@ -172,6 +240,7 @@ export function wrapMessage(
   if (payment) tags.push([PAYMENT_TAG, PAYMENT_TAG_VERSION, payment.utxoId])
   if (tariAddress) tags.push([ADDRESS_TAG, ADDRESS_TAG_VERSION, tariAddress])
   if (groupId) tags.push([GROUP_TAG, GROUP_TAG_VERSION, groupId])
+  if (logicalId) tags.push([MSGID_TAG, MSGID_VERSION, logicalId])
   const rumor = {
     kind: KIND_PRIVATE_DM,
     created_at: Math.round(Date.now() / 1000),
@@ -231,13 +300,40 @@ export function wrapGroupLeave(
   return wrapEvent(rumor, senderSecretKey, recipientPubkeyHex)
 }
 
+// Wraps an EDIT for one recipient (M2): the target's logical id + the new revision number in the
+// tag, the NEW TEXT as the content. Modelled on wrapGroupLeave — a dedicated control-message
+// builder — and like it, nothing about the editor's identity rides in the payload: the receiver
+// takes it from seal.pubkey, which unwrapMessage authenticates.
+//
+// Putting the text in `content` is what makes this degrade sanely: a NIP-17 client that doesn't
+// know the tag renders the corrected text as an ordinary message instead of dropping it.
+export function wrapEdit(
+  senderSecretKey: Uint8Array,
+  recipientPubkeyHex: string,
+  targetLogicalId: string,
+  newText: string,
+  revision: number
+): NostrEvent {
+  const tags: string[][] = [
+    ['p', recipientPubkeyHex],
+    [EDIT_TAG, EDIT_VERSION, targetLogicalId, String(revision)],
+  ]
+  const rumor = {
+    kind: KIND_PRIVATE_DM,
+    created_at: Math.round(Date.now() / 1000),
+    content: newText,
+    tags,
+  }
+  return wrapEvent(rumor, senderSecretKey, recipientPubkeyHex)
+}
+
 // Returns the plaintext, the sender's public key (hex), and any payment reference — or throws on
 // decryption failure. Performs a manual two-layer decrypt (rather than nip59.unwrapEvent) so we
 // can access the intermediate seal and enforce the NIP-17 pubkey consistency check below.
 export function unwrapMessage(
   recipientSecretKey: Uint8Array,
   giftWrapEvent: NostrEvent
-): { senderPubkeyHex: string; plaintext: string; payment?: PaymentRef; tariAddress?: string; groupId?: string; groupDef?: GroupDef; groupLeave?: boolean; groupReinvite?: boolean } {
+): { senderPubkeyHex: string; plaintext: string; payment?: PaymentRef; tariAddress?: string; groupId?: string; groupDef?: GroupDef; groupLeave?: boolean; groupReinvite?: boolean; logicalId?: string; edit?: { targetLogicalId: string; revision: number } } {
   // Layer 1: decrypt gift wrap (kind 1059) → seal (kind 13)
   const sealKey = getConversationKey(recipientSecretKey, giftWrapEvent.pubkey)
   const seal = JSON.parse(decrypt(giftWrapEvent.content, sealKey)) as {
@@ -271,6 +367,8 @@ export function unwrapMessage(
     groupDef: extractGroupDef(rumor.tags, rumor.content),
     groupLeave: extractGroupLeave(rumor.tags),
     groupReinvite: extractGroupReinvite(rumor.tags),
+    logicalId: extractMsgId(rumor.tags),
+    edit: extractEdit(rumor.tags),
   }
 }
 

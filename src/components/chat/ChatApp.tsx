@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef, type ReactNode } from 'react'
+import { Fragment, useState, useEffect, useMemo, useRef, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import * as nip19 from 'nostr-tools/nip19'
 import Logo from '../primitives/Logo'
@@ -20,6 +20,7 @@ import { usePaymentResolution } from '../../hooks/usePaymentResolution'
 import { avatarFor, initialsFor, truncNpub, bubbleTime, compactTime, MONO } from './chatDisplay'
 import Avatar from './Avatar'
 import MessageBubble from './MessageBubble'
+import { beginFlight, canEditMessage, displayTextFor, flightFor, isEditSubmittable, settleFlight, clearFlight, type EditFlightMap } from './messageEdit'
 import { groupGlyph } from './groupGlyph'
 
 // ── Conversation derivation ─────────────────────────────────────────────────────
@@ -208,7 +209,7 @@ function PaymentMessageCard({ message }: { message: CaravelMessage }) {
 // ── Component ────────────────────────────────────────────────────────────────────
 
 export default function ChatApp() {
-  const { wallet, address, scan, messages, nostrPubkeyHex, messagingStatus, contacts, acceptContact, contactAddresses, setManualTariAddress, createMessagingProvider, recordSentMessage, deleteConversation, getRelayStates, reconnectAll, balanceHidden, setBalanceHidden, groups, createGroup, acceptGroup, declineGroup, leaveGroup, reinviteGroup } = useWallet()
+  const { wallet, address, scan, messages, nostrPubkeyHex, messagingStatus, contacts, acceptContact, contactAddresses, setManualTariAddress, createMessagingProvider, recordSentMessage, deleteConversation, editMessage, getRelayStates, reconnectAll, balanceHidden, setBalanceHidden, groups, createGroup, acceptGroup, declineGroup, leaveGroup, reinviteGroup } = useWallet()
   const [walletOpen, setWalletOpen] = useState(false)
   const [profileOpen, setProfileOpen] = useState(false)
   // The user's own generated avatar (deterministic gradient from their pubkey hash) — used for the
@@ -253,11 +254,29 @@ export default function ChatApp() {
   // Group equivalent, keyed on groupId (the parallel to pendingSends' peerHex). Same lifecycle:
   // provisional bubble before the fan-out resolves, removed on success, marked failed on throw.
   const [pendingGroupSends, setPendingGroupSends] = useState<(PendingSend & { groupId: string })[]>([])
+  // EDIT MODE (M3). The FOURTH exclusive composer state, alongside normal / paymentMode / confirming
+  // — all four bind `draft`, so entering one while another is active would have them fight over the
+  // same textarea. `stashedDraft` holds whatever the user had half-typed, restored verbatim on
+  // cancel: starting an edit must never destroy an unsent message.
+  const [editing, setEditing] = useState<{ logicalId: string; original: string } | null>(null)
+  const [stashedDraft, setStashedDraft] = useState('')
+  // Optimistic layer: the new text lives here while its publish is outstanding, because
+  // editMessage only writes to the store once a relay ACCEPTS (M2). Never persisted, never on the
+  // wire. See messageEdit.ts for why a failed flight snaps the bubble back instead of holding it.
+  const [editFlights, setEditFlights] = useState<EditFlightMap>({})
+  // Mirror of `editing` for the thread-switch reset below, which must know whether we WERE editing
+  // without taking `editing` as a dependency (that would re-fire the whole payment-composer reset
+  // every time an edit starts or ends).
+  const editingRef = useRef(false)
+  useEffect(() => { editingRef.current = !!editing }, [editing])
   // Ephemeral, honest partial-delivery note for the group composer footer: a fan-out can reach some
   // members and not others, and `membersReached` is RELAY ACCEPTANCE, not receipt — so this says
   // "reached", never "delivered". React state only; nothing is persisted per message (a durable
   // per-bubble indicator would need a local-only CaravelMessage field — noted follow-up).
-  const [groupSendNote, setGroupSendNote] = useState<{ groupId: string; reached: number; total: number } | null>(null)
+  // `kind` (M4) names which fan-out fell short, since an EDIT fans out the same way a message does.
+  // ONE slot for both, last-writer-wins: either way it means "the most recent thing you sent to this
+  // group didn't reach everyone", and stacking two warn lines in the footer would say no more.
+  const [groupSendNote, setGroupSendNote] = useState<{ groupId: string; kind: 'send' | 'edit'; reached: number; total: number } | null>(null)
 
   // Payment (TARI) composer state.
   const [paymentMode, setPaymentMode] = useState(false)
@@ -426,7 +445,7 @@ export default function ChatApp() {
         setPendingGroupSends(p => p.filter(x => x.id !== tempId))  // real persisted bubble now shows
         // Reached some but not all — surface it rather than letting "sent" imply everyone got it.
         if (res.membersReached < res.memberCount) {
-          setGroupSendNote({ groupId, reached: res.membersReached, total: res.memberCount })
+          setGroupSendNote({ groupId, kind: 'send', reached: res.membersReached, total: res.memberCount })
         }
       } finally {
         provider.disconnect()
@@ -610,7 +629,7 @@ export default function ChatApp() {
   // it appears in the thread immediately without waiting for a relay round-trip.
   async function handleSend() {
     const text = draft.trim()
-    if (!text || !selectedConvo || sending) return
+    if (!text || !selectedConvo || sending || editing) return
     setSending(true)
     setSendError(null)
     const peer = selectedConvo.peerHex
@@ -648,10 +667,78 @@ export default function ChatApp() {
     handleSend()
   }
 
+  // ── Message editing (M3) ─────────────────────────────────────────────────────
+
+  // Load a message into the composer. Refused while any other composer state owns the draft
+  // (payment compose / confirm) or while a send is in flight — all of them bind the same textarea.
+  function beginEdit(logicalId: string, currentText: string) {
+    if (paymentMode || confirming || sending || payBusy) return
+    setStashedDraft(editing ? stashedDraft : draft)   // don't clobber the stash when re-targeting
+    setEditing({ logicalId, original: currentText })
+    setDraft(currentText)
+    setSendError(null)
+    composerRef.current?.focus()
+  }
+
+  // Put the composer back exactly as the user left it.
+  function cancelEdit() {
+    if (!editing) return
+    setEditing(null)
+    setDraft(stashedDraft)
+    setStashedDraft('')
+  }
+
+  // THE one edit publish path, shared by the DM composer, the group composer (via GroupThread's
+  // onSaveEdit) and both Retry buttons. Optimistic by design: the bubble shows the new text
+  // immediately (a publish can take up to PUBLISH_TIMEOUT_MS, and a frozen bubble reads as broken),
+  // while the STORE only changes if the edit actually got out — editMessage owns that. On failure the
+  // flight flips to 'failed', the bubble snaps back to the stored text, and a Retry appears.
+  //
+  // GROUPS (M4) add partial reach. `ok` is TOTAL-failure-only there, so a fan-out that reached some
+  // members keeps the new text (those members already show it) and the shortfall is reported in the
+  // composer footer instead. Nothing on either path ever claims the edit was DELIVERED.
+  async function runEdit(logicalId: string, text: string) {
+    setEditFlights(m => beginFlight(m, logicalId, text))
+    const res = await editMessage(logicalId, text)
+    setEditFlights(m => settleFlight(m, logicalId, res.ok))
+
+    // Partial fan-out: same honest tally the group SEND footer shows, flagged as an edit so the line
+    // names the right thing. Counts are group-only, so a DM never reaches this.
+    const groupId = messages.find(m => m.logicalId === logicalId)?.groupId
+    if (res.ok && groupId && res.memberCount !== undefined && res.membersReached !== undefined
+        && res.membersReached < res.memberCount) {
+      setGroupSendNote({ groupId, kind: 'edit', reached: res.membersReached, total: res.memberCount })
+    }
+  }
+
+  // Save from the DM composer.
+  async function saveEdit() {
+    if (!editing) return
+    const next = draft.trim()
+    // Unchanged or empty is a cancel, not a send: it would burn a revision for nothing.
+    if (!isEditSubmittable(editing.original, next)) { cancelEdit(); return }
+
+    const { logicalId } = editing
+    setEditing(null)
+    setDraft(stashedDraft)
+    setStashedDraft('')
+    await runEdit(logicalId, next)
+  }
+
+  // Retry a failed edit with the text the user actually typed (kept on the failed flight). Safe to
+  // offer after ANY failure, including a partial group fan-out: applyEdit's strictly-newer guard
+  // makes a re-delivered edit idempotent, so unlike a retried group SEND this cannot duplicate.
+  async function retryEdit(logicalId: string) {
+    const flight = editFlights[logicalId]
+    if (!flight) return
+    await runEdit(logicalId, flight.text)
+  }
+
   // ── Payment (TARI) flow ──────────────────────────────────────────────────────
 
   function toggleTari() {
     if (payBusy) return
+    if (editing) return   // edit mode owns the composer; leave it explicitly first
     setPaymentMode(prev => {
       const next = !prev
       if (next) {
@@ -801,6 +888,13 @@ export default function ChatApp() {
     setPayError(null)
     setPayAmount('')
     setMenuOpen(false)
+    // Edit mode is per-message, so it cannot survive a thread switch — otherwise the composer would
+    // stay loaded with another conversation's text and Save would edit a message you can't see.
+    // Restoring the stash here would drop it into the WRONG thread's composer, so the draft is
+    // simply cleared, exactly as every other composer state is on switch.
+    setEditing(null)
+    setStashedDraft('')
+    setDraft(d => (editingRef.current ? '' : d))
   }, [selectedPeerHex])
 
   // Auto-grow the composer with its content: reset to 'auto' to measure, then set to the
@@ -1226,10 +1320,17 @@ export default function ChatApp() {
               group={selectedGroup}
               messages={groupMessages}
               pending={pendingGroupSends.filter(p => p.groupId === selectedGroup.id)}
-              sendNote={groupSendNote?.groupId === selectedGroup.id ? { reached: groupSendNote.reached, total: groupSendNote.total } : null}
+              sendNote={groupSendNote?.groupId === selectedGroup.id ? { kind: groupSendNote.kind, reached: groupSendNote.reached, total: groupSendNote.total } : null}
               nameFor={displayName}
               onSend={handleGroupSend}
               onRetryPending={retryGroupSend}
+              /* Editing (M4): the flight map is owned HERE, shared with the DM thread, so a group
+                 edit's in-flight state survives switching threads. GroupThread owns only which of
+                 ITS bubbles is loaded into ITS own composer. */
+              editFlights={editFlights}
+              onSaveEdit={runEdit}
+              onRetryEdit={retryEdit}
+              onDismissEdit={(logicalId) => setEditFlights(x => clearFlight(x, logicalId))}
               /* Leave (B-M1) replaces Delete as the thread's exit action: 'left' is the stronger
                  suppression (delete's "forget until re-invited" resurrects the group as a pending
                  invite on the next message) and it keeps the roster the B-M2 notice fans out to. */
@@ -1363,18 +1464,49 @@ export default function ChatApp() {
               </div>
             )}
 
-            {selectedConvo.messages.map((m) => (
-              m.payment ? (
-                <PaymentMessageCard key={m.id} message={m} />
-              ) : (
-                <MessageBubble
-                  key={m.id}
-                  text={m.plaintext}
-                  timestamp={m.timestamp}
-                  variant={isSelf ? 'self' : m.direction === 'received' ? 'received' : 'sent'}
-                />
+            {selectedConvo.messages.map((m) => {
+              if (m.payment) return <PaymentMessageCard key={m.id} message={m} />
+              const flight = flightFor(m, editFlights)
+              const editable = canEditMessage(m)
+              return (
+                <Fragment key={m.id}>
+                  <MessageBubble
+                    text={displayTextFor(m, editFlights)}
+                    timestamp={m.timestamp}
+                    variant={isSelf ? 'self' : m.direction === 'received' ? 'received' : 'sent'}
+                    edited={!!m.editedAt}
+                    highlighted={!!m.logicalId && editing?.logicalId === m.logicalId}
+                    actions={editable ? (
+                      <button
+                        className="cv-msg-edit"
+                        onClick={() => beginEdit(m.logicalId!, m.plaintext)}
+                        title="Edit message"
+                        aria-label="Edit message"
+                        style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 26, height: 26, flexShrink: 0, padding: 0, borderRadius: 8, border: '1px solid rgba(var(--border-rgb),0.16)', background: 'var(--surface-raised)', color: 'var(--text-muted)', cursor: 'pointer' }}
+                      >
+                        <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" /></svg>
+                      </button>
+                    ) : undefined}
+                  />
+                  {/* In-flight + failed states for an edit. "Saving" says only that it left this
+                      device; nothing here implies the recipient received it. */}
+                  {flight?.status === 'saving' && (
+                    <div style={{ alignSelf: 'flex-end', display: 'flex', alignItems: 'center', gap: 6, fontFamily: MONO, fontSize: 11, color: 'var(--text-muted-dim)', marginTop: -2, marginRight: 4 }}>
+                      <span style={{ width: 10, height: 10, borderRadius: '50%', border: '2px solid rgba(var(--border-rgb),0.2)', borderTopColor: 'var(--text-muted-dim)', animation: 'cv-spin 0.8s linear infinite' }} />Saving edit
+                    </div>
+                  )}
+                  {flight?.status === 'failed' && (
+                    <div style={{ alignSelf: 'flex-end', display: 'flex', alignItems: 'center', gap: 10, marginTop: -2, marginRight: 4 }}>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'var(--danger-300)' }}>
+                        <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="var(--danger-500)" strokeWidth={2.4} strokeLinecap="round"><circle cx={12} cy={12} r={9} /><path d="M12 8v5M12 16h.01" /></svg>Couldn’t save edit
+                      </span>
+                      <span onClick={() => retryEdit(m.logicalId!)} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '4px 10px', borderRadius: 8, background: 'rgba(var(--danger-rgb),0.08)', border: '1px solid rgba(var(--danger-rgb),0.3)', fontSize: 11, fontWeight: 700, color: 'var(--danger-300)', cursor: 'pointer' }}>Retry</span>
+                      <span onClick={() => setEditFlights(x => clearFlight(x, m.logicalId!))} style={{ fontSize: 11, color: 'var(--text-muted-dim)', cursor: 'pointer' }}>Dismiss</span>
+                    </div>
+                  )}
+                </Fragment>
               )
-            ))}
+            })}
 
             {/* Pending-send overlay (design lifecycle: sending → failed + Retry) */}
             {pendingForPeer.map((p) => (
@@ -1388,8 +1520,13 @@ export default function ChatApp() {
           {/* Composer */}
           {(() => {
             const paymentValid = validatePayment() === null
+            // Edit mode is the fourth exclusive composer state: Save replaces Send, and is live only
+            // when the text is both non-empty and actually different (an unchanged save would burn a
+            // revision for nothing).
+            const editSubmittable = !!editing && isEditSubmittable(editing.original, draft)
             const canSend = payBusy || confirming
               ? false
+              : editing ? editSubmittable
               : paymentMode ? paymentValid : (!!draft.trim() && !sending)
             const showCounter = draft.length >= MAX_MESSAGE_LEN - 200
             const inputsDisabled = sending || payBusy || confirming
@@ -1503,13 +1640,25 @@ export default function ChatApp() {
                 </div>
               )}
 
+              {/* Editing banner (M3): names the state and offers the explicit way out. The bubble
+                  being edited is ringed in the thread, so the pairing is visible at a glance. */}
+              {editing && !paymentMode && !confirming && (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 10, padding: '9px 13px', borderRadius: 11, background: 'rgba(var(--teal-500-rgb),0.06)', border: '1px solid rgba(var(--teal-500-rgb),0.28)' }}>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12.5, fontWeight: 600, color: 'var(--teal-300)' }}>
+                    <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="var(--teal-500)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" /></svg>
+                    Editing message
+                  </span>
+                  <span onClick={cancelEdit} style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', cursor: 'pointer' }}>Cancel</span>
+                </div>
+              )}
+
               {/* Text composer row (design) — TARI toggle + input + send. Emoji button removed. */}
               {!paymentMode && !confirming && (
                 <div style={{ display: 'flex', alignItems: 'flex-end', gap: 12 }}>
                   <button
                     onClick={toggleTari}
-                    disabled={payBusy}
-                    title="Attach confidential payment"
+                    disabled={payBusy || !!editing}
+                    title={editing ? 'Finish editing first' : 'Attach confidential payment'}
                     style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 46, height: 46, flexShrink: 0, borderRadius: 12, border: 'none', background: 'var(--teal-grad)', cursor: payBusy ? 'default' : 'pointer', boxShadow: '0 0 18px rgba(var(--teal-500-rgb),0.28)', padding: 0 }}
                   >
                     <svg width={22} height={22} viewBox="0 0 24 24" fill="none" stroke="var(--ink-on-accent)" strokeWidth={2.3} strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>
@@ -1520,8 +1669,14 @@ export default function ChatApp() {
                       className="cv-composer"
                       value={draft}
                       onChange={e => { setDraft(e.target.value); if (sendError) setSendError(null) }}
-                      onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onComposerSend() } }}
-                      placeholder="Write an encrypted message…"
+                      onKeyDown={e => {
+                        if (e.key === 'Escape' && editing) { e.preventDefault(); cancelEdit(); return }
+                        if (e.key === 'Enter' && !e.shiftKey) {
+                          e.preventDefault()
+                          if (editing) void saveEdit(); else onComposerSend()
+                        }
+                      }}
+                      placeholder={editing ? 'Edit your message…' : 'Write an encrypted message…'}
                       rows={1}
                       maxLength={MAX_MESSAGE_LEN}
                       disabled={inputsDisabled}
@@ -1529,13 +1684,15 @@ export default function ChatApp() {
                     />
                   </div>
                   <button
-                    onClick={onComposerSend}
+                    onClick={() => (editing ? void saveEdit() : onComposerSend())}
                     disabled={!canSend}
-                    title="Send message"
+                    title={editing ? 'Save edit' : 'Send message'}
                     style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 46, height: 46, flexShrink: 0, borderRadius: 12, background: 'var(--surface-inset)', border: '1px solid rgba(var(--border-rgb),0.16)', cursor: canSend ? 'pointer' : 'default', opacity: canSend ? 1 : 0.5, padding: 0 }}
                   >
                     {sending ? (
                       <span style={{ width: 20, height: 20, borderRadius: '50%', border: '2.5px solid rgba(var(--border-rgb),0.25)', borderTopColor: 'var(--text-muted-dim)', animation: 'cv-spin 0.8s linear infinite' }} />
+                    ) : editing ? (
+                      <svg width={20} height={20} viewBox="0 0 24 24" fill="none" stroke={canSend ? 'var(--teal-500)' : 'var(--text-muted-dim)'} strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
                     ) : (
                       <svg width={20} height={20} viewBox="0 0 24 24" fill="none" stroke={canSend ? 'var(--teal-500)' : 'var(--text-muted-dim)'} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" /></svg>
                     )}
@@ -1547,7 +1704,6 @@ export default function ChatApp() {
                   <span style={{ fontFamily: MONO, fontSize: 11, color: draft.length >= MAX_MESSAGE_LEN ? 'var(--danger-500)' : 'var(--text-muted-dim)' }}>{draft.length}/{MAX_MESSAGE_LEN}</span>
                 </div>
               )}
-              <style>{`.cv-composer::placeholder { color: var(--text-faint-dim); }`}</style>
             </div>
             )
           })()}

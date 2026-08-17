@@ -52,6 +52,38 @@ export interface CaravelMessage {
   //   'group-leave' — senderPubkeyHex has left groupId. Visual only: the roster is NOT edited
   //                   (Phase 1 has no roster changes).
   system?: 'group-leave'
+
+  // ── Message editing (M1) ──────────────────────────────────────────────────────
+  // All four are optional and absent on every row written before editing existed, so stored
+  // JSON parses unchanged (loadMessages is an unchecked cast) — there is no migration.
+
+  // Stable LOGICAL identity, generated once at SEND time and — from M2 — carried on the wire, so
+  // the sender and every recipient name the same message.
+  //
+  // Needed because `id` is NOT a shared name for group messages. A group send fans out N gift
+  // wraps with N distinct ids and keeps a synthetic `grp-<uuid>` locally (see
+  // NostrMessagingProvider.sendGroupMessage), so sender and recipients hold different ids for the
+  // same message. DMs happen to share `id` — both sides store the same gift-wrap id — which is why
+  // DM editing can ship first (M2/M3) while groups (M4) need this field.
+  //
+  // DECLARED, NOT YET POPULATED: M1 is store-only, and setting it at send time without also
+  // putting it on the wire would produce a local id no peer shares. M2 does both together.
+  logicalId?: string
+
+  // Set when an edit has been applied. OUR clock, the same basis as `timestamp` — which an edit
+  // never writes, so an edited message keeps its position in the thread (see applyEdit).
+  editedAt?: number
+
+  // Sender-supplied monotonic edit counter: absent = never edited, 1 = first edit, 2 = second.
+  // Edits CANNOT be ordered by event time — gift wraps fuzz created_at by up to 2 days, per the
+  // `timestamp` note above — so ordering rides on this instead. applyEdit accepts strictly-newer
+  // revisions only, which also makes replayed edits idempotent.
+  revision?: number
+
+  // The plaintext as originally SENT, retained on the first edit only. NOT version history and
+  // never rendered: it exists so addReceivedMessage's self-echo suppressor, which matches on
+  // content, can still recognise a late echo carrying the pre-edit text. See messageStore.
+  preEditPlaintext?: string
 }
 
 // ── Groups (Phase 1: fan-out, in-message roster, fixed membership) ──────────────
@@ -109,6 +141,24 @@ export interface MessagingProvider {
   // Resolves true if at least one relay accepted it (so the caller can mark it delivered).
   sendContactAddress(recipientPubkeyHex: string, tariAddress: string): Promise<boolean>
 
+  // Send an EDIT of an already-sent DM (M2): replaces the text of the message carrying
+  // `targetLogicalId`. Resolves true if at least one relay accepted, false otherwise — like
+  // sendContactAddress and deliberately UNLIKE sendMessage's throw, so the caller decides how to
+  // surface a failure. Best-effort: acceptance is not delivery, and a recipient who never receives
+  // it keeps the original text with no way for either side to detect the divergence.
+  sendEdit(recipientPubkeyHex: string, targetLogicalId: string, newText: string, revision: number): Promise<boolean>
+
+  // Group EDIT (M4): the same instruction, fanned out to the roster (minus self) so every member's
+  // client can apply it to the row carrying `targetLogicalId` — the shared handle sendGroupMessage
+  // has minted since M2. Returns the same relays-reached tally as its siblings, NOT a delivery
+  // receipt: a partial fan-out leaves some members on the new text and some on the old, and neither
+  // side can tell which.
+  //
+  // NEVER THROWS, unlike sendGroupMessage — the caller (WalletContext.editMessage) is awaited from a
+  // `void saveEdit()` with no catch, so a rejection here would escape as an unhandled rejection.
+  // Same contract as sendGroupLeave for the same class of reason.
+  sendGroupEdit(groupId: string, memberPubkeysHex: string[], targetLogicalId: string, newText: string, revision: number): Promise<{ memberCount: number; membersReached: number }>
+
   // Group message (Phase 1): fan out one NIP-17 gift wrap per member (roster minus self), each
   // tagged with the group id. Returns the local 'sent' record + a relays-reached tally (NOT a
   // delivery receipt). Throws only if no member's wrap reached any relay.
@@ -144,7 +194,12 @@ export interface MessagingProvider {
     // `defEventId` is the gift-wrap event id — unique per publish, so it distinguishes a genuine
     // re-send from a stale backfill replay of the same def. `reinvite` is the caravel-group-reinvite
     // marker (Phase C); only a marked def may lift a locally 'left' group.
-    onGroupDefinition?: (senderPubkeyHex: string, def: GroupDef, defEventId: string, reinvite: boolean) => void
+    onGroupDefinition?: (senderPubkeyHex: string, def: GroupDef, defEventId: string, reinvite: boolean) => void,
+    // Fires for a received EDIT (M2). `senderPubkeyHex` is the AUTHENTICATED editor (seal.pubkey,
+    // checked against the rumor pubkey in unwrapMessage) — the receiver must apply the edit only if
+    // it matches the original message's sender, which applyEdit enforces. Like onGroupDefinition
+    // this is a control message: it mutates an existing row and never creates a bubble.
+    onEdit?: (senderPubkeyHex: string, targetLogicalId: string, newText: string, revision: number) => void
   ): void
 
   // Close all relay connections and subscriptions. Idempotent — safe to call more than once.

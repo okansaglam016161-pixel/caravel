@@ -916,7 +916,18 @@ export default function ChatApp() {
 
   // Reset the payment composer when switching conversations so a half-filled payment can't carry
   // across to a different peer. The must-acknowledge alert banner is intentionally NOT reset here.
+  //
+  // `attachment` belongs in here for the same reason, and more urgently (images M5): a picked photo
+  // left mounted across a thread switch would sit in the new conversation's composer, and pressing
+  // Send would deliver it TO THE WRONG PERSON. That is a privacy failure, not a UI wrinkle.
+  //
+  // Switching between a DM and a GROUP does not necessarily change selectedPeerHex — but it does not
+  // need to: the DM composer is not rendered while a group thread is open (the right pane renders one
+  // or the other), so the preview is unmounted and its object URL revoked, and coming back lands on
+  // the SAME peer it was picked for. Only a change of peer can misdirect a send, and that is exactly
+  // what this dependency tracks.
   useEffect(() => {
+    setAttachment(null)
     setPaymentMode(false)
     setConfirming(false)
     setPayError(null)

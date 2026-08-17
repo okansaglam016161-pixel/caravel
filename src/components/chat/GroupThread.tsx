@@ -7,7 +7,7 @@
 //   B-M1: the ⋯ menu's exit action is LEAVE (was Delete) — two-step, confirmed inline in the menu.
 //   Leave is local-only here; the outbound "X has left the chat" notice is B-M2.
 
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { CaravelMessage, Group } from '../../messaging/types'
 import Avatar from './Avatar'
 import MessageBubble from './MessageBubble'
@@ -66,6 +66,14 @@ export default function GroupThread({
   // Pending sends are in the key so the provisional bubble is scrolled into view the instant it
   // appears — and so the swap to the real row re-fires, which a bare count never did.
   const bottomRef = useScrollToBottom(group.id, threadContentKey(messages, pending))
+
+  // MANDATORY reset on group switch (images M5). This component is REUSED, not remounted, when the
+  // selected group changes — the same reason useScrollToBottom is keyed on group.id — so without this
+  // a picked photo would stay in the composer and Send would fan it out TO THE WRONG ROSTER. That is
+  // a privacy failure, not a UI wrinkle, which is why it sits beside the group id rather than being
+  // left to the component's lifecycle. Clearing `attachment` unmounts AttachPreview, which is also
+  // what revokes its object URL.
+  useEffect(() => { setAttachment(null) }, [group.id])
 
   // Any dismissal drops the confirm step too, so re-opening the menu always starts at step one.
   function closeMenu() { setMenuOpen(false); setConfirmLeave(false) }

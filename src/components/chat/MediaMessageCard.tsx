@@ -62,7 +62,9 @@ const brokenIcon = (
   </svg>
 )
 
-export default function MediaMessageCard({ message }: { message: CaravelMessage }) {
+// `lid`/`flashed` (replies v1): an image is a JUMP TARGET even though v1 cannot reply TO one — being
+// un-quotable is about what you can answer, not about what a quote can point at.
+export default function MediaMessageCard({ message, lid, flashed }: { message: CaravelMessage; lid?: string; flashed?: boolean }) {
   const media = message.media
   // Defensive: the dispatch sites only render this when `media` is set, but the non-null assertion
   // would be the one thing standing between a malformed row and a crashed thread.
@@ -115,7 +117,7 @@ export default function MediaMessageCard({ message }: { message: CaravelMessage 
   }
 
   return (
-    <div style={{ alignSelf: sent ? 'flex-end' : 'flex-start', maxWidth: '72%' }}>
+    <div data-lid={lid} className={flashed ? 'cv-msg-flash' : undefined} style={{ alignSelf: sent ? 'flex-end' : 'flex-start', maxWidth: '72%', borderRadius: 14 }}>
       <Frame w={w} h={h} sent={sent}>{body}</Frame>
       {/* Only reachable once the bytes are decrypted, so `state.url` is always a live borrow here. */}
       {expanded && state.kind === 'ready' && (

@@ -453,6 +453,67 @@ describe('caravel-media — malformed refs degrade to a plain message', () => {
   })
 })
 
+describe('caravel-reply on the wire', () => {
+  it('round-trips a reply reference on an ordinary message', () => {
+    const target = newLogicalId()
+    const logicalId = newLogicalId()
+    const out = unwrapMessage(bob, wrapMessage(alice, bobPub, 'quoting you', { logicalId, replyTo: target }))
+
+    expect(out.replyTo).toBe(target)
+    // A reply is an ORDINARY message: its own text and id survive intact, and it is NOT an edit.
+    expect(out.plaintext).toBe('quoting you')
+    expect(out.logicalId).toBe(logicalId)
+    expect(out.edit).toBeUndefined()
+    expect(out.senderPubkeyHex).toBe(alicePub)
+  })
+
+  it('carries the same reference on every wrap of a group fan-out', () => {
+    // The group case is the whole reason the reference is a LOGICAL id: each member gets a distinct
+    // gift wrap, and all of them must resolve the quote to the same message.
+    const target = newLogicalId()
+    const logicalId = newLogicalId()
+    const opts = { groupId: 'g1', logicalId, replyTo: target }
+    const first = unwrapMessage(bob, wrapMessage(alice, bobPub, 'to the group', opts))
+    const second = unwrapMessage(bob, wrapMessage(alice, bobPub, 'to the group', opts))
+
+    expect(first.replyTo).toBe(target)
+    expect(second.replyTo).toBe(target)
+    expect(first.groupId).toBe('g1')
+  })
+
+  it('is absent when omitted — an ordinary message is unchanged', () => {
+    const out = unwrapMessage(bob, wrapMessage(alice, bobPub, 'hello', { logicalId: newLogicalId() }))
+    expect(out.replyTo).toBeUndefined()
+    expect(out.plaintext).toBe('hello')
+  })
+})
+
+describe('caravel-reply — malformed refs degrade to a plain message', () => {
+  // Same discipline as caravel-media: a reader that cannot fully understand the tag must ignore it,
+  // never guess. Degrading to undefined renders the rumor as an ordinary message — the text still
+  // stands on its own, it just loses the quote.
+  it('rejects an unknown version', () => {
+    expect(unwrapMessage(bob, wrapRawTags([['caravel-reply', 'v2', newLogicalId()]])).replyTo).toBeUndefined()
+  })
+
+  it('rejects an over-long id (the localStorage bound)', () => {
+    expect(unwrapMessage(bob, wrapRawTags([['caravel-reply', 'v1', 'x'.repeat(65)]])).replyTo).toBeUndefined()
+    // 64 is the bound itself, and must still be accepted.
+    expect(unwrapMessage(bob, wrapRawTags([['caravel-reply', 'v1', 'x'.repeat(64)]])).replyTo).toBe('x'.repeat(64))
+  })
+
+  it('rejects an empty or missing id', () => {
+    expect(unwrapMessage(bob, wrapRawTags([['caravel-reply', 'v1', '']])).replyTo).toBeUndefined()
+    expect(unwrapMessage(bob, wrapRawTags([['caravel-reply', 'v1']])).replyTo).toBeUndefined()
+  })
+
+  it('leaves the message itself intact when the ref is dropped', () => {
+    const out = unwrapMessage(bob, wrapRawTags([['caravel-reply', 'v2', newLogicalId()]], 'still readable'))
+    expect(out.replyTo).toBeUndefined()
+    expect(out.plaintext).toBe('still readable')
+  })
+})
+
 describe('existing wire behaviour is unchanged', () => {
   it('still round-trips a payment reference', () => {
     const wrapped = wrapMessage(senderSk, recipientPk, 'note', { payment: { utxoId: 'utxo_1' } })

@@ -64,6 +64,21 @@ const MSGID_VERSION = 'v1'
 const EDIT_TAG = 'caravel-edit'
 const EDIT_VERSION = 'v1'
 
+// Caravel quoted-reply tag (replies v1) — same seal-protected, versioned pattern.
+//   ["caravel-reply","v1","<target-logical-id>"]   this rumor is a REPLY to the message carrying
+//     that logical id. The reference is a BARE ID and never a copy of the quoted text: the quote is
+//     resolved LIVE at render time from the local store, so an edited original updates its own
+//     quotes for free, and an original that is missing or deleted degrades to a visible placeholder
+//     rather than leaving a stale snippet nobody can correct.
+//
+//     A reply is an ORDINARY message that also points at another — not a control message. It gets no
+//     early-return intercept in handleEvent, exactly like caravel-media and unlike caravel-edit,
+//     which is what gives it the known-contact gate, group routing, tombstoning and persistence for
+//     free. A reader that doesn't understand this tag shows the reply as a plain message, which is
+//     the correct degradation: the text stands on its own, it just loses the quote.
+const REPLY_TAG = 'caravel-reply'
+const REPLY_VERSION = 'v1'
+
 // Upper bound on an id arriving from an untrusted peer. We mint 32 hex chars; the slack leaves room
 // for a future format without letting a peer push an unbounded string into localStorage.
 const MAX_LOGICAL_ID_LEN = 64
@@ -84,6 +99,23 @@ function extractMsgId(tags: string[][] | undefined): string | undefined {
   for (const tag of tags) {
     if (tag[0] !== MSGID_TAG) continue
     if (tag[1] !== MSGID_VERSION) return undefined
+    const id = tag[2]
+    if (typeof id !== 'string' || id.length === 0 || id.length > MAX_LOGICAL_ID_LEN) return undefined
+    return id
+  }
+  return undefined
+}
+
+// Pulls a quoted-reply reference out of a rumor's tags. The value names another message's LOGICAL
+// id, so it gets exactly the discipline extractMsgId applies to that same id space: version checked,
+// length bounded (the value is attacker-controlled and ends up in localStorage), and anything
+// unexpected degrades to undefined — which routes the rumor down the ordinary message path, so it
+// renders as a plain message instead of as a reply pointing nowhere.
+function extractReply(tags: string[][] | undefined): string | undefined {
+  if (!tags) return undefined
+  for (const tag of tags) {
+    if (tag[0] !== REPLY_TAG) continue
+    if (tag[1] !== REPLY_VERSION) return undefined
     const id = tag[2]
     if (typeof id !== 'string' || id.length === 0 || id.length > MAX_LOGICAL_ID_LEN) return undefined
     return id
@@ -295,6 +327,9 @@ export interface WrapMessageOptions {
   // one-byte floor wrapGroupLeave and the address control message use, since NIP-44 requires at least
   // one byte of content.
   media?: MediaRef
+  // replies v1. The LOGICAL id of the message this one quotes. Ref only — the quoted text is never
+  // copied here; see the caravel-reply note above for why.
+  replyTo?: string
 }
 
 // Wraps plaintext (and any optional tags) for the recipient. Builds the kind-14 rumor ourselves —
@@ -307,7 +342,7 @@ export function wrapMessage(
   plaintext: string,
   opts: WrapMessageOptions = {}
 ): NostrEvent {
-  const { payment, tariAddress, groupId, logicalId, media } = opts
+  const { payment, tariAddress, groupId, logicalId, media, replyTo } = opts
   // Tag order is preserved exactly as it was under the positional signature. Readers match on
   // tag[0] so order does not affect parsing, but keeping it identical means this refactor changes
   // the call shape and nothing about the bytes on the wire.
@@ -317,6 +352,7 @@ export function wrapMessage(
   if (groupId) tags.push([GROUP_TAG, GROUP_TAG_VERSION, groupId])
   if (logicalId) tags.push([MSGID_TAG, MSGID_VERSION, logicalId])
   if (media) tags.push([MEDIA_TAG, MEDIA_VERSION, JSON.stringify(media)])
+  if (replyTo) tags.push([REPLY_TAG, REPLY_VERSION, replyTo])
   const rumor = {
     kind: KIND_PRIVATE_DM,
     created_at: Math.round(Date.now() / 1000),
@@ -409,7 +445,7 @@ export function wrapEdit(
 export function unwrapMessage(
   recipientSecretKey: Uint8Array,
   giftWrapEvent: NostrEvent
-): { senderPubkeyHex: string; plaintext: string; payment?: PaymentRef; tariAddress?: string; groupId?: string; groupDef?: GroupDef; groupLeave?: boolean; groupReinvite?: boolean; logicalId?: string; edit?: { targetLogicalId: string; revision: number }; media?: MediaRef } {
+): { senderPubkeyHex: string; plaintext: string; payment?: PaymentRef; tariAddress?: string; groupId?: string; groupDef?: GroupDef; groupLeave?: boolean; groupReinvite?: boolean; logicalId?: string; edit?: { targetLogicalId: string; revision: number }; media?: MediaRef; replyTo?: string } {
   // Layer 1: decrypt gift wrap (kind 1059) → seal (kind 13)
   const sealKey = getConversationKey(recipientSecretKey, giftWrapEvent.pubkey)
   const seal = JSON.parse(decrypt(giftWrapEvent.content, sealKey)) as {
@@ -446,6 +482,7 @@ export function unwrapMessage(
     logicalId: extractMsgId(rumor.tags),
     edit: extractEdit(rumor.tags),
     media: extractMedia(rumor.tags),
+    replyTo: extractReply(rumor.tags),
   }
 }
 

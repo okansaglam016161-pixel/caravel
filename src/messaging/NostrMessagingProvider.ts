@@ -1,7 +1,7 @@
 import type { NostrEvent, Filter } from 'nostr-tools'
 import { Relay, type Subscription } from 'nostr-tools/relay'
 import { wrapMessage, wrapGroupDefinition, wrapGroupLeave, wrapEdit, unwrapMessage, publishGiftWrap, newLogicalId } from '../crypto/nostrMessaging'
-import type { CaravelMessage, GroupDef, GroupSendResult, MediaRef, MessagingConnectionStatus, MessagingProvider, PaymentRef, RelayState } from './types'
+import type { CaravelMessage, GroupDef, GroupSendResult, MessagingConnectionStatus, MessagingProvider, RelayState, SendGroupMessageOptions, SendMessageOptions } from './types'
 
 function hexToBytes(hex: string): Uint8Array {
   const arr = new Uint8Array(hex.length / 2)
@@ -146,11 +146,12 @@ export class NostrMessagingProvider implements MessagingProvider {
   // NOTHING about Blossom: uploading happens before this is called, in messaging/sendMedia.ts, the
   // same way submitPayment settles an on-chain transaction before sending a message that references
   // it. This just carries the reference.
-  async sendMessage(recipientPubkeyHex: string, plaintext: string, payment?: PaymentRef, tariAddress?: string, media?: MediaRef): Promise<CaravelMessage> {
+  async sendMessage(recipientPubkeyHex: string, plaintext: string, opts: SendMessageOptions = {}): Promise<CaravelMessage> {
+    const { payment, tariAddress, media, replyTo } = opts
     // M2: mint the logical id BEFORE wrapping and keep it on the local row, so sender and recipient
     // store the same handle for this message and an edit can name it.
     const logicalId = newLogicalId()
-    const wrapped = wrapMessage(this.secretKey, recipientPubkeyHex, plaintext, { payment, tariAddress, logicalId, media })
+    const wrapped = wrapMessage(this.secretKey, recipientPubkeyHex, plaintext, { payment, tariAddress, logicalId, media, replyTo })
     const results = await publishGiftWrap(wrapped, [...this.relayUrls], PUBLISH_TIMEOUT_MS, CONNECT_TIMEOUT_MS)
 
     const anyOk = results.some(r => r.ok)
@@ -169,6 +170,9 @@ export class NostrMessagingProvider implements MessagingProvider {
       payment,
       logicalId,
       ...(media ? { media } : {}),
+      // replies v1: same spread discipline as media — the key is absent, not undefined, on a
+      // non-reply, so a stored row is byte-identical to one written before replies existed.
+      ...(replyTo ? { replyTo } : {}),
     }
   }
 
@@ -237,7 +241,8 @@ export class NostrMessagingProvider implements MessagingProvider {
   // SAME reference — same url, same key, same nonce, same hash — goes to every member, so the group
   // costs one upload no matter how large the roster. (Each member does fetch it independently, so it
   // is N downloads from the host; see the durability note in config/blossom.ts.)
-  async sendGroupMessage(groupId: string, memberPubkeysHex: string[], plaintext: string, media?: MediaRef): Promise<GroupSendResult> {
+  async sendGroupMessage(groupId: string, memberPubkeysHex: string[], plaintext: string, opts: SendGroupMessageOptions = {}): Promise<GroupSendResult> {
+    const { media, replyTo } = opts
     const recipients = memberPubkeysHex.filter(m => m && m !== this.pubkeyHex)
     // ONE logical id for the whole fan-out (M2): every member's wrap carries the same value, so all
     // N copies plus our local row name the same logical message. This is exactly what `id` cannot
@@ -246,7 +251,9 @@ export class NostrMessagingProvider implements MessagingProvider {
     const logicalId = newLogicalId()
     let membersReached = 0
     await Promise.all(recipients.map(async member => {
-      const wrapped = wrapMessage(this.secretKey, member, plaintext, { groupId, logicalId, media })
+      // ONE replyTo for the whole fan-out, exactly like logicalId and media: every member's wrap
+      // quotes the same logical message, so all N copies resolve the quote to the same row.
+      const wrapped = wrapMessage(this.secretKey, member, plaintext, { groupId, logicalId, media, replyTo })
       const results = await publishGiftWrap(wrapped, [...this.relayUrls], PUBLISH_TIMEOUT_MS, CONNECT_TIMEOUT_MS)
       if (results.some(r => r.ok)) membersReached++
     }))
@@ -265,6 +272,7 @@ export class NostrMessagingProvider implements MessagingProvider {
       groupId,
       logicalId,
       ...(media ? { media } : {}),
+      ...(replyTo ? { replyTo } : {}),
     }
     return { message, memberCount: recipients.length, membersReached }
   }
@@ -568,7 +576,7 @@ export class NostrMessagingProvider implements MessagingProvider {
     if (this.seen.has(event.id)) return
     this.seen.add(event.id)
     try {
-      const { senderPubkeyHex, plaintext, payment, tariAddress, groupId, groupDef, groupLeave, groupReinvite, logicalId, edit, media } = unwrapMessage(this.secretKey, event)
+      const { senderPubkeyHex, plaintext, payment, tariAddress, groupId, groupDef, groupLeave, groupReinvite, logicalId, edit, media, replyTo } = unwrapMessage(this.secretKey, event)
 
       // A group DEFINITION is a control message (no chat bubble): hand it to the group callback and
       // stop. The gate (accept only from known contacts) lives with the callback, which has the
@@ -647,6 +655,12 @@ export class NostrMessagingProvider implements MessagingProvider {
         // is what gives it the known-contact gate, the left-group drop, tombstoning, group routing and
         // persistence for free — intercepting it would mean reimplementing every one of them.
         ...(media ? { media } : {}),
+        // A quoted reply (replies v1). No early-return intercept, for the same reason media has
+        // none: a reply is an ORDINARY message that also points at another, so falling through is
+        // what gives it the known-contact gate, group routing, tombstoning and persistence. The
+        // target is NOT resolved here — the quote is looked up live at render, so a reply whose
+        // original has not arrived yet still stores fine and heals when it does.
+        ...(replyTo ? { replyTo } : {}),
       }
       this.onMessageCallback?.(msg)
     } catch (e) {

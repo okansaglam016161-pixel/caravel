@@ -120,6 +120,18 @@ export interface CaravelMessage {
   // `plaintext` is the CAPTION and may be blank — a media message is an ordinary message that also
   // has an image, not a control message, so it persists, orders and gates exactly like any other row.
   media?: MediaRef
+
+  // ── Quoted replies (replies v1) ───────────────────────────────────────────────
+  // The LOGICAL id of the message this one quotes, when it is a reply. Optional and absent on every
+  // row written before replies existed, so stored JSON parses unchanged — no migration, the same way
+  // the editing and media fields landed.
+  //
+  // A REFERENCE, never a snapshot: the quoted text is resolved live from the store at render time.
+  // That is what makes an edited original update its own quotes, and what turns a missing original
+  // into a visible "original unavailable" placeholder instead of a stale copy. It also means a reply
+  // whose target we have never received still renders as an ordinary message with a placeholder, and
+  // heals itself if the original arrives later.
+  replyTo?: string
 }
 
 // ── Groups (Phase 1: fan-out, in-message roster, fixed membership) ──────────────
@@ -165,6 +177,26 @@ export interface GroupSendResult {
   membersReached: number   // members whose wrap ≥1 relay ACCEPTED (relays-reached, not delivered)
 }
 
+// Optional extras on an ordinary DM send. An OBJECT rather than a positional tail, for the same
+// reason WrapMessageOptions is one: the tail had already reached five parameters, and two call sites
+// were passing a positional `undefined` purely to reach the slot after it. Adding a sixth would have
+// walked further down exactly the road wrapMessage was refactored off. With keys, a new capability
+// adds a KEY here and a guard at the send site, and no call site has to count arguments.
+export interface SendMessageOptions {
+  payment?: PaymentRef
+  tariAddress?: string
+  media?: MediaRef
+  // replies v1. The LOGICAL id of the message being quoted; rides through to the caravel-reply tag.
+  replyTo?: string
+}
+
+// The group mirror. No `payment` (groups have no payments) and no `tariAddress` (address exchange is
+// pairwise), so the group surface is deliberately narrower than the DM one rather than a copy of it.
+export interface SendGroupMessageOptions {
+  media?: MediaRef
+  replyTo?: string
+}
+
 export interface MessagingProvider {
   // Send a message to the given recipient. Returns the CaravelMessage so the caller
   // can record it immediately without waiting for an echo from the relay.
@@ -172,7 +204,7 @@ export interface MessagingProvider {
   // (piggybacked for self-healing address exchange — see M9.0d).
   // `media` (images M3) attaches an already-uploaded encrypted image; `plaintext` is then its
   // caption and may be a single space. Uploading is NOT the provider's job — see sendMedia.ts.
-  sendMessage(recipientPubkeyHex: string, plaintext: string, payment?: PaymentRef, tariAddress?: string, media?: MediaRef): Promise<CaravelMessage>
+  sendMessage(recipientPubkeyHex: string, plaintext: string, opts?: SendMessageOptions): Promise<CaravelMessage>
 
   // Send a dedicated, silent Tari-address control message (M9.0d). Carries only the address tag
   // over an empty-content rumor, so the recipient stores the address without a chat bubble.
@@ -202,7 +234,7 @@ export interface MessagingProvider {
   // delivery receipt). Throws only if no member's wrap reached any relay.
   // `media` (images M3): the blob is uploaded ONCE beforehand and the identical reference goes to
   // every member, so roster size costs wraps, not uploads.
-  sendGroupMessage(groupId: string, memberPubkeysHex: string[], plaintext: string, media?: MediaRef): Promise<GroupSendResult>
+  sendGroupMessage(groupId: string, memberPubkeysHex: string[], plaintext: string, opts?: SendGroupMessageOptions): Promise<GroupSendResult>
 
   // Group definition control message: fan out the group's { name, roster } to its members (minus
   // self) so their clients learn the group exists. Empty-of-prose → no chat bubble on receipt.

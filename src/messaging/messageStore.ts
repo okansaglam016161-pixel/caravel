@@ -144,6 +144,22 @@ export function nextRevision(current: CaravelMessage[], logicalId: string): numb
   return (row?.revision ?? 0) + 1
 }
 
+// Find a message by its LOGICAL id (replies v1). The read-only sibling of applyEditByLogicalId, and
+// deliberately the same shape: logicalId is the only name sender and recipients agree on, so it is
+// the only usable handle for "the message this reply quotes".
+//
+// PURE — no persistence, which is why it takes no pubkeyHex. An empty id or an unknown one returns
+// undefined, and the caller renders the "original unavailable" placeholder: a reply whose target we
+// never received, or have since deleted, is a normal and expected state, not an error.
+//
+// NOT the render path. Resolving a quote by calling this once per rendered reply is O(rows × replies)
+// over an array holding EVERY thread's messages; the views build one Map per render pass instead
+// (see QuotedPreview). This is the primitive for logic and tests, where clarity beats sharing a map.
+export function findByLogicalId(current: CaravelMessage[], logicalId: string | undefined): CaravelMessage | undefined {
+  if (!logicalId) return undefined
+  return current.find(m => m.logicalId === logicalId)
+}
+
 // applyEdit keyed by LOGICAL id — the name an edit travels under on the wire, since `id` is not
 // shared between sender and recipients for group messages (see CaravelMessage.logicalId).
 //

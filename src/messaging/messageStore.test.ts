@@ -3,7 +3,7 @@
 // contract honest, and a bug here corrupts stored messages, so each guard is covered explicitly.
 
 import { beforeEach, describe, expect, it } from 'vitest'
-import { addReceivedMessage, addSentMessage, applyEdit, applyEditByLogicalId, editReachOk, editTargetsLeftGroup, loadMessages, nextRevision } from './messageStore'
+import { addReceivedMessage, addSentMessage, applyEdit, applyEditByLogicalId, editReachOk, editTargetsLeftGroup, findByLogicalId, loadMessages, nextRevision } from './messageStore'
 import type { CaravelMessage } from './types'
 
 // messageStore persists through localStorage, which does not exist under Vitest's node
@@ -361,6 +361,39 @@ describe('nextRevision — group rows (M4)', () => {
   it('derives from the sender\'s own group row, so a retried fan-out cannot drift', () => {
     expect(nextRevision([groupSent()], 'L1')).toBe(1)
     expect(nextRevision([groupSent({ revision: 2 })], 'L1')).toBe(3)
+  })
+})
+
+describe('findByLogicalId — resolving a reply\'s target (replies v1)', () => {
+  const rows = [
+    msg({ id: 'e1', logicalId: 'aaa', plaintext: 'first' }),
+    msg({ id: 'e2', logicalId: 'bbb', plaintext: 'second' }),
+    msg({ id: 'e3', plaintext: 'pre-M2, no logical id' }),
+  ]
+
+  it('finds the row carrying the logical id', () => {
+    expect(findByLogicalId(rows, 'bbb')?.plaintext).toBe('second')
+  })
+
+  it('returns undefined for an unknown id — the "original unavailable" case', () => {
+    // Not an error: a reply whose target we never received, or have since deleted, is normal.
+    expect(findByLogicalId(rows, 'zzz')).toBeUndefined()
+  })
+
+  it('returns undefined for an empty or absent id rather than matching a row without one', () => {
+    // The guard matters: without it, `undefined === undefined` would match the pre-M2 row above.
+    expect(findByLogicalId(rows, undefined)).toBeUndefined()
+    expect(findByLogicalId(rows, '')).toBeUndefined()
+  })
+
+  it('is a pure read — it does not persist anything', () => {
+    findByLogicalId(rows, 'aaa')
+    expect(loadMessages(ME)).toEqual([])
+  })
+
+  it('finds a group row by the id shared across the fan-out', () => {
+    const group = [msg({ id: 'grp-1', groupId: 'g1', logicalId: 'shared', plaintext: 'to the group' })]
+    expect(findByLogicalId(group, 'shared')?.plaintext).toBe('to the group')
   })
 })
 

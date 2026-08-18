@@ -33,22 +33,38 @@ function EditedTag() {
   return <span style={{ fontStyle: 'italic' }}>· edited</span>
 }
 
-export default function MessageBubble({ text, timestamp, variant, senderHeader, edited, actions, highlighted }: {
+export default function MessageBubble({ text, timestamp, variant, senderHeader, edited, actions, highlighted, quoted, lid, flashed }: {
   text: string
   timestamp: number
   variant: 'received' | 'sent' | 'self'
   senderHeader?: SenderHeader   // group received only; undefined for every DM bubble
   edited?: boolean              // renders the "edited" suffix in the meta row
-  actions?: ReactNode           // hover affordance (M3: the Edit pencil); markup only
-  highlighted?: boolean         // this bubble is the one being edited
+  actions?: ReactNode           // hover affordance (M3: the Edit pencil, replies: the Reply arrow)
+  highlighted?: boolean         // this bubble is the one being edited (persistent ring)
+  quoted?: ReactNode            // replies v1: the quoted-original preview, rendered ABOVE the text
+  // TAP-TO-JUMP (replies v1). `lid` is the jump ANCHOR — set on the bubble box itself rather than on
+  // a wrapper, because the sent/self roots carry alignSelf and an outer wrapper would reinterpret it
+  // (the same trap the `actions` note above describes). `flashed` is TRANSIENT and separate from
+  // `highlighted` on purpose: one is "you landed here", the other is "this is loaded in the composer".
+  lid?: string
+  flashed?: boolean
 }) {
+  // The flash ring must contrast with the bubble it lands on, exactly as the quote panel does. The
+  // 'sent' variant is the ONLY teal-filled message surface (--msg-sent), so it takes the light ring;
+  // 'self' and 'received' are both dark inset surfaces and keep the teal one. Decided here rather
+  // than via a prop because `variant` is already in scope — unlike `quoted`, which arrives as a
+  // built node and so has to be told its tone by the call site.
+  const flashClass = flashed ? (variant === 'sent' ? 'cv-msg-flash-light' : 'cv-msg-flash') : undefined
   // Outgoing (right, teal, timestamp + delivered check).
   if (variant === 'sent') {
     return (
       <div style={{ alignSelf: 'flex-end', maxWidth: '62%', display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
         <div className={actions ? 'cv-msg-actionrow' : undefined} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           {actions}
-          <div style={{ padding: '13px 17px', borderRadius: '16px 4px 16px 16px', background: 'var(--msg-sent)', color: 'var(--text-bright)', fontSize: 15, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word', boxShadow: highlighted ? EDIT_RING : undefined, minWidth: 0 }}>{text}</div>
+          <div data-lid={lid} className={flashClass} style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', minWidth: 0, padding: '13px 17px', borderRadius: '16px 4px 16px 16px', background: 'var(--msg-sent)', color: 'var(--text-bright)', fontSize: 15, lineHeight: 1.5, boxShadow: highlighted ? EDIT_RING : undefined }}>
+            {quoted}
+            <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', minWidth: 0 }}>{text}</span>
+          </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontFamily: MONO, fontSize: 11, color: 'var(--text-muted-dim)', marginTop: 6, marginRight: 4 }}>
           {bubbleTime(timestamp)}
@@ -67,7 +83,10 @@ export default function MessageBubble({ text, timestamp, variant, senderHeader, 
       <div style={{ alignSelf: 'flex-end', maxWidth: '62%', display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
         <div className={actions ? 'cv-msg-actionrow' : undefined} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           {actions}
-          <div style={{ padding: '13px 17px', borderRadius: 14, background: 'var(--surface-inset)', border: '1px solid rgba(var(--border-rgb),0.14)', color: 'var(--text-body)', fontSize: 15, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word', boxShadow: highlighted ? EDIT_RING : undefined, minWidth: 0 }}>{text}</div>
+          <div data-lid={lid} className={flashClass} style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', minWidth: 0, padding: '13px 17px', borderRadius: 14, background: 'var(--surface-inset)', border: '1px solid rgba(var(--border-rgb),0.14)', color: 'var(--text-body)', fontSize: 15, lineHeight: 1.5, boxShadow: highlighted ? EDIT_RING : undefined }}>
+            {quoted}
+            <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', minWidth: 0 }}>{text}</span>
+          </div>
         </div>
         {edited && (
           <div style={{ fontFamily: MONO, fontSize: 11, color: 'var(--text-muted-dim)', marginTop: 6, marginRight: 4 }}><EditedTag /></div>
@@ -78,9 +97,21 @@ export default function MessageBubble({ text, timestamp, variant, senderHeader, 
 
   // Incoming (left, timestamp below-left). The bubble + timestamp are identical whether or not a
   // sender header is present.
+  //
+  // The ACTION ROW is a replies-v1 addition here. Received bubbles never had one — edit is
+  // mine-only, so there was no affordance to hang on someone else's message — but Reply is not
+  // authorship-gated, so the row now exists on both sides. It MIRRORS the sent layout: the button
+  // sits outboard of the bubble, on the side away from the thread edge, which puts it on the RIGHT
+  // for a left-aligned bubble and the LEFT for a right-aligned one.
   const bubble = (
     <>
-      <div style={{ padding: '13px 17px', borderRadius: '4px 16px 16px 16px', background: 'var(--surface-inset)', border: 'none', color: 'var(--text-body)', fontSize: 15, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{text}</div>
+      <div className={actions ? 'cv-msg-actionrow' : undefined} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div data-lid={lid} className={flashClass} style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', minWidth: 0, padding: '13px 17px', borderRadius: '4px 16px 16px 16px', background: 'var(--surface-inset)', border: 'none', color: 'var(--text-body)', fontSize: 15, lineHeight: 1.5, boxShadow: highlighted ? EDIT_RING : undefined }}>
+          {quoted}
+          <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', minWidth: 0 }}>{text}</span>
+        </div>
+        {actions}
+      </div>
       {edited ? (
         <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontFamily: MONO, fontSize: 11, color: 'var(--text-faint-dim)', marginTop: 5, marginLeft: 4 }}>
           {bubbleTime(timestamp)}<EditedTag />

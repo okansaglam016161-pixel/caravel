@@ -144,10 +144,45 @@ a:hover { color: var(--accL); }
 .cv-msg-edit:focus-visible { opacity: 1; }
 .cv-msg-edit:hover { color: var(--text-primary); border-color: rgba(var(--teal-500-rgb), 0.4); }
 
+/* Reply arrow (replies v1) — the same affordance contract as the edit pencil, so per-message actions
+   behave identically wherever they appear. Kept as its own class rather than folded into
+   .cv-msg-edit: the two are revealed by the same hover but are separate buttons, and a shared class
+   would make "hide edit, keep reply" (a received bubble, where only reply applies) impossible. */
+.cv-msg-reply { opacity: 0; transition: opacity 0.15s; }
+.cv-msg-actionrow:hover .cv-msg-reply { opacity: 1; }
+.cv-msg-reply:focus-visible { opacity: 1; }
+.cv-msg-reply:hover { color: var(--text-primary); border-color: rgba(var(--teal-500-rgb), 0.4); }
+
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-thumb { background: rgba(120,150,210,0.2); border-radius: 4px; }
 
 /* Shared animations for the primitive kit + wallet modal (components/primitives/*, WalletModal). */
 @keyframes cv-spin { to { transform: rotate(360deg); } }
+
+/* Tap-to-jump flash (replies v1): the jumped-to message pulses once, then fades. DELIBERATELY NOT
+   the edit ring — that ring is a persistent "this bubble is loaded in the composer" state, and
+   reusing it would mean one visual saying two different things. This is transient and self-clearing.
+   A CSS animation also beats animating from JS: it overrides the inline box-shadow for its duration
+   and hands the property straight back when it ends, so a bubble that is BOTH being edited and
+   jumped to flashes and then returns to its ring with no state to reconcile. */
+@keyframes cv-flash {
+  0%   { box-shadow: 0 0 0 3px rgba(var(--teal-500-rgb), 0.6); }
+  70%  { box-shadow: 0 0 0 3px rgba(var(--teal-500-rgb), 0.45); }
+  100% { box-shadow: 0 0 0 3px rgba(var(--teal-500-rgb), 0); }
+}
+.cv-msg-flash { animation: cv-flash 1.6s ease-out; }
+
+/* The same pulse in LIGHT, for a flash landing on the sent bubble — the one message surface that is
+   itself teal (--msg-sent). The ring is drawn immediately outside the bubble's box, so a teal ring
+   there abuts a teal fill: it contrasts with the thread background but not with the thing it is
+   pointing at, which is what makes it hard to see. Inverting it restores the edge contrast.
+   The cards do NOT need this — --card-payment and --surface-inset are both near-black. */
+@keyframes cv-flash-light {
+  0%   { box-shadow: 0 0 0 3px rgba(234, 251, 247, 0.75); }
+  70%  { box-shadow: 0 0 0 3px rgba(234, 251, 247, 0.55); }
+  100% { box-shadow: 0 0 0 3px rgba(234, 251, 247, 0); }
+}
+.cv-msg-flash-light { animation: cv-flash-light 1.6s ease-out; }
+
 @keyframes cv-pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
 @keyframes cv-breathe { 0%, 100% { box-shadow: 0 0 0 0 rgba(var(--teal-500-rgb), 0.35); } 50% { box-shadow: 0 0 0 4px rgba(var(--teal-500-rgb), 0); } }

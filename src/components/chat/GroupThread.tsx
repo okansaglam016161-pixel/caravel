@@ -13,14 +13,17 @@
 //   keyed by logicalId, must survive a thread switch), while which bubble is loaded into the
 //   composer is local, because the composer itself is local.
 
-import { Fragment, useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import type { CaravelMessage, Group } from '../../messaging/types'
 import Avatar from './Avatar'
 import MessageBubble from './MessageBubble'
+import QuotedPreview from './QuotedPreview'
+import { canBeginEdit, canBeginReply, canReplyTo, quotedAuthorLabel } from './replyCompose'
 import MediaMessageCard from './MediaMessageCard'
-import { mergeThreadItems, threadContentKey, MONO } from './chatDisplay'
+import { mergeThreadItems, threadContentKey, ACTION_BTN, MONO } from './chatDisplay'
 import { groupGlyph } from './groupGlyph'
 import { useScrollToBottom } from './useScrollToBottom'
+import { useJumpToMessage } from './useJumpToMessage'
 import PendingBubble, { type PendingSend } from './PendingBubble'
 import { canEditMessage, displayTextFor, flightFor, isEditSubmittable, type EditFlightMap } from './messageEdit'
 import AttachPreview from './AttachPreview'
@@ -38,7 +41,7 @@ export default function GroupThread({
   messages: CaravelMessage[]        // this group's messages, oldest-first
   pending: PendingSend[]            // provisional sends for THIS group (already filtered)
   nameFor: (hex: string) => string  // sender display name (nickname ?? truncated npub)
-  onSend: (text: string) => Promise<void>
+  onSend: (text: string, replyTo?: string) => Promise<void>
   onRetryPending: (id: string) => void
   // Clears a failed provisional bubble — the only way out of a terminal failure, which shows no Retry.
   onDismissPending: (id: string) => void
@@ -76,6 +79,9 @@ export default function GroupThread({
   // verbatim on cancel: starting an edit must never destroy an unsent message.
   const [editing, setEditing] = useState<{ logicalId: string; original: string } | null>(null)
   const [stashedDraft, setStashedDraft] = useState('')
+  // REPLY MODE (replies v1) — the group mirror of the DM chip. Does NOT own the draft; interlocked
+  // with edit through the shared predicates so the two composers cannot diverge on the rule.
+  const [replying, setReplying] = useState<{ logicalId: string } | null>(null)
   // Two-step leave (B-M1): the ⋯ item swaps the menu panel to an inline confirm rather than opening
   // a modal. Leave hides a history the user has been reading and is irreversible until Phase C, so
   // it is guarded — Delete never was, but Delete was the weaker "forget until re-invited".
@@ -92,6 +98,26 @@ export default function GroupThread({
   // Pending sends are in the key so the provisional bubble is scrolled into view the instant it
   // appears — and so the swap to the real row re-fires, which a bare count never did.
   const bottomRef = useScrollToBottom(group.id, threadContentKey(messages, pending))
+
+  // logicalId → message for this group's thread, built once per render pass (see QuotedPreview for
+  // why a Map rather than a find() per rendered reply).
+  const quotedIndex = useMemo(() => {
+    const map = new Map<string, CaravelMessage>()
+    for (const m of messages) if (m.logicalId) map.set(m.logicalId, m)
+    return map
+  }, [messages])
+
+  // Who the pending reply quotes. Unlike the DM chip, a group names the MEMBER — with N participants
+  // "Replying to a message" would not say which conversation you are answering.
+  // Tap-to-jump (replies v1), keyed on group.id for the same reason useScrollToBottom is: this
+  // component is REUSED across group switches, so a flash would otherwise outlive its thread.
+  const { containerRef: threadRef, flashedId, jumpTo } = useJumpToMessage(group.id)
+
+  const replyTarget = replying ? quotedIndex.get(replying.logicalId) : undefined
+  // Same helper the rendered quote uses, so the chip and the bubble can never disagree about who
+  // authored the quoted message. 'yourself' rather than the default 'You' purely for grammar: this
+  // reads "Replying to yourself", while the quote's byline stands alone as "You".
+  const replyChipLabel = !replyTarget ? 'a message' : quotedAuthorLabel(replyTarget, nameFor, 'yourself')
 
   // MANDATORY reset on group switch (images M5). This component is REUSED, not remounted, when the
   // selected group changes — the same reason useScrollToBottom is keyed on group.id — so without this
@@ -110,13 +136,25 @@ export default function GroupThread({
   // group changes (the same reason useScrollToBottom is keyed on group.id) — so without this, leaving
   // mid-edit would keep the composer bound to a logicalId belonging to another group's thread, and
   // Save would silently edit a message you can no longer see.
-  useEffect(() => { setEditing(null); setStashedDraft('') }, [group.id])
+  useEffect(() => { setEditing(null); setStashedDraft(''); setReplying(null) }, [group.id])
 
   // Load a message into the composer. Refused while a send is in flight — both bind this textarea.
+  function beginReply(logicalId: string) {
+    if (!canBeginReply({ editing: !!editing, replying: !!replying })) return
+    if (sending) return
+    setReplying({ logicalId })
+  }
+
+  function cancelReply() {
+    setReplying(null)
+  }
+
   function beginEdit(logicalId: string, currentText: string) {
     // `|| attachment` for the same reason as the DM composer: attach mode uses this textarea as the
     // image's CAPTION field and edit mode uses it as the EDIT field, both bound to `draft`.
     if (sending || attachment) return
+    // Symmetric interlock, identical to the DM composer's — see replyCompose.ts.
+    if (!canBeginEdit({ editing: !!editing, replying: !!replying })) return
     setStashedDraft(editing ? stashedDraft : draft)   // don't clobber the stash when re-targeting
     setEditing({ logicalId, original: currentText })
     setDraft(currentText)
@@ -150,8 +188,9 @@ export default function GroupThread({
     if (!text || sending) return
     setSending(true)
     try {
-      await onSend(text)
+      await onSend(text, replying?.logicalId)
       setDraft('')   // success only — a failed send keeps the text, as the failed bubble promises
+      setReplying(null)   // same rule as the draft: the quote survives a failed send, with the text
     } catch {
       // Swallowed deliberately: onSend has already logged the cause and turned the provisional
       // bubble into a failed one with Retry, which is the user-facing surface. Without this catch
@@ -245,7 +284,7 @@ export default function GroupThread({
       </div>
 
       {/* Message list — DM container tokens; received bubbles carry a per-run sender identity. */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '28px 32px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <div ref={threadRef} style={{ flex: 1, overflowY: 'auto', padding: '28px 32px', display: 'flex', flexDirection: 'column', gap: 16 }}>
         {messages.length === 0 && (
           <div style={{ margin: 'auto', textAlign: 'center', maxWidth: 300 }}>
             <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-body-dim)', marginBottom: 6 }}>This is the start of {groupTitle(group)}</div>
@@ -282,7 +321,7 @@ export default function GroupThread({
           // An encrypted image (images M4). Same component and same resolver as the DM thread, on
           // both sides — a group image is fetched and decrypted per member, from one upload.
           if (m.media) {
-            return <MediaMessageCard key={m.id} message={m} />
+            return <MediaMessageCard key={m.id} message={m} lid={m.logicalId} flashed={!!m.logicalId && flashedId === m.logicalId} />
           }
           if (m.direction === 'sent') {
             // My own group message: the same edit affordance the DM thread offers, on the same
@@ -297,16 +336,22 @@ export default function GroupThread({
                   variant="sent"
                   edited={!!m.editedAt}
                   highlighted={!!m.logicalId && editing?.logicalId === m.logicalId}
-                  actions={canEditMessage(m) ? (
-                    <button
-                      className="cv-msg-edit"
-                      onClick={() => beginEdit(m.logicalId!, m.plaintext)}
-                      title="Edit message"
-                      aria-label="Edit message"
-                      style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 26, height: 26, flexShrink: 0, padding: 0, borderRadius: 8, border: '1px solid rgba(var(--border-rgb),0.16)', background: 'var(--surface-raised)', color: 'var(--text-muted)', cursor: 'pointer' }}
-                    >
-                      <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" /></svg>
-                    </button>
+                  lid={m.logicalId}
+                  flashed={!!m.logicalId && flashedId === m.logicalId}
+                  quoted={m.replyTo ? <QuotedPreview replyTo={m.replyTo} byLogicalId={quotedIndex} nameFor={nameFor} onJump={jumpTo} tone="on-teal" /> : undefined}
+                  actions={(canEditMessage(m) || canReplyTo(m)) ? (
+                    <>
+                      {canReplyTo(m) && (
+                        <button className="cv-msg-reply" onClick={() => beginReply(m.logicalId!)} title="Reply" aria-label="Reply to message" style={ACTION_BTN}>
+                          <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M9 17l-5-5 5-5" /><path d="M4 12h11a5 5 0 0 1 5 5v2" /></svg>
+                        </button>
+                      )}
+                      {canEditMessage(m) && (
+                        <button className="cv-msg-edit" onClick={() => beginEdit(m.logicalId!, m.plaintext)} title="Edit message" aria-label="Edit message" style={ACTION_BTN}>
+                          <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" /></svg>
+                        </button>
+                      )}
+                    </>
                   ) : undefined}
                 />
                 {/* In-flight + failed states. "Saving" says only that the fan-out is running; a
@@ -346,9 +391,18 @@ export default function GroupThread({
               timestamp={m.timestamp}
               variant="received"
               // A member's corrected message is labelled here exactly as in the DM thread — the
-              // edit is only visible as an edit if the label travels with it. No affordance: only
-              // the author can edit, and applyEdit enforces that on every device.
+              // edit is only visible as an edit if the label travels with it. No EDIT affordance:
+              // only the author can edit, and applyEdit enforces that on every device. Reply,
+              // however, is not authorship-gated, so a received bubble now carries an action row.
               edited={!!m.editedAt}
+              lid={m.logicalId}
+              flashed={!!m.logicalId && flashedId === m.logicalId}
+              quoted={m.replyTo ? <QuotedPreview replyTo={m.replyTo} byLogicalId={quotedIndex} nameFor={nameFor} onJump={jumpTo} /> : undefined}
+              actions={canReplyTo(m) ? (
+                <button className="cv-msg-reply" onClick={() => beginReply(m.logicalId!)} title="Reply" aria-label="Reply to message" style={ACTION_BTN}>
+                  <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M9 17l-5-5 5-5" /><path d="M4 12h11a5 5 0 0 1 5 5v2" /></svg>
+                </button>
+              ) : undefined}
               senderHeader={firstOfRun
                 ? { avatar: <Avatar hex={m.senderPubkeyHex} size={28} radius={9} fontSize={11} />, label: nameFor(m.senderPubkeyHex) }
                 : 'continuation'}
@@ -361,6 +415,19 @@ export default function GroupThread({
 
       {/* Composer — DM compose treatment, minus the $ payment toggle (deferred). */}
       <div style={{ padding: '16px 24px 20px', borderTop: '1px solid rgba(var(--border-rgb),0.1)', flexShrink: 0 }}>
+
+        {/* Replying-to chip (replies v1), matching the DM composer: same slot, same visual language,
+            same explicit Cancel. Names the MEMBER being answered, which a group needs and a DM does
+            not. Does not own the draft — whatever was half-typed stays put. */}
+        {replying && (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 10, padding: '9px 13px', borderRadius: 11, background: 'rgba(var(--teal-500-rgb),0.06)', border: '1px solid rgba(var(--teal-500-rgb),0.28)' }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, minWidth: 0, fontSize: 12.5, fontWeight: 600, color: 'var(--teal-300)' }}>
+              <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="var(--teal-500)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><path d="M9 17l-5-5 5-5" /><path d="M4 12h11a5 5 0 0 1 5 5v2" /></svg>
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Replying to {replyChipLabel}</span>
+            </span>
+            <span onClick={cancelReply} style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', cursor: 'pointer', flexShrink: 0 }}>Cancel</span>
+          </div>
+        )}
 
         {/* Editing banner (M4), matching the DM composer: names the state and offers the explicit
             way out. The bubble being edited is ringed in the thread, so the pairing is visible. */}

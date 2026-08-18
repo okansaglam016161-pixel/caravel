@@ -117,7 +117,7 @@ export async function sendImageToPeer(
   const { media, plaintextBytes } = await prepare(file, onStage)
   onStage?.('send')
   try {
-    const message = await provider.sendMessage(peerHex, caption?.trim() || EMPTY_CAPTION, undefined, tariAddress, media)
+    const message = await provider.sendMessage(peerHex, caption?.trim() || EMPTY_CAPTION, { tariAddress, media })
     return { message, plaintextBytes }
   } catch (e) {
     // The benign orphan — see the header. The blob is undecryptable noise; report only the send.
@@ -138,7 +138,7 @@ export async function sendImageToGroup(
   const { media, plaintextBytes } = await prepare(file, onStage)
   onStage?.('send')
   try {
-    const result = await provider.sendGroupMessage(groupId, memberPubkeysHex, caption?.trim() || EMPTY_CAPTION, media)
+    const result = await provider.sendGroupMessage(groupId, memberPubkeysHex, caption?.trim() || EMPTY_CAPTION, { media })
     return { result, plaintextBytes }
   } catch (e) {
     throw new MediaSendFailure({ stage: 'send', detail: e instanceof Error ? e.message : String(e) })

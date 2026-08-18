@@ -10,6 +10,7 @@ import GroupThread from './GroupThread'
 import CreateGroupModal, { type GroupContactOption } from './CreateGroupModal'
 import ReinviteModal, { type ReinviteMemberOption } from './ReinviteModal'
 import { useScrollToBottom } from './useScrollToBottom'
+import { useJumpToMessage } from './useJumpToMessage'
 import PendingBubble, { type PendingSend } from './PendingBubble'
 import { loadNicknames, setNickname, MAX_NICKNAME_LEN, type NicknameMap } from '../../messaging/nicknameStore'
 import { loadAddressSent, markAddressSent, clearAddressSent, type AddressSentMap } from '../../messaging/addressSentStore'
@@ -17,9 +18,11 @@ import { sendConfidential, tariToMicrotari, MAX_FEE } from '../../crypto/confide
 import { resolveOnsNameToHex, toOnsName, type OnsResolveErrorKind } from '../../crypto/ons'
 import { ConnectionIndicator, RelayHealthPanel } from './ConnectionStatus'
 import { usePaymentResolution } from '../../hooks/usePaymentResolution'
-import { avatarFor, initialsFor, truncNpub, bubbleTime, compactTime, mergeThreadItems, threadContentKey, MONO } from './chatDisplay'
+import { avatarFor, initialsFor, truncNpub, bubbleTime, compactTime, mergeThreadItems, threadContentKey, ACTION_BTN, MONO } from './chatDisplay'
 import Avatar from './Avatar'
 import MessageBubble from './MessageBubble'
+import QuotedPreview from './QuotedPreview'
+import { canBeginEdit, canBeginReply, canReplyTo } from './replyCompose'
 import { beginFlight, canEditMessage, displayTextFor, flightFor, isEditSubmittable, settleFlight, clearFlight, type EditFlightMap } from './messageEdit'
 import MediaMessageCard from './MediaMessageCard'
 import { describeMediaFailure, describeMediaStage, sendImageToGroup, sendImageToPeer, type MediaSendStage } from '../../messaging/sendMedia'
@@ -125,12 +128,12 @@ const cardChrome: Record<CardTone, { border: string; bg: string; headerBg: strin
 }
 
 // Card chrome per resolution tone. The private note ALWAYS renders (M10.0) below the amount area.
-function PaymentCard({ sent, tone, chip, timestamp, plaintext, body }: { sent: boolean; tone: CardTone; chip: string; timestamp: number; plaintext: string; body: ReactNode }) {
+function PaymentCard({ sent, tone, chip, timestamp, plaintext, body, lid, flashed }: { sent: boolean; tone: CardTone; chip: string; timestamp: number; plaintext: string; body: ReactNode; lid?: string; flashed?: boolean }) {
   const c = cardChrome[tone]
   const chipColor = tone === 'danger' ? 'var(--danger-300)' : (sent && tone === 'teal') ? 'var(--teal-500)' : 'var(--text-muted-dim)'
   const noteBorder = tone === 'teal' ? 'rgba(var(--teal-500-rgb),0.28)' : 'rgba(var(--border-rgb),0.2)'
   return (
-    <div style={{ alignSelf: sent ? 'flex-end' : 'flex-start', maxWidth: '68%', width: 440 }}>
+    <div data-lid={lid} className={flashed ? 'cv-msg-flash' : undefined} style={{ alignSelf: sent ? 'flex-end' : 'flex-start', maxWidth: '68%', width: 440, borderRadius: 16 }}>
       <div style={{ borderRadius: sent ? '16px 6px 16px 16px' : '6px 16px 16px 16px', overflow: 'hidden', border: `1px solid ${c.border}`, background: c.bg }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 17px', background: c.headerBg, borderBottom: `1px solid ${c.headerBorder}` }}>
           <span style={{ fontSize: 12, fontWeight: 700, color: c.title, letterSpacing: '0.06em' }}>CONFIDENTIAL PAYMENT</span>
@@ -166,7 +169,7 @@ const retryBtn = (retry: () => void) => (
   </span>
 )
 
-function SentPaymentCard({ message }: { message: CaravelMessage }) {
+function SentPaymentCard({ message, lid, flashed }: { message: CaravelMessage; lid?: string; flashed?: boolean }) {
   const amount = message.localPayment ? microToTari(message.localPayment.amountMicrotari) : null
   const body = amount !== null
     ? <>{<BigAmount tari={amount} />}{hiddenPill}</>
@@ -174,10 +177,10 @@ function SentPaymentCard({ message }: { message: CaravelMessage }) {
         <div style={{ fontFamily: MONO, fontSize: 26, fontWeight: 700, color: 'var(--text-teal-label)', letterSpacing: '0.08em', marginBottom: 10 }}>••••</div>
         <div style={{ fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.5, maxWidth: 320, margin: '0 auto' }}>Sent from another device, so the amount isn’t cached here. The recipient can still see it.</div>
       </>
-  return <PaymentCard sent tone="teal" chip="Sent" timestamp={message.timestamp} plaintext={message.plaintext} body={body} />
+  return <PaymentCard sent tone="teal" chip="Sent" timestamp={message.timestamp} plaintext={message.plaintext} body={body} lid={lid} flashed={flashed} />
 }
 
-function ReceivedPaymentCard({ message }: { message: CaravelMessage }) {
+function ReceivedPaymentCard({ message, lid, flashed }: { message: CaravelMessage; lid?: string; flashed?: boolean }) {
   const { state, retry } = usePaymentResolution(message.payment!.utxoId)
   let tone: CardTone = 'teal', chip = 'Received', body: ReactNode
   if (state.kind === 'resolved') {
@@ -201,13 +204,13 @@ function ReceivedPaymentCard({ message }: { message: CaravelMessage }) {
     tone = 'danger'; chip = 'Error'
     body = <><div style={{ fontSize: 14, fontWeight: 600, color: 'var(--danger-300)', marginBottom: 6 }}>Couldn’t reach the network</div><div style={{ fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.5, marginBottom: 14 }}>The payment is fine. We just can’t read it right now.</div>{retryBtn(retry)}</>
   }
-  return <PaymentCard sent={false} tone={tone} chip={chip} timestamp={message.timestamp} plaintext={message.plaintext} body={body} />
+  return <PaymentCard sent={false} tone={tone} chip={chip} timestamp={message.timestamp} plaintext={message.plaintext} body={body} lid={lid} flashed={flashed} />
 }
 
-function PaymentMessageCard({ message }: { message: CaravelMessage }) {
+function PaymentMessageCard({ message, lid, flashed }: { message: CaravelMessage; lid?: string; flashed?: boolean }) {
   return message.direction === 'sent'
-    ? <SentPaymentCard message={message} />
-    : <ReceivedPaymentCard message={message} />
+    ? <SentPaymentCard message={message} lid={lid} flashed={flashed} />
+    : <ReceivedPaymentCard message={message} lid={lid} flashed={flashed} />
 }
 
 // ── Component ────────────────────────────────────────────────────────────────────
@@ -267,6 +270,10 @@ export default function ChatApp() {
   // editMessage only writes to the store once a relay ACCEPTS (M2). Never persisted, never on the
   // wire. See messageEdit.ts for why a failed flight snaps the bubble back instead of holding it.
   const [editFlights, setEditFlights] = useState<EditFlightMap>({})
+  // REPLY MODE (replies v1). Unlike edit, this does NOT own the draft: you type a new message while
+  // the chip names what you are quoting, so there is no stash to keep. Interlocked with edit via
+  // canBeginReply/canBeginEdit (replyCompose.ts) — symmetric, so neither silently clears the other.
+  const [replying, setReplying] = useState<{ logicalId: string } | null>(null)
   // Mirror of `editing` for the thread-switch reset below, which must know whether we WERE editing
   // without taking `editing` as a dependency (that would re-fire the whole payment-composer reset
   // every time an edit starts or ends).
@@ -439,7 +446,7 @@ export default function ChatApp() {
   // re-wraps with fresh event ids, so anyone who already received the message would get a duplicate
   // (addReceivedMessage dedups by event id only). So ≥1 reached is recorded as sent with NO retry
   // offered, and the shortfall is reported honestly in the composer footer instead.
-  async function sendToGroup(groupId: string, members: string[], text: string) {
+  async function sendToGroup(groupId: string, members: string[], text: string, replyTo?: string) {
     const tempId = `gpending-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
     setPendingGroupSends(p => [...p, { id: tempId, groupId, text, status: 'sending', attemptedAt: Date.now() }])
     setGroupSendNote(null)
@@ -448,7 +455,7 @@ export default function ChatApp() {
       // Locked wallet → null. Previously this returned silently; now it surfaces as a failed bubble.
       if (!provider) throw new Error('Wallet is locked — unlock to send')
       try {
-        const res = await provider.sendGroupMessage(groupId, members, text)
+        const res = await provider.sendGroupMessage(groupId, members, text, { replyTo })
         recordSentMessage(res.message)
         setPendingGroupSends(p => p.filter(x => x.id !== tempId))  // real persisted bubble now shows
         // Reached some but not all — surface it rather than letting "sent" imply everyone got it.
@@ -468,9 +475,9 @@ export default function ChatApp() {
     }
   }
 
-  async function handleGroupSend(text: string) {
+  async function handleGroupSend(text: string, replyTo?: string) {
     if (!selectedGroup) return
-    await sendToGroup(selectedGroup.id, selectedGroup.members, text)
+    await sendToGroup(selectedGroup.id, selectedGroup.members, text, replyTo)
   }
 
   // Retry a failed group send. Unlike the DM retry (which re-reads the composer draft), this resends
@@ -651,11 +658,12 @@ export default function ChatApp() {
       if (!provider) throw new Error('Wallet is locked — unlock to send')
       // Self-healing address exchange (M9.0d): piggyback my address until the peer has it.
       const addr = outboundAddressFor(peer)
-      const msg = await provider.sendMessage(peer, text, undefined, addr)
+      const msg = await provider.sendMessage(peer, text, { tariAddress: addr, replyTo: replying?.logicalId })
       provider.disconnect()
       recordSentMessage(msg)
       if (addr) markSent(peer)
       setDraft('')  // clear only on success — a failed send keeps the text
+      setReplying(null)  // same rule as the draft: the quote survives a failed send, with the text
       setPendingSends(p => p.filter(x => x.id !== tempId))  // real persisted bubble now shows
     } catch (e) {
       // The design's failed bubble shows only "Couldn't send" + Retry (no raw string), so log the
@@ -791,7 +799,24 @@ export default function ChatApp() {
 
   // Load a message into the composer. Refused while any other composer state owns the draft
   // (payment compose / confirm) or while a send is in flight — all of them bind the same textarea.
+  // Load a message into the reply chip. Refused mid-EDIT (symmetric interlock) and while a send is
+  // in flight; re-targeting an existing reply is allowed, since picking a different message to quote
+  // is a normal correction and not a state change.
+  function beginReply(logicalId: string) {
+    if (!canBeginReply({ editing: !!editing, replying: !!replying })) return
+    if (sending || payBusy) return
+    setReplying({ logicalId })
+    composerRef.current?.focus()
+  }
+
+  function cancelReply() {
+    setReplying(null)
+  }
+
   function beginEdit(logicalId: string, currentText: string) {
+    // Symmetric interlock: an edit cannot start while a reply is pending. Cancelling the reply for
+    // the user would discard a choice they made without saying so — see replyCompose.ts.
+    if (!canBeginEdit({ editing: !!editing, replying: !!replying })) return
     // `attachment` belongs in this list for the same reason as the others, and it is the one neither
     // feature branch could have added alone: attach mode uses this same textarea as the image's
     // CAPTION field while edit mode uses it as the EDIT field, both bound to `draft`. With an image
@@ -969,7 +994,7 @@ export default function ChatApp() {
       try {
         // Piggyback my address (M9.0d self-healing) on this payment message too, if not yet sent.
         const addr = outboundAddressFor(peerHex)
-        const msg = await provider.sendMessage(peerHex, note, { utxoId: result.recipientUtxoId }, addr)
+        const msg = await provider.sendMessage(peerHex, note, { payment: { utxoId: result.recipientUtxoId }, tariAddress: addr })
         provider.disconnect()
         if (addr) markSent(peerHex)
         // Cache the amount + txId LOCALLY (never on the wire) so our thread renders the amount.
@@ -1031,12 +1056,36 @@ export default function ChatApp() {
     setEditing(null)
     setStashedDraft('')
     setDraft(d => (editingRef.current ? '' : d))
+    // A reply names a message in the thread being left, so it cannot survive the switch either.
+    setReplying(null)
   }, [selectedPeerHex])
 
   // Auto-grow the composer with its content: reset to 'auto' to measure, then set to the
   // content height capped at COMPOSER_MAX_H (beyond which it scrolls internally). Keyed on the
   // draft, so it grows on Shift+Enter/wrap, shrinks on delete, and resets to one line on send.
   const composerRef = useRef<HTMLTextAreaElement>(null)
+
+  // logicalId → message for the OPEN thread, built once per render pass so a quote resolves with a
+  // Map lookup instead of a scan. The alternative — messages.find() per rendered reply — is
+  // O(rows × replies) over an array that holds every thread's messages, paid on every keystroke.
+  const quotedIndex = useMemo(() => {
+    const map = new Map<string, CaravelMessage>()
+    for (const m of selectedConvo?.messages ?? []) if (m.logicalId) map.set(m.logicalId, m)
+    return map
+  }, [selectedConvo?.messages])
+
+  // Who the pending reply quotes, for the chip. 'yourself' rather than your own name: the chip is
+  // read in the second person ("Replying to …"), and a DM has only two participants, so a name there
+  // would be the only place in the thread the user is addressed by their own handle.
+  // Tap-to-jump (replies v1). Keyed on the open peer so a flash cannot survive a thread switch.
+  const { containerRef: threadRef, flashedId, jumpTo } = useJumpToMessage(selectedPeerHex)
+
+  const replyTarget = replying ? quotedIndex.get(replying.logicalId) : undefined
+  const replyChipLabel = !replyTarget
+    ? 'a message'
+    : replyTarget.direction === 'sent'
+      ? 'yourself'
+      : displayName(replyTarget.senderPubkeyHex)
   useEffect(() => {
     const el = composerRef.current
     if (!el) return
@@ -1558,7 +1607,7 @@ export default function ChatApp() {
             const pendingForPeer = pendingSends.filter(p => p.peerHex === selectedConvo.peerHex)
             const isEmpty = selectedConvo.messages.length === 0 && pendingForPeer.length === 0
             return (
-          <div style={{ flex: 1, overflowY: 'auto', padding: '28px 32px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div ref={threadRef} style={{ flex: 1, overflowY: 'auto', padding: '28px 32px', display: 'flex', flexDirection: 'column', gap: 16 }}>
 
             {/* Notes-to-self banner (self thread) */}
             {isSelf && (
@@ -1623,9 +1672,9 @@ export default function ChatApp() {
                 )
               }
               const m = item.message
-              if (m.payment) return <PaymentMessageCard key={m.id} message={m} />
+              if (m.payment) return <PaymentMessageCard key={m.id} message={m} lid={m.logicalId} flashed={!!m.logicalId && flashedId === m.logicalId} />
               /* Encrypted image (images M4): resolves itself — cache first, then the host. */
-              if (m.media) return <MediaMessageCard key={m.id} message={m} />
+              if (m.media) return <MediaMessageCard key={m.id} message={m} lid={m.logicalId} flashed={!!m.logicalId && flashedId === m.logicalId} />
               const flight = flightFor(m, editFlights)
               const editable = canEditMessage(m)
               return (
@@ -1636,16 +1685,36 @@ export default function ChatApp() {
                     variant={isSelf ? 'self' : m.direction === 'received' ? 'received' : 'sent'}
                     edited={!!m.editedAt}
                     highlighted={!!m.logicalId && editing?.logicalId === m.logicalId}
-                    actions={editable ? (
-                      <button
-                        className="cv-msg-edit"
-                        onClick={() => beginEdit(m.logicalId!, m.plaintext)}
-                        title="Edit message"
-                        aria-label="Edit message"
-                        style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 26, height: 26, flexShrink: 0, padding: 0, borderRadius: 8, border: '1px solid rgba(var(--border-rgb),0.16)', background: 'var(--surface-raised)', color: 'var(--text-muted)', cursor: 'pointer' }}
-                      >
-                        <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" /></svg>
-                      </button>
+                    lid={m.logicalId}
+                    flashed={!!m.logicalId && flashedId === m.logicalId}
+                    // 'self' is the notes-to-self bubble — dark inset, NOT teal — so only a true 'sent'
+                    // bubble takes the inverted palette.
+                    quoted={m.replyTo ? <QuotedPreview replyTo={m.replyTo} byLogicalId={quotedIndex} onJump={jumpTo} tone={!isSelf && m.direction === 'sent' ? 'on-teal' : 'on-dark'} /> : undefined}
+                    actions={(editable || canReplyTo(m)) ? (
+                      <>
+                        {canReplyTo(m) && (
+                          <button
+                            className="cv-msg-reply"
+                            onClick={() => beginReply(m.logicalId!)}
+                            title="Reply"
+                            aria-label="Reply to message"
+                            style={ACTION_BTN}
+                          >
+                            <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M9 17l-5-5 5-5" /><path d="M4 12h11a5 5 0 0 1 5 5v2" /></svg>
+                          </button>
+                        )}
+                        {editable && (
+                          <button
+                            className="cv-msg-edit"
+                            onClick={() => beginEdit(m.logicalId!, m.plaintext)}
+                            title="Edit message"
+                            aria-label="Edit message"
+                            style={ACTION_BTN}
+                          >
+                            <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" /></svg>
+                          </button>
+                        )}
+                      </>
                     ) : undefined}
                   />
                   {/* In-flight + failed states for an edit. "Saving" says only that it left this
@@ -1792,6 +1861,21 @@ export default function ChatApp() {
                     <button onClick={() => setConfirming(false)} style={{ flex: '0 0 120px', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 13, borderRadius: 12, border: '1px solid rgba(var(--border-rgb),0.2)', background: 'transparent', color: 'var(--text-muted)', fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
                     <button onClick={submitPayment} style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 13, borderRadius: 12, border: 'none', background: 'var(--teal-grad)', color: 'var(--ink-on-accent)', fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>Send payment</button>
                   </div>
+                </div>
+              )}
+
+              {/* Replying-to chip (replies v1): the same slot, visual language and explicit Cancel as
+                  the editing banner below. Distinct from it in one way that matters — this state does
+                  NOT own the draft, so the composer keeps whatever you were typing. */}
+              {replying && !paymentMode && !confirming && (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 10, padding: '9px 13px', borderRadius: 11, background: 'rgba(var(--teal-500-rgb),0.06)', border: '1px solid rgba(var(--teal-500-rgb),0.28)' }}>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, minWidth: 0, fontSize: 12.5, fontWeight: 600, color: 'var(--teal-300)' }}>
+                    <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="var(--teal-500)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><path d="M9 17l-5-5 5-5" /><path d="M4 12h11a5 5 0 0 1 5 5v2" /></svg>
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      Replying to {replyChipLabel}
+                    </span>
+                  </span>
+                  <span onClick={cancelReply} style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', cursor: 'pointer', flexShrink: 0 }}>Cancel</span>
                 </div>
               )}
 

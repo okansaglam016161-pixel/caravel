@@ -1,0 +1,8 @@
+ONS client — vendored build provenance
+======================================
+source repo   : ootle-name-service
+source commit : fe72b4fce609e9a0c5c26d964b6ba768d85d2083
+              : (fe72b4f, branch: fix-scan-utxos-offset-loop)
+built from    : client/src → client/dist  (tsc -p client/tsconfig.json)
+vendored at   : 2026-08-18T10:48:54Z
+tree state    : clean (dist matches the commit above exactly)

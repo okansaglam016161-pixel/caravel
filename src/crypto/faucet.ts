@@ -30,13 +30,26 @@ import {
 } from '@tari-project/ootle'
 import { IndexerProvider } from '@tari-project/ootle-indexer'
 import { nextMaxEpoch } from './epoch'
+import { dryRunFee, withFeeMargin } from './feeProbe'
 import type { SecretKeyWallet } from '@tari-project/ootle-secret-key-wallet'
 
 const INDEXER_URL = 'https://ootle-indexer-a.tari.com'
-const STEALTH_FAUCET_FEE = 1_000n
+/**
+ * What one `XtrFaucet.take` deposits: 1_000_000_000 µtTARI (~1000 tTARI). The claim withdraws
+ * EXACTLY this and splits it into the stealth output plus the fee, so `stealthAmount + fee` must
+ * always equal it — withdrawing more aborts with `Bucket or vault contained insufficient revealed
+ * funds`, which is precisely what a naive "just raise the fee" fix would have caused.
+ */
+const FAUCET_PAYOUT_MICROTARI = 1_000_000_000n
 
-/** The faucet's per-`take` dispense is 1_000_000_000 µtTARI (~1000 tTARI); claim it all minus the fee. */
-export const CLAIM_AMOUNT_MICROTARI = 999_999_000n
+/**
+ * Fee reserved for the DRY RUN only — never submitted for real. It has to be comfortably above the
+ * true cost so the simulation runs to completion (an under-funded probe aborts before the network
+ * has priced the whole transaction, which is how the first diagnosis of this outage read 2 738
+ * when the real figure was 13 211), and comfortably under FAUCET_PAYOUT_MICROTARI so the withdraw
+ * still balances. Unconsumed reservation is reported back as overcharge and costs nothing.
+ */
+const FEE_PROBE_MICROTARI = 50_000n
 
 export type ClaimOutcome = 'Commit' | 'Reject' | 'Timeout'
 export interface ClaimResult {
@@ -78,30 +91,74 @@ export async function claimFaucet(
   onProgress?: (msg: string) => void,
 ): Promise<ClaimResult> {
   const log = (m: string) => onProgress?.(m)
-  const stealthAmount = CLAIM_AMOUNT_MICROTARI
-  const revealedInputAmount = stealthAmount + STEALTH_FAUCET_FEE
 
   log('Connecting…')
   const provider = await IndexerProvider.connect({ url: INDEXER_URL, network: Network.Esmeralda })
   const crypto = new WasmStealthCrypto(Network.Esmeralda)
   const ownerPkHex = toHexStr(await wallet.getPublicKey())
 
-  log('Building claim…')
-  // revealed_amount = stealth_out + fee, so the on-chain withdraw lines up with the outputs side.
-  const { statement: outputsStatement, outputMask } = await crypto.generateOutputsStatement(
-    [createOutput({ destination: ownerAddress, amount: stealthAmount, resourceAddress: TARI_RESOURCE_ADDRESS })],
-    STEALTH_FAUCET_FEE,
-  )
-  const inputsStatement = await crypto.buildInputsStatement([], revealedInputAmount)
-  const balanceProof = await signBalanceProof(crypto, Mask.zero(), outputMask, inputsStatement, outputsStatement)
-  const statement = new StealthTransferStatement(inputsStatement, outputsStatement, balanceProof)
-
-  // 0.39: mandatory validity window — the builder needs the chain tip before it exists. `provider`
-  // has been connected since the top of this function, so the read slots in here without reordering
-  // anything; it sits AFTER the balance proof above so the window is not spent on local wasm work.
+  // 0.39: mandatory validity window — the builder cannot be constructed without the chain tip.
+  // Read ONCE and used for both the dry run and the real submission: the two are seconds apart and
+  // the window is ~10 epochs wide (see crypto/epoch.ts), so re-reading would buy nothing, while
+  // letting them differ would mean simulating a transaction that is not the one submitted.
   const maxEpoch = await nextMaxEpoch(provider)
 
-  const builder = new TransactionBuilder(Network.Esmeralda, maxEpoch)
+  // Everything downstream of the fee has to be rebuilt when the fee changes — the outputs statement
+  // commits to it, the withdraw amount is derived from it, and the balance proof signs over both.
+  // So the whole build is a function OF the fee, called once to price the transaction and once to
+  // send it. The wasm work is a few hundred milliseconds; paying it twice is the cost of not
+  // hardcoding a number that goes stale.
+  async function buildEnvelope(feeMicrotari: bigint, dryRun: boolean) {
+    // The withdraw takes the WHOLE payout and splits it; see FAUCET_PAYOUT_MICROTARI.
+    const stealthAmount = FAUCET_PAYOUT_MICROTARI - feeMicrotari
+    const revealedInputAmount = stealthAmount + feeMicrotari
+
+    const { statement: outputsStatement, outputMask } = await crypto.generateOutputsStatement(
+      [createOutput({ destination: ownerAddress, amount: stealthAmount, resourceAddress: TARI_RESOURCE_ADDRESS })],
+      feeMicrotari,
+    )
+    const inputsStatement = await crypto.buildInputsStatement([], revealedInputAmount)
+    const balanceProof = await signBalanceProof(crypto, Mask.zero(), outputMask, inputsStatement, outputsStatement)
+    const statement = new StealthTransferStatement(inputsStatement, outputsStatement, balanceProof)
+
+    const builder = buildClaim(maxEpoch, ownerPkHex, revealedInputAmount, statement)
+    const unsigned = builder.buildUnsignedTransaction()
+    // `dry_run` must ride INSIDE the sealed envelope — the dry-run endpoint refuses anything else.
+    const signed = await signTransaction([wallet], dryRun ? { ...unsigned, dry_run: true } : unsigned)
+    return { envelope: sealTransaction(signed), stealthAmount }
+  }
+
+  log('Estimating network fee…')
+  const probe = await buildEnvelope(FEE_PROBE_MICROTARI, true)
+  const cost = await dryRunFee(INDEXER_URL, probe.envelope)
+  const fee = withFeeMargin(cost)
+  if (fee >= FAUCET_PAYOUT_MICROTARI) {
+    throw new Error(`Network fee (${fee} µtTARI) exceeds the faucet's payout — the faucet cannot cover its own claim.`)
+  }
+
+  log('Building claim…')
+  const real = await buildEnvelope(fee, false)
+  const stealthAmount = real.stealthAmount
+
+  log('Submitting…')
+  const sub = await provider.submitTransaction(real.envelope)
+  const txId = sub.transaction_id as string
+
+  log('Confirming on-chain…')
+  const outcome = await pollOutcome(txId)
+  provider.stopWatcher?.()
+  return { txId, outcome, amount: stealthAmount }
+}
+
+// The instruction recipe, lifted out so the pricing build and the real build are provably the same
+// transaction shape and can only differ in the fee that is threaded through them.
+function buildClaim(
+  maxEpoch: number,
+  ownerPkHex: string,
+  revealedInputAmount: bigint,
+  statement: StealthTransferStatement,
+) {
+  return new TransactionBuilder(Network.Esmeralda, maxEpoch)
     .withFeeInstructionsBuilder((b) =>
       b
         .createAccount(ownerPkHex)
@@ -126,18 +183,4 @@ export async function claimFaucet(
       { substate_id: XTR_FAUCET_VAULT_ADDRESS, version: null },
       { substate_id: XTR_FAUCET_CLAIM_RESOURCE_ADDRESS, version: null },
     ])
-
-  const unsigned = builder.buildUnsignedTransaction()
-  log('Signing (in-browser)…')
-  const signed = await signTransaction([wallet], unsigned)
-  const envelope = sealTransaction(signed)
-
-  log('Submitting…')
-  const sub = await provider.submitTransaction(envelope)
-  const txId = sub.transaction_id as string
-
-  log('Confirming on-chain…')
-  const outcome = await pollOutcome(txId)
-  provider.stopWatcher?.()
-  return { txId, outcome, amount: stealthAmount }
 }

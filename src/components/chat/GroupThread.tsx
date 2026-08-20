@@ -13,20 +13,26 @@
 //   keyed by logicalId, must survive a thread switch), while which bubble is loaded into the
 //   composer is local, because the composer itself is local.
 
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { CaravelMessage, Group } from '../../messaging/types'
 import Avatar from './Avatar'
 import MessageBubble from './MessageBubble'
 import QuotedPreview from './QuotedPreview'
 import { canBeginEdit, canBeginReply, canReplyTo, quotedAuthorLabel } from './replyCompose'
+import { aggregateReactions, atReactionLimit, canReactTo, myReactions } from './reactionDisplay'
+import MessageActionRow from './MessageActionRow'
+import ReactionPills from './ReactionPills'
+import ReactionQuickSet from './ReactionQuickSet'
 import MediaMessageCard from './MediaMessageCard'
-import { mergeThreadItems, threadContentKey, ACTION_BTN, MONO } from './chatDisplay'
+import { mergeThreadItems, threadContentKey, MONO } from './chatDisplay'
 import { groupGlyph } from './groupGlyph'
 import { useScrollToBottom } from './useScrollToBottom'
 import { useJumpToMessage } from './useJumpToMessage'
 import PendingBubble, { type PendingSend } from './PendingBubble'
 import { canEditMessage, displayTextFor, flightFor, isEditSubmittable, type EditFlightMap } from './messageEdit'
 import AttachPreview from './AttachPreview'
+import EmojiPicker from './EmojiPicker'
+import { insertAtCursor } from './composerInsert'
 
 // A group with no real name yet (a lazy placeholder learned from a message before its definition).
 function groupTitle(g: Group): string {
@@ -35,7 +41,7 @@ function groupTitle(g: Group): string {
 
 export default function GroupThread({
   group, messages, pending, nameFor, onSend, onRetryPending, onDismissPending, onLeave, onReinvite, sendNote, onSendImage, imageStageLabel,
-  editFlights, onSaveEdit, onRetryEdit, onDismissEdit,
+  editFlights, onSaveEdit, onRetryEdit, onDismissEdit, mePubkeyHex, onReact,
 }: {
   group: Group
   messages: CaravelMessage[]        // this group's messages, oldest-first
@@ -57,6 +63,14 @@ export default function GroupThread({
   // the flight). What lives here is only which bubble is loaded into THIS composer.
   editFlights: EditFlightMap
   onSaveEdit: (logicalId: string, text: string) => Promise<void>
+  // MY Nostr pubkey — needed to tell my own reactions from a member's, which is what makes a pill
+  // tappable-to-remove. Passed rather than read from context so this component stays presentational,
+  // the same way nameFor and the edit callbacks are.
+  mePubkeyHex: string
+  // Publish one of my reactions (add or remove). ChatApp owns the provider, exactly as it owns the
+  // edit and image sends; this resolves when the round trip settles, so the popover knows when to
+  // stop dimming.
+  onReact: (logicalId: string, emoji: string, action: 'add' | 'remove') => Promise<void>
   onRetryEdit: (logicalId: string) => void
   onDismissEdit: (logicalId: string) => void
   // ChatApp owns the messaging provider, so the CONFIRMED file (post-preview) goes back up to it to
@@ -72,6 +86,17 @@ export default function GroupThread({
   const [attachment, setAttachment] = useState<File | null>(null)
   const [imageBusy, setImageBusy] = useState(false)
   const imageInputRef = useRef<HTMLInputElement | null>(null)
+  // ── Emoji picker (B) ──
+  // The textarea REF is new here. This composer never had one — it had no auto-grow and nothing
+  // else needed to read the caret — so without it the picker could only ever append, while the DM
+  // composer inserted at the cursor. Two composers that behave differently for the same button is
+  // the asymmetry this closes (F8); everything below is deliberately identical to ChatApp's copy.
+  const composerRef = useRef<HTMLTextAreaElement>(null)
+  const [emojiOpen, setEmojiOpen] = useState(false)
+  // Where the caret goes after React commits an inserted draft. A CONTROLLED textarea drops the
+  // caret at the end on every re-render, so without this an insert into the middle of a half-typed
+  // message would silently become an append — see the fuller note in ChatApp.
+  const pendingCaretRef = useRef<number | null>(null)
   const [sending, setSending] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   // EDIT MODE (M4) — the group mirror of ChatApp's fourth composer state, minus the payment
@@ -126,6 +151,86 @@ export default function GroupThread({
   // left to the component's lifecycle. Clearing `attachment` unmounts AttachPreview, which is also
   // what revokes its object URL.
   useEffect(() => { setAttachment(null) }, [group.id])
+
+  // ── Emoji picker (B) — deliberately identical to ChatApp's copy ─────────────
+  // Restore the caret AFTER the commit and BEFORE paint, or the controlled textarea leaves it at
+  // the end and the insert reads as an append. useLayoutEffect (not useEffect) is what keeps the
+  // jump from being visible.
+  useLayoutEffect(() => {
+    const caret = pendingCaretRef.current
+    if (caret === null) return
+    pendingCaretRef.current = null
+    const el = composerRef.current
+    if (!el) return
+    el.focus()
+    el.setSelectionRange(caret, caret)
+  }, [draft])
+
+  // 2000 is this composer's own limit, matching the textarea's maxLength below — which does NOT
+  // gate a programmatic write, so the cap has to be passed in explicitly (F9).
+  function insertEmoji(char: string) {
+    const el = composerRef.current
+    const { text, caret } = insertAtCursor(draft, el?.selectionStart, el?.selectionEnd, char, 2000)
+    if (text === draft) return
+    pendingCaretRef.current = caret
+    setDraft(text)
+  }
+
+  // The picker is anchored to a composer that is about to hold another group's draft.
+  useEffect(() => { setEmojiOpen(false) }, [group.id])
+
+  // ── Reactions (C) — the group mirror of ChatApp's block, on the same contract ───
+  const [reactOpen, setReactOpen] = useState<string | null>(null)
+  const [reactPending, setReactPending] = useState<{ logicalId: string; emoji: string } | null>(null)
+  // Anchored to a bubble that is about to unmount when the group changes.
+  useEffect(() => { setReactOpen(null) }, [group.id])
+
+  // Not optimistic, deliberately (F7): the store is written only once a relay accepts, so the
+  // dimmed control IS the feedback and a failed reaction is silently absent rather than snapping
+  // back. See ChatApp.toggleReaction, which this mirrors exactly.
+  async function toggleReaction(logicalId: string, emoji: string, action: 'add' | 'remove') {
+    if (reactPending) return
+    setReactPending({ logicalId, emoji })
+    try { await onReact(logicalId, emoji, action) }
+    finally {
+      setReactPending(null)
+      setReactOpen(null)
+    }
+  }
+
+  // The two bubble branches below build identical reaction props; only the bubble side differs.
+  // Kept as one helper so the sent and received strips cannot drift apart.
+  function reactionProps(m: CaravelMessage, outboardLeft: boolean) {
+    const summaries = aggregateReactions(m, mePubkeyHex)
+    const pendingEmoji = reactPending && reactPending.logicalId === m.logicalId ? reactPending.emoji : null
+    const held = myReactions(m, mePubkeyHex)
+    const side = outboardLeft ? 'left' as const : 'right' as const
+    return {
+      reactable: canReactTo(m),
+      pills: summaries.length > 0 ? (
+        <ReactionPills
+          summaries={summaries}
+          pending={pendingEmoji}
+          // A group names WHO reacted — with N participants an untitled pill says only "someone".
+          labelFor={hex => (hex === mePubkeyHex ? 'You' : nameFor(hex))}
+          onToggle={(emoji, action) => void toggleReaction(m.logicalId!, emoji, action)}
+        />
+      ) : undefined,
+      popover: reactOpen === m.logicalId ? (
+        <ReactionQuickSet
+          align={side}
+          mine={held}
+          blocked={atReactionLimit(m, mePubkeyHex)}
+          pending={pendingEmoji}
+          onPick={emoji => void toggleReaction(m.logicalId!, emoji, held.includes(emoji) ? 'remove' : 'add')}
+          onClose={() => setReactOpen(null)}
+        />
+      ) : undefined,
+      onReactClick: () => setReactOpen(o => (o === m.logicalId ? null : m.logicalId!)),
+      open: reactOpen === m.logicalId,
+      side,
+    }
+  }
 
   // Any dismissal drops the confirm step too, so re-opening the menu always starts at step one.
   function closeMenu() { setMenuOpen(false); setConfirmLeave(false) }
@@ -284,7 +389,8 @@ export default function GroupThread({
       </div>
 
       {/* Message list — DM container tokens; received bubbles carry a per-run sender identity. */}
-      <div ref={threadRef} style={{ flex: 1, overflowY: 'auto', padding: '28px 32px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {/* data-popover-bounds — see the note on the DM thread's scroller in ChatApp. */}
+      <div ref={threadRef} data-popover-bounds style={{ flex: 1, overflowY: 'auto', padding: '28px 32px', display: 'flex', flexDirection: 'column', gap: 16 }}>
         {messages.length === 0 && (
           <div style={{ margin: 'auto', textAlign: 'center', maxWidth: 300 }}>
             <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-body-dim)', marginBottom: 6 }}>This is the start of {groupTitle(group)}</div>
@@ -328,6 +434,8 @@ export default function GroupThread({
             // predicate. `flight` is the optimistic layer — the bubble reads the new text while the
             // fan-out is outstanding and snaps back if it reached NOBODY.
             const flight = flightFor(m, editFlights)
+            // My own sent bubble sits right, so its action row is outboard on the LEFT.
+            const rx = reactionProps(m, true)
             return (
               <Fragment key={m.id}>
                 <MessageBubble
@@ -339,19 +447,16 @@ export default function GroupThread({
                   lid={m.logicalId}
                   flashed={!!m.logicalId && flashedId === m.logicalId}
                   quoted={m.replyTo ? <QuotedPreview replyTo={m.replyTo} byLogicalId={quotedIndex} nameFor={nameFor} onJump={jumpTo} tone="on-teal" /> : undefined}
-                  actions={(canEditMessage(m) || canReplyTo(m)) ? (
-                    <>
-                      {canReplyTo(m) && (
-                        <button className="cv-msg-reply" onClick={() => beginReply(m.logicalId!)} title="Reply" aria-label="Reply to message" style={ACTION_BTN}>
-                          <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M9 17l-5-5 5-5" /><path d="M4 12h11a5 5 0 0 1 5 5v2" /></svg>
-                        </button>
-                      )}
-                      {canEditMessage(m) && (
-                        <button className="cv-msg-edit" onClick={() => beginEdit(m.logicalId!, m.plaintext)} title="Edit message" aria-label="Edit message" style={ACTION_BTN}>
-                          <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" /></svg>
-                        </button>
-                      )}
-                    </>
+                  reactions={rx.pills}
+                  actions={(canEditMessage(m) || canReplyTo(m) || rx.reactable) ? (
+                    <MessageActionRow
+                      menuAlign={rx.side}
+                      onReact={rx.reactable ? rx.onReactClick : undefined}
+                      reactOpen={rx.open}
+                      reactPopover={rx.popover}
+                      onReply={canReplyTo(m) ? () => beginReply(m.logicalId!) : undefined}
+                      onEdit={canEditMessage(m) ? () => beginEdit(m.logicalId!, m.plaintext) : undefined}
+                    />
                   ) : undefined}
                 />
                 {/* In-flight + failed states. "Saving" says only that the fan-out is running; a
@@ -384,6 +489,8 @@ export default function GroupThread({
           const prevItem = items[i - 1]
           const prev = prevItem?.kind === 'message' ? prevItem.message : undefined
           const firstOfRun = !prev || prev.system !== undefined || prev.direction !== 'received' || prev.senderPubkeyHex !== m.senderPubkeyHex
+          // A member's bubble sits left, so its action row is outboard on the RIGHT.
+          const rx = reactionProps(m, false)
           return (
             <MessageBubble
               key={m.id}
@@ -398,10 +505,17 @@ export default function GroupThread({
               lid={m.logicalId}
               flashed={!!m.logicalId && flashedId === m.logicalId}
               quoted={m.replyTo ? <QuotedPreview replyTo={m.replyTo} byLogicalId={quotedIndex} nameFor={nameFor} onJump={jumpTo} /> : undefined}
-              actions={canReplyTo(m) ? (
-                <button className="cv-msg-reply" onClick={() => beginReply(m.logicalId!)} title="Reply" aria-label="Reply to message" style={ACTION_BTN}>
-                  <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M9 17l-5-5 5-5" /><path d="M4 12h11a5 5 0 0 1 5 5v2" /></svg>
-                </button>
+              reactions={rx.pills}
+              // No Edit on a member's message — only the author may, and applyEdit enforces that on
+              // every device, so there is nothing for the overflow menu to hold and it is omitted.
+              actions={(canReplyTo(m) || rx.reactable) ? (
+                <MessageActionRow
+                  menuAlign={rx.side}
+                  onReact={rx.reactable ? rx.onReactClick : undefined}
+                  reactOpen={rx.open}
+                  reactPopover={rx.popover}
+                  onReply={canReplyTo(m) ? () => beginReply(m.logicalId!) : undefined}
+                />
               ) : undefined}
               senderHeader={firstOfRun
                 ? { avatar: <Avatar hex={m.senderPubkeyHex} size={28} radius={9} fontSize={11} />, label: nameFor(m.senderPubkeyHex) }
@@ -474,8 +588,22 @@ export default function GroupThread({
           >
             <svg width={21} height={21} viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round"><rect x={3} y={3} width={18} height={18} rx={2} /><circle cx={8.5} cy={8.5} r={1.5} /><path d="M21 15l-5-5L5 21" /></svg>
           </button>
+          {/* Emoji (B) — the DM composer's button, verbatim. `position: relative` anchors the panel. */}
+          <div style={{ position: 'relative', flexShrink: 0 }}>
+            <button
+              onClick={() => setEmojiOpen(o => !o)}
+              disabled={sending}
+              title="Insert emoji"
+              aria-label="Insert emoji"
+              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 46, height: 46, flexShrink: 0, borderRadius: 12, border: '1px solid rgba(var(--border-rgb),0.16)', background: emojiOpen ? 'rgba(var(--border-rgb),0.1)' : 'var(--surface-inset)', cursor: sending ? 'default' : 'pointer', opacity: sending ? 0.5 : 1, padding: 0 }}
+            >
+              <svg width={21} height={21} viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round"><circle cx={12} cy={12} r={9} /><path d="M8.5 14.5a4.5 4.5 0 0 0 7 0" /><path d="M9 9.5h.01M15 9.5h.01" /></svg>
+            </button>
+            {emojiOpen && <EmojiPicker onPick={insertEmoji} onClose={() => setEmojiOpen(false)} />}
+          </div>
           <div style={{ flex: 1, display: 'flex', alignItems: 'center', padding: '13px 17px', borderRadius: 13, background: 'var(--surface-raised)', border: '1px solid rgba(var(--border-rgb),0.14)' }}>
             <textarea
+              ref={composerRef}
               className="cv-composer"
               value={draft}
               onChange={e => setDraft(e.target.value)}

@@ -11,6 +11,7 @@ import { generateSecretKey, getPublicKey } from 'nostr-tools/pure'
 import { wrapEvent } from 'nostr-tools/nip59'
 import { newLogicalId, planPublishRetry, unwrapMessage, wrapEdit, wrapMessage, wrapReaction } from './nostrMessaging'
 import type { MediaRef } from '../messaging/types'
+import { ALL_EMOJI } from '../components/chat/emojiData'
 
 // The real call site's values: 3 attempts, 400ms base backoff, a 10s connect budget, and a per-relay
 // budget of connectTimeout + publishTimeout = 10_000 + 9_000.
@@ -647,6 +648,17 @@ describe('caravel-reaction — emoji validation', () => {
     expect(emoji('1️⃣')).toBeUndefined()
     expect(emoji('#️⃣')).toBeUndefined()
     expect(emoji('🇺🇸')).toBeUndefined()
+  })
+
+  it('accepts every emoji in the curated picker set (B) — the A/B contract', () => {
+    // The claim made when the validator was written is that nothing this client can SEND is refused
+    // by it. That claim spans two checkpoints — the rule lives in the wire layer, the set lives in
+    // the picker — so it is worth one test rather than two comments that agree with each other.
+    // Adding an emoji to the picker that this rejects would break here rather than in the field.
+    expect(ALL_EMOJI.length).toBeGreaterThan(100)
+    for (const e of ALL_EMOJI) {
+      expect(emoji(e.char), `curated ${e.char} must survive the wire validator`).toBe(e.char)
+    }
   })
 
   it('rejects joiners with nothing to join', () => {

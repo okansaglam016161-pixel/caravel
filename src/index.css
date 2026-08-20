@@ -130,28 +130,39 @@ a:hover { color: var(--accL); }
 .cv-step:hover { border-color: rgba(var(--accRGB), 0.4) !important; }
 .cv-conv:hover { background: #10161F; }
 
-/* Chat composer + per-message edit affordance (M3/M4). Shared by BOTH chat views — the DM thread in
-   ChatApp and the group thread in GroupThread — which is exactly why they live here rather than in a
-   <style> element inside one of them. They used to sit in ChatApp's DM composer branch, which React
-   unmounts whenever a group is selected: the group pencil then had no opacity:0 rule and sat visible
-   at rest, and the group composer's placeholder fell back to the browser default. A rule that two
-   mutually-exclusive subtrees both depend on cannot be owned by either one. */
+/* Chat composer + the per-message hover affordances (M3/M4, replies v1, reactions C). Shared by
+   BOTH chat views — the DM thread in ChatApp and the group thread in GroupThread — which is exactly
+   why they live here rather than in a <style> element inside one of them. They used to sit in
+   ChatApp's DM composer branch, which React unmounts whenever a group is selected: the group pencil
+   then had no opacity:0 rule and sat visible at rest, and the group composer's placeholder fell back
+   to the browser default. A rule that two mutually-exclusive subtrees both depend on cannot be owned
+   by either one. */
 .cv-composer::placeholder { color: var(--text-faint-dim); }
-.cv-msg-edit { opacity: 0; transition: opacity 0.15s; }
-/* Revealed by hovering the bubble's action row (MessageBubble wraps actions + bubble in it), or by
-   keyboard focus — the affordance must be reachable without a pointer. */
-.cv-msg-actionrow:hover .cv-msg-edit { opacity: 1; }
-.cv-msg-edit:focus-visible { opacity: 1; }
-.cv-msg-edit:hover { color: var(--text-primary); border-color: rgba(var(--teal-500-rgb), 0.4); }
 
-/* Reply arrow (replies v1) — the same affordance contract as the edit pencil, so per-message actions
-   behave identically wherever they appear. Kept as its own class rather than folded into
-   .cv-msg-edit: the two are revealed by the same hover but are separate buttons, and a shared class
-   would make "hide edit, keep reply" (a received bubble, where only reply applies) impossible. */
-.cv-msg-reply { opacity: 0; transition: opacity 0.15s; }
-.cv-msg-actionrow:hover .cv-msg-reply { opacity: 1; }
-.cv-msg-reply:focus-visible { opacity: 1; }
-.cv-msg-reply:hover { color: var(--text-primary); border-color: rgba(var(--teal-500-rgb), 0.4); }
+/* The action-row buttons: React and Reply, plus the "⋯" that holds Edit (C moved Edit off the row —
+   see MessageActionRow for why three visible buttons did not fit). All hidden at rest and revealed
+   by hovering the row (MessageBubble wraps actions + bubble in .cv-msg-actionrow) or by keyboard
+   focus, because the affordance must be reachable without a pointer.
+
+   THREE CLASSES RATHER THAN ONE, deliberately: the buttons appear in different combinations — a
+   received bubble has React + Reply and no overflow, a self-thread bubble has no React — and a
+   shared class cannot express "hide one, keep the others". They are also selected individually by
+   the inline open-state styles, which must beat the opacity:0 here while a popover is up.
+
+   `.cv-msg-edit` was removed with the pencil itself; the Edit item now lives inside the overflow
+   menu, which is a normal menu row rather than a hover-revealed button. */
+.cv-msg-react, .cv-msg-reply, .cv-msg-more { opacity: 0; transition: opacity 0.15s; }
+.cv-msg-actionrow:hover .cv-msg-react,
+.cv-msg-actionrow:hover .cv-msg-reply,
+.cv-msg-actionrow:hover .cv-msg-more { opacity: 1; }
+.cv-msg-react:focus-visible, .cv-msg-reply:focus-visible, .cv-msg-more:focus-visible { opacity: 1; }
+.cv-msg-react:hover, .cv-msg-reply:hover, .cv-msg-more:hover { color: var(--text-primary); border-color: rgba(var(--teal-500-rgb), 0.4); }
+
+/* Emoji picker cells (B). Lives here rather than inline for the same reason the rules above do:
+   :hover and :focus-visible have no inline-style equivalent, and both chat views mount the picker
+   while never being mounted at the same time, so neither can own the rule. */
+.cv-emoji-cell:hover { background: rgba(var(--border-rgb), 0.14); }
+.cv-emoji-cell:focus-visible { outline: 2px solid rgba(var(--teal-500-rgb), 0.5); outline-offset: -2px; }
 
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-thumb { background: rgba(120,150,210,0.2); border-radius: 4px; }

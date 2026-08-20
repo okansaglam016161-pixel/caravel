@@ -12,9 +12,9 @@
 // carry alignSelf:'flex-end'; wrapping them in a flex row outside would silently reinterpret that
 // as VERTICAL alignment. Keeping every alignment decision in one file avoids that class of bug.
 //
-// The `cv-msg-actionrow` class below is the HOVER TARGET for the affordance: the reveal rule
-// (.cv-msg-actionrow:hover .cv-msg-edit) lives in index.css, global, because both chat views mount
-// this component and they never mount at the same time.
+// The `cv-msg-actionrow` class below is the HOVER TARGET for the affordances: the reveal rules
+// (.cv-msg-actionrow:hover .cv-msg-react, and its siblings) live in index.css, global, because both
+// chat views mount this component and they never mount at the same time.
 // Only the markup slot lives here — all edit STATE stays in ChatApp, matching PendingBubble's split.
 
 import type { ReactNode } from 'react'
@@ -33,7 +33,7 @@ function EditedTag() {
   return <span style={{ fontStyle: 'italic' }}>· edited</span>
 }
 
-export default function MessageBubble({ text, timestamp, variant, senderHeader, edited, actions, highlighted, quoted, lid, flashed }: {
+export default function MessageBubble({ text, timestamp, variant, senderHeader, edited, actions, highlighted, quoted, lid, flashed, reactions }: {
   text: string
   timestamp: number
   variant: 'received' | 'sent' | 'self'
@@ -48,6 +48,22 @@ export default function MessageBubble({ text, timestamp, variant, senderHeader, 
   // `highlighted` on purpose: one is "you landed here", the other is "this is loaded in the composer".
   lid?: string
   flashed?: boolean
+  // REACTIONS (C): the pill strip, prebuilt by the call site exactly as `quoted` and `actions` are.
+  // It arrives as a node rather than as data because a group tooltip needs display names and a DM's
+  // does not — neither the store nor nameFor belongs in this component.
+  //
+  // WHERE IT GOES, and why it is three separate insertions rather than one wrapper:
+  //   - OUTSIDE the `data-lid` box. That box is the jump anchor and carries the flash ring, so
+  //     pills inside it would be ringed on a tap-to-jump and would enlarge the target.
+  //   - NOT in a wrapper around the roots. The sent/self roots carry alignSelf:'flex-end', which an
+  //     outer flex row would silently reinterpret as VERTICAL alignment — the same trap the
+  //     `actions` note above describes.
+  //   So it is a sibling of the action row inside each root's existing column, between the row and
+  //   the meta line. Alignment then falls out of the roots for free: the sent/self column already
+  //   sets alignItems:'flex-end', and the received markup is block-flow, so the strip sits left.
+  // There are FOUR bubble paths but only THREE insertions: the DM-received and group-received paths
+  // share the `bubble` fragment below.
+  reactions?: ReactNode
 }) {
   // The flash ring must contrast with the bubble it lands on, exactly as the quote panel does. The
   // 'sent' variant is the ONLY teal-filled message surface (--msg-sent), so it takes the light ring;
@@ -66,6 +82,7 @@ export default function MessageBubble({ text, timestamp, variant, senderHeader, 
             <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', minWidth: 0 }}>{text}</span>
           </div>
         </div>
+        {reactions}
         <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontFamily: MONO, fontSize: 11, color: 'var(--text-muted-dim)', marginTop: 6, marginRight: 4 }}>
           {bubbleTime(timestamp)}
           {edited && <EditedTag />}
@@ -88,6 +105,7 @@ export default function MessageBubble({ text, timestamp, variant, senderHeader, 
             <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', minWidth: 0 }}>{text}</span>
           </div>
         </div>
+        {reactions}
         {edited && (
           <div style={{ fontFamily: MONO, fontSize: 11, color: 'var(--text-muted-dim)', marginTop: 6, marginRight: 4 }}><EditedTag /></div>
         )}
@@ -112,6 +130,7 @@ export default function MessageBubble({ text, timestamp, variant, senderHeader, 
         </div>
         {actions}
       </div>
+      {reactions}
       {edited ? (
         <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontFamily: MONO, fontSize: 11, color: 'var(--text-faint-dim)', marginTop: 5, marginLeft: 4 }}>
           {bubbleTime(timestamp)}<EditedTag />

@@ -1,4 +1,4 @@
-import { Fragment, useState, useEffect, useMemo, useRef, type ReactNode } from 'react'
+import { Fragment, useState, useEffect, useLayoutEffect, useMemo, useRef, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import * as nip19 from 'nostr-tools/nip19'
 import Logo from '../primitives/Logo'
@@ -18,17 +18,23 @@ import { sendConfidential, tariToMicrotari, MAX_FEE } from '../../crypto/confide
 import { resolveOnsNameToHex, toOnsName, type OnsResolveErrorKind } from '../../crypto/ons'
 import { ConnectionIndicator, RelayHealthPanel } from './ConnectionStatus'
 import { usePaymentResolution } from '../../hooks/usePaymentResolution'
-import { avatarFor, initialsFor, truncNpub, bubbleTime, compactTime, mergeThreadItems, threadContentKey, ACTION_BTN, MONO } from './chatDisplay'
+import { avatarFor, initialsFor, truncNpub, bubbleTime, compactTime, mergeThreadItems, threadContentKey, MONO } from './chatDisplay'
 import Avatar from './Avatar'
 import MessageBubble from './MessageBubble'
 import QuotedPreview from './QuotedPreview'
 import { canBeginEdit, canBeginReply, canReplyTo } from './replyCompose'
+import { aggregateReactions, atReactionLimit, canReactTo, myReactions } from './reactionDisplay'
+import MessageActionRow from './MessageActionRow'
+import ReactionPills from './ReactionPills'
+import ReactionQuickSet from './ReactionQuickSet'
 import { beginFlight, canEditMessage, displayTextFor, flightFor, isEditSubmittable, settleFlight, clearFlight, type EditFlightMap } from './messageEdit'
 import MediaMessageCard from './MediaMessageCard'
 import { describeMediaFailure, describeMediaStage, sendImageToGroup, sendImageToPeer, type MediaSendStage } from '../../messaging/sendMedia'
 import { putBlob } from '../../messaging/blobCache'
 import AttachPreview from './AttachPreview'
 import { groupGlyph } from './groupGlyph'
+import EmojiPicker from './EmojiPicker'
+import { insertAtCursor } from './composerInsert'
 
 // ── Conversation derivation ─────────────────────────────────────────────────────
 
@@ -216,7 +222,7 @@ function PaymentMessageCard({ message, lid, flashed }: { message: CaravelMessage
 // ── Component ────────────────────────────────────────────────────────────────────
 
 export default function ChatApp() {
-  const { wallet, address, scan, messages, nostrPubkeyHex, messagingStatus, contacts, acceptContact, contactAddresses, setManualTariAddress, createMessagingProvider, recordSentMessage, deleteConversation, editMessage, getRelayStates, reconnectAll, balanceHidden, setBalanceHidden, groups, createGroup, acceptGroup, declineGroup, leaveGroup, reinviteGroup } = useWallet()
+  const { wallet, address, scan, messages, nostrPubkeyHex, messagingStatus, contacts, acceptContact, contactAddresses, setManualTariAddress, createMessagingProvider, recordSentMessage, deleteConversation, editMessage, reactMessage, getRelayStates, reconnectAll, balanceHidden, setBalanceHidden, groups, createGroup, acceptGroup, declineGroup, leaveGroup, reinviteGroup } = useWallet()
   const [walletOpen, setWalletOpen] = useState(false)
   const [profileOpen, setProfileOpen] = useState(false)
   // The user's own generated avatar (deterministic gradient from their pubkey hash) — used for the
@@ -829,6 +835,30 @@ export default function ChatApp() {
     composerRef.current?.focus()
   }
 
+  // ── Reactions (C) ───────────────────────────────────────────────────────────
+  // Which message's quick-set is open (by logicalId), and which (message, emoji) pair is mid-flight.
+  const [reactOpen, setReactOpen] = useState<string | null>(null)
+  const [reactPending, setReactPending] = useState<{ logicalId: string; emoji: string } | null>(null)
+
+  // THE one reaction publish path for the DM thread. Deliberately NOT optimistic, unlike saveEdit
+  // below (F7): reactMessage writes the store only once a relay has accepted, so between tap and
+  // pill there is nothing to render — and a reaction is cheap enough that inventing a flight map,
+  // a snap-back and a Retry for it would cost more than it is worth. The feedback is the tapped
+  // control dimming until the round trip settles, which is honest about what is and is not known.
+  //
+  // A failed reaction is therefore SILENT: the pill simply never appears. That is the deliberate
+  // trade — an edit that vanishes is a lie about what the other side is reading, a reaction that
+  // vanishes is a reaction that was never sent.
+  async function toggleReaction(logicalId: string, emoji: string, action: 'add' | 'remove') {
+    if (reactPending) return                     // one at a time; the popover is disabled meanwhile
+    setReactPending({ logicalId, emoji })
+    try { await reactMessage(logicalId, emoji, action) }
+    finally {
+      setReactPending(null)
+      setReactOpen(null)
+    }
+  }
+
   // Put the composer back exactly as the user left it.
   function cancelEdit() {
     if (!editing) return
@@ -1058,6 +1088,10 @@ export default function ChatApp() {
     setDraft(d => (editingRef.current ? '' : d))
     // A reply names a message in the thread being left, so it cannot survive the switch either.
     setReplying(null)
+    // The picker is anchored to a composer that is about to hold a different conversation's draft.
+    setEmojiOpen(false)
+    // The quick-set is anchored to a bubble that is about to unmount.
+    setReactOpen(null)
   }, [selectedPeerHex])
 
   // Auto-grow the composer with its content: reset to 'auto' to measure, then set to the
@@ -1092,6 +1126,40 @@ export default function ChatApp() {
     el.style.height = 'auto'
     el.style.height = Math.min(el.scrollHeight, COMPOSER_MAX_H) + 'px'
   }, [draft])
+
+  // ── Emoji picker (B) ────────────────────────────────────────────────────────
+  const [emojiOpen, setEmojiOpen] = useState(false)
+
+  // Where the caret must go once React has committed the draft an insert produced, or null when
+  // nothing is pending.
+  //
+  // THIS REF IS THE WHOLE REASON insertAtCursor RETURNS A CARET. The textarea is CONTROLLED, so
+  // writing a new `draft` re-renders it with a fresh value and the browser drops the caret at the
+  // END — silently turning "insert where I was typing" into "append", which is exactly the bug the
+  // helper exists to prevent. Restoring it has to happen AFTER the commit and BEFORE paint, or the
+  // caret visibly jumps, which is what useLayoutEffect is for. The group composer carries the
+  // identical pair; they are not shared because each owns its own draft state and its own textarea.
+  const pendingCaretRef = useRef<number | null>(null)
+  useLayoutEffect(() => {
+    const caret = pendingCaretRef.current
+    if (caret === null) return
+    pendingCaretRef.current = null
+    const el = composerRef.current
+    if (!el) return
+    el.focus()
+    el.setSelectionRange(caret, caret)
+  }, [draft])
+
+  // Splice the picked emoji in at the cursor. A refused insert (it would pass MAX_MESSAGE_LEN —
+  // see F9, which the textarea's own maxLength cannot enforce for a programmatic write) comes back
+  // as the unchanged draft, and is dropped here rather than queuing a pointless caret restore.
+  function insertEmoji(char: string) {
+    const el = composerRef.current
+    const { text, caret } = insertAtCursor(draft, el?.selectionStart, el?.selectionEnd, char, MAX_MESSAGE_LEN)
+    if (text === draft) return
+    pendingCaretRef.current = caret
+    setDraft(text)
+  }
 
   // Truncate address for display: otl_esm_1abc…xyz
 
@@ -1509,6 +1577,11 @@ export default function ChatApp() {
               nameFor={displayName}
               onSend={handleGroupSend}
               onRetryPending={retryGroupSend}
+              /* Reactions (C): the publish path is ChatApp's, like every other send, but the
+                 in-flight state is GroupThread's own — a reaction round trip is short and, unlike an
+                 edit flight, has nothing to survive a thread switch for. */
+              mePubkeyHex={nostrPubkeyHex ?? ''}
+              onReact={async (logicalId, emoji, action) => { await reactMessage(logicalId, emoji, action) }}
               /* Editing (M4): the flight map is owned HERE, shared with the DM thread, so a group
                  edit's in-flight state survives switching threads. GroupThread owns only which of
                  ITS bubbles is loaded into ITS own composer. */
@@ -1606,8 +1679,12 @@ export default function ChatApp() {
             const isSelf = selectedConvo.peerHex === nostrPubkeyHex
             const pendingForPeer = pendingSends.filter(p => p.peerHex === selectedConvo.peerHex)
             const isEmpty = selectedConvo.messages.length === 0 && pendingForPeer.length === 0
+            // data-popover-bounds below: the box a reaction popover must stay inside. This element
+            // is the scroll container, and `overflow-y: auto` resolves overflow-x to `auto` too — so
+            // a panel that spills past its LEFT edge is not merely off-screen, it is unreachable, a
+            // scroll container's scrollable region never extending leftward. See popoverFit.ts.
             return (
-          <div ref={threadRef} style={{ flex: 1, overflowY: 'auto', padding: '28px 32px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div ref={threadRef} data-popover-bounds style={{ flex: 1, overflowY: 'auto', padding: '28px 32px', display: 'flex', flexDirection: 'column', gap: 16 }}>
 
             {/* Notes-to-self banner (self thread) */}
             {isSelf && (
@@ -1677,6 +1754,16 @@ export default function ChatApp() {
               if (m.media) return <MediaMessageCard key={m.id} message={m} lid={m.logicalId} flashed={!!m.logicalId && flashedId === m.logicalId} />
               const flight = flightFor(m, editFlights)
               const editable = canEditMessage(m)
+              // NO REACT AFFORDANCE IN A NOTES-TO-SELF THREAD. reactMessage refuses it — the wire
+              // destination would be my own key, and it will not publish a reaction to myself and
+              // then apply it locally as if it had gone somewhere. Offering a button that always
+              // fails would be worse than not offering one.
+              const reactable = !isSelf && canReactTo(m)
+              // The action row sits OUTBOARD of its bubble, so it is on the left of a sent bubble and
+              // the right of a received one. Popovers open inboard, i.e. the opposite way (F17).
+              const outboardLeft = isSelf || m.direction === 'sent'
+              const summaries = aggregateReactions(m, nostrPubkeyHex ?? '')
+              const pendingEmoji = reactPending && reactPending.logicalId === m.logicalId ? reactPending.emoji : null
               return (
                 <Fragment key={m.id}>
                   <MessageBubble
@@ -1690,31 +1777,33 @@ export default function ChatApp() {
                     // 'self' is the notes-to-self bubble — dark inset, NOT teal — so only a true 'sent'
                     // bubble takes the inverted palette.
                     quoted={m.replyTo ? <QuotedPreview replyTo={m.replyTo} byLogicalId={quotedIndex} onJump={jumpTo} tone={!isSelf && m.direction === 'sent' ? 'on-teal' : 'on-dark'} /> : undefined}
-                    actions={(editable || canReplyTo(m)) ? (
-                      <>
-                        {canReplyTo(m) && (
-                          <button
-                            className="cv-msg-reply"
-                            onClick={() => beginReply(m.logicalId!)}
-                            title="Reply"
-                            aria-label="Reply to message"
-                            style={ACTION_BTN}
-                          >
-                            <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M9 17l-5-5 5-5" /><path d="M4 12h11a5 5 0 0 1 5 5v2" /></svg>
-                          </button>
-                        )}
-                        {editable && (
-                          <button
-                            className="cv-msg-edit"
-                            onClick={() => beginEdit(m.logicalId!, m.plaintext)}
-                            title="Edit message"
-                            aria-label="Edit message"
-                            style={ACTION_BTN}
-                          >
-                            <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" /></svg>
-                          </button>
-                        )}
-                      </>
+                    // No labelFor in a DM: the answer is one of two people, and a tooltip listing
+                    // npubs would be noise rather than information.
+                    reactions={summaries.length > 0 ? (
+                      <ReactionPills
+                        summaries={summaries}
+                        pending={pendingEmoji}
+                        onToggle={(emoji, action) => void toggleReaction(m.logicalId!, emoji, action)}
+                      />
+                    ) : undefined}
+                    actions={(editable || canReplyTo(m) || reactable) ? (
+                      <MessageActionRow
+                        menuAlign={outboardLeft ? 'left' : 'right'}
+                        onReact={reactable ? () => setReactOpen(o => (o === m.logicalId ? null : m.logicalId!)) : undefined}
+                        reactOpen={reactOpen === m.logicalId}
+                        reactPopover={reactOpen === m.logicalId ? (
+                          <ReactionQuickSet
+                            align={outboardLeft ? 'left' : 'right'}
+                            mine={myReactions(m, nostrPubkeyHex ?? '')}
+                            blocked={atReactionLimit(m, nostrPubkeyHex ?? '')}
+                            pending={pendingEmoji}
+                            onPick={emoji => void toggleReaction(m.logicalId!, emoji, myReactions(m, nostrPubkeyHex ?? '').includes(emoji) ? 'remove' : 'add')}
+                            onClose={() => setReactOpen(null)}
+                          />
+                        ) : undefined}
+                        onReply={canReplyTo(m) ? () => beginReply(m.logicalId!) : undefined}
+                        onEdit={editable ? () => beginEdit(m.logicalId!, m.plaintext) : undefined}
+                      />
                     ) : undefined}
                   />
                   {/* In-flight + failed states for an edit. "Saving" says only that it left this
@@ -1909,7 +1998,7 @@ export default function ChatApp() {
                 />
               )}
 
-              {/* Text composer row (design) — TARI toggle + input + send. Emoji button removed. */}
+              {/* Text composer row (design) — TARI toggle + image + emoji + input + send. */}
               {!paymentMode && !confirming && (
                 <div style={{ display: 'flex', alignItems: 'flex-end', gap: 12 }}>
                   <button
@@ -1943,6 +2032,26 @@ export default function ChatApp() {
                   >
                     <svg width={21} height={21} viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round"><rect x={3} y={3} width={18} height={18} rx={2} /><circle cx={8.5} cy={8.5} r={1.5} /><path d="M21 15l-5-5L5 21" /></svg>
                   </button>
+                  {/* Emoji (B). `position: relative` is load-bearing — it is what the picker's
+                      absolutely-positioned panel anchors to. Left ENABLED while editing: putting an
+                      emoji into a correction is exactly as reasonable as putting one into a new
+                      message, unlike the payment toggle beside it, which an edit has no use for. */}
+                  <div style={{ position: 'relative', flexShrink: 0 }}>
+                    <button
+                      onClick={() => setEmojiOpen(o => !o)}
+                      disabled={inputsDisabled}
+                      title="Insert emoji"
+                      aria-label="Insert emoji"
+                      style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 46, height: 46, flexShrink: 0, borderRadius: 12, border: '1px solid rgba(var(--border-rgb),0.16)', background: emojiOpen ? 'rgba(var(--border-rgb),0.1)' : 'var(--surface-inset)', cursor: inputsDisabled ? 'default' : 'pointer', opacity: inputsDisabled ? 0.5 : 1, padding: 0 }}
+                    >
+                      <svg width={21} height={21} viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round"><circle cx={12} cy={12} r={9} /><path d="M8.5 14.5a4.5 4.5 0 0 0 7 0" /><path d="M9 9.5h.01M15 9.5h.01" /></svg>
+                    </button>
+                    {emojiOpen && (
+                      // Stays OPEN after a pick, and insertEmoji hands focus back to the textarea —
+                      // so several emoji can go in without reopening, and Enter still sends.
+                      <EmojiPicker onPick={insertEmoji} onClose={() => setEmojiOpen(false)} />
+                    )}
+                  </div>
                   <div style={{ flex: 1, display: 'flex', alignItems: 'center', padding: '13px 17px', borderRadius: 13, background: 'var(--surface-raised)', border: '1px solid rgba(var(--border-rgb),0.14)' }}>
                     <textarea
                       ref={composerRef}

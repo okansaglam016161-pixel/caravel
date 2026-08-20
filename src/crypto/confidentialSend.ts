@@ -160,12 +160,21 @@ async function pollOutcome(txId: string): Promise<{ outcome: SendOutcome; feeMic
       const res = await fetch(`${INDEXER_URL}/transactions/${txId}/result`)
       if (!res.ok) continue
       const json = await res.json() as {
-        result?: { Finalized?: { final_decision?: string; finalize?: { fee_receipt?: { total_fees_paid?: number | string } } } }
+        result?: { Finalized?: { final_decision?: string; execution_result?: { finalize?: { fee_receipt?: { total_fees_paid?: number | string } } } } }
       }
       const fin = json.result?.Finalized
       const decision = fin?.final_decision
-      // Actual fee lives on the committed receipt (same field the faucet reads).
-      const feePaid = fin?.finalize?.fee_receipt?.total_fees_paid
+      // The fee lives at Finalized.execution_result.finalize.fee_receipt — NOT
+      // Finalized.finalize, which is where this looked until CP4 and why `feeMicrotari` was always
+      // undefined and the UI always fell back to showing the ceiling. (The DRY-RUN endpoint really
+      // does answer at result.finalize with no execution_result wrapper; the two response shapes
+      // differ, which is what made the wrong path look plausible. See crypto/feeProbe.ts.)
+      //
+      // `total_fees_paid` is the RESERVED amount, and that is the honest number to show: the
+      // overcharge is NOT refunded to the sender in this stealth flow. Measured — a send reserving
+      // 20 725 reported total_fee_overcharge 4 587, and the wallet's change UTXO came back at
+      // exactly value − amount − 20 725, with no refund output. So the user paid 20 725.
+      const feePaid = fin?.execution_result?.finalize?.fee_receipt?.total_fees_paid
       const feeMicrotari = feePaid != null ? BigInt(feePaid) : undefined
       if (decision === 'Commit') return { outcome: 'Commit', feeMicrotari }
       if (decision) return { outcome: 'Reject', feeMicrotari }

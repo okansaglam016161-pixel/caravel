@@ -16,11 +16,9 @@
     "noEmit": true,
     "jsx": "react-jsx",
 
-    /* Types for the Vite-aliased Tari SDK + ONS client, vendored in-repo (see vendor/README.md) */
+    /* The Tari SDK resolves from node_modules like any dependency (0.39 bump — see vite.config.ts).
+       Only the ONS client is still Vite-aliased to a vendored dist. */
     "paths": {
-      "@tari-project/ootle": ["./vendor/tari/ootle/dist/index.d.ts"],
-      "@tari-project/ootle-secret-key-wallet": ["./vendor/tari/ootle-secret-key-wallet/dist/index.d.ts"],
-      "@tari-project/ootle-indexer": ["./vendor/tari/ootle-indexer/dist/index.d.ts"],
       "@ootle/name-service": ["./vendor/ons/dist/index.d.ts"]
     },
 

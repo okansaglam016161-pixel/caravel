@@ -29,6 +29,7 @@ import {
   sealTransaction,
 } from '@tari-project/ootle'
 import { IndexerProvider } from '@tari-project/ootle-indexer'
+import { nextMaxEpoch } from './epoch'
 import type { SecretKeyWallet } from '@tari-project/ootle-secret-key-wallet'
 
 const INDEXER_URL = 'https://ootle-indexer-a.tari.com'
@@ -95,7 +96,12 @@ export async function claimFaucet(
   const balanceProof = await signBalanceProof(crypto, Mask.zero(), outputMask, inputsStatement, outputsStatement)
   const statement = new StealthTransferStatement(inputsStatement, outputsStatement, balanceProof)
 
-  const builder = new TransactionBuilder(Network.Esmeralda)
+  // 0.39: mandatory validity window — the builder needs the chain tip before it exists. `provider`
+  // has been connected since the top of this function, so the read slots in here without reordering
+  // anything; it sits AFTER the balance proof above so the window is not spent on local wasm work.
+  const maxEpoch = await nextMaxEpoch(provider)
+
+  const builder = new TransactionBuilder(Network.Esmeralda, maxEpoch)
     .withFeeInstructionsBuilder((b) =>
       b
         .createAccount(ownerPkHex)

@@ -29,6 +29,7 @@ import {
   type Mask,
 } from '@tari-project/ootle'
 import { IndexerProvider } from '@tari-project/ootle-indexer'
+import { nextMaxEpoch } from './epoch'
 import type { SecretKeyWallet } from '@tari-project/ootle-secret-key-wallet'
 
 const INDEXER_URL = 'https://ootle-indexer-a.tari.com'
@@ -228,7 +229,12 @@ export async function sendConfidential(
   const proof   = await signBalanceProof(crypto, utxo.mask, outputMask, insStmt, outsStmt)
   const stmt    = new StealthTransferStatement(insStmt, outsStmt, proof)
 
-  const builder = new TransactionBuilder(Network.Esmeralda)
+  // 0.39: every transaction carries a mandatory validity window, so the builder cannot be
+  // constructed without the chain tip. Read here — after the range proofs above, immediately before
+  // the builder — so none of the window is spent generating them locally. See crypto/epoch.ts.
+  const maxEpoch = await nextMaxEpoch(provider)
+
+  const builder = new TransactionBuilder(Network.Esmeralda, maxEpoch)
   builder.addFeeInstruction(
     stealthTransferInstruction(
       { resourceAddress: TARI_RESOURCE_ADDRESS, revealedInputBucket: null, statement: stmt },

@@ -16,8 +16,14 @@ const V = (p: string) => path.join(ROOT, 'vendor', p)
 
 // Vite 8 handles top-level-await natively — no plugin needed.
 // vite-plugin-wasm handles the `import * as wasm from "*.wasm"` in ootle-wasm.
-// Aliases point the Tari SDK + ONS client at their pre-built dists vendored in-repo (vendor/);
-// ootle-wasm is installed directly from npm at the correct version (0.35.2).
+//
+// The Tari SDK is now a NORMAL NPM DEPENDENCY (0.39 bump). It used to be vendored under
+// vendor/tari/ because the only published versions were 0.1.0, built against ootle-wasm ^0.32.0 —
+// ABI-mismatched against the wasm Esmeralda actually needed, so their transactions were rejected.
+// tari.js published 0.3.0 on ootle-wasm ^0.39.0, which is exactly the pairing this app needs, so
+// the vendored dists are gone and there is nothing left to keep in sync by hand.
+//
+// The ONS client stays vendored — see vendor/README.md; it is our own unpublished package.
 export default defineConfig({
   plugins: [wasm(), react()],
   build: {
@@ -30,9 +36,6 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      '@tari-project/ootle': V('tari/ootle/dist/index.js'),
-      '@tari-project/ootle-secret-key-wallet': V('tari/ootle-secret-key-wallet/dist/index.js'),
-      '@tari-project/ootle-indexer': V('tari/ootle-indexer/dist/index.js'),
       '@ootle/name-service': V('ons/dist/index.js'),
     },
   },

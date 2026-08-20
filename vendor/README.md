@@ -4,20 +4,21 @@ These are **pre-built `dist/` bundles** vendored into the repo so a fresh clone 
 `npm install && npm run dev` — no external repos, no absolute paths. They are resolved by the
 aliases in `vite.config.ts` (runtime) and the `paths` in `tsconfig.app.json` (types).
 
-Both should be replaced with real npm dependencies once upstream/we publish current versions.
+The ONS client should be replaced with a real npm dependency once we publish it.
 
-## `tari/` — Tari Ootle JS SDK (official, BSD-3)
+## `tari/` — REMOVED (0.39 bump)
 
-`@tari-project/ootle`, `@tari-project/ootle-secret-key-wallet`, `@tari-project/ootle-indexer`.
+The Tari Ootle SDK (`@tari-project/ootle`, `-secret-key-wallet`, `-indexer`) used to be vendored
+here. It no longer is: they are ordinary npm dependencies in `package.json`.
 
-- Source: the official SDK, <https://github.com/tari-project/tari.js> (commit `2bc5e93`).
-- **Why vendored instead of npm:** the published versions (`0.1.0`) target `@tari-project/ootle-wasm ^0.32.0`,
-  but Caravel needs the current Esmeralda wire format, which requires `ootle-wasm 0.35.2`. The `0.32`-era
-  npm build is ABI-mismatched against `0.35.2` and its transactions are rejected by the indexer. These
-  dists are built against `0.35.2` (Esmeralda-current). When Tari publishes an Esmeralda-current version,
-  drop `tari/` and `npm install` the packages instead.
-- License: `tari/LICENSE` (BSD 3-Clause, © The Tari Developer Community). Retained per the license.
-- `@tari-project/ootle-wasm@0.35.2` is a normal npm dependency (in `package.json`) — not vendored here.
+The vendoring existed for one reason — the only published versions were `0.1.0`, built against
+`@tari-project/ootle-wasm ^0.32.0`, while Esmeralda's wire format needed `0.35.2`. That pairing was
+ABI-mismatched and its transactions were rejected by the indexer, so the dists were built from
+tari.js `2bc5e93` against the right wasm and checked in.
+
+tari.js has since published `0.3.0` on `ootle-wasm ^0.39.0`, which is exactly the pairing Ootle
+0.39 requires. The reason to vendor is gone, so the dists are gone with it — one fewer thing to
+keep in sync by hand, and `npm install` now gets the same code the rest of the ecosystem runs.
 
 ## `ons/` — Ootle Name Service client (unpublished)
 

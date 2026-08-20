@@ -1,6 +1,6 @@
 import type { NostrEvent, Filter } from 'nostr-tools'
 import { Relay, type Subscription } from 'nostr-tools/relay'
-import { wrapMessage, wrapGroupDefinition, wrapGroupLeave, wrapEdit, unwrapMessage, publishGiftWrap, newLogicalId } from '../crypto/nostrMessaging'
+import { wrapMessage, wrapGroupDefinition, wrapGroupLeave, wrapEdit, wrapReaction, unwrapMessage, publishGiftWrap, newLogicalId } from '../crypto/nostrMessaging'
 import type { CaravelMessage, GroupDef, GroupSendResult, MessagingConnectionStatus, MessagingProvider, RelayState, SendGroupMessageOptions, SendMessageOptions } from './types'
 
 function hexToBytes(hex: string): Uint8Array {
@@ -68,6 +68,7 @@ export class NostrMessagingProvider implements MessagingProvider {
   private onContactAddressCallback: ((senderPubkeyHex: string, tariAddress: string) => void) | null
   private onGroupDefinitionCallback: ((senderPubkeyHex: string, def: GroupDef, defEventId: string, reinvite: boolean) => void) | null
   private onEditCallback: ((senderPubkeyHex: string, targetLogicalId: string, newText: string, revision: number) => void) | null
+  private onReactionCallback: ((senderPubkeyHex: string, targetLogicalId: string, emoji: string, action: 'add' | 'remove', seq: number) => void) | null
   private disconnecting: boolean
   // Bound window listeners — stored so removeEventListener can find them in disconnect().
   private onlineHandler: (() => void) | null
@@ -93,6 +94,7 @@ export class NostrMessagingProvider implements MessagingProvider {
     this.onContactAddressCallback = null
     this.onGroupDefinitionCallback = null
     this.onEditCallback = null
+    this.onReactionCallback = null
     this.disconnecting = false
     this.onlineHandler = null
     this.offlineHandler = null
@@ -116,13 +118,15 @@ export class NostrMessagingProvider implements MessagingProvider {
     onStatusChange?: (status: MessagingConnectionStatus) => void,
     onContactAddress?: (senderPubkeyHex: string, tariAddress: string) => void,
     onGroupDefinition?: (senderPubkeyHex: string, def: GroupDef, defEventId: string, reinvite: boolean) => void,
-    onEdit?: (senderPubkeyHex: string, targetLogicalId: string, newText: string, revision: number) => void
+    onEdit?: (senderPubkeyHex: string, targetLogicalId: string, newText: string, revision: number) => void,
+    onReaction?: (senderPubkeyHex: string, targetLogicalId: string, emoji: string, action: 'add' | 'remove', seq: number) => void
   ): void {
     this.onMessageCallback = onMessage
     this.onStatusCallback = onStatusChange ?? null
     this.onContactAddressCallback = onContactAddress ?? null
     this.onGroupDefinitionCallback = onGroupDefinition ?? null
     this.onEditCallback = onEdit ?? null
+    this.onReactionCallback = onReaction ?? null
     const since = Math.floor(Date.now() / 1000) - SINCE_WINDOW_S
     this.filter = { kinds: [1059], '#p': [this.pubkeyHex], since }
 
@@ -204,7 +208,7 @@ export class NostrMessagingProvider implements MessagingProvider {
   // `groupId` is taken for symmetry with its siblings and is deliberately NOT put on the wire: an
   // edit stays group-agnostic (wrapEdit tags no group), because the RECEIVER's own stored row is the
   // authoritative statement of which group the target belongs to. That is what the left/deleted-group
-  // ingest gate keys off — see editTargetsLeftGroup in messageStore.
+  // ingest gate keys off — see targetsLeftGroup in messageStore.
   async sendGroupEdit(
     _groupId: string,
     memberPubkeysHex: string[],
@@ -216,6 +220,50 @@ export class NostrMessagingProvider implements MessagingProvider {
     let membersReached = 0
     await Promise.all(recipients.map(async member => {
       const wrapped = wrapEdit(this.secretKey, member, targetLogicalId, newText, revision)
+      const results = await publishGiftWrap(wrapped, [...this.relayUrls], PUBLISH_TIMEOUT_MS, CONNECT_TIMEOUT_MS)
+      if (results.some(r => r.ok)) membersReached++
+    }))
+    return { memberCount: recipients.length, membersReached }
+  }
+
+  // Send a REACTION on a DM (reactions v1). Boolean, exactly like sendEdit: relay acceptance is all
+  // we can observe, and the caller decides how to surface a miss. Nothing is applied locally here —
+  // WalletContext.reactMessage writes the store only once this resolves true, so a send that went
+  // nowhere never leaves this device showing a reaction no peer will ever see.
+  //
+  // Note what is NOT checked here, deliberately: neither that the target is mine (it need not be)
+  // nor that I am under the two-reaction allowance. The allowance is a decision about STORED state,
+  // which the provider does not hold; it is enforced by the caller before this is reached and again
+  // by the applier on every receiving device. The provider stays a transport.
+  async sendReaction(recipientPubkeyHex: string, targetLogicalId: string, emoji: string, action: 'add' | 'remove', seq: number): Promise<boolean> {
+    const wrapped = wrapReaction(this.secretKey, recipientPubkeyHex, targetLogicalId, emoji, action, seq)
+    const results = await publishGiftWrap(wrapped, [...this.relayUrls], PUBLISH_TIMEOUT_MS, CONNECT_TIMEOUT_MS)
+    return results.some(r => r.ok)
+  }
+
+  // Group REACTION: sendReaction's payload over sendGroupEdit's fan-out, one wrap per member (minus
+  // self), every one naming the shared logical id their copy already carries.
+  //
+  // Same two contract choices as sendGroupEdit, for the same reasons: it NEVER THROWS (the caller is
+  // awaited from a UI handler with no catch, so a rejection would escape as an unhandled rejection),
+  // and it uses plain publishGiftWrap rather than the bounded control retry (a human is watching).
+  //
+  // `groupId` is taken for symmetry and deliberately NOT put on the wire — a reaction is
+  // group-agnostic, because the RECEIVER's own stored row is the authoritative statement of which
+  // group the target belongs to. That is what the left-group ingest gate keys off; see
+  // targetsLeftGroup in messageStore, which reactions share with edits unchanged.
+  async sendGroupReaction(
+    _groupId: string,
+    memberPubkeysHex: string[],
+    targetLogicalId: string,
+    emoji: string,
+    action: 'add' | 'remove',
+    seq: number
+  ): Promise<{ memberCount: number; membersReached: number }> {
+    const recipients = memberPubkeysHex.filter(m => m && m !== this.pubkeyHex)
+    let membersReached = 0
+    await Promise.all(recipients.map(async member => {
+      const wrapped = wrapReaction(this.secretKey, member, targetLogicalId, emoji, action, seq)
       const results = await publishGiftWrap(wrapped, [...this.relayUrls], PUBLISH_TIMEOUT_MS, CONNECT_TIMEOUT_MS)
       if (results.some(r => r.ok)) membersReached++
     }))
@@ -576,7 +624,7 @@ export class NostrMessagingProvider implements MessagingProvider {
     if (this.seen.has(event.id)) return
     this.seen.add(event.id)
     try {
-      const { senderPubkeyHex, plaintext, payment, tariAddress, groupId, groupDef, groupLeave, groupReinvite, logicalId, edit, media, replyTo } = unwrapMessage(this.secretKey, event)
+      const { senderPubkeyHex, plaintext, payment, tariAddress, groupId, groupDef, groupLeave, groupReinvite, logicalId, edit, media, replyTo, reaction } = unwrapMessage(this.secretKey, event)
 
       // A group DEFINITION is a control message (no chat bubble): hand it to the group callback and
       // stop. The gate (accept only from known contacts) lives with the callback, which has the
@@ -618,6 +666,24 @@ export class NostrMessagingProvider implements MessagingProvider {
       // a logical id we sent them) from rewriting somebody else's message.
       if (edit) {
         this.onEditCallback?.(senderPubkeyHex, edit.targetLogicalId, plaintext, edit.revision)
+        return
+      }
+
+      // A REACTION (reactions v1) is a control message on the same footing as an edit: it MUTATES an
+      // existing row, must never become a bubble, and carries a single-space content that would
+      // render blank if it fell through. Intercepted here for exactly those reasons.
+      //
+      // `senderPubkeyHex` is seal.pubkey, already verified against the rumor pubkey by unwrapMessage,
+      // and it is the ONLY source of reactor identity — the wire payload carries none. Unlike an edit
+      // there is no authorship check downstream, because a reaction is anyone-to-anyone; that is safe
+      // because the applier keys every row on this authenticated value, so a reaction can only ever
+      // touch the sender's OWN row. See applyReactionByLogicalId.
+      //
+      // Note this bypasses the tombstone gate in WalletContext's onMessage, exactly as an edit does:
+      // control messages never reach it. Harmless — a deleted conversation's rows are gone, so the
+      // applier's unknown-logicalId guard no-ops on anything a backfill replays.
+      if (reaction) {
+        this.onReactionCallback?.(senderPubkeyHex, reaction.targetLogicalId, reaction.emoji, reaction.action, reaction.seq)
         return
       }
 

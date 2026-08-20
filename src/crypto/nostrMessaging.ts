@@ -144,6 +144,98 @@ function extractEdit(tags: string[][] | undefined): { targetLogicalId: string; r
   return undefined
 }
 
+// Caravel reaction tag (reactions v1) — same seal-protected, versioned pattern as its siblings.
+//   ["caravel-reaction","v1","<target-logical-id>","<emoji>","add"|"remove","<seq>"]
+//
+// A reaction is a CONTROL message — like caravel-edit and unlike caravel-reply — so it takes an
+// early-return intercept in handleEvent and never becomes a bubble. The rumor CONTENT is a single
+// space (the NIP-44 one-byte floor), exactly as wrapGroupLeave sends: there is no prose to carry,
+// and echoing the emoji into `content` as well would give it two homes and invite a "which one
+// wins" question the tag already answers. The cost is that a foreign NIP-17 client renders a blank
+// message for each reaction — the same cost the leave notice already accepted.
+//
+// `seq` is a per-(REACTOR, EMOJI) monotonic counter and the direct analogue of caravel-edit's
+// `revision`, for the identical reason: event time cannot order these, because gift wraps fuzz
+// created_at by up to 2 days (see CaravelMessage.timestamp). It is scoped per (reactor, emoji)
+// rather than per message because the reactors are independent of one another — B's first reaction
+// must not be ordered against A's third — and because add/remove of one emoji says nothing about
+// any other. Same strict-string discipline as `revision`: a lenient Number() would accept " 1 ",
+// "1e3" and "0x2", and seq is the field that decides which reaction event wins.
+//
+// The reactor's identity is NOT in the payload: it is seal.pubkey, authenticated by the NIP-17
+// invariant enforced in unwrapMessage. Unlike an edit there is deliberately NO authorship check
+// against the target's sender — anyone may react to anyone's message — and that is safe precisely
+// BECAUSE the payload carries no identity: every row an inbound reaction can reach is keyed on the
+// reactor's own authenticated key, so no reaction can add, flip or remove somebody else's row.
+const REACTION_TAG = 'caravel-reaction'
+const REACTION_VERSION = 'v1'
+
+// Upper bound on an emoji from an untrusted peer, in UTF-16 code units. The longest sequence in
+// ordinary use is a four-person ZWJ family (👨‍👩‍👧‍👦 — 11 units), which fits with room to spare;
+// per-person skin tones on a four-person family would need 19, and is not an RGI sequence any
+// platform renders. Same reasoning as the other length bounds on attacker-controlled tag values:
+// generous enough for real content, small enough that a peer cannot push an unbounded string into
+// localStorage — and here the value is also RENDERED, so an unbounded one would wreck the layout.
+const MAX_EMOJI_LEN = 16
+
+// One codepoint per test, non-global so there is no lastIndex state to carry between calls.
+const EXTENDED_PICTOGRAPHIC = /^\p{Extended_Pictographic}$/u
+
+// Is this an emoji we are willing to store and render?
+//
+// The rule: at least one Extended_Pictographic codepoint, and EVERY codepoint drawn from
+// {Extended_Pictographic, ZWJ (200D), VS16 (FE0F), skin-tone modifiers (1F3FB–1F3FF)}. Anything
+// else — a letter, a digit, whitespace, a control character, a combining mark — fails the whole
+// string. Sequences are validated codepoint-wise rather than against a grapheme-cluster or RGI
+// table because \p{RGI_Emoji} needs the ES2024 `v` flag, whose browser support is narrower than
+// the property escapes this uses.
+//
+// Two families are deliberately EXCLUDED by that rule rather than by a special case:
+//   - keycaps ("1️⃣" = '1' + FE0F + 20E3) — admitting them would mean admitting bare ASCII digits;
+//   - country flags ("🇺🇸" = two regional indicators) — regional indicators are not
+//     Extended_Pictographic, so they fall out for free.
+// Neither is in the curated picker, so nothing we can SEND is rejected here. A peer running a
+// richer client simply has those reactions dropped, which is the documented degradation: a reader
+// that does not fully understand a tag ignores it rather than guessing at it.
+function isAllowedEmoji(value: string): boolean {
+  // .length is UTF-16 code units, which is exactly the storage bound we want to cap.
+  if (value.length === 0 || value.length > MAX_EMOJI_LEN) return false
+  let pictographic = 0
+  for (const ch of value) {                                  // iterates by CODEPOINT, not code unit
+    const cp = ch.codePointAt(0) ?? 0    // `for..of` yields non-empty strings; ?? 0 is unreachable
+    if (cp === 0x200d || cp === 0xfe0f) continue             // ZWJ / VS16 — joiners, never alone
+    if (cp >= 0x1f3fb && cp <= 0x1f3ff) continue             // skin-tone modifiers
+    if (!EXTENDED_PICTOGRAPHIC.test(ch)) return false
+    pictographic++
+  }
+  return pictographic > 0
+}
+
+// Pulls a reaction out of a rumor's tags. Same total-validation discipline as extractEdit, applied
+// to one more field: an unknown version, a missing/oversized target, an emoji that fails
+// isAllowedEmoji, an action that is not exactly 'add' or 'remove', or a seq that is not a positive
+// integer ALL degrade to undefined — which routes the rumor down the ORDINARY message path, where
+// its single-space content is suppressed rather than half-applied as a reaction.
+function extractReaction(tags: string[][] | undefined): { targetLogicalId: string; emoji: string; action: 'add' | 'remove'; seq: number } | undefined {
+  if (!tags) return undefined
+  for (const tag of tags) {
+    if (tag[0] !== REACTION_TAG) continue
+    if (tag[1] !== REACTION_VERSION) return undefined
+    const targetLogicalId = tag[2]
+    const emoji = tag[3]
+    const action = tag[4]
+    const rawSeq = tag[5]
+    if (typeof targetLogicalId !== 'string' || targetLogicalId.length === 0 || targetLogicalId.length > MAX_LOGICAL_ID_LEN) return undefined
+    if (typeof emoji !== 'string' || !isAllowedEmoji(emoji)) return undefined
+    if (action !== 'add' && action !== 'remove') return undefined
+    if (typeof rawSeq !== 'string' || !/^[1-9][0-9]*$/.test(rawSeq)) return undefined
+    const seq = Number(rawSeq)
+    if (!Number.isSafeInteger(seq)) return undefined
+    return { targetLogicalId, emoji, action, seq }
+  }
+  return undefined
+}
+
 // Caravel encrypted-image tag (images M3) — same seal-protected, versioned pattern as its siblings.
 //   ["caravel-media","v1","<MediaRef as JSON>"]
 //
@@ -439,13 +531,44 @@ export function wrapEdit(
   return wrapEvent(rumor, senderSecretKey, recipientPubkeyHex)
 }
 
+
+// Wraps a REACTION for one recipient (reactions v1): the target's logical id, the emoji, the
+// add/remove verb and the per-(reactor, emoji) sequence number, all in the tag — over a
+// single-space content, the way wrapGroupLeave carries a control message with nothing to say.
+//
+// Modelled on wrapEdit, with the one divergence noted at REACTION_TAG: nothing about the REACTOR
+// rides in the payload either, and here that is doing more work than it does for an edit. An edit
+// is checked against the target's author on receipt; a reaction is not (anyone may react to
+// anyone), so the ONLY thing binding a reaction to a person is seal.pubkey, which unwrapMessage
+// authenticates. That is what makes "you can only remove your own reaction" true by construction
+// rather than by a check somebody could forget to write.
+export function wrapReaction(
+  senderSecretKey: Uint8Array,
+  recipientPubkeyHex: string,
+  targetLogicalId: string,
+  emoji: string,
+  action: 'add' | 'remove',
+  seq: number
+): NostrEvent {
+  const tags: string[][] = [
+    ['p', recipientPubkeyHex],
+    [REACTION_TAG, REACTION_VERSION, targetLogicalId, emoji, action, String(seq)],
+  ]
+  const rumor = {
+    kind: KIND_PRIVATE_DM,
+    created_at: Math.round(Date.now() / 1000),
+    content: ' ',
+    tags,
+  }
+  return wrapEvent(rumor, senderSecretKey, recipientPubkeyHex)
+}
 // Returns the plaintext, the sender's public key (hex), and any payment reference — or throws on
 // decryption failure. Performs a manual two-layer decrypt (rather than nip59.unwrapEvent) so we
 // can access the intermediate seal and enforce the NIP-17 pubkey consistency check below.
 export function unwrapMessage(
   recipientSecretKey: Uint8Array,
   giftWrapEvent: NostrEvent
-): { senderPubkeyHex: string; plaintext: string; payment?: PaymentRef; tariAddress?: string; groupId?: string; groupDef?: GroupDef; groupLeave?: boolean; groupReinvite?: boolean; logicalId?: string; edit?: { targetLogicalId: string; revision: number }; media?: MediaRef; replyTo?: string } {
+): { senderPubkeyHex: string; plaintext: string; payment?: PaymentRef; tariAddress?: string; groupId?: string; groupDef?: GroupDef; groupLeave?: boolean; groupReinvite?: boolean; logicalId?: string; edit?: { targetLogicalId: string; revision: number }; media?: MediaRef; replyTo?: string; reaction?: { targetLogicalId: string; emoji: string; action: 'add' | 'remove'; seq: number } } {
   // Layer 1: decrypt gift wrap (kind 1059) → seal (kind 13)
   const sealKey = getConversationKey(recipientSecretKey, giftWrapEvent.pubkey)
   const seal = JSON.parse(decrypt(giftWrapEvent.content, sealKey)) as {
@@ -483,6 +606,7 @@ export function unwrapMessage(
     edit: extractEdit(rumor.tags),
     media: extractMedia(rumor.tags),
     replyTo: extractReply(rumor.tags),
+    reaction: extractReaction(rumor.tags),
   }
 }
 

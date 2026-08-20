@@ -59,6 +59,39 @@ export interface MediaRef {
   size: number     // ciphertext bytes
 }
 
+// One person's reaction to one message with one emoji (reactions v1). Stored as a flat array on
+// the message rather than as a map, so the shape stays JSON-safe and merges by the same
+// read-modify-write rules every other row field does.
+//
+// THE ROW IS NEVER DELETED. A removal sets `removed: true` and KEEPS the entry, because `seq` is a
+// per-(by, emoji) high-water mark and deleting the row would throw it away: the next inbound event
+// for that pair would find no stored seq, and a replayed OLD add (relays re-serve everything inside
+// their ~2-day window on every unlock) would sail past the ordering guard and resurrect a reaction
+// the person had removed. Retaining a tombstoned row is the same trick preEditPlaintext plays for
+// the echo suppressor — a field kept solely so a later replay can be recognised for what it is.
+//
+// This is NOT related to messaging/tombstoneStore.ts despite the shared word: that store is a
+// per-identity map of deleted gift-wrap event ids, pruned at 3 days, which blocks re-ingest of a
+// deleted CONVERSATION. This is an in-row flag with no pruning and no storage of its own.
+export interface ReactionEntry {
+  // The reactor's Nostr pubkey (hex), taken from the AUTHENTICATED seal.pubkey and never from
+  // anything in the payload. Every guard that makes reactions safe rests on this: a reaction can
+  // only ever create or flip the row keyed on the sender's own key, which is why "only you can
+  // remove your reaction" needs no explicit check — there is no way to address someone else's row.
+  by: string
+  emoji: string
+  // Per-(by, emoji) monotonic counter. Reactions cannot be ordered by event time (gift wraps fuzz
+  // created_at by up to 2 days), so this decides which of two events for the same pair wins.
+  seq: number
+  // OUR clock at the moment the entry was written, the same basis as `timestamp` and `editedAt`.
+  // Display ordering only — never authoritative, and never compared across devices.
+  at: number
+  // Tombstoned: the reactor removed this reaction. Filtered out at render and excluded from the
+  // max-2 count, but retained forever so `seq` survives. Absent (not `false`) on a live row, so a
+  // stored row stays byte-identical to one written before a removal ever happened.
+  removed?: boolean
+}
+
 export interface CaravelMessage {
   id: string               // unique per message — use the gift wrap event id
   senderPubkeyHex: string
@@ -132,6 +165,15 @@ export interface CaravelMessage {
   // whose target we have never received still renders as an ordinary message with a placeholder, and
   // heals itself if the original arrives later.
   replyTo?: string
+
+  // ── Emoji reactions (reactions v1) ────────────────────────────────────────────
+  // Absent on every row written before reactions existed, so stored JSON parses unchanged — no
+  // migration, the same way the editing, media and reply fields landed.
+  //
+  // ANYONE-TO-ANYONE, unlike edits: the array holds MY reactions and my peers' alike, and a group
+  // message accumulates one entry per (member, emoji). Includes `removed: true` tombstones — see
+  // ReactionEntry — so consumers MUST filter them at render and when counting.
+  reactions?: ReactionEntry[]
 }
 
 // ── Groups (Phase 1: fan-out, in-message roster, fixed membership) ──────────────
@@ -229,6 +271,24 @@ export interface MessagingProvider {
   // Same contract as sendGroupLeave for the same class of reason.
   sendGroupEdit(groupId: string, memberPubkeysHex: string[], targetLogicalId: string, newText: string, revision: number): Promise<{ memberCount: number; membersReached: number }>
 
+  // Send a REACTION to a DM (reactions v1): add or remove `emoji` on the message carrying
+  // `targetLogicalId`. Boolean like sendEdit and sendContactAddress — acceptance by one relay is
+  // all we can observe, and the caller decides how to surface a miss.
+  //
+  // `seq` is the per-(reactor, emoji) counter the receiver orders on; the caller derives it from
+  // stored state (nextReactionSeq), so a failed send that is retried recomputes the SAME number.
+  // Unlike sendEdit this is NOT restricted to my own messages — a reaction is anyone-to-anyone, and
+  // the reactor's identity rides in the authenticated seal rather than anywhere the caller controls.
+  sendReaction(recipientPubkeyHex: string, targetLogicalId: string, emoji: string, action: 'add' | 'remove', seq: number): Promise<boolean>
+
+  // Group REACTION: sendReaction's payload over sendGroupMessage's fan-out, so every member's
+  // client applies the identical change to the row carrying `targetLogicalId`. Returns the same
+  // relays-reached tally as its siblings, NOT a delivery receipt.
+  //
+  // NEVER THROWS, for the same reason sendGroupEdit doesn't: the caller is awaited from a UI handler
+  // with no catch, so a rejection would escape as an unhandled rejection.
+  sendGroupReaction(groupId: string, memberPubkeysHex: string[], targetLogicalId: string, emoji: string, action: 'add' | 'remove', seq: number): Promise<{ memberCount: number; membersReached: number }>
+
   // Group message (Phase 1): fan out one NIP-17 gift wrap per member (roster minus self), each
   // tagged with the group id. Returns the local 'sent' record + a relays-reached tally (NOT a
   // delivery receipt). Throws only if no member's wrap reached any relay.
@@ -271,7 +331,14 @@ export interface MessagingProvider {
     // checked against the rumor pubkey in unwrapMessage) — the receiver must apply the edit only if
     // it matches the original message's sender, which applyEdit enforces. Like onGroupDefinition
     // this is a control message: it mutates an existing row and never creates a bubble.
-    onEdit?: (senderPubkeyHex: string, targetLogicalId: string, newText: string, revision: number) => void
+    onEdit?: (senderPubkeyHex: string, targetLogicalId: string, newText: string, revision: number) => void,
+    // Fires for a received REACTION (reactions v1). `senderPubkeyHex` is the AUTHENTICATED reactor
+    // (seal.pubkey, checked against the rumor pubkey in unwrapMessage) and is the ONLY source of
+    // reactor identity — the wire payload deliberately carries none. Like onEdit this is a control
+    // message: it mutates an existing row and never creates a bubble. There is no authorship check
+    // to make here (anyone may react to anyone), which is safe because every row this can reach is
+    // keyed on `senderPubkeyHex` itself.
+    onReaction?: (senderPubkeyHex: string, targetLogicalId: string, emoji: string, action: 'add' | 'remove', seq: number) => void
   ): void
 
   // Close all relay connections and subscriptions. Idempotent — safe to call more than once.

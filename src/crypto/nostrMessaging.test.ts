@@ -9,7 +9,7 @@
 import { describe, expect, it } from 'vitest'
 import { generateSecretKey, getPublicKey } from 'nostr-tools/pure'
 import { wrapEvent } from 'nostr-tools/nip59'
-import { newLogicalId, planPublishRetry, unwrapMessage, wrapEdit, wrapMessage } from './nostrMessaging'
+import { newLogicalId, planPublishRetry, unwrapMessage, wrapEdit, wrapMessage, wrapReaction } from './nostrMessaging'
 import type { MediaRef } from '../messaging/types'
 
 // The real call site's values: 3 attempts, 400ms base backoff, a 10s connect budget, and a per-relay
@@ -511,6 +511,150 @@ describe('caravel-reply — malformed refs degrade to a plain message', () => {
     const out = unwrapMessage(bob, wrapRawTags([['caravel-reply', 'v2', newLogicalId()]], 'still readable'))
     expect(out.replyTo).toBeUndefined()
     expect(out.plaintext).toBe('still readable')
+  })
+})
+
+// Wire tests for the reaction tag (reactions v1).
+//
+// The emoji is the newest class of attacker-controlled value on the wire — unlike a logical id it
+// is RENDERED, so a bad one is not merely stored but drawn — and it is the only tag field validated
+// by content rather than by shape. Most of what follows is therefore about what must NOT get
+// through. Everything runs through a real wrap/unwrap, so the tag survives the seal and gift wrap
+// exactly as a hostile peer would deliver it.
+
+describe('caravel-reaction on the wire', () => {
+  it('round-trips target, emoji, action and seq — and reports the AUTHENTICATED reactor', () => {
+    const target = newLogicalId()
+    const out = unwrapMessage(bob, wrapReaction(alice, bobPub, target, '👍', 'add', 3))
+
+    expect(out.reaction).toEqual({ targetLogicalId: target, emoji: '👍', action: 'add', seq: 3 })
+    // The content is a single space: a reaction is a control message with no prose, and the emoji
+    // deliberately has ONE home (the tag) rather than being echoed into content as well.
+    expect(out.plaintext).toBe(' ')
+    // This is the ONLY source of reactor identity. It comes from seal.pubkey, which unwrapMessage
+    // verifies equals the rumor pubkey — so it cannot be claimed by anything in the payload, which
+    // is what makes "you can only ever touch your own reaction row" true by construction.
+    expect(out.senderPubkeyHex).toBe(alicePub)
+    // A reaction is not an edit and not a message: nothing else on the rumor is set.
+    expect(out.edit).toBeUndefined()
+    expect(out.logicalId).toBeUndefined()
+    expect(out.replyTo).toBeUndefined()
+  })
+
+  it('round-trips a remove', () => {
+    const target = newLogicalId()
+    const out = unwrapMessage(bob, wrapReaction(alice, bobPub, target, '❤️', 'remove', 2))
+    expect(out.reaction).toEqual({ targetLogicalId: target, emoji: '❤️', action: 'remove', seq: 2 })
+  })
+
+  it('carries the same target on every wrap of a group fan-out', () => {
+    // Same reason the reply reference is a LOGICAL id: each member gets a distinct gift wrap, and
+    // every one of them must apply the reaction to the same row.
+    const target = newLogicalId()
+    const first = unwrapMessage(bob, wrapReaction(alice, bobPub, target, '😂', 'add', 1))
+    const second = unwrapMessage(bob, wrapReaction(alice, bobPub, target, '😂', 'add', 1))
+    expect(first.reaction).toEqual(second.reaction)
+  })
+
+  it('is absent on an ordinary message', () => {
+    const out = unwrapMessage(bob, wrapMessage(alice, bobPub, 'hello', { logicalId: newLogicalId() }))
+    expect(out.reaction).toBeUndefined()
+  })
+})
+
+describe('caravel-reaction — malformed tags degrade to undefined', () => {
+  const t = newLogicalId()
+  const raw = (tag: string[], content = ' ') => unwrapMessage(bob, wrapRawTags([tag], content)).reaction
+
+  it('rejects an unknown version', () => {
+    expect(raw(['caravel-reaction', 'v2', t, '👍', 'add', '1'])).toBeUndefined()
+  })
+
+  it('rejects a malformed target', () => {
+    expect(raw(['caravel-reaction', 'v1', '', '👍', 'add', '1'])).toBeUndefined()
+    expect(raw(['caravel-reaction', 'v1', 'x'.repeat(65), '👍', 'add', '1'])).toBeUndefined()
+    // 64 is the bound itself and must still be accepted.
+    expect(raw(['caravel-reaction', 'v1', 'x'.repeat(64), '👍', 'add', '1'])?.targetLogicalId).toBe('x'.repeat(64))
+  })
+
+  it('rejects every action that is not exactly add or remove', () => {
+    for (const bad of ['', 'ADD', 'Add', 'added', 'remove ', 'toggle', 'delete']) {
+      expect(raw(['caravel-reaction', 'v1', t, '👍', bad, '1']),
+        `action ${JSON.stringify(bad)} must be rejected`).toBeUndefined()
+    }
+    expect(raw(['caravel-reaction', 'v1', t, '👍'])).toBeUndefined()   // missing action + seq
+  })
+
+  it('rejects every non positive-integer seq — the same strictness revision gets', () => {
+    // A lenient Number() would accept most of these, and seq is the field that decides which of two
+    // events for one (reactor, emoji) pair wins.
+    for (const bad of ['0', '-1', '1.5', '', 'abc', ' 1 ', '1e3', '0x2', '01', '+1']) {
+      expect(raw(['caravel-reaction', 'v1', t, '👍', 'add', bad]),
+        `seq ${JSON.stringify(bad)} must be rejected`).toBeUndefined()
+    }
+    expect(raw(['caravel-reaction', 'v1', t, '👍', 'add'])).toBeUndefined()   // missing seq
+  })
+
+  it('accepts a large but safe seq', () => {
+    expect(raw(['caravel-reaction', 'v1', t, '👍', 'add', '9007199254740991'])?.seq).toBe(9007199254740991)
+  })
+
+  it('leaves the rumor readable when the tag is dropped', () => {
+    // Degrading routes it down the ORDINARY message path, exactly as a malformed edit or reply does.
+    const out = unwrapMessage(bob, wrapRawTags([['caravel-reaction', 'v2', t, '👍', 'add', '1']], 'still readable'))
+    expect(out.reaction).toBeUndefined()
+    expect(out.plaintext).toBe('still readable')
+  })
+})
+
+describe('caravel-reaction — emoji validation', () => {
+  const t = newLogicalId()
+  const emoji = (value: string) => unwrapMessage(bob, wrapRawTags([['caravel-reaction', 'v1', t, value, 'add', '1']])).reaction?.emoji
+
+  it('accepts plain emoji, VS16 sequences and ZWJ sequences', () => {
+    for (const ok of ['👍', '😂', '😮', '😢', '🙏', '❤️', '☺️', '🫶', '👩🏽‍🚒', '👨‍👩‍👧‍👦', '🏳️‍🌈']) {
+      expect(emoji(ok), `${ok} must be accepted`).toBe(ok)
+    }
+  })
+
+  it('rejects an empty emoji', () => {
+    expect(emoji('')).toBeUndefined()
+  })
+
+  it('rejects anything longer than the 16 code-unit bound', () => {
+    // The bound is on UTF-16 code units, which is what a stored/rendered string actually costs.
+    expect('👍'.repeat(8).length).toBe(16)
+    expect(emoji('👍'.repeat(8))).toBe('👍'.repeat(8))      // exactly at the bound
+    expect(emoji('👍'.repeat(9))).toBeUndefined()           // one over
+  })
+
+  it('rejects text, digits, whitespace and control characters', () => {
+    for (const bad of ['a', 'lol', '1', ' ', '\n', '\u0000', '<script>', '.', '-']) {
+      expect(emoji(bad), `${JSON.stringify(bad)} must be rejected`).toBeUndefined()
+    }
+  })
+
+  it('rejects a mix of emoji and text — one bad codepoint fails the whole string', () => {
+    expect(emoji('👍a')).toBeUndefined()
+    expect(emoji('a👍')).toBeUndefined()
+    expect(emoji('👍 👍')).toBeUndefined()        // the space is not a joiner
+  })
+
+  it('rejects keycaps and country flags (F4) — not by special case, but by the rule', () => {
+    // A keycap is an ASCII digit plus VS16 plus U+20E3, and admitting it would mean admitting bare
+    // digits. A country flag is two regional indicators, which are not Extended_Pictographic.
+    // Neither is in the curated picker, so nothing this client can SEND is refused here.
+    expect(emoji('1️⃣')).toBeUndefined()
+    expect(emoji('#️⃣')).toBeUndefined()
+    expect(emoji('🇺🇸')).toBeUndefined()
+  })
+
+  it('rejects joiners with nothing to join', () => {
+    // At least one Extended_Pictographic codepoint is required, so a string of pure modifiers —
+    // which would render as nothing — cannot get through.
+    expect(emoji('\u200d')).toBeUndefined()
+    expect(emoji('\ufe0f')).toBeUndefined()
+    expect(emoji('\u{1f3fb}')).toBeUndefined()
   })
 })
 

@@ -15,7 +15,7 @@ import { scanWallet, type ScannedUtxo, type ScanProgress } from '../crypto/walle
 import { loadHistory, addSent, type SentEntry, type NewSentParams } from '../crypto/txHistory'
 import { NostrMessagingProvider } from '../messaging/NostrMessagingProvider'
 import type { MessagingProvider, MessagingConnectionStatus, CaravelMessage, RelayState } from '../messaging/types'
-import { loadMessages, addReceivedMessage, addSentMessage, deletePeerMessages, deleteGroupMessages, applyEditByLogicalId, editReachOk, editTargetsLeftGroup, nextRevision } from '../messaging/messageStore'
+import { loadMessages, addReceivedMessage, addSentMessage, deletePeerMessages, deleteGroupMessages, applyEditByLogicalId, editReachOk, targetsLeftGroup, nextRevision, applyReactionByLogicalId, nextReactionSeq, isReactableTarget, liveReactionCountBy, MAX_LIVE_REACTIONS_PER_REACTOR } from '../messaging/messageStore'
 import { loadGroups, addOrUpdateGroup, ensureGroup, setGroupState, hasGroup, getGroupState, deleteGroup as removeGroupFromStore } from '../messaging/groupStore'
 import { loadDeletedGroupIdSet, recordDeletedGroup, clearDeletedGroup } from '../messaging/deletedGroupStore'
 import { loadSeenDefIdSet, recordSeenDef } from '../messaging/seenDefStore'
@@ -62,6 +62,15 @@ const SCAN_IDLE: ScanState = {
 // so there is no partial reach to describe (`ok` already says whether a relay accepted).
 // Both counts are RELAY ACCEPTANCE, never delivery — same caveat as GroupSendResult.
 export interface EditResult {
+  ok: boolean
+  memberCount?: number
+  membersReached?: number
+}
+
+// The outcome of reactMessage (reactions v1). Structurally identical to EditResult and kept as its
+// own name rather than aliased: the two describe different acts, and a later divergence (a reason
+// code for "you already have two") should not have to unpick a shared type first.
+export interface ReactResult {
   ok: boolean
   memberCount?: number
   membersReached?: number
@@ -139,6 +148,15 @@ export interface WalletCtx {
    *  The counts are GROUP-ONLY and absent for a DM, which has no such thing as partial reach.
    *  Best-effort throughout — see MessagingProvider.sendEdit / sendGroupEdit. */
   editMessage: (logicalId: string, newText: string) => Promise<EditResult>
+  /** Add or remove one of MY emoji reactions on any message in a live thread (reactions v1).
+   *  Anyone-to-anyone — unlike editMessage this is not restricted to my own messages — but always
+   *  MY reaction: the reactor is this identity, taken from the authenticated seal on receipt and
+   *  from `nostrPubkeyHex` here, never from a caller-supplied value.
+   *  `ok` is false when the message can't be reacted to (unknown, a system/payment/media row, no
+   *  logicalId, a group that is gone or not active), when adding would exceed the two-reaction
+   *  allowance, or when nothing was accepted at all. Counts are GROUP-ONLY, as for editMessage.
+   *  Best-effort throughout — see MessagingProvider.sendReaction / sendGroupReaction. */
+  reactMessage: (logicalId: string, emoji: string, action: 'add' | 'remove') => Promise<ReactResult>
   /** Factory: returns a ready-to-use MessagingProvider backed by the current identity,
    *  or null if the wallet is locked. The secret key stays inside the closure — callers
    *  receive a working provider but never see the raw key. */
@@ -420,14 +438,36 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       //
       // The ONE gate the store cannot make is the group-lifecycle one, added in M4. An edit carries no
       // group tag on the wire, so this is keyed on the target row we already hold — see
-      // editTargetsLeftGroup. Without it a LEFT group would keep mutating: leave/decline are
+      // targetsLeftGroup. Without it a LEFT group would keep mutating: leave/decline are
       // non-destructive, so its rows are still here, and an edit would rewrite hidden history in a
       // group whose contract (B-M2) is that nothing about it touches the store again. A DELETED
       // group's rows are gone, so that case is already the unknown-logicalId no-op.
       (senderPubkeyHex, targetLogicalId, newText, revision) => {
         setMessages(prev => {
-          if (editTargetsLeftGroup(prev, targetLogicalId, leftGroupsRef.current)) return prev
+          if (targetsLeftGroup(prev, targetLogicalId, leftGroupsRef.current)) return prev
           return applyEditByLogicalId(pubkeyHex, prev, targetLogicalId, newText, revision, senderPubkeyHex)
+        })
+      },
+      // Inbound REACTION (reactions v1). Deliberately the same two-line shape as the edit handler
+      // above, and for the same division of labour: every check that can be made from stored state
+      // lives in applyReactionByLogicalId (target exists, target is a text row, ordering by seq, the
+      // per-person allowance, the per-message row cap), so an unknown, deleted, stale or replayed
+      // reaction all resolve to the array coming back unchanged, by reference.
+      //
+      // The one gate the store cannot make is the group-lifecycle one, exactly as for edits: a
+      // reaction carries no group tag on the wire, so it is keyed on the target row we already hold.
+      // Without it a LEFT group would keep mutating — leave/decline are non-destructive, so its rows
+      // are still here — and reactions would accumulate on hidden history in a group whose contract
+      // (B-M2) is that nothing about it touches the store again. A DELETED group's rows are gone, so
+      // that case is already the unknown-logicalId no-op.
+      //
+      // NO AUTHORSHIP GATE, unlike the edit handler, and nothing here needs to add one: `senderPubkeyHex`
+      // is the authenticated seal pubkey and the applier keys the row on it, so this can only ever
+      // create or flip the sender's OWN reaction — never anyone else's, in a group or a DM.
+      (senderPubkeyHex, targetLogicalId, emoji, action, seq) => {
+        setMessages(prev => {
+          if (targetsLeftGroup(prev, targetLogicalId, leftGroupsRef.current)) return prev
+          return applyReactionByLogicalId(pubkeyHex, prev, targetLogicalId, emoji, action, seq, senderPubkeyHex)
         })
       }
     )
@@ -659,6 +699,84 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     }
   }, [nostrPubkeyHex, messages, groups, createMessagingProvider])
 
+  // Add or remove one of MY reactions on a message — DM or GROUP (reactions v1). SEND FIRST, apply
+  // locally only once it got far enough, exactly as editMessage does and for the same reason: a
+  // send that went nowhere must never leave this device showing a reaction nobody else will see.
+  //
+  // The destination is DERIVED from the stored row rather than passed in, so this cannot be called
+  // with a mismatched (message, recipient) pair. Two differences from editMessage, both deliberate:
+  //
+  //   1. NOT MINE-ONLY. A reaction to a peer's message is the normal case, so there is no
+  //      `direction === 'sent'` check. For a DM that means the wire destination is the OTHER party,
+  //      whichever side of the row they sit on — hence the direction-aware recipient below rather
+  //      than editMessage's flat `row.recipientPubkeyHex` (which is blank on a received row).
+  //   2. A MAX-2 CHECK. The allowance is about stored state, so it belongs here; every receiving
+  //      device enforces it again in applyReactionByLogicalId, which is the backstop for a peer
+  //      that ignores it. A `remove` is never capped — it can only ever free an allowance slot.
+  const reactMessage = useCallback(async (logicalId: string, emoji: string, action: 'add' | 'remove'): Promise<ReactResult> => {
+    const pubkeyHex = nostrPubkeyHex
+    if (!pubkeyHex || !logicalId || !emoji) return { ok: false }
+
+    const row = messages.find(m => m.logicalId === logicalId)
+    if (!row) return { ok: false }
+    if (!isReactableTarget(row)) return { ok: false }    // text only in v1 — see isReactableTarget
+
+    // Adding a third live reaction is refused before anything is published. Re-adding an emoji I
+    // already hold is not a third: it costs no new slot, so it is allowed through as a seq bump.
+    if (action === 'add') {
+      const alreadyHeld = (row.reactions ?? []).some(r => r.by === pubkeyHex && r.emoji === emoji && !r.removed)
+      if (!alreadyHeld && liveReactionCountBy(row, pubkeyHex) >= MAX_LIVE_REACTIONS_PER_REACTOR) return { ok: false }
+    }
+
+    // One past whatever has been applied for THIS (me, emoji) pair. Derived from stored state, so a
+    // failed send that is retried recomputes the SAME number rather than drifting; a duplicate is a
+    // benign no-op because every receiver's strictly-newer guard rejects it.
+    const seq = nextReactionSeq(messages, logicalId, pubkeyHex, emoji)
+
+    // GROUP: fan out to the roster, exactly as the message itself was fanned out.
+    if (row.groupId) {
+      // Gated to an ACTIVE group, matching editMessage/leaveGroup/reinviteGroup: a group that is
+      // gone, declined or left has no roster to address and is not a thread you should be reacting
+      // into. (No UI can reach this — a non-active group renders no thread — but the context must
+      // not depend on that.)
+      const group = groups.find(g => g.id === row.groupId)
+      if (!group || group.state !== 'active') return { ok: false }
+
+      const provider = createMessagingProvider()
+      if (!provider) return { ok: false }
+      try {
+        const { memberCount, membersReached } = await provider.sendGroupReaction(group.id, group.members, logicalId, emoji, action, seq)
+        // TOTAL failure only, on the same reasoning editReachOk was written for: reaching some
+        // members is the ordinary best-effort outcome, and refusing locally would put this device
+        // out of step with the members who did receive it.
+        const ok = editReachOk(memberCount, membersReached)
+        if (!ok) return { ok, memberCount, membersReached }
+        setMessages(prev => applyReactionByLogicalId(pubkeyHex, prev, logicalId, emoji, action, seq, pubkeyHex))
+        return { ok, memberCount, membersReached }
+      } finally {
+        provider.disconnect()
+      }
+    }
+
+    // DM: the other party is the sender on a RECEIVED row and the recipient on a sent one. Reacting
+    // to my own message in a notes-to-self thread addresses myself, which resolves to no recipient
+    // and is refused — there is no second device to tell, and the local apply alone would be a lie
+    // about what was published.
+    const recipient = row.direction === 'received' ? row.senderPubkeyHex : row.recipientPubkeyHex
+    if (!recipient || recipient === pubkeyHex) return { ok: false }
+
+    const provider = createMessagingProvider()
+    if (!provider) return { ok: false }
+    try {
+      const ok = await provider.sendReaction(recipient, logicalId, emoji, action, seq)
+      if (!ok) return { ok: false }
+      setMessages(prev => applyReactionByLogicalId(pubkeyHex, prev, logicalId, emoji, action, seq, pubkeyHex))
+      return { ok: true }
+    } finally {
+      provider.disconnect()
+    }
+  }, [nostrPubkeyHex, messages, groups, createMessagingProvider])
+
   // Create a group locally (random 32-byte id, self included in the roster) and fan its definition
   // out to the other members so their clients learn it. Delivery is best-effort (relays-reached, not
   // a receipt) and never blocks creation. Members are already my contacts, so their gate accepts me.
@@ -784,7 +902,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       messagingStatus, messages,
       generateMnemonic, createWallet, unlock, restore, lock, getMnemonic, rescan, recordSent,
       recordSentMessage, contacts, acceptContact, contactAddresses, setManualTariAddress,
-      deleteConversation, editMessage, createMessagingProvider, getRelayStates, reconnectAll,
+      deleteConversation, editMessage, reactMessage, createMessagingProvider, getRelayStates, reconnectAll,
       balanceHidden, setBalanceHidden,
       groups, createGroup, deleteGroup, acceptGroup, declineGroup, leaveGroup, reinviteGroup,
     }}>

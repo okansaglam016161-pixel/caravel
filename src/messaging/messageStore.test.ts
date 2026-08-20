@@ -3,7 +3,7 @@
 // contract honest, and a bug here corrupts stored messages, so each guard is covered explicitly.
 
 import { beforeEach, describe, expect, it } from 'vitest'
-import { addReceivedMessage, addSentMessage, applyEdit, applyEditByLogicalId, editReachOk, editTargetsLeftGroup, findByLogicalId, loadMessages, nextRevision } from './messageStore'
+import { addReceivedMessage, addSentMessage, applyEdit, applyEditByLogicalId, applyReactionByLogicalId, editReachOk, targetsLeftGroup, findByLogicalId, isReactableTarget, liveReactionCountBy, loadMessages, nextReactionSeq, nextRevision } from './messageStore'
 import type { CaravelMessage } from './types'
 
 // messageStore persists through localStorage, which does not exist under Vitest's node
@@ -328,32 +328,32 @@ describe('editReachOk (M4)', () => {
   })
 })
 
-describe('editTargetsLeftGroup (M4)', () => {
+describe('targetsLeftGroup (M4)', () => {
   const LEFT = new Set(['g-left'])
 
   it('drops an edit whose target belongs to a group I have LEFT', () => {
     // Leave/decline are NON-destructive: the rows are kept and hidden by state, so without this gate
     // an edit would keep rewriting history inside a group that should never be touched again.
     const current = [groupSent({ groupId: 'g-left' })]
-    expect(editTargetsLeftGroup(current, 'L1', LEFT)).toBe(true)
+    expect(targetsLeftGroup(current, 'L1', LEFT)).toBe(true)
   })
 
   it('allows a live group, a pending group, and a DM', () => {
-    expect(editTargetsLeftGroup([groupSent()], 'L1', LEFT)).toBe(false)
+    expect(targetsLeftGroup([groupSent()], 'L1', LEFT)).toBe(false)
     // A pending (invite-gated) group stores its messages; an edit should land so the corrected text
     // is what you read on accept.
-    expect(editTargetsLeftGroup([groupSent({ groupId: 'g-pending' })], 'L1', LEFT)).toBe(false)
-    expect(editTargetsLeftGroup([msg({ logicalId: 'L1' })], 'L1', LEFT)).toBe(false)
+    expect(targetsLeftGroup([groupSent({ groupId: 'g-pending' })], 'L1', LEFT)).toBe(false)
+    expect(targetsLeftGroup([msg({ logicalId: 'L1' })], 'L1', LEFT)).toBe(false)
   })
 
   it('allows an unknown or empty logical id — deletion already resolves to a store no-op', () => {
-    expect(editTargetsLeftGroup([groupSent({ groupId: 'g-left' })], 'unknown', LEFT)).toBe(false)
-    expect(editTargetsLeftGroup([groupSent({ groupId: 'g-left' })], '', LEFT)).toBe(false)
-    expect(editTargetsLeftGroup([], 'L1', LEFT)).toBe(false)
+    expect(targetsLeftGroup([groupSent({ groupId: 'g-left' })], 'unknown', LEFT)).toBe(false)
+    expect(targetsLeftGroup([groupSent({ groupId: 'g-left' })], '', LEFT)).toBe(false)
+    expect(targetsLeftGroup([], 'L1', LEFT)).toBe(false)
   })
 
   it('allows everything when no group has been left', () => {
-    expect(editTargetsLeftGroup([groupSent({ groupId: 'g-left' })], 'L1', new Set())).toBe(false)
+    expect(targetsLeftGroup([groupSent({ groupId: 'g-left' })], 'L1', new Set())).toBe(false)
   })
 })
 
@@ -394,6 +394,313 @@ describe('findByLogicalId — resolving a reply\'s target (replies v1)', () => {
   it('finds a group row by the id shared across the fan-out', () => {
     const group = [msg({ id: 'grp-1', groupId: 'g1', logicalId: 'shared', plaintext: 'to the group' })]
     expect(findByLogicalId(group, 'shared')?.plaintext).toBe('to the group')
+  })
+})
+
+
+// ── Emoji reactions (reactions v1) ────────────────────────────────────────────
+//
+// The applier is the second mutation in this store, and unlike the edit path it accepts events from
+// ANYONE. What keeps that safe is not a check but a shape: the row is keyed on (by, emoji) where
+// `by` is the authenticated seal pubkey, so a reaction can only ever reach its own sender's row.
+// These tests pin that, the seq ordering that makes replay harmless, and the two caps.
+
+const OTHER = 'c'.repeat(64)
+
+// A text row with a shared logical id — the only thing a reaction can name.
+function reactable(over: Partial<CaravelMessage> = {}): CaravelMessage {
+  return msg({ logicalId: 'L1', ...over })
+}
+
+// Convenience: apply a chain of reactions and return the final array.
+function react(rows: CaravelMessage[], by: string, emoji: string, action: 'add' | 'remove', seq: number) {
+  return applyReactionByLogicalId(ME, rows, 'L1', emoji, action, seq, by)
+}
+
+function reactionsOf(rows: CaravelMessage[]) {
+  return rows[0].reactions ?? []
+}
+
+function liveEmoji(rows: CaravelMessage[], by: string) {
+  return reactionsOf(rows).filter(r => r.by === by && !r.removed).map(r => r.emoji)
+}
+
+describe('applyReactionByLogicalId — applying and removing', () => {
+  it('adds a reaction and persists it', () => {
+    const next = react([reactable()], PEER, '👍', 'add', 1)
+
+    expect(reactionsOf(next)).toHaveLength(1)
+    expect(reactionsOf(next)[0]).toMatchObject({ by: PEER, emoji: '👍', seq: 1 })
+    expect(reactionsOf(next)[0].removed).toBeUndefined()   // absent, not false
+    expect(loadMessages(ME)[0].reactions).toHaveLength(1)
+  })
+
+  it('returns a NEW array and a NEW row — the memo on array identity must see the change', () => {
+    const before = [reactable()]
+    const next = react(before, PEER, '👍', 'add', 1)
+    expect(next).not.toBe(before)
+    expect(next[0]).not.toBe(before[0])
+    expect(before[0].reactions).toBeUndefined()            // the input row is untouched
+  })
+
+  it('TOMBSTONES on remove instead of deleting the row — the seq high-water must survive', () => {
+    const added = react([reactable()], PEER, '👍', 'add', 1)
+    const removed = react(added, PEER, '👍', 'remove', 2)
+
+    // The row is still there, flagged — this is what nextReactionSeq reads.
+    expect(reactionsOf(removed)).toHaveLength(1)
+    expect(reactionsOf(removed)[0]).toMatchObject({ by: PEER, emoji: '👍', seq: 2, removed: true })
+  })
+
+  it('re-adds by clearing the tombstone rather than appending a second row', () => {
+    let rows = react([reactable()], PEER, '👍', 'add', 1)
+    rows = react(rows, PEER, '👍', 'remove', 2)
+    rows = react(rows, PEER, '👍', 'add', 3)
+
+    expect(reactionsOf(rows)).toHaveLength(1)
+    expect(reactionsOf(rows)[0].removed).toBeUndefined()
+    expect(reactionsOf(rows)[0].seq).toBe(3)
+  })
+
+  it('leaves the message itself completely intact', () => {
+    const next = react([reactable({ plaintext: 'hi', timestamp: 1_000_000, revision: 2 })], PEER, '👍', 'add', 1)
+    // Ordering, text and edit state are none of a reaction's business.
+    expect(next[0].plaintext).toBe('hi')
+    expect(next[0].timestamp).toBe(1_000_000)
+    expect(next[0].revision).toBe(2)
+    expect(next[0].editedAt).toBeUndefined()
+  })
+})
+
+describe('applyReactionByLogicalId — seq ordering and replay', () => {
+  it('ignores a repeat of the same seq (idempotent), by reference', () => {
+    const once = react([reactable()], PEER, '👍', 'add', 1)
+    const twice = react(once, PEER, '👍', 'add', 1)
+    expect(twice).toBe(once)
+  })
+
+  it('ignores a seq BELOW the stored one', () => {
+    const at3 = react([reactable()], PEER, '👍', 'add', 3)
+    expect(react(at3, PEER, '👍', 'add', 2)).toBe(at3)
+    expect(react(at3, PEER, '👍', 'remove', 1)).toBe(at3)
+  })
+
+  it('REPLAY: add(1) → remove(2) → replayed add(1) stays removed, seq 2, array identity unchanged', () => {
+    // The case the whole tombstone design exists for. Relays re-serve everything inside their ~2-day
+    // window on every unlock, and gift wraps fuzz created_at by up to 2 days, so a stale add
+    // arriving AFTER the remove is ordinary, not exotic. If removal deleted the row, the stored seq
+    // would be gone and this replay would resurrect a reaction the person took back.
+    let rows = react([reactable()], PEER, '👍', 'add', 1)
+    rows = react(rows, PEER, '👍', 'remove', 2)
+
+    const replayed = react(rows, PEER, '👍', 'add', 1)
+
+    expect(replayed).toBe(rows)                                        // rejected, no re-render
+    expect(reactionsOf(replayed)).toHaveLength(1)
+    expect(reactionsOf(replayed)[0]).toMatchObject({ seq: 2, removed: true })
+    expect(loadMessages(ME)[0].reactions?.[0].removed).toBe(true)      // and nothing was persisted over it
+  })
+
+  it('rejects a seq that is not a positive safe integer', () => {
+    const rows = [reactable()]
+    for (const bad of [0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(applyReactionByLogicalId(ME, rows, 'L1', '👍', 'add', bad, PEER), `seq ${bad}`).toBe(rows)
+    }
+  })
+})
+
+describe('applyReactionByLogicalId — who may react', () => {
+  it('ANYONE-TO-ANYONE: a third party may react to a message between two others', () => {
+    // The deliberate divergence from applyEdit, which refuses unless the sender authored the target.
+    const next = react([reactable({ senderPubkeyHex: ME, recipientPubkeyHex: PEER })], OTHER, '👍', 'add', 1)
+    expect(reactionsOf(next)[0].by).toBe(OTHER)
+  })
+
+  it('keys the row on the REACTOR, so one person can never touch another person\'s reaction', () => {
+    // This is why removal is self-only by construction: PEER\'s "remove" addresses PEER\'s row, and
+    // there is no way to express "remove OTHER\'s row" — the key comes from the authenticated seal.
+    let rows = react([reactable()], OTHER, '👍', 'add', 1)
+    rows = react(rows, PEER, '👍', 'remove', 5)      // PEER tries to unreact OTHER\'s 👍
+
+    const byOther = reactionsOf(rows).find(r => r.by === OTHER)
+    expect(byOther?.emoji).toBe('👍')
+    expect(byOther?.removed).toBeUndefined()      // untouched — still live
+    // PEER only ever tombstoned their OWN (absent) row.
+    expect(reactionsOf(rows).find(r => r.by === PEER)).toMatchObject({ removed: true })
+  })
+
+  it('keeps each reactor\'s seq independent — B\'s first is not ordered against A\'s third', () => {
+    let rows = react([reactable()], PEER, '👍', 'add', 3)
+    rows = react(rows, OTHER, '👍', 'add', 1)        // lower seq, different reactor → accepted
+
+    expect(liveEmoji(rows, PEER)).toEqual(['👍'])
+    expect(liveEmoji(rows, OTHER)).toEqual(['👍'])
+  })
+
+  it('keeps each EMOJI independent for one reactor', () => {
+    let rows = react([reactable()], PEER, '👍', 'add', 4)
+    rows = react(rows, PEER, '❤️', 'add', 1)         // lower seq, different emoji → accepted
+
+    expect(liveEmoji(rows, PEER).sort()).toEqual(['❤️', '👍'].sort())
+  })
+})
+
+describe('applyReactionByLogicalId — the two caps', () => {
+  it('MAX-2: a third live emoji from one person is tombstoned, not applied', () => {
+    let rows = react([reactable()], PEER, '👍', 'add', 1)
+    rows = react(rows, PEER, '❤️', 'add', 1)
+    rows = react(rows, PEER, '😂', 'add', 1)
+
+    expect(liveEmoji(rows, PEER).sort()).toEqual(['❤️', '👍'].sort())
+    // Stored as a tombstone rather than dropped, so its seq is recorded (F2): a later legitimate
+    // remove/re-add of that pair still orders correctly instead of starting from nothing.
+    expect(reactionsOf(rows).find(r => r.emoji === '😂')).toMatchObject({ by: PEER, seq: 1, removed: true })
+  })
+
+  it('MAX-2 is per person, not per message', () => {
+    let rows = react([reactable()], PEER, '👍', 'add', 1)
+    rows = react(rows, PEER, '❤️', 'add', 1)
+    rows = react(rows, OTHER, '😂', 'add', 1)       // a different reactor has their own allowance
+
+    expect(liveEmoji(rows, OTHER)).toEqual(['😂'])
+  })
+
+  it('MAX-2 does not block a seq bump on an emoji already held', () => {
+    let rows = react([reactable()], PEER, '👍', 'add', 1)
+    rows = react(rows, PEER, '❤️', 'add', 1)
+    rows = react(rows, PEER, '👍', 'add', 2)        // re-add of one I hold: costs no new slot
+
+    expect(liveEmoji(rows, PEER).sort()).toEqual(['❤️', '👍'].sort())
+    expect(reactionsOf(rows).find(r => r.emoji === '👍')?.seq).toBe(2)
+  })
+
+  it('MAX-2 frees a slot once a reaction is removed', () => {
+    let rows = react([reactable()], PEER, '👍', 'add', 1)
+    rows = react(rows, PEER, '❤️', 'add', 1)
+    rows = react(rows, PEER, '👍', 'remove', 2)
+    rows = react(rows, PEER, '😂', 'add', 2)
+
+    expect(liveEmoji(rows, PEER).sort()).toEqual(['❤️', '😂'].sort())
+  })
+
+  it('never caps a remove — it can only free a slot', () => {
+    let rows = react([reactable()], PEER, '👍', 'add', 1)
+    rows = react(rows, PEER, '❤️', 'add', 1)
+    rows = react(rows, PEER, '😂', 'remove', 1)     // removing one I never had
+
+    expect(reactionsOf(rows).find(r => r.emoji === '😂')).toMatchObject({ removed: true })
+    expect(liveEmoji(rows, PEER)).toHaveLength(2)
+  })
+
+  it('PER-MESSAGE CAP: refuses a new pair past 64 rows, tombstones included', () => {
+    // Removed rows are never deleted, so without this cap a peer could cycle through hundreds of
+    // distinct emoji and permanently inflate one row in localStorage.
+    const many = Array.from({ length: 64 }, (_, i) => ({ by: PEER, emoji: `e${i}`, seq: 1, at: 1, removed: true }))
+    const rows = [reactable({ reactions: many })]
+
+    const next = react(rows, OTHER, '👍', 'add', 1)
+    expect(next).toBe(rows)                                  // rejected, by reference
+  })
+
+  it('PER-MESSAGE CAP: still allows updating a pair that is already stored', () => {
+    // The cap bites on GROWTH only. Refusing updates too would freeze a full message\'s existing
+    // reactions — nobody could take theirs back.
+    const many = Array.from({ length: 63 }, (_, i) => ({ by: OTHER, emoji: `e${i}`, seq: 1, at: 1, removed: true }))
+    many.push({ by: PEER, emoji: '👍', seq: 1, at: 1, removed: false })
+    const rows = [reactable({ reactions: many })]
+
+    const next = react(rows, PEER, '👍', 'remove', 2)
+    expect(next).not.toBe(rows)
+    expect(next[0].reactions).toHaveLength(64)
+    expect(next[0].reactions?.find(r => r.emoji === '👍')).toMatchObject({ seq: 2, removed: true })
+  })
+})
+
+describe('applyReactionByLogicalId — what it refuses outright', () => {
+  it('no-ops on an unknown or empty logical id, by reference', () => {
+    const rows = [reactable()]
+    expect(applyReactionByLogicalId(ME, rows, 'nope', '👍', 'add', 1, PEER)).toBe(rows)
+    expect(applyReactionByLogicalId(ME, rows, '', '👍', 'add', 1, PEER)).toBe(rows)
+    expect(applyReactionByLogicalId(ME, [], 'L1', '👍', 'add', 1, PEER)).toEqual([])
+  })
+
+  it('refuses a NON-TEXT target — payment, media and system rows', () => {
+    // Neither card has anywhere to draw a pill, so a stored reaction on one would be invisible
+    // forever: quiet localStorage growth a peer on a richer client could produce by accident.
+    for (const over of [
+      { payment: { utxoId: 'utxo_1' } },
+      { media: { url: 'u', key: 'k', nonce: 'n', mime: 'image/webp', x: 'x', ox: 'o', width: 1, height: 1, size: 1 } },
+      { system: 'group-leave' as const, plaintext: '' },
+    ]) {
+      const rows = [reactable(over)]
+      expect(applyReactionByLogicalId(ME, rows, 'L1', '👍', 'add', 1, PEER), JSON.stringify(Object.keys(over))).toBe(rows)
+    }
+  })
+
+  it('refuses a blank emoji or a blank reactor', () => {
+    const rows = [reactable()]
+    expect(applyReactionByLogicalId(ME, rows, 'L1', '', 'add', 1, PEER)).toBe(rows)
+    expect(applyReactionByLogicalId(ME, rows, 'L1', '👍', 'add', 1, '')).toBe(rows)
+  })
+})
+
+describe('isReactableTarget / liveReactionCountBy', () => {
+  it('accepts a text row and refuses payment, media and system rows', () => {
+    expect(isReactableTarget(msg())).toBe(true)
+    expect(isReactableTarget(msg({ payment: { utxoId: 'u' } }))).toBe(false)
+    expect(isReactableTarget(msg({ system: 'group-leave', plaintext: '' }))).toBe(false)
+  })
+
+  it('counts LIVE reactions only, per person', () => {
+    const row = msg({ reactions: [
+      { by: PEER, emoji: '👍', seq: 1, at: 1 },
+      { by: PEER, emoji: '❤️', seq: 2, at: 1, removed: true },
+      { by: OTHER, emoji: '😂', seq: 1, at: 1 },
+    ] })
+    expect(liveReactionCountBy(row, PEER)).toBe(1)
+    expect(liveReactionCountBy(row, OTHER)).toBe(1)
+    expect(liveReactionCountBy(msg(), PEER)).toBe(0)
+  })
+})
+
+describe('nextReactionSeq', () => {
+  it('starts at 1 for a pair never reacted with', () => {
+    expect(nextReactionSeq([reactable()], 'L1', ME, '👍')).toBe(1)
+    expect(nextReactionSeq([], 'L1', ME, '👍')).toBe(1)
+    expect(nextReactionSeq([reactable()], 'unknown', ME, '👍')).toBe(1)
+  })
+
+  it('reads the high-water for THAT pair only', () => {
+    const rows = [reactable({ reactions: [
+      { by: ME, emoji: '👍', seq: 4, at: 1 },
+      { by: PEER, emoji: '👍', seq: 9, at: 1 },
+    ] })]
+    expect(nextReactionSeq(rows, 'L1', ME, '👍')).toBe(5)
+    expect(nextReactionSeq(rows, 'L1', ME, '❤️')).toBe(1)     // a different emoji is a different pair
+  })
+
+  it('counts a TOMBSTONED row — this is why removal keeps it', () => {
+    let rows = react([reactable()], ME, '👍', 'add', 1)
+    rows = react(rows, ME, '👍', 'remove', 2)
+    // If removal deleted the row this would answer 1, every peer still holding seq 2 would reject
+    // the re-add, and the reaction would be silently un-re-addable forever.
+    expect(nextReactionSeq(rows, 'L1', ME, '👍')).toBe(3)
+  })
+
+  it('is STABLE across a retry — a send that failed recomputes the same number', () => {
+    const rows = [reactable()]
+    expect(nextReactionSeq(rows, 'L1', ME, '👍')).toBe(1)
+    expect(nextReactionSeq(rows, 'L1', ME, '👍')).toBe(1)      // send failed, nothing applied, retry
+  })
+})
+
+describe('reactions on group rows', () => {
+  it('applies to the row carrying the shared logical id, from any member', () => {
+    const rows = [msg({ id: 'grp-1', groupId: 'g1', logicalId: 'L1', recipientPubkeyHex: '' })]
+    const next = react(rows, OTHER, '👍', 'add', 1)
+
+    expect(next[0].groupId).toBe('g1')
+    expect(reactionsOf(next)[0].by).toBe(OTHER)
   })
 })
 

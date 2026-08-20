@@ -1,4 +1,4 @@
-import type { CaravelMessage } from './types'
+import type { CaravelMessage, ReactionEntry } from './types'
 
 // Local persistence for messages, sibling to crypto/txHistory.ts. Same shape of problem:
 // localStorage keyed per identity, load on unlock, merge on arrival, clear React state on lock
@@ -211,7 +211,11 @@ export function editReachOk(memberCount: number, membersReached: number): boolea
   return memberCount === 0 || membersReached > 0
 }
 
-// Should an inbound edit be DROPPED because its target belongs to a group I have LEFT? (M4)
+// Should an inbound MUTATION be DROPPED because its target belongs to a group I have LEFT? (M4)
+//
+// Named for the target rather than for the edit because nothing in it is edit-specific: it reads
+// the RECEIVER's own stored row and asks which group that row belongs to. Reactions (reactions v1)
+// call it unchanged, and any future control message that names a logical id can too.
 //
 // The gap this closes was latent until group editing existed: leave/decline are NON-DESTRUCTIVE, so
 // a left group's rows are kept and merely hidden by state — which means an edit naming one would
@@ -227,7 +231,7 @@ export function editReachOk(memberCount: number, membersReached: number): boolea
 //
 // Answers false for a DM, an unknown logical id, and a live group — so the caller can apply, and
 // applyEditByLogicalId's own guards decide the rest.
-export function editTargetsLeftGroup(
+export function targetsLeftGroup(
   current: CaravelMessage[],
   logicalId: string,
   leftGroupIds: ReadonlySet<string>
@@ -236,6 +240,137 @@ export function editTargetsLeftGroup(
   const target = current.find(m => m.logicalId === logicalId)
   if (!target?.groupId) return false
   return leftGroupIds.has(target.groupId)
+}
+
+// ── Emoji reactions (reactions v1) ────────────────────────────────────────────
+
+// How many LIVE reactions one person may hold on one message. Enforced at SEND (so this client
+// never emits a third) and again in the applier below (so a misbehaving peer cannot).
+export const MAX_LIVE_REACTIONS_PER_REACTOR = 2
+
+// Hard ceiling on TOTAL reaction rows per message, tombstoned rows INCLUDED. Removed rows are never
+// deleted (they carry the seq high-water — see ReactionEntry), so without this a peer could cycle
+// through hundreds of distinct emoji and permanently inflate one row in localStorage: each
+// add/remove pair costs a row forever, and MAX_LIVE_REACTIONS_PER_REACTOR bounds only the LIVE set,
+// not the distinct one. 64 is far above any real conversation (a 20-member group where everyone
+// uses their full allowance is 40) and far below anything that hurts. Same class of bound as the
+// length caps on attacker-controlled tag values in nostrMessaging.
+const MAX_REACTION_ROWS = 64
+
+// Which rows may carry reactions AT ALL: text messages only in v1.
+//
+// Checked on RECEIPT as well as at send, and that is the half that matters. Payment and media rows
+// render as PaymentMessageCard / MediaMessageCard, neither of which has anywhere to show a pill, so
+// a reaction naming one would be stored and never seen — quiet, permanent localStorage growth a
+// peer on a richer client could produce without meaning anything by it. Dropping it is the same
+// discipline the extractors follow: ignore what you do not fully understand rather than half-apply.
+export function isReactableTarget(m: CaravelMessage): boolean {
+  return !m.system && !m.payment && !m.media
+}
+
+// LIVE (non-tombstoned) reactions one person holds on one message. The send-side max-2 check and
+// the applier's own cap both count with this, so the two can never disagree about what "two" means.
+export function liveReactionCountBy(m: CaravelMessage, reactorPubkeyHex: string): number {
+  if (!m.reactions) return 0
+  let n = 0
+  for (const r of m.reactions) if (r.by === reactorPubkeyHex && !r.removed) n++
+  return n
+}
+
+// The seq a reaction from `reactorPubkeyHex` with `emoji` should carry: one past whatever has been
+// applied for THAT PAIR. The direct analogue of nextRevision, and derived from stored state for the
+// same reason — a send that failed and is retried recomputes the SAME number instead of drifting.
+//
+// Counts TOMBSTONED rows too, which is the whole point of keeping them: after add(1) → remove(2), a
+// fresh add must be 3. If removal deleted the row this would answer 1, every peer still holding
+// seq 2 would reject it, and the reaction would be silently un-re-addable forever.
+export function nextReactionSeq(current: CaravelMessage[], logicalId: string, reactorPubkeyHex: string, emoji: string): number {
+  const row = current.find(m => m.logicalId === logicalId)
+  const entry = row?.reactions?.find(r => r.by === reactorPubkeyHex && r.emoji === emoji)
+  return (entry?.seq ?? 0) + 1
+}
+
+// Apply an inbound (or locally-committed) reaction, keyed on LOGICAL id — the only name the sender
+// and every recipient agree on, exactly as for edits. There is no by-message-id sibling: applyEdit
+// has one only because M1 shipped store-only before the wire carried a logical id, and reactions
+// have no such history, so every guard lives here in one function.
+//
+// GUARDS, IN ORDER (each returns `current` BY REFERENCE, so a rejected event costs no re-render):
+//   1. seq is a positive safe integer                 — malformed ordering key, unusable
+//   2. the target row exists                          — unknown / deleted / never received
+//   3. the target is reactable                        — text only in v1; see isReactableTarget
+//   4. the per-message row cap                        — only for a NEW pair; see MAX_REACTION_ROWS
+//   5. seq > the stored seq for THIS (by, emoji)      — stale or replayed; the ordering guard
+// then: `add` clears the tombstone, `remove` sets it, and BOTH bump the stored seq.
+//
+// AUTHORSHIP IS DELIBERATELY ABSENT, which is the one substantive divergence from applyEdit. Anyone
+// may react to anyone's message, including in a group where every member knows every logical id.
+// That is safe because `reactorPubkeyHex` comes from the authenticated seal and nowhere else: the
+// (by, emoji) key means an inbound reaction can only ever create or flip the row belonging to its
+// own sender. "Only you can remove your reaction" therefore holds BY CONSTRUCTION — there is no way
+// to address someone else's row — rather than by a check a future edit here could forget to keep.
+//
+// MAX-2 ON THE RECEIVE SIDE IS AN ANTI-ABUSE BOUND, NOT A CONSENSUS RULE. Backfill order is
+// arbitrary (gift wraps fuzz created_at by up to 2 days), so if a misbehaving client emits three
+// live reactions from one person, two devices may keep a different two. A cap-rejected add is
+// stored as a TOMBSTONE rather than dropped, so its seq is still recorded and a later legitimate
+// remove/re-add of that pair orders correctly; what it cannot do is agree with the other device
+// about which two are showing. The sender-side cap is the real one — this is the backstop.
+//
+// KNOWN GAP — ORPHAN REACTIONS (parked). A reaction arriving BEFORE the message it names is
+// silently and permanently lost: guard 2 no-ops, and nothing ever replays it. Identical in shape,
+// cause and cure to the ORPHAN EDITS gap documented on applyEditByLogicalId above — it needs a
+// buffer of unmatched events with its own storage and pruning story, not a line in this function.
+export function applyReactionByLogicalId(
+  pubkeyHex: string,
+  current: CaravelMessage[],
+  logicalId: string,
+  emoji: string,
+  action: 'add' | 'remove',
+  seq: number,
+  reactorPubkeyHex: string
+): CaravelMessage[] {
+  if (!logicalId || !emoji || !reactorPubkeyHex) return current
+  if (!Number.isSafeInteger(seq) || seq <= 0) return current
+
+  const index = current.findIndex(m => m.logicalId === logicalId)
+  if (index === -1) return current                                   // absent, incl. deleted
+  const target = current[index]
+  if (!isReactableTarget(target)) return current
+
+  const rows = target.reactions ?? []
+  const entryIndex = rows.findIndex(r => r.by === reactorPubkeyHex && r.emoji === emoji)
+  // The cap bites only on a NEW pair — an update to a pair already stored adds no row, so refusing
+  // it would freeze the message's existing reactions instead of merely refusing to grow them.
+  if (entryIndex === -1 && rows.length >= MAX_REACTION_ROWS) return current
+
+  const existing = entryIndex === -1 ? undefined : rows[entryIndex]
+  if (existing && seq <= existing.seq) return current                // stale / replayed
+
+  // An `add` beyond the allowance is recorded as a TOMBSTONE, not applied and not dropped: the row
+  // carries the seq forward so this pair stays orderable, while showing nothing. See the note above.
+  let removed = action === 'remove'
+  if (action === 'add') {
+    let live = 0
+    for (let i = 0; i < rows.length; i++) {
+      if (i !== entryIndex && rows[i].by === reactorPubkeyHex && !rows[i].removed) live++
+    }
+    if (live >= MAX_LIVE_REACTIONS_PER_REACTOR) removed = true
+  }
+
+  // `removed` is spread in only when true, so a live row is byte-identical to one written before
+  // any removal existed — the same absent-not-undefined discipline the send path uses for media.
+  const entry: ReactionEntry = { by: reactorPubkeyHex, emoji, seq, at: Date.now(), ...(removed ? { removed: true } : {}) }
+  const nextRows = [...rows]
+  if (entryIndex === -1) nextRows.push(entry)
+  else nextRows[entryIndex] = entry
+
+  // New object, new reactions array AND new outer array — ChatApp memoises deriveConversations on
+  // the array identity, so an in-place write would persist correctly and still show nothing.
+  const next = [...current]
+  next[index] = { ...target, reactions: nextRows }
+  save(pubkeyHex, next)
+  return next
 }
 
 // Delete every message belonging to one peer conversation (M9.0a). Membership matches

@@ -1,8 +1,24 @@
 ONS client — vendored build provenance
 ======================================
 source repo   : ootle-name-service
-source commit : fe72b4fce609e9a0c5c26d964b6ba768d85d2083
-              : (fe72b4f, branch: fix-scan-utxos-offset-loop)
+source commit : ed6ca7204b856551ed69d491e95260ac769e92f6
+              : (ed6ca72, branch: ons-039-redeploy)
 built from    : client/src → client/dist  (tsc -p client/tsconfig.json)
-vendored at   : 2026-08-18T10:48:54Z
+vendored at   : 2026-08-20T20:45:10Z
 tree state    : clean (dist matches the commit above exactly)
+src digest    : 572a31292289c3c7fbf32b7eb3eda796a9016af24164c2fa927155351878f646
+                (sha256 over the sorted sha256s of client/src/*.ts)
+
+Verified at vendoring time: rebuilding client/dist from ed6ca72 reproduces this directory
+byte-for-byte (diff -rq, excluding this file).
+
+This build carries the Ootle 0.39 write-path fixes:
+  - browser-writer.ts / writer.ts : the mandatory max_epoch, tip + 10 epochs. The daemon path
+                                    reads the tip from the indexer, since walletd 0.39.0
+                                    exposes no epoch method.
+  - browser-writer.ts             : fee margin 2% → 25% (measured drift is 2.7%, which a 2%
+                                    margin turns into a hard abort).
+  - ootle-sdk.d.ts                : the stub declared TransactionBuilder's old 1-arg
+                                    constructor, which is why the break was invisible to both
+                                    repos' compilers. Corrected — but the stub is still a
+                                    stub; see the follow-up noted in ed6ca72.

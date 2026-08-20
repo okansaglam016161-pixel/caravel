@@ -4,8 +4,17 @@ export declare class OnsWriter {
     private readonly signer;
     private readonly component;
     private readonly network;
+    private readonly indexerUrl;
     private rpcId;
     constructor(config: OnsConfig, signer: DaemonSigner);
+    /**
+     * `max_epoch` for a transaction built now: the chain tip plus MAX_EPOCH_LEAD.
+     *
+     * Read straight from the indexer with `fetch` rather than through an SDK provider, to keep this
+     * module's dependency surface as it was — it imports two symbols from @tari-project/ootle and
+     * otherwise talks HTTP.
+     */
+    private maxEpoch;
     private jrpc;
     /** Resolve the fee-payer account: its component (fee source) and its seal signer (owner key id). */
     private account;

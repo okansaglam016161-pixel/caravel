@@ -9,9 +9,21 @@ import { createOnsClient, type NameRecord } from '@ootle/name-service'
 import type { SecretKeyWallet } from '@tari-project/ootle-secret-key-wallet'
 import * as nip19 from 'nostr-tools/nip19'
 
-/** The live ONS registry on esmeralda (ONS-2 deployment). */
+/**
+ * The live ONS registry on esmeralda.
+ *
+ * REDEPLOYED for Ootle 0.39. The ONS-2 registry (component_0e70f16a…) and the template behind it
+ * were destroyed by the esmeralda reset — both return 404 — and 0.39 would have required a rebuild
+ * regardless, since `Amount`'s CBOR encoding changed and templates must be rebuilt against the new
+ * `tari_template_lib`. This is the fresh instantiation, on template_66a7034e…, verified live:
+ * register + set_record commit, and a keyless resolve returns the record.
+ *
+ * A REDEPLOY IS A NEW ADDRESS, ALWAYS. Nothing migrates: every name registered against the old
+ * registry is gone with it, and this constant is the only place Caravel learns where the registry
+ * lives — so it must be updated in lockstep with any republish of the template.
+ */
 export const ONS_COMPONENT =
-  'component_0e70f16ad20e1c1b92f035d1e6f4b69c6c4c774ed309c2eb9e2c42c01279994a'
+  'component_fe93e87e362a263ee65d382047b5adcc92c2a1dc08051a770032aefdda45c787'
 
 /** Configured client. Same indexer Caravel already uses for UTXOs; network defaults to Esmeralda. */
 export const ons = createOnsClient({

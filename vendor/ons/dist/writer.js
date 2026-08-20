@@ -9,18 +9,44 @@
 //   It is loaded lazily by `OnsClient.withSigner()`, so read-only consumers never pull it in.
 import { TransactionBuilder, stringLiteral } from "@tari-project/ootle";
 const DEFAULT_NETWORK = 38; // Esmeralda
+const DEFAULT_INDEXER_URL = "https://ootle-indexer-a.tari.com";
 const MAX_FEE = 200000n; // µtTARI ceiling; account-paid fees refund any overcharge
 const WAIT_SECS = 30;
+// Epochs of validity a transaction we build now should carry (Ootle 0.39: `max_epoch` is mandatory
+// and the builder throws without it). Same value as browser-writer.ts and Caravel's crypto/epoch.ts.
+const MAX_EPOCH_LEAD = 10;
 /** ONS writes via a wallet daemon. Obtain one with `createOnsClient(cfg).withSigner(signer)`. */
 export class OnsWriter {
     signer;
     component;
     network;
+    indexerUrl;
     rpcId = 0;
     constructor(config, signer) {
         this.signer = signer;
         this.component = config.component;
         this.network = config.network ?? DEFAULT_NETWORK;
+        // Needed only for the chain-tip read below. The daemon exposes no epoch method (checked against
+        // walletd 0.39.0), so `max_epoch` has to come from the indexer even on the daemon-signed path.
+        this.indexerUrl = (config.indexerUrl ?? DEFAULT_INDEXER_URL).replace(/\/+$/, "");
+    }
+    /**
+     * `max_epoch` for a transaction built now: the chain tip plus MAX_EPOCH_LEAD.
+     *
+     * Read straight from the indexer with `fetch` rather than through an SDK provider, to keep this
+     * module's dependency surface as it was — it imports two symbols from @tari-project/ootle and
+     * otherwise talks HTTP.
+     */
+    async maxEpoch() {
+        const resp = await fetch(`${this.indexerUrl}/epoch-manager/stats`);
+        if (!resp.ok)
+            throw new Error(`ONS: could not read the chain tip for max_epoch (indexer HTTP ${resp.status})`);
+        const body = (await resp.json());
+        const current = Number(body?.current_epoch);
+        if (!Number.isSafeInteger(current) || current < 0) {
+            throw new Error(`ONS: indexer returned an unusable current_epoch (${String(body?.current_epoch)})`);
+        }
+        return current + MAX_EPOCH_LEAD;
     }
     async jrpc(method, params) {
         const resp = await fetch(this.signer.url, {
@@ -40,7 +66,7 @@ export class OnsWriter {
     }
     async call(methodName, args) {
         const acct = await this.account();
-        const built = new TransactionBuilder(this.network)
+        const built = new TransactionBuilder(this.network, await this.maxEpoch())
             .feeTransactionPayFromComponent(acct.component, MAX_FEE)
             .callMethod({ componentAddress: this.component, methodName }, args)
             .buildUnsignedTransaction();
@@ -52,7 +78,8 @@ export class OnsWriter {
                     instructions: built.instructions ?? [],
                     inputs: built.inputs ?? [],
                     min_epoch: built.min_epoch ?? null,
-                    max_epoch: built.max_epoch ?? null,
+                    // 0.39: always a real value now — the builder cannot be constructed without one.
+                    max_epoch: built.max_epoch,
                     is_seal_signer_authorized: true,
                     dry_run: false,
                     blobs: built.blobs ?? [],

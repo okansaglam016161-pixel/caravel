@@ -19,7 +19,8 @@
     /* The Tari SDK resolves from node_modules like any dependency (0.39 bump — see vite.config.ts).
        Only the ONS client is still Vite-aliased to a vendored dist. */
     "paths": {
-      "@ootle/name-service": ["./vendor/ons/dist/index.d.ts"]
+      "@ootle/name-service": ["./vendor/ons/dist/index.d.ts"],
+      "tari-cipherseed": ["./vendor/tari-cipherseed/src/index.ts"]
     },
 
     /* Linting */

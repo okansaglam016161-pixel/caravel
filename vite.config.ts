@@ -24,6 +24,10 @@ const V = (p: string) => path.join(ROOT, 'vendor', p)
 // the vendored dists are gone and there is nothing left to keep in sync by hand.
 //
 // The ONS client stays vendored — see vendor/README.md; it is our own unpublished package.
+//
+// tari-cipherseed is vendored too, but as SOURCE rather than a built dist: it derives the keys
+// that control funds, so the reviewed bytes belong in-tree where every future diff re-exposes
+// them. See vendor/tari-cipherseed/README.md for the pinned version and re-vendor procedure.
 export default defineConfig({
   plugins: [wasm(), react()],
   build: {
@@ -37,6 +41,7 @@ export default defineConfig({
   resolve: {
     alias: {
       '@ootle/name-service': V('ons/dist/index.js'),
+      'tari-cipherseed': V('tari-cipherseed/src/index.ts'),
     },
   },
 })

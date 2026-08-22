@@ -20,6 +20,17 @@ tari.js has since published `0.3.0` on `ootle-wasm ^0.39.0`, which is exactly th
 0.39 requires. The reason to vendor is gone, so the dists are gone with it — one fewer thing to
 keep in sync by hand, and `npm install` now gets the same code the rest of the ecosystem runs.
 
+## `tari-cipherseed/` — Tari CipherSeed format + account-key derivation (SOURCE, not a dist)
+
+The one entry here that is **not** a pre-built dist. `tari-cipherseed` derives the keys that
+control funds, so it is vendored as readable source with the reviewed bytes in-tree, pinned to
+version 0.2.0 at commit `a3f3b40`. It is an unofficial, single-maintainer package, adopted only
+after a live byte-for-byte round-trip against the official `tari_ootle_walletd`.
+
+See `tari-cipherseed/README.md` for full provenance, what was verified, and the re-vendor
+procedure. Resolved by the `tari-cipherseed` alias in `vite.config.ts`, `tsconfig.app.json` **and**
+`vitest.config.ts` — all three must agree.
+
 ## `ons/` — Ootle Name Service client (unpublished)
 
 `@ootle/name-service` — our own client (source repo not yet published). Caravel imports only

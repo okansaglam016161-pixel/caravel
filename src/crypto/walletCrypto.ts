@@ -66,7 +66,18 @@ async function deriveKey(password: string, salt: Uint8Array, iterations: number)
   )
 }
 
-export async function encryptMnemonic(mnemonic: string, password: string): Promise<StoredWallet> {
+/**
+ * `scheme` is REQUIRED, and is returned as part of the same record as the ciphertext it describes —
+ * not attached afterwards by the caller. A phrase and the knowledge of how to derive from it are
+ * useless apart: a record that reached storage with the ciphertext but without the marker would be
+ * read back as a legacy BIP-39 wallet and silently open the wrong one. Building them together makes
+ * that state unrepresentable rather than merely unlikely.
+ */
+export async function encryptMnemonic(
+  mnemonic: string,
+  password: string,
+  scheme: DerivationScheme,
+): Promise<StoredWallet> {
   const salt = crypto.getRandomValues(new Uint8Array(16))
   const iv = crypto.getRandomValues(new Uint8Array(12))
   const key = await deriveKey(password, salt, KDF_ITERATIONS)
@@ -82,6 +93,7 @@ export async function encryptMnemonic(mnemonic: string, password: string): Promi
     salt: b64Encode(salt),
     iv: b64Encode(iv),
     ciphertext: b64Encode(new Uint8Array(cipherBuf)),
+    scheme,
   }
 }
 
@@ -144,14 +156,45 @@ export function hasStoredWallet(): boolean {
   return localStorage.getItem(STORAGE_KEY) !== null
 }
 
+/** The envelope versions this build knows how to open. */
+const SUPPORTED_VERSIONS = [1]
+
+/**
+ * Returns null when there is no wallet, and THROWS when there is one this build cannot safely open
+ * — a record written by a newer Caravel, or one that has been corrupted.
+ *
+ * The distinction matters. Returning null for an unreadable-but-present record would look exactly
+ * like "no wallet here" and send the user to the create screen, where making a new wallet would
+ * overwrite the record they could not open. Failing loudly keeps the bytes on disk and gives them
+ * something to act on.
+ */
 export function loadStoredWallet(): StoredWallet | null {
   const raw = localStorage.getItem(STORAGE_KEY)
   if (!raw) return null
+
+  let parsed: unknown
   try {
-    return JSON.parse(raw) as StoredWallet
+    parsed = JSON.parse(raw)
   } catch {
-    return null
+    throw new Error('Your saved wallet on this device is unreadable. Restore from your recovery phrase.')
   }
+
+  const stored = parsed as StoredWallet
+  if (!SUPPORTED_VERSIONS.includes(stored?.version)) {
+    throw new Error(
+      `This wallet was saved by a newer version of Caravel (format ${String(stored?.version)}). Update Caravel, or restore from your recovery phrase.`,
+    )
+  }
+  return stored
+}
+
+/**
+ * Adds a resolved derivation marker to a record that predates the field, leaving the ciphertext and
+ * every other field exactly as they are. Used only by the self-heal path in resolveScheme(); it
+ * re-labels an existing record and never re-encrypts, so it cannot disturb a working wallet.
+ */
+export function markScheme(stored: StoredWallet, scheme: DerivationScheme): StoredWallet {
+  return { ...stored, scheme }
 }
 
 export function saveStoredWallet(stored: StoredWallet): void {

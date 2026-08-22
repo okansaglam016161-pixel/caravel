@@ -17,12 +17,13 @@ const QUIZ_POSITIONS = [5, 12, 20]
 
 // ── Step 1: Welcome ──────────────────────────────────────────────────────────
 
-function Welcome({ onCreate, onRestore }: { onCreate: () => void; onRestore: () => void }) {
+function Welcome({ onCreate, onRestore, genError }: { onCreate: () => void; onRestore: () => void; genError?: string }) {
   return (
     <div style={entryCard({ padding: '34px 26px 26px', border: '1px solid rgba(var(--border-rgb),0.16)', textAlign: 'center' })}>
       <div style={{ marginBottom: 18 }}><Logo size={46} flat /></div>
       <div style={{ fontSize: 24, fontWeight: 800, color: 'var(--text-primary)', letterSpacing: '-0.02em', marginBottom: 10 }}>Create your Caravel wallet</div>
       <div style={{ fontSize: 14, color: 'var(--text-muted)', lineHeight: 1.6, marginBottom: 24 }}>Your keys are generated here in your browser and never leave this device. We hold nothing.</div>
+      {genError && <div style={{ fontSize: 12, color: 'var(--danger-300)', marginBottom: 12 }}>{genError}</div>}
       <button onClick={onCreate} style={{ ...primaryBtn, padding: 14, fontSize: 15, marginBottom: 16 }}>Create wallet</button>
       <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>
         I already have a wallet. <span onClick={onRestore} style={{ color: 'var(--teal-500)', fontWeight: 600, cursor: 'pointer' }}>Restore from recovery phrase</span>
@@ -135,7 +136,7 @@ function SetPassword({ mnemonic }: { mnemonic: string }) {
     }
   }
 
-  if (loading) return <CryptoBusy title="Encrypting your wallet on this device" reassurance="This takes a moment. We deliberately make the key slow to derive, so a stolen file is hard to crack." />
+  if (loading) return <CryptoBusy title="Encrypting your wallet on this device" reassurance="Deriving your keys and locking the phrase behind your password. Both are deliberately slow, so a stolen file is hard to crack." />
 
   return (
     <div style={entryCard({ padding: 22, border: '1px solid rgba(var(--border-rgb),0.16)' })}>
@@ -158,14 +159,35 @@ function SetPassword({ mnemonic }: { mnemonic: string }) {
 // ── Root ─────────────────────────────────────────────────────────────────────
 
 export default function CreateWallet() {
-  const { generateMnemonic } = useWallet()
+  const { createRecoveryPhrase } = useWallet()
   const [mode, setMode] = useState<'create' | 'restore'>('create')
   const [step, setStep] = useState(1)
   const [mnemonic, setMnemonic] = useState<string[]>([])
+  // Generating a CipherSeed phrase runs Argon2d, so the words no longer exist synchronously — step 2
+  // cannot render until this resolves. Short (tens of ms on a laptop) but not free, and on a slow
+  // phone it is long enough that an unacknowledged tap would read as a dead button.
+  const [generating, setGenerating] = useState(false)
+  const [genError, setGenError] = useState('')
 
-  function startCreate() {
-    setMnemonic(generateMnemonic().split(' '))
-    setStep(2)
+  async function startCreate() {
+    setGenError('')
+    setGenerating(true)
+    try {
+      setMnemonic((await createRecoveryPhrase()).split(' '))
+      setStep(2)
+    } catch (e) {
+      setGenError(e instanceof Error ? e.message : 'Could not create a recovery phrase. Please try again.')
+    } finally {
+      setGenerating(false)
+    }
+  }
+
+  if (generating) {
+    return (
+      <div style={pageShell}>
+        <CryptoBusy title="Creating your recovery phrase" reassurance="Generating the 24 words that back up your wallet and your messages." />
+      </div>
+    )
   }
 
   return (
@@ -173,7 +195,7 @@ export default function CreateWallet() {
       {mode === 'restore'
         ? <RestoreFlow onBack={() => { setMode('create'); setStep(1) }} />
         : <>
-            {step === 1 && <Welcome onCreate={startCreate} onRestore={() => setMode('restore')} />}
+            {step === 1 && <Welcome onCreate={startCreate} onRestore={() => setMode('restore')} genError={genError} />}
             {step === 2 && <SeedReveal words={mnemonic} onNext={() => setStep(3)} />}
             {step === 3 && <SeedConfirm words={mnemonic} onBack={() => setStep(2)} onNext={() => setStep(4)} />}
             {step === 4 && <SetPassword mnemonic={mnemonic.join(' ')} />}

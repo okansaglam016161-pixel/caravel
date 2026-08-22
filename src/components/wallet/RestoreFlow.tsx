@@ -11,11 +11,12 @@
 import { useState } from 'react'
 import { useWallet } from '../../context/WalletContext'
 import { validateMnemonicDetail, type MnemonicDetail } from '../../crypto/walletCrypto'
+import { detectScheme, type DerivationScheme } from '../../crypto/derivation'
 import { CryptoBusy } from '../primitives'
 import PasswordField from './PasswordField'
 import { MONO, entryCard, primaryBtn, disabledBtn, secondaryBtn, backBtn } from './entryStyles'
 
-type Step = 'phrase' | 'badphrase' | 'password' | 'restoring'
+type Step = 'phrase' | 'badphrase' | 'ambiguous' | 'password' | 'restoring'
 
 export default function RestoreFlow({ onBack }: { onBack: () => void }) {
   const { restore } = useWallet()
@@ -27,6 +28,9 @@ export default function RestoreFlow({ onBack }: { onBack: () => void }) {
   const [confirm, setConfirm] = useState('')
   const [step, setStep] = useState<Step>('phrase')
   const [error, setError] = useState('')
+  // Which derivation the typed phrase belongs to. Established once, here, before any password is
+  // set — and carried through to restore() rather than being re-derived deeper in the stack.
+  const [scheme, setScheme] = useState<DerivationScheme | null>(null)
 
   function setWord(i: number, val: string) {
     setPhraseInputs(prev => prev.map((w, j) => (j === i ? val.trim().toLowerCase() : w)))
@@ -47,19 +51,41 @@ export default function RestoreFlow({ onBack }: { onBack: () => void }) {
   const allWordsFilled = phraseInputs.every(w => w.length > 0)
   const canSubmit = pass.length >= 8 && pass === confirm
 
+  // A restored phrase can be either format: Tari's CipherSeed (what Caravel issues now, and what an
+  // official Tari wallet exports) or the legacy BIP-39 an older Caravel wallet was created with.
+  // Both are 24 words from the same wordlist, so the format is established structurally.
   function checkPhrase() {
-    const d = validateMnemonicDetail(phraseInputs.join(' '))
-    if (d.valid) { setDetail(null); setStep('password') }
-    else { setDetail(d); setStep('badphrase') }
+    const phrase = phraseInputs.join(' ')
+    const detected = detectScheme(phrase)
+
+    if (detected === 'cipherseed' || detected === 'bip39') {
+      setScheme(detected)
+      setDetail(null)
+      setStep('password')
+      return
+    }
+    if (detected === 'ambiguous') {
+      // Should never happen (~2^-40). Asked rather than guessed, because with funds involved the
+      // difference between "cannot happen" and "we picked one for you" is the whole point.
+      setDetail(null)
+      setStep('ambiguous')
+      return
+    }
+    // Invalid. validateMnemonicDetail still gives the best available explanation: the wordlist is
+    // shared by both formats, so a word that isn't in it is nameable either way. Only the checksum
+    // wording had to stop being BIP-39-specific.
+    setDetail(validateMnemonicDetail(phrase))
+    setStep('badphrase')
   }
 
   async function submit() {
     if (pass.length < 8) { setError('Password must be at least 8 characters.'); return }
     if (pass !== confirm) { setError("Passwords don't match."); return }
+    if (!scheme) { setError('Check your recovery phrase again.'); setStep('phrase'); return }
     setError('')
     setStep('restoring')
     try {
-      await restore(phraseInputs.join(' '), pass)
+      await restore(phraseInputs.join(' '), pass, scheme)
       // On success the context sets `wallet` → AppRoute swaps to ChatApp → this unmounts.
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Something went wrong.')
@@ -70,6 +96,29 @@ export default function RestoreFlow({ onBack }: { onBack: () => void }) {
   // ── Restoring busy ──────────────────────────────────────────────────────────
   if (step === 'restoring') {
     return <CryptoBusy title="Restoring your wallet" reassurance="Rebuilding your keys from the phrase and encrypting them here. This takes a moment." />
+  }
+
+  // ── Ambiguous phrase ──────────────────────────────────────────────────────────
+  // Reachable only if a phrase satisfies BOTH formats' integrity checks — a coincidence on the
+  // order of one in a trillion. It exists so that outcome is a question with two clear answers
+  // rather than an undefined path through fund-critical code.
+  if (step === 'ambiguous') {
+    const choose = (s: DerivationScheme) => { setScheme(s); setStep('password') }
+    return (
+      <div style={entryCard({ padding: 22, border: '1px solid rgba(var(--warn-rgb),0.3)' })}>
+        <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--text-primary)', marginBottom: 6 }}>Which wallet is this?</div>
+        <div style={{ fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.55, marginBottom: 18 }}>
+          This phrase is valid in both recovery-phrase formats, which is extraordinarily rare. Pick
+          the one it came from — choosing wrong opens a different, empty wallet, so if you aren’t
+          sure, go back and check your written copy first.
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 16 }}>
+          <button onClick={() => choose('cipherseed')} style={{ ...primaryBtn, padding: 13 }}>A Tari wallet, or a newer Caravel wallet</button>
+          <button onClick={() => choose('bip39')} style={{ ...secondaryBtn, padding: 13, textAlign: 'center' }}>An older Caravel wallet</button>
+        </div>
+        <div onClick={() => { setStep('phrase'); setScheme(null) }} style={{ ...backBtn, textAlign: 'center' }}>Back</div>
+      </div>
+    )
   }
 
   // ── Bad phrase ────────────────────────────────────────────────────────────────
@@ -87,7 +136,7 @@ export default function RestoreFlow({ onBack }: { onBack: () => void }) {
             <div style={{ fontSize: 12, color: 'var(--text-body-dim)', lineHeight: 1.5 }}>
               {isWordlist
                 ? `Word #${detail.index} “${detail.word}” isn’t in the wordlist. Check your written copy.`
-                : 'Every word is in the list, but the 24-word checksum doesn’t match. Check the order and your written copy.'}
+                : 'Every word is in the list, but the phrase doesn’t check out. Check the order and your written copy.'}
             </div>
           </div>
         </div>

@@ -1,16 +1,20 @@
 import { createContext, useContext, useState, useCallback, useRef, useEffect, type ReactNode, type Dispatch, type SetStateAction } from 'react'
 import { type SecretKeyWallet } from '@tari-project/ootle-secret-key-wallet'
 import {
-  createMnemonic,
-  seedFromMnemonic,
-  walletFromSeed,
   encryptMnemonic,
   decryptMnemonic,
   hasStoredWallet,
   loadStoredWallet,
+  markScheme,
   saveStoredWallet,
 } from '../crypto/walletCrypto'
-import { deriveNostrKeyFromSeed } from '../crypto/nostrCrypto'
+import {
+  type DerivationScheme,
+  type WalletIdentity,
+  deriveIdentity,
+  resolveScheme,
+} from '../crypto/derivation'
+import { createWalletSeed } from 'tari-cipherseed'
 import { scanWallet, type ScannedUtxo, type ScanProgress } from '../crypto/walletScanner'
 import { loadHistory, addSent, type SentEntry, type NewSentParams } from '../crypto/txHistory'
 import { NostrMessagingProvider } from '../messaging/NostrMessagingProvider'
@@ -86,14 +90,20 @@ export interface WalletCtx {
   nostrPubkeyHex: string | null
   scan: ScanState
   txHistory: SentEntry[]
-  /** Generate a fresh BIP-39 mnemonic (sync, call before showing step 2). */
-  generateMnemonic: () => string
-  /** Encrypt mnemonic with password, save to localStorage, unlock in memory. */
+  /**
+   * Generate a fresh 24-word Tari CipherSeed recovery phrase, for a new wallet.
+   * ASYNC — enciphering runs Argon2d, so show a busy state over it.
+   */
+  createRecoveryPhrase: () => Promise<string>
+  /** Encrypt phrase with password, save to localStorage, unlock in memory. Always CipherSeed. */
   createWallet: (mnemonic: string, password: string) => Promise<void>
-  /** Decrypt stored wallet with password, load into memory. */
+  /** Decrypt stored wallet with password, load into memory. Scheme comes from the stored marker. */
   unlock: (password: string) => Promise<void>
-  /** Overwrite stored wallet from an existing phrase + new password, then unlock. */
-  restore: (mnemonic: string, password: string) => Promise<void>
+  /**
+   * Overwrite stored wallet from an existing phrase + new password, then unlock.
+   * `scheme` must come from detectScheme() in the restore UI — see restore() for why.
+   */
+  restore: (mnemonic: string, password: string, scheme: DerivationScheme) => Promise<void>
   /** Clear wallet from memory (wallet remains in localStorage; returns to unlock screen). */
   lock: () => void
   /** Decrypt and return the stored mnemonic — requires the user's password. */
@@ -285,7 +295,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     startScan(w)
   }, [startScan])
 
-  const generateMnemonic = useCallback(() => createMnemonic(), [])
+  // Async now: CipherSeed encipherment runs Argon2d before the words exist. Callers show a busy
+  // state over it — the phrase-reveal screen cannot render until this resolves.
+  const createRecoveryPhrase = useCallback(async () => (await createWalletSeed()).mnemonic, [])
 
   // Tears down any existing provider, starts a new one with the given identity, and
   // wires status + message callbacks into React state. Returns immediately — relay
@@ -473,47 +485,49 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     )
   }, [])
 
-  const createWallet = useCallback(async (mnemonic: string, password: string) => {
-    const stored = await encryptMnemonic(mnemonic, password)
-    saveStoredWallet(stored)
-    setWalletExists(true)
-    const seed = await seedFromMnemonic(mnemonic)
-    const nostr = deriveNostrKeyFromSeed(seed)
+  // The one place a derived identity becomes the live session. All three entry points below
+  // (create, unlock, restore) differ only in where the phrase came from and how its scheme was
+  // established; from here on they are identical, so they share this.
+  const adoptIdentity = useCallback(async (identity: WalletIdentity) => {
+    const { wallet: w, nostr } = identity
     nostrSecretKeyRef.current = nostr.privateKeyHex
     setNostrNpub(nostr.npub)
     setNostrPubkeyHex(nostr.publicKeyHex)
-    const w = await walletFromSeed(seed)
     await materialize(w)
     startMessaging(nostr.privateKeyHex, nostr.publicKeyHex)
   }, [materialize, startMessaging])
+
+  // New wallets are always CipherSeed — Tari's own format, importable by official Tari wallets.
+  const createWallet = useCallback(async (mnemonic: string, password: string) => {
+    saveStoredWallet(await encryptMnemonic(mnemonic, password, 'cipherseed'))
+    setWalletExists(true)
+    await adoptIdentity(await deriveIdentity(mnemonic, 'cipherseed'))
+  }, [adoptIdentity])
 
   const unlock = useCallback(async (password: string) => {
     const stored = loadStoredWallet()
     if (!stored) throw new Error('No wallet stored')
     const mnemonic = await decryptMnemonic(stored, password)
-    const seed = await seedFromMnemonic(mnemonic)
-    const nostr = deriveNostrKeyFromSeed(seed)
-    nostrSecretKeyRef.current = nostr.privateKeyHex
-    setNostrNpub(nostr.npub)
-    setNostrPubkeyHex(nostr.publicKeyHex)
-    const w = await walletFromSeed(seed)
-    await materialize(w)
-    startMessaging(nostr.privateKeyHex, nostr.publicKeyHex)
-  }, [materialize, startMessaging])
 
-  const restore = useCallback(async (mnemonic: string, password: string) => {
-    const stored = await encryptMnemonic(mnemonic, password)
-    saveStoredWallet(stored)
+    // Trusted lookup, not detection: we wrote this record, so we read what we recorded. An existing
+    // BIP-39 wallet therefore never touches the CipherSeed path and pays none of its cost.
+    const { scheme, markerWasMissing } = resolveScheme(stored, mnemonic)
+    if (markerWasMissing) saveStoredWallet(markScheme(stored, scheme))
+
+    await adoptIdentity(await deriveIdentity(mnemonic, scheme))
+  }, [adoptIdentity])
+
+  // `scheme` comes from the restore UI, which detects it from the phrase and — in the vanishingly
+  // rare ambiguous case — has the user confirm. It is passed in rather than re-derived here so the
+  // decision is made once, in front of the person who knows which wallet they meant.
+  const restore = useCallback(async (mnemonic: string, password: string, scheme: DerivationScheme) => {
+    // Derive BEFORE overwriting storage: restore replaces the stored wallet outright, so a phrase
+    // that fails to derive must not be allowed to destroy the record it was going to replace.
+    const identity = await deriveIdentity(mnemonic, scheme)
+    saveStoredWallet(await encryptMnemonic(mnemonic, password, scheme))
     setWalletExists(true)
-    const seed = await seedFromMnemonic(mnemonic)
-    const nostr = deriveNostrKeyFromSeed(seed)
-    nostrSecretKeyRef.current = nostr.privateKeyHex
-    setNostrNpub(nostr.npub)
-    setNostrPubkeyHex(nostr.publicKeyHex)
-    const w = await walletFromSeed(seed)
-    await materialize(w)
-    startMessaging(nostr.privateKeyHex, nostr.publicKeyHex)
-  }, [materialize, startMessaging])
+    await adoptIdentity(identity)
+  }, [adoptIdentity])
 
   const lock = useCallback(() => {
     scanAbortRef.current?.abort()
@@ -900,7 +914,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     <Ctx.Provider value={{
       walletExists, wallet, address, nostrNpub, nostrPubkeyHex, scan, txHistory,
       messagingStatus, messages,
-      generateMnemonic, createWallet, unlock, restore, lock, getMnemonic, rescan, recordSent,
+      createRecoveryPhrase, createWallet, unlock, restore, lock, getMnemonic, rescan, recordSent,
       recordSentMessage, contacts, acceptContact, contactAddresses, setManualTariAddress,
       deleteConversation, editMessage, reactMessage, createMessagingProvider, getRelayStates, reconnectAll,
       balanceHidden, setBalanceHidden,

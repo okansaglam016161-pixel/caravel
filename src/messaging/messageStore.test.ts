@@ -4,7 +4,7 @@
 
 import { beforeEach, describe, expect, it } from 'vitest'
 import { addReceivedMessage, addSentMessage, applyEdit, applyEditByLogicalId, applyReactionByLogicalId, editReachOk, targetsLeftGroup, findByLogicalId, isReactableTarget, liveReactionCountBy, loadMessages, nextReactionSeq, nextRevision } from './messageStore'
-import type { CaravelMessage } from './types'
+import { sortKey, type CaravelMessage } from './types'
 
 // messageStore persists through localStorage, which does not exist under Vitest's node
 // environment. A tiny in-memory Storage keeps the dependency footprint at one package (no jsdom)
@@ -186,6 +186,89 @@ describe('addReceivedMessage — self-echo suppressor after an edit', () => {
     const kept = addReceivedMessage(ME, stored, other)
     expect(kept).toHaveLength(2)
     expect(kept[0].direction).toBe('sent')
+  })
+})
+
+
+describe('addReceivedMessage — self-echo across send time and arrival', () => {
+  // Before send-time display, an inbound row's `timestamp` was our DECRYPT time, so the window below
+  // compared our send clock against our sign-in clock: an echo that queued while we were signed out
+  // fell far outside it and landed as a duplicate 'from another device' row. Both sides of the
+  // comparison are now the SENDER's clock, which is what makes these cases hold.
+  //
+  // The suppressor is keyed on `timestamp`, and must stay that way whatever the sort basis is doing:
+  // send time is the only value a local row and its echo SHARE. Arrival is not — the local row is
+  // stamped when we sent, the echo whenever it happens to find its way back.
+
+  const SENT_AT = 1_700_000_000_700    // 12:04:00.700 — our clock when we pressed send
+  const SIGN_IN = 1_700_002_400_000    // 12:44 — 40 minutes later, when the backfill decrypts
+
+  // The local 'sent' row exactly as sendMessage writes it: one instant in both fields.
+  const localSend = msg({ id: 'evt-local', plaintext: 'hello', timestamp: SENT_AT, receivedAt: SENT_AT })
+
+  // An inbound self-copy as the provider builds it: `timestamp` is the sender's claimed send time
+  // (that sender being us, on some device), `receivedAt` is when we actually decrypted it.
+  function echo(over: Partial<CaravelMessage> = {}): CaravelMessage {
+    return msg({
+      id: 'evt-echo',
+      senderPubkeyHex: ME,
+      recipientPubkeyHex: '',        // unwrapMessage does not expose the rumor's p-tag
+      plaintext: 'hello',
+      timestamp: SENT_AT,
+      receivedAt: SIGN_IN,
+      direction: 'received',
+      ...over,
+    })
+  }
+
+  it('suppresses an echo claiming the exact instant of the local send', () => {
+    const stored = addSentMessage(ME, [], localSend)
+    const next = addReceivedMessage(ME, stored, echo())
+
+    expect(next).toBe(stored)             // same reference — suppressed, so React skips the re-render
+    expect(next).toHaveLength(1)
+    // The surviving row keeps OUR send instant, not the moment the echo turned up 40 minutes later.
+    expect(next[0].timestamp).toBe(SENT_AT)
+  })
+
+  it('suppresses an echo offset by whole-second rounding, in either direction', () => {
+    // wrapMessage stamps Math.round(Date.now() / 1000), so an echo's claim is the local send rounded
+    // to the NEAREST second — up to ~500ms away from it, and free to round either way.
+    const stored = addSentMessage(ME, [], localSend)
+
+    const rounded = Math.round(SENT_AT / 1000) * 1000    // 12:04:01.000, i.e. 300ms ahead of the send
+    expect(rounded - SENT_AT).toBe(300)
+    expect(addReceivedMessage(ME, stored, echo({ timestamp: rounded }))).toBe(stored)
+
+    // The worst case each way, pinned explicitly so a narrower window would have to fail here.
+    expect(addReceivedMessage(ME, stored, echo({ timestamp: SENT_AT + 500 }))).toBe(stored)
+    expect(addReceivedMessage(ME, stored, echo({ timestamp: SENT_AT - 500 }))).toBe(stored)
+  })
+
+  it('keeps a genuine other-device message that merely shares an arrival time', () => {
+    // Signing in after an offline stretch decrypts a whole backfill at once, so unrelated
+    // self-authored messages land at the SAME arrival instant. Arrival therefore cannot be what
+    // decides an echo.
+    //
+    // Same text as the desktop send, deliberately: content alone cannot tell these two apart, so the
+    // send times are the only thing that can. A suppressor keyed on receivedAt would see two
+    // identical-looking rows arriving together and silently swallow the phone's message.
+    const stored = addSentMessage(ME, [], localSend)
+
+    const PHONE_SENT_AT = SENT_AT + 26 * 60 * 1000       // sent from my phone, well past the window
+    const fromPhone = echo({ id: 'evt-phone', timestamp: PHONE_SENT_AT })
+
+    expect(fromPhone.receivedAt).toBe(echo().receivedAt) // the shared arrival instant...
+    expect(addReceivedMessage(ME, stored, echo())).toBe(stored)   // ...yet only the echo is suppressed
+
+    const kept = addReceivedMessage(ME, stored, fromPhone)
+    expect(kept).toHaveLength(2)
+    const row = kept[0]
+    expect(row.id).toBe('evt-phone')
+    expect(row.direction).toBe('sent')          // flipped, so it renders on our own side
+    expect(row.timestamp).toBe(PHONE_SENT_AT)   // labelled with the phone's send time...
+    expect(sortKey(row)).toBe(PHONE_SENT_AT)    // ...and ordered by it, so the two cannot disagree
+    expect(row.receivedAt).toBe(SIGN_IN)        // arrival is kept, but only as compareMessages' tiebreak
   })
 })
 

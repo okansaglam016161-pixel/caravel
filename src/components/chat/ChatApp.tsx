@@ -5,7 +5,7 @@ import Logo from '../primitives/Logo'
 import { useWallet } from '../../context/WalletContext'
 import WalletModal from '../wallet/WalletModal'
 import ProfilePanel from '../wallet/ProfilePanel'
-import type { CaravelMessage, Group } from '../../messaging/types'
+import { compareMessages, sortKey, type CaravelMessage, type Group } from '../../messaging/types'
 import GroupThread from './GroupThread'
 import CreateGroupModal, { type GroupContactOption } from './CreateGroupModal'
 import ReinviteModal, { type ReinviteMemberOption } from './ReinviteModal'
@@ -62,9 +62,11 @@ function deriveConversations(messages: CaravelMessage[]): Conversation[] {
   }
   const convos: Conversation[] = []
   for (const [peerHex, msgs] of byPeer) {
-    const sorted = [...msgs].sort((a, b) => a.timestamp - b.timestamp)
+    // Ordered by CLAMPED SEND TIME — the same value each bubble displays — with compareMessages'
+    // tiebreak keeping a same-second burst in one fixed order across renders.
+    const sorted = [...msgs].sort(compareMessages)
     const lastMessage = sorted[sorted.length - 1]
-    convos.push({ peerHex, messages: sorted, lastMessage, lastActivity: lastMessage.timestamp })
+    convos.push({ peerHex, messages: sorted, lastMessage, lastActivity: sortKey(lastMessage) })
   }
   // Most recent activity first.
   convos.sort((a, b) => b.lastActivity - a.lastActivity)
@@ -375,7 +377,7 @@ export default function ChatApp() {
   // ── Groups (Phase 1) — a parallel selection path; DM logic above is untouched ──
   const selectedGroup: Group | null = selectedGroupId ? (groups.find(g => g.id === selectedGroupId) ?? null) : null
   const groupMessages = useMemo(
-    () => (selectedGroupId ? messages.filter(m => m.groupId === selectedGroupId).sort((a, b) => a.timestamp - b.timestamp) : []),
+    () => (selectedGroupId ? messages.filter(m => m.groupId === selectedGroupId).sort(compareMessages) : []),
     [messages, selectedGroupId]
   )
   // Sidebar group rows, split by invite state (A-M2). Only ACTIVE groups render as open-thread
@@ -389,9 +391,11 @@ export default function ChatApp() {
         // Preview text comes from PROSE only: a system notice (B-M2) has empty plaintext and would
         // render as a blank preview. It still counts for lastActivity, so a leave re-sorts the row.
         const prose = gmsgs.filter(m => !m.system)
-        const lastMessage = prose.length ? prose.reduce((a, b) => (a.timestamp > b.timestamp ? a : b)) : null
-        const newest = gmsgs.length ? gmsgs.reduce((a, b) => (a.timestamp > b.timestamp ? a : b)) : null
-        return { group: g, lastMessage, lastActivity: newest ? newest.timestamp : g.createdAt }
+        // Same rule as the DM list above, via the same comparator — so "newest" cannot mean one
+        // thing in the thread and another in the sidebar row summarising it.
+        const lastMessage = prose.length ? prose.reduce((a, b) => (compareMessages(a, b) > 0 ? a : b)) : null
+        const newest = gmsgs.length ? gmsgs.reduce((a, b) => (compareMessages(a, b) > 0 ? a : b)) : null
+        return { group: g, lastMessage, lastActivity: newest ? sortKey(newest) : g.createdAt }
       })
       .sort((a, b) => b.lastActivity - a.lastActivity)
   }, [groups, messages])
@@ -515,7 +519,11 @@ export default function ChatApp() {
     if (!g) return []
     const gmsgs = messages.filter(m => m.groupId === g.id)
     const newestBy = (hex: string, pick: (m: CaravelMessage) => boolean) =>
-      gmsgs.reduce((acc, m) => (m.senderPubkeyHex === hex && pick(m) && m.timestamp > acc ? m.timestamp : acc), 0)
+      // A high-water NUMBER rather than a message, so this takes sortKey and not the comparator.
+      // Note what it now rests on: a leave notice is stamped on OUR clock, an ordinary message on
+      // the SENDER's, and this compares the two. A member who back-dates therefore reads as not
+      // having spoken since leaving — bounded by nothing, since the clamp only caps the future.
+      gmsgs.reduce((acc, m) => (m.senderPubkeyHex === hex && pick(m) && sortKey(m) > acc ? sortKey(m) : acc), 0)
     return g.members
       .filter(hex => hex && hex !== nostrPubkeyHex)
       .map(hex => {

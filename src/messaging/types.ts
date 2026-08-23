@@ -92,15 +92,103 @@ export interface ReactionEntry {
   removed?: boolean
 }
 
+/** The fields any ordering decision may read. Nothing else about a message affects its position. */
+export type MessageOrder = Pick<CaravelMessage, 'id' | 'timestamp' | 'receivedAt'>
+
+/**
+ * THE ordering key for messages: the CLAMPED SEND TIME — the very same value the bubble displays.
+ *
+ * Display and order therefore agree, which is the point. Ordering by `receivedAt` instead (as this
+ * did originally) sorts by the moment a gift wrap happened to finish decrypting, and that is a race:
+ * messages sent 1, 2, 3 a few hundred milliseconds apart come off different relays out of order and
+ * render 2, 1, 3. Send time is the only value that reflects what the sender actually did.
+ *
+ * WHAT KEEPS THIS SAFE, AND WHAT DOES NOT. `timestamp` on a received row is sender-controlled, so
+ * this is a deliberate trade with a known shape:
+ *
+ *   FORWARD (a message dated into the future) is bounded. clampSendTime caps any claim beyond
+ *   receivedAt + SEND_TIME_SKEW_MS at receivedAt, so nobody can pin themselves to the bottom of a
+ *   thread, hold the top of the conversation list, or look permanently "most recent".
+ *
+ *   BACKWARD (a message back-dated into the past) is NOT bounded, by design — clampSendTime leaves
+ *   past claims alone because a genuinely delayed message is indistinguishable from a lie. Under a
+ *   send-time sort that now has an ordering consequence it did not have when we sorted by arrival:
+ *   a peer can place their message arbitrarily early in a thread, sink their own conversation down
+ *   the list, and read as not having spoken since leaving a group. The damage is confined to
+ *   position — no message is hidden, dropped, or attributed to anyone else — and a peer who
+ *   back-dates mostly harms their own visibility. Bounding it would mean a floor on how old a claim
+ *   may be, which is a separate decision about display, not a change to this helper.
+ *
+ * Legacy rows (written before `receivedAt` existed) carry our decrypt time in `timestamp` and are
+ * read exactly as they always were — no migration, no reshuffle of existing history.
+ */
+export function sortKey(m: Pick<CaravelMessage, 'timestamp'>): number {
+  return m.timestamp
+}
+
+/**
+ * The full message comparator — sortKey plus a TOTAL, STABLE tiebreak. Use this for every actual
+ * sort and every "newest of these" pick; bare sortKey is only for the places that need a single
+ * number (a lastActivity value, mergeThreadItems' merge key).
+ *
+ * The tiebreak is not decoration. Send time reaches us at WHOLE-SECOND resolution — wrapMessage
+ * stamps Math.round(Date.now() / 1000) — so a burst of messages sent inside one second arrives
+ * carrying one identical timestamp. With no tiebreak their order is whatever the sort algorithm
+ * does with equal keys for that particular input array, which can differ between renders as the
+ * array grows: the same visible shuffle we set out to remove, just from a different cause.
+ *
+ *   1. clamped send time  — what the user sees, and what they mean by "order"
+ *   2. receivedAt         — our arrival clock; the best evidence available inside a tied second
+ *   3. id                 — the gift-wrap event id: arbitrary, but identical on every device and
+ *                           on every render, which is what makes the result stable rather than
+ *                           merely deterministic-on-this-machine
+ *
+ * Step 2 is a proxy, not proof: within a single second, arrival order is exactly the relay race
+ * this change exists to stop trusting. It is used only where send time has already tied, where the
+ * alternative is no information at all.
+ */
+export function compareMessages(a: MessageOrder, b: MessageOrder): number {
+  if (a.timestamp !== b.timestamp) return a.timestamp - b.timestamp
+  const arrivalA = a.receivedAt ?? a.timestamp
+  const arrivalB = b.receivedAt ?? b.timestamp
+  if (arrivalA !== arrivalB) return arrivalA - arrivalB
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0
+}
+
 export interface CaravelMessage {
   id: string               // unique per message — use the gift wrap event id
   senderPubkeyHex: string
   recipientPubkeyHex: string
   plaintext: string
-  // OUR clock at the moment of send/receive, NOT the Nostr event's created_at.
-  // Gift wraps deliberately fuzz created_at by up to 2 days in the past (NIP-17 / randomNow),
-  // so event time is useless for ordering a conversation thread. This field is.
+  // DISPLAY TIME, and also THE ORDERING KEY — the bubble shows this and threads sort by it, so what
+  // the user reads and what they scroll past can never disagree. Always go through sortKey() /
+  // compareMessages() rather than reading this field directly for position.
+  //
+  // On a SENT row: our clock at the moment we sent.
+  // On a RECEIVED row: the SENDER'S clock at the moment they sent, taken from the inner rumor's
+  // created_at, clamped (see clampSendTime in NostrMessagingProvider). This is the fix for messages
+  // arriving after an offline period: previously this was our decrypt time, so everything queued
+  // while signed out displayed the moment of sign-in.
+  //
+  // The OUTER gift-wrap and seal created_at values remain useless — NIP-17 fuzzes both by up to two
+  // days for privacy. Only the inner rumor carries a real time, and only that is read.
+  //
+  // SENDER-CONTROLLED on received rows. The clamp bounds it in the future direction only; a
+  // back-dated claim can still place a message early. See sortKey for the full shape of that trade.
+  //
+  // WHOLE-SECOND RESOLUTION on received rows — the wire carries seconds, so a burst sent inside one
+  // second lands on one identical value. compareMessages breaks those ties; do not assume distinct.
   timestamp: number        // ms epoch
+  // ARRIVAL TIME — our own clock, unforgeable, stamped when the gift wrap finished decrypting. Sent
+  // rows carry the same value as `timestamp` (we are the sender, so there is nothing to diverge).
+  //
+  // No longer the primary ordering key: sorting by it shuffled rapid sends into relay-arrival order.
+  // It survives as compareMessages' SECONDARY key, where it is the only evidence left once two
+  // messages claim the same second, and as the ceiling clampSendTime measures a claim against.
+  //
+  // Optional because rows written before this field existed do not have it; the comparator falls
+  // back to `timestamp` for those, which is what they were ordered by anyway. No migration.
+  receivedAt?: number      // ms epoch
   direction: 'sent' | 'received'
   // Present only when the message carried a caravel-payment tag on its rumor.
   payment?: PaymentRef

@@ -79,6 +79,30 @@ const EDIT_VERSION = 'v1'
 const REPLY_TAG = 'caravel-reply'
 const REPLY_VERSION = 'v1'
 
+// Caravel millisecond send-time tag (send-time display) — same seal-protected, versioned pattern.
+//   ["caravel-ts","v1","<ms-epoch>"]   the sender's own clock at the moment of send, in MILLISECONDS.
+//
+// WHY A TAG RATHER THAN created_at. NIP-01 defines created_at as a unix timestamp in SECONDS and
+// NIP-17 grants the rumor no exemption, so a millisecond value there would read as ~50,000 years in
+// the future to any third-party client. This carries the precision alongside it instead: the rumor
+// stays spec-compliant for every reader, and the extra resolution is purely additive.
+//
+// WHY THE PRECISION IS NEEDED. Threads sort on send time (see sortKey), and a burst sent inside one
+// second rounds to ONE identical created_at. Recipients then fall through to compareMessages' arrival
+// tiebreak — which is the relay race this change exists to stop trusting — so messages sent 1, 2, 3
+// render 2, 1, 3. Milliseconds separate them before the tiebreak is ever consulted.
+//
+// ABSENT IS NORMAL, NOT AN ERROR: every message sent before this tag existed, and every message from
+// a non-Caravel NIP-17 client, carries only created_at. Those fall back to created_at * 1000 — exactly
+// the second-resolution behaviour they have today — and the tiebreak still orders them stably.
+//
+// SENDER-CONTROLLED, precisely as created_at already is. It is authenticated as to WHO wrote it
+// (seal.pubkey === rumor.pubkey) but never as to whether it is TRUE, so it buys resolution and not
+// trust: clampSendTime applies to it unchanged. It also discloses nothing new — it rides INSIDE the
+// seal, where only the recipient can read it, and they already learn the send second from created_at.
+const SENT_AT_TAG = 'caravel-ts'
+const SENT_AT_VERSION = 'v1'
+
 // Upper bound on an id arriving from an untrusted peer. We mint 32 hex chars; the slack leaves room
 // for a future format without letting a peer push an unbounded string into localStorage.
 const MAX_LOGICAL_ID_LEN = 64
@@ -380,6 +404,26 @@ function extractPaymentRef(tags: string[][] | undefined): PaymentRef | undefined
   return undefined
 }
 
+// Pulls the sender's millisecond send time out of the rumor's tags. Same version discipline as its
+// siblings, and the same strict numeric parse as extractEdit's `revision`: the value is
+// attacker-controlled, so anything that is not a plain positive integer of digits is refused rather
+// than coerced. Every refusal falls back to created_at * 1000 in toSentAtMs, which is the same path a
+// message with no tag at all takes — a malformed tag can therefore only cost precision, never
+// correctness.
+function extractSentAtMs(tags: string[][] | undefined): number | undefined {
+  if (!tags) return undefined
+  for (const tag of tags) {
+    if (tag[0] !== SENT_AT_TAG) continue
+    if (tag[1] !== SENT_AT_VERSION) return undefined     // unknown version → fall back to created_at
+    const raw = tag[2]
+    if (typeof raw !== 'string' || !/^[1-9][0-9]*$/.test(raw)) return undefined
+    const ms = Number(raw)
+    if (!Number.isSafeInteger(ms)) return undefined
+    return ms
+  }
+  return undefined
+}
+
 // Pulls a Tari address out of the rumor's tags (same version discipline as extractPaymentRef).
 function extractTariAddress(tags: string[][] | undefined): string | undefined {
   if (!tags) return undefined
@@ -445,9 +489,18 @@ export function wrapMessage(
   if (logicalId) tags.push([MSGID_TAG, MSGID_VERSION, logicalId])
   if (media) tags.push([MEDIA_TAG, MEDIA_VERSION, JSON.stringify(media)])
   if (replyTo) tags.push([REPLY_TAG, REPLY_VERSION, replyTo])
+  // ONE clock read for both stamps. Two Date.now() calls could straddle a second boundary and put
+  // created_at and the ms tag on either side of it, so a recipient preferring the tag would disagree
+  // with one preferring created_at about which second this message belongs to.
+  const now = Date.now()
+  // Appended LAST so every tag above keeps the position it has always had on the wire. Unconditional,
+  // unlike its neighbours: precision is not a feature a message opts into.
+  tags.push([SENT_AT_TAG, SENT_AT_VERSION, String(now)])
   const rumor = {
     kind: KIND_PRIVATE_DM,
-    created_at: Math.round(Date.now() / 1000),
+    // Seconds, unchanged and spec-compliant. The ms tag supplements this; it never replaces it, so a
+    // third-party NIP-17 client reads exactly what it read before.
+    created_at: Math.round(now / 1000),
     content: plaintext,
     tags,
   }
@@ -565,10 +618,28 @@ export function wrapReaction(
 // Returns the plaintext, the sender's public key (hex), and any payment reference — or throws on
 // decryption failure. Performs a manual two-layer decrypt (rather than nip59.unwrapEvent) so we
 // can access the intermediate seal and enforce the NIP-17 pubkey consistency check below.
+// Normalises the rumor's sender-claimed send time to epoch MILLISECONDS, or undefined if it is not
+// a value we can use.
+//
+// TWO SOURCES, IN PRIORITY ORDER. The caravel-ts tag wins when present — it is the same instant as
+// created_at, only unrounded — and extractSentAtMs has already validated it. Otherwise created_at
+// carries the claim at second resolution, which is all a pre-tag Caravel client or any third-party
+// NIP-17 client sends. Note that created_at is stamped with Math.round, so this fallback can sit up
+// to ~500ms ahead of the true send; SEND_TIME_SKEW_MS in the provider exists to absorb exactly that.
+//
+// Rejects non-numbers, NaN/Infinity, and anything <= 0 — a peer can put arbitrary JSON in the
+// created_at field, and every rejected shape falls back to arrival time downstream.
+function toSentAtMs(taggedMs: number | undefined, createdAtSeconds: number | undefined): number | undefined {
+  if (taggedMs !== undefined) return taggedMs
+  if (typeof createdAtSeconds !== 'number') return undefined
+  if (!Number.isFinite(createdAtSeconds) || createdAtSeconds <= 0) return undefined
+  return Math.round(createdAtSeconds * 1000)
+}
+
 export function unwrapMessage(
   recipientSecretKey: Uint8Array,
   giftWrapEvent: NostrEvent
-): { senderPubkeyHex: string; plaintext: string; payment?: PaymentRef; tariAddress?: string; groupId?: string; groupDef?: GroupDef; groupLeave?: boolean; groupReinvite?: boolean; logicalId?: string; edit?: { targetLogicalId: string; revision: number }; media?: MediaRef; replyTo?: string; reaction?: { targetLogicalId: string; emoji: string; action: 'add' | 'remove'; seq: number } } {
+): { senderPubkeyHex: string; plaintext: string; sentAtMs?: number; payment?: PaymentRef; tariAddress?: string; groupId?: string; groupDef?: GroupDef; groupLeave?: boolean; groupReinvite?: boolean; logicalId?: string; edit?: { targetLogicalId: string; revision: number }; media?: MediaRef; replyTo?: string; reaction?: { targetLogicalId: string; emoji: string; action: 'add' | 'remove'; seq: number } } {
   // Layer 1: decrypt gift wrap (kind 1059) → seal (kind 13)
   const sealKey = getConversationKey(recipientSecretKey, giftWrapEvent.pubkey)
   const seal = JSON.parse(decrypt(giftWrapEvent.content, sealKey)) as {
@@ -582,6 +653,16 @@ export function unwrapMessage(
     pubkey: string
     content: string
     tags?: string[][]
+    // The SENDER'S OWN clock at the moment of send, in seconds — the only honest time a NIP-17
+    // message is guaranteed to carry. The gift wrap and the seal both hold created_at values fuzzed
+    // by up to two days (nostr-tools randomNow), so neither can date a message; this one is not
+    // fuzzed. A Caravel sender also puts the same instant, unrounded, in the caravel-ts tag.
+    //
+    // Optional and untrusted. It is absent on a client that never set it, and it is entirely
+    // sender-controlled: authenticated as to WHO wrote it (seal.pubkey === rumor.pubkey, checked
+    // below) but never as to whether it is TRUE. Callers must treat it as a claim — see
+    // clampSendTime in NostrMessagingProvider, and note that nothing orders by this value.
+    created_at?: number
   }
 
   // NIP-17 security invariant: seal.pubkey MUST equal rumor.pubkey.
@@ -596,6 +677,12 @@ export function unwrapMessage(
   return {
     senderPubkeyHex: seal.pubkey,
     plaintext: rumor.content,
+    // Resolved to ms HERE, once, so the seconds/ms boundary has exactly one owner and no caller has
+    // to remember which unit it is holding — nor which of the two wire sources it came from.
+    // Anything that isn't a usable positive number becomes undefined rather than a subtly wrong
+    // date: a hostile or broken client can put any JSON value here, and `undefined` routes cleanly
+    // to the arrival-time fallback.
+    sentAtMs: toSentAtMs(extractSentAtMs(rumor.tags), rumor.created_at),
     payment: extractPaymentRef(rumor.tags),
     tariAddress: extractTariAddress(rumor.tags),
     groupId: extractGroupId(rumor.tags),

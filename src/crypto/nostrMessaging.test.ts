@@ -7,7 +7,9 @@
 // bug while every other test stayed green.
 
 import { describe, expect, it } from 'vitest'
-import { generateSecretKey, getPublicKey } from 'nostr-tools/pure'
+import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools/pure'
+import * as nip44 from 'nostr-tools/nip44'
+import type { NostrEvent } from 'nostr-tools'
 import { wrapEvent } from 'nostr-tools/nip59'
 import { newLogicalId, planPublishRetry, unwrapMessage, wrapEdit, wrapMessage, wrapReaction } from './nostrMessaging'
 import type { MediaRef } from '../messaging/types'
@@ -224,6 +226,27 @@ const bobPub = getPublicKey(bob)
 // the real crypto path exactly as a hostile peer would deliver it.
 function wrapRawTags(tags: string[][], content = 'payload') {
   return wrapEvent({ kind: 14, created_at: Math.round(Date.now() / 1000), content, tags }, alice, bobPub)
+}
+
+// Builds a gift wrap around a HAND-WRITTEN rumor, bypassing nostr-tools' event validation so a
+// malformed created_at can be delivered exactly as a hostile or broken client would. wrapEvent()
+// cannot be used for this: getEventHash refuses to serialize an event whose created_at is not a
+// number, which is precisely the input worth testing.
+function wrapHostileRumor(overrides: Record<string, unknown>): NostrEvent {
+  const rumor = { kind: 14, created_at: Math.round(Date.now() / 1000), content: 'hostile', tags: [['p', bobPub]], pubkey: alicePub, ...overrides }
+  const seal = finalizeEvent({
+    kind: 13,
+    content: nip44.encrypt(JSON.stringify(rumor), nip44.getConversationKey(alice, bobPub)),
+    created_at: Math.round(Date.now() / 1000),
+    tags: [],
+  }, alice)
+  const throwaway = generateSecretKey()
+  return finalizeEvent({
+    kind: 1059,
+    content: nip44.encrypt(JSON.stringify(seal), nip44.getConversationKey(throwaway, bobPub)),
+    created_at: Math.round(Date.now() / 1000),
+    tags: [['p', bobPub]],
+  }, throwaway)
 }
 
 describe('newLogicalId', () => {
@@ -683,5 +706,185 @@ describe('existing wire behaviour is unchanged', () => {
     const wrapped = wrapMessage(senderSk, recipientPk, 'x', { media: ref() })
     const otherSk = generateSecretKey()
     expect(() => unwrapMessage(otherSk, wrapped)).toThrow()
+  })
+})
+
+// ── Send time on the wire (send-time display) ────────────────────────────────
+//
+// The sender's real send time lives in the INNER rumor. Both outer layers — the gift wrap and the
+// seal — carry times fuzzed by up to two days for privacy, so only this one can date a message. It
+// was being decrypted and discarded, which is why a message received after an offline period
+// displayed the moment of sign-in.
+//
+// TWO SOURCES, since millisecond precision was added: the caravel-ts tag (exact, Caravel-only) and
+// created_at (whole seconds, spec-compliant, what every other NIP-17 client sends). The tag wins when
+// present; created_at is the fallback. Both paths are covered below, because the fallback is not a
+// legacy curiosity — it is the live path for every third-party client.
+
+// Decrypts a gift wrap down to the raw rumor, so the tests can assert what is actually ON THE WIRE
+// rather than what unwrapMessage chose to report. Needed to prove created_at stayed in seconds.
+function peekRumor(giftWrap: NostrEvent, recipientSecret: Uint8Array) {
+  const seal = JSON.parse(nip44.decrypt(giftWrap.content, nip44.getConversationKey(recipientSecret, giftWrap.pubkey))) as NostrEvent
+  return JSON.parse(nip44.decrypt(seal.content, nip44.getConversationKey(recipientSecret, seal.pubkey))) as {
+    created_at: number
+    tags: string[][]
+  }
+}
+
+const tsTag = (tags: string[][]) => tags.find(t => t[0] === 'caravel-ts')
+
+describe('sender send time (rumor created_at + caravel-ts)', () => {
+  it('survives wrap → unwrap and arrives in exact milliseconds', () => {
+    const before = Date.now()
+    const out = unwrapMessage(bob, wrapMessage(alice, bobPub, 'hello'))
+    const after = Date.now()
+
+    expect(out.sentAtMs).toBeDefined()
+    // EXACT now, with no rounding slack: the ms tag carries the unrounded instant, so the value must
+    // land inside the window this test itself observed. The old ±1000ms tolerance was the whole
+    // problem — it was the second-resolution the burst repro trips over.
+    expect(out.sentAtMs!).toBeGreaterThanOrEqual(before)
+    expect(out.sentAtMs!).toBeLessThanOrEqual(after)
+    // Milliseconds, not the seconds the wire carries: a seconds value would be ~1000x too small and
+    // would render as 1970.
+    expect(out.sentAtMs!).toBeGreaterThan(1_700_000_000_000)
+  })
+
+  it('keeps rumor.created_at in SECONDS — the tag supplements it, never replaces it', () => {
+    // The compatibility guarantee. NIP-01 defines created_at in seconds; a millisecond value there
+    // would date the message ~50,000 years ahead for any third-party NIP-17 client.
+    const rumor = peekRumor(wrapMessage(alice, bobPub, 'hello'), bob)
+    const nowSeconds = Math.round(Date.now() / 1000)
+
+    expect(rumor.created_at).toBeGreaterThan(nowSeconds - 5)
+    expect(rumor.created_at).toBeLessThan(nowSeconds + 5)
+    expect(Number.isInteger(rumor.created_at)).toBe(true)
+  })
+
+  it('stamps created_at and the ms tag from ONE clock read', () => {
+    // Two Date.now() calls could straddle a second boundary, leaving a reader that prefers the tag
+    // and a reader that prefers created_at disagreeing about which second this message belongs to.
+    const rumor = peekRumor(wrapMessage(alice, bobPub, 'hello'), bob)
+    const tag = tsTag(rumor.tags)
+
+    expect(tag).toBeDefined()
+    expect(Math.round(Number(tag![2]) / 1000)).toBe(rumor.created_at)
+  })
+
+  it('tags every message, and puts the tag inside the SEAL where only the recipient sees it', () => {
+    // Unconditional — precision is not something a message opts into. And it must not leak: the
+    // outer gift wrap carries only the routing p-tag.
+    const wrapped = wrapMessage(alice, bobPub, 'hello')
+    expect(tsTag(peekRumor(wrapped, bob).tags)).toBeDefined()
+    expect(tsTag(wrapped.tags)).toBeUndefined()
+  })
+
+  it('gives a same-second burst DISTINCT, TRULY ORDERED times — the 1,2,3 repro', () => {
+    // The reason the tag exists. Three sends inside one second used to arrive with one identical
+    // second-resolution stamp, leaving order to the arrival tiebreak (the relay race).
+    const burst = ['one', 'two', 'three'].map(text => unwrapMessage(bob, wrapMessage(alice, bobPub, text)))
+    const times = burst.map(m => m.sentAtMs!)
+
+    // Same second — otherwise this test would pass without exercising anything.
+    const seconds = new Set(times.map(t => Math.round(t / 1000)))
+    expect(seconds.size).toBeLessThanOrEqual(2)
+    // Strictly increasing, so a sort on send time alone reproduces the true order.
+    expect(times[0]).toBeLessThan(times[1])
+    expect(times[1]).toBeLessThan(times[2])
+    // And sorting by that key recovers 1, 2, 3 from any starting arrangement.
+    const scrambled = [burst[2], burst[0], burst[1]]
+    expect([...scrambled].sort((a, b) => a.sentAtMs! - b.sentAtMs!).map(m => m.plaintext))
+      .toEqual(['one', 'two', 'three'])
+  })
+
+  it('carries the sender\'s time, not the receiver\'s — even when they differ wildly', () => {
+    // A message genuinely sent in the past: exactly the offline-recipient case, where the sender's
+    // clock and the moment of decryption are far apart.
+    const sentSeconds = Math.round(Date.now() / 1000) - 3600
+    const wrapped = wrapEvent({ kind: 14, created_at: sentSeconds, content: 'an hour ago', tags: [['p', bobPub]] }, alice, bobPub)
+    const out = unwrapMessage(bob, wrapped)
+    expect(out.sentAtMs).toBe(sentSeconds * 1000)
+    expect(Date.now() - out.sentAtMs!).toBeGreaterThan(3_500_000)
+  })
+
+  it.each([
+    ['omitted entirely', undefined],
+    ['a string', 'not-a-number'],
+    ['zero', 0],
+    ['negative', -1],
+    ['NaN-as-null (JSON has no NaN)', null],
+    ['an object', { evil: true }],
+    ['a boolean', true],
+  ])('rejects %s and yields undefined rather than a bogus date', (_label, value) => {
+    // A peer can put any JSON in this field, and nostr-tools will not sign such an event — so this
+    // has to be built the way a hostile client would: encrypt a hand-written rumor directly.
+    const out = unwrapMessage(bob, wrapHostileRumor({ created_at: value }))
+    expect(out.sentAtMs).toBeUndefined()
+    // And the message itself must still arrive. A malformed time is not grounds to drop content.
+    expect(out.plaintext).toBe('hostile')
+    expect(out.senderPubkeyHex).toBe(alicePub)
+  })
+
+  it('accepts a fractional-second claim by rounding it', () => {
+    const out = unwrapMessage(bob, wrapHostileRumor({ created_at: 1_700_000_000.4 }))
+    expect(out.sentAtMs).toBe(1_700_000_000_400)
+  })
+
+  it('falls back to created_at when the ms tag is ABSENT — the third-party client path', () => {
+    // Exactly what a non-Caravel NIP-17 client sends, and what every Caravel message sent before the
+    // tag existed carries. Second resolution, which is the behaviour that shipped before this change.
+    const sentSeconds = Math.round(Date.now() / 1000) - 10
+    const wrapped = wrapEvent({ kind: 14, created_at: sentSeconds, content: 'no tag', tags: [['p', bobPub]] }, alice, bobPub)
+    expect(unwrapMessage(bob, wrapped).sentAtMs).toBe(sentSeconds * 1000)
+  })
+
+  it.each([
+    ['a non-numeric string', 'not-a-number'],
+    ['zero', '0'],
+    ['negative', '-5'],
+    ['fractional', '1700000000000.5'],
+    ['leading zero', '01700000000000'],
+    ['empty', ''],
+    ['beyond Number.MAX_SAFE_INTEGER', '99999999999999999999'],
+  ])('falls back to created_at when the ms tag is malformed (%s)', (_label, raw) => {
+    // A malformed tag must cost PRECISION only, never correctness — it takes the same path as no tag
+    // at all rather than nulling out the send time and dropping the message back to arrival time.
+    const sentSeconds = Math.round(Date.now() / 1000) - 10
+    const wrapped = wrapEvent(
+      { kind: 14, created_at: sentSeconds, content: 'bad tag', tags: [['p', bobPub], ['caravel-ts', 'v1', raw]] },
+      alice, bobPub,
+    )
+    const out = unwrapMessage(bob, wrapped)
+    expect(out.sentAtMs).toBe(sentSeconds * 1000)
+    expect(out.plaintext).toBe('bad tag')      // and the message still arrives
+  })
+
+  it('falls back to created_at on an unrecognised tag VERSION', () => {
+    // Same degradation discipline as every other caravel-* tag: an unknown version is ignored, not
+    // guessed at, so a future v2 format cannot be misread by a client that predates it.
+    const sentSeconds = Math.round(Date.now() / 1000) - 10
+    const wrapped = wrapEvent(
+      { kind: 14, created_at: sentSeconds, content: 'v2', tags: [['p', bobPub], ['caravel-ts', 'v2', '1700000000123']] },
+      alice, bobPub,
+    )
+    expect(unwrapMessage(bob, wrapped).sentAtMs).toBe(sentSeconds * 1000)
+  })
+
+  it('prefers the ms tag over created_at when the two disagree', () => {
+    // Priority made explicit. Both are sender-controlled, so this is about which field is read, not
+    // about which is more trustworthy — the clamp downstream treats the result identically either way.
+    const wrapped = wrapEvent(
+      { kind: 14, created_at: 1_700_000_000, content: 'x', tags: [['p', bobPub], ['caravel-ts', 'v1', '1699999999123']] },
+      alice, bobPub,
+    )
+    expect(unwrapMessage(bob, wrapped).sentAtMs).toBe(1_699_999_999_123)
+  })
+
+  it('still authenticates the sender — a send time cannot be claimed for someone else', () => {
+    // The time rides inside the seal, so it inherits the impersonation check rather than needing
+    // one of its own. Guards against the field being moved somewhere unauthenticated later.
+    const out = unwrapMessage(bob, wrapMessage(alice, bobPub, 'hello'))
+    expect(out.senderPubkeyHex).toBe(alicePub)
+    expect(out.sentAtMs).toBeDefined()
   })
 })

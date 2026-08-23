@@ -4,6 +4,7 @@
 
 import * as nip19 from 'nostr-tools/nip19'
 import type { CSSProperties } from 'react'
+import { compareMessages, sortKey, type MessageOrder } from '../../messaging/types'
 
 export const MONO = "'IBM Plex Mono', monospace"
 
@@ -88,22 +89,33 @@ export function mediaBoxSize(width: number, height: number, maxW: number, maxH: 
 // by construction the newest, so ordering by time puts it at the bottom anyway. Only the
 // after-the-fact case changes.
 //
-// TIES: messages sort before pending at the same instant. Array.prototype.sort is stable and
+// TIES BETWEEN A MESSAGE AND A PENDING ROW: the message wins. Array.prototype.sort is stable and
 // `messages` is concatenated first, so that falls out rather than needing a comparator branch — but
 // it is deliberate, not incidental: a real row beats a provisional one for the same moment.
+//
+// TIES BETWEEN TWO MESSAGES are broken by compareMessages, NOT left to stability. Received rows
+// carry whole-second send times, so a burst sent inside one second ties here routinely, and leaving
+// it to stability would silently make the rendered order depend on the caller having pre-sorted with
+// the same comparator. This function decides its own order instead.
 export type ThreadItem<M, P> =
   | { kind: 'message'; at: number; message: M }
   | { kind: 'pending'; at: number; pending: P }
 
-export function mergeThreadItems<M extends { timestamp: number }, P extends { attemptedAt: number }>(
+export function mergeThreadItems<M extends MessageOrder, P extends { attemptedAt: number }>(
   messages: readonly M[],
   pending: readonly P[],
 ): ThreadItem<M, P>[] {
   const items: ThreadItem<M, P>[] = [
-    ...messages.map(message => ({ kind: 'message' as const, at: message.timestamp, message })),
+    // `at` merges the two kinds onto one axis: a message's clamped send time against a pending
+    // row's attempt time, both our-clock-or-sender-clock instants of "when this was written".
+    ...messages.map(message => ({ kind: 'message' as const, at: sortKey(message), message })),
     ...pending.map(p => ({ kind: 'pending' as const, at: p.attemptedAt, pending: p })),
   ]
-  return items.sort((a, b) => a.at - b.at)
+  return items.sort((a, b) => {
+    if (a.at !== b.at) return a.at - b.at
+    if (a.kind === 'message' && b.kind === 'message') return compareMessages(a.message, b.message)
+    return 0    // message-vs-pending: 0 keeps the stable message-first rule above
+  })
 }
 
 // The auto-scroll trigger for a thread: changes whenever the rendered content could have grown.

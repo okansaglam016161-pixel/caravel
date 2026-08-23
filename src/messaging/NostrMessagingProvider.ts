@@ -26,6 +26,7 @@ const CONTROL_RETRY_BACKOFF_MS = 2_000
 // Gift wraps use randomNow() which backdates created_at by up to 2 days (172800s).
 // Using `since = now` silently misses all of them — always cover the full window.
 const SINCE_WINDOW_S = 172800
+
 const MAX_RETRIES = 5
 const BASE_BACKOFF_MS = 2_000
 const MAX_BACKOFF_MS = 60_000
@@ -43,6 +44,42 @@ const HEARTBEAT_PROBE_ID = '0'.repeat(64)
 // forever, when we believe we're offline we poll on this fixed cadence WITHOUT consuming the
 // retry budget — self-healing if connectivity returns without the event firing.
 const OFFLINE_POLL_MS = 15_000
+
+// How far a sender's claimed send time may exceed the moment we received it before we stop
+// believing it. A message cannot arrive before it was sent, so any future claim is wrong — but
+// "future" needs a little slack for two benign reasons:
+//
+//   1. wrapMessage stamps Math.round(Date.now() / 1000), which rounds to the NEAREST second — so an
+//      honest message sent at :00.700 claims :01.000, up to ~500ms ahead of its own send. Over a
+//      fast local relay that can genuinely land before the claimed instant. A zero tolerance would
+//      misfire on our own messages.
+//   2. Ordinary client clock drift between two NTP-synced devices.
+//
+// Two minutes clears both comfortably — but generosity is NO LONGER FREE, and that is worth stating
+// plainly. Threads sort on this clamped value (see sortKey), so the bound is now the only thing
+// stopping a future-dated message from parking itself at the bottom of a thread and at the top of
+// the conversation list. A too-loose value buys a liar that much room, in position as well as in
+// label. Two minutes is small enough that the worst case is invisible; do not widen it casually.
+const SEND_TIME_SKEW_MS = 2 * 60 * 1000
+
+/**
+ * Resolves the SEND TIME for a received message: the sender's claim when it is usable, our arrival
+ * time when it is not. This value is both displayed and sorted on, so it decides position as well as
+ * label — see sortKey.
+ *
+ * `sentAtMs` is sender-controlled. unwrapMessage has already rejected non-numeric, non-finite and
+ * non-positive values; what remains to reject here is the one claim that is provably false — a send
+ * time later than the arrival it preceded.
+ *
+ * Deliberately NOT clamped: times in the PAST. Any threshold for "too old" would be arbitrary, since
+ * a genuinely delayed message is indistinguishable from a lie. The cost of leaving it open GREW when
+ * ordering moved onto this value — a back-dated claim now sorts early, where before it only mislabelled
+ * — and that is an accepted, tested trade rather than an oversight; see sortKey and sendTime.test.ts.
+ */
+function clampSendTime(sentAtMs: number | undefined, receivedAt: number): number {
+  if (sentAtMs === undefined) return receivedAt
+  return sentAtMs > receivedAt + SEND_TIME_SKEW_MS ? receivedAt : sentAtMs
+}
 
 type RelayRecordStatus = 'connecting' | 'connected' | 'failed' | 'closed'
 
@@ -164,12 +201,17 @@ export class NostrMessagingProvider implements MessagingProvider {
       throw new Error(`NostrMessagingProvider: failed to publish to any relay — ${detail}`)
     }
 
+    // We are the sender, so display time and arrival time are the same instant — there is nothing
+    // to diverge. receivedAt is still written: compareMessages uses it as its tiebreak, and rapid
+    // local sends are exactly where ties happen.
+    const sentAt = Date.now()
     return {
       id: wrapped.id,
       senderPubkeyHex: this.pubkeyHex,
       recipientPubkeyHex,
       plaintext,
-      timestamp: Date.now(),
+      timestamp: sentAt,
+      receivedAt: sentAt,
       direction: 'sent',
       payment,
       logicalId,
@@ -308,6 +350,8 @@ export class NostrMessagingProvider implements MessagingProvider {
     if (recipients.length > 0 && membersReached === 0) {
       throw new Error('NostrMessagingProvider: group message reached no relay for any member')
     }
+    // Same instant for both, as in sendMessage — we are the sender.
+    const groupSentAt = Date.now()
     const message: CaravelMessage = {
       // Synthetic id — there are N gift-wrap ids; we don't self-wrap so there is nothing to dedup
       // against. Prefixed so it can never collide with a 64-hex gift-wrap event id.
@@ -315,7 +359,8 @@ export class NostrMessagingProvider implements MessagingProvider {
       senderPubkeyHex: this.pubkeyHex,
       recipientPubkeyHex: '',   // no single recipient — routed by groupId
       plaintext,
-      timestamp: Date.now(),
+      timestamp: groupSentAt,
+      receivedAt: groupSentAt,
       direction: 'sent',
       groupId,
       logicalId,
@@ -624,7 +669,7 @@ export class NostrMessagingProvider implements MessagingProvider {
     if (this.seen.has(event.id)) return
     this.seen.add(event.id)
     try {
-      const { senderPubkeyHex, plaintext, payment, tariAddress, groupId, groupDef, groupLeave, groupReinvite, logicalId, edit, media, replyTo, reaction } = unwrapMessage(this.secretKey, event)
+      const { senderPubkeyHex, plaintext, sentAtMs, payment, tariAddress, groupId, groupDef, groupLeave, groupReinvite, logicalId, edit, media, replyTo, reaction } = unwrapMessage(this.secretKey, event)
 
       // A group DEFINITION is a control message (no chat bubble): hand it to the group callback and
       // stop. The gate (accept only from known contacts) lives with the callback, which has the
@@ -642,12 +687,18 @@ export class NostrMessagingProvider implements MessagingProvider {
       // Intercepting here is mandatory: the rumor carries a group tag, so falling through would
       // store it as a group message and render a blank bubble for its single-space content.
       if (groupLeave && groupId) {
+        const leaveAt = Date.now()
         this.onMessageCallback?.({
           id: event.id,
           senderPubkeyHex,
           recipientPubkeyHex: this.pubkeyHex,
           plaintext: '',            // notice text is composed at render time from the display name
-          timestamp: Date.now(),
+          // Label stays on OUR clock — a leave notice is a local event marker, not a message with a
+          // meaningful send time, so it is out of scope for the send-time change. It still needs
+          // receivedAt: the re-invite check compares leave rows against ordinary messages, and that
+          // comparison must run on a single basis (see ChatApp's newestBy).
+          timestamp: leaveAt,
+          receivedAt: leaveAt,
           direction: 'received',
           groupId,
           system: 'group-leave',
@@ -703,12 +754,18 @@ export class NostrMessagingProvider implements MessagingProvider {
         if (plaintext.trim() === '' && !media && !payment) return
       }
 
+      // Arrival is our clock and is what everything orders by; the label is the sender's claim,
+      // clamped. Before this, `timestamp` was Date.now() here — the moment of DECRYPT — so every
+      // message that queued while signed out displayed the instant of sign-in rather than when it
+      // was actually sent.
+      const receivedAt = Date.now()
       const msg: CaravelMessage = {
         id: event.id,
         senderPubkeyHex,
         recipientPubkeyHex: this.pubkeyHex,
         plaintext,
-        timestamp: Date.now(),
+        timestamp: clampSendTime(sentAtMs, receivedAt),
+        receivedAt,
         direction: 'received',
         payment,
         // Present → routes to the group thread; the sender-is-a-contact gate is applied downstream.

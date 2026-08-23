@@ -5,7 +5,7 @@
 // The blind UTXO scan is deliberately NOT a source: a confidential UTXO carries no sender, so the
 // scan cannot tell an incoming payment from our own change output. Only message-linked refs can.
 
-import type { CaravelMessage } from '../messaging/types'
+import { sortKey, type CaravelMessage } from '../messaging/types'
 import type { SentEntry } from './txHistory'
 import * as nip19 from 'nostr-tools/nip19'
 
@@ -66,7 +66,7 @@ export function buildActivity(sent: SentEntry[], messages: CaravelMessage[]): Ac
         id: m.id,
         counterparty: m.recipientPubkeyHex ? `Sent to ${shortNpub(m.recipientPubkeyHex)}` : 'Sent from another device',
         note: m.plaintext,
-        timestamp: m.timestamp,
+        timestamp: sortKey(m),
         // localPayment is a this-device cache (never on the wire); absent for other-device sends.
         amountMicrotari: m.localPayment ? BigInt(m.localPayment.amountMicrotari) : null,
         outcome: null,
@@ -77,12 +77,21 @@ export function buildActivity(sent: SentEntry[], messages: CaravelMessage[]): Ac
         id: m.id,
         counterparty: `Received from ${shortNpub(m.senderPubkeyHex)}`,
         note: m.plaintext,
-        timestamp: m.timestamp,
+        timestamp: sortKey(m),
         utxoId: m.payment.utxoId,
       })
     }
   }
 
+  // Newest first. Rows reach this sort on TWO clocks: a wallet send carries our own (SentEntry), a
+  // message-linked row carries sortKey — which is now the counterparty's CLAMPED SEND TIME, not our
+  // arrival time. That is a real weakening of a financial record and is called out rather than
+  // hidden: a peer who back-dates can place their payment row earlier in the ledger than it belongs,
+  // because clampSendTime bounds only future claims. What they cannot do is reorder anything by
+  // claiming to be recent, invent a row, or alter an amount — the amount and the UTXO come from the
+  // chain and from our own local cache, never from the label. Ordering follows the chat thread
+  // deliberately: a payment the user finds by scrolling to a message must sit where that message
+  // sits, and two views of the same event disagreeing would be its own bug.
   rows.sort((a, b) => b.timestamp - a.timestamp)
   return rows
 }

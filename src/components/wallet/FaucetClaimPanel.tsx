@@ -5,6 +5,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useWallet } from '../../context/WalletContext'
 import { claimFaucet, type ClaimResult } from '../../crypto/faucet'
+import { saveAccountAddress } from '../../crypto/accountStore'
 
 type Phase = 'idle' | 'claiming' | 'verifying' | 'done' | 'lagging' | 'error'
 
@@ -67,6 +68,12 @@ export default function FaucetClaimPanel() {
       return
     }
     lastTx.current = r.txId
+    // The claim is the only transaction Caravel runs that creates an account component, so this is
+    // the one place its address can be learned (it is not derivable client-side — see
+    // accountAddress.ts). Stored before the outcome check below only in the sense that it is stored
+    // as soon as it exists: `accountAddress` is set exclusively on a committed result, and the store
+    // ignores an empty value, so a failed claim writes nothing.
+    if (r.accountAddress) saveAccountAddress(address, r.accountAddress)
     if (r.outcome !== 'Commit') {
       setPhase('error')
       setMsg(`Claim did not land on-chain (${r.outcome}) — no tokens added.`)

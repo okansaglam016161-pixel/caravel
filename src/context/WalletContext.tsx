@@ -30,6 +30,7 @@ import { deleteBlobs } from '../messaging/blobCache'
 import { mediaBlobKeys } from '../messaging/sendMedia'
 import { loadContacts, setContactState, removeContact, type ContactMap } from '../messaging/contactStore'
 import { loadTariAddresses, setTariAddress, type TariAddressMap } from '../messaging/tariAddressStore'
+import { fetchRevealedBalance } from '../crypto/revealedBalance'
 import { DEFAULT_RELAYS } from '../config/relays'
 
 // ── Scan state ────────────────────────────────────────────────────────────────
@@ -54,6 +55,29 @@ const SCAN_IDLE: ScanState = {
   incomplete: false,
   error: '',
 }
+
+// ── Revealed (public) balance state ───────────────────────────────────────────
+
+/**
+ * The REVEALED balance is tracked SEPARATELY from the scan, not folded into ScanState, for two
+ * reasons that both matter to the user:
+ *
+ *   1. It must never delay the private balance. They are different reads against different
+ *      substates; the hero number renders as soon as the scan finishes regardless of what the
+ *      revealed read is doing.
+ *   2. It has its own failure mode. A revealed read that fails must not put the scan into 'error'
+ *      and blank a perfectly good private balance.
+ *
+ * 'unavailable' is deliberately NOT 'zero'. The read throws only on a network/indexer failure —
+ * every structural absence already resolves to 0n inside readRevealedBalance — so reaching this
+ * state means we genuinely do not know, and the UI must say so rather than draw a confident 0.
+ */
+export interface RevealedState {
+  status: 'idle' | 'loading' | 'done' | 'unavailable'
+  amount: bigint | null
+}
+
+const REVEALED_IDLE: RevealedState = { status: 'idle', amount: null }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -89,6 +113,8 @@ export interface WalletCtx {
    *  need raw hex without re-decoding bech32 — derivation already computes it for free. */
   nostrPubkeyHex: string | null
   scan: ScanState
+  /** The REVEALED (public) balance — read-only in M1. Independent of `scan`; see RevealedState. */
+  revealed: RevealedState
   txHistory: SentEntry[]
   /**
    * Generate a fresh 24-word Tari CipherSeed recovery phrase, for a new wallet.
@@ -199,6 +225,10 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const [nostrPubkeyHex, setNostrPubkeyHex] = useState<string | null>(null)
   const [walletExists, setWalletExists] = useState(() => hasStoredWallet())
   const [scan, setScan] = useState<ScanState>(SCAN_IDLE)
+  const [revealed, setRevealed] = useState<RevealedState>(REVEALED_IDLE)
+  // Generation counter, the revealed-read equivalent of scanAbortRef: a read that resolves after a
+  // lock or a newer read must not write its result into state.
+  const revealedGenRef = useRef(0)
   const [txHistory, setTxHistory] = useState<SentEntry[]>([])
 
   // Ref holds the AbortController for the active scan — replaced each run
@@ -286,6 +316,29 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     })
   }, [])
 
+  /**
+   * Read the REVEALED (public) balance. Runs alongside startScan on the same triggers, but entirely
+   * independently — it never blocks the private balance and never fails it.
+   *
+   * Not aborted, generation-guarded: the read is two short GETs with nothing to cancel meaningfully,
+   * so a superseded one is simply not allowed to write its result.
+   */
+  const startRevealedRead = useCallback((walletAddress: string) => {
+    const gen = ++revealedGenRef.current
+    setRevealed({ status: 'loading', amount: null })
+    fetchRevealedBalance(walletAddress)
+      .then(amount => {
+        if (revealedGenRef.current !== gen) return
+        setRevealed({ status: 'done', amount })
+      })
+      .catch(() => {
+        if (revealedGenRef.current !== gen) return
+        // Network/indexer failure only — structural absence already resolved to 0n upstream. We do
+        // not know the balance, so we say so; drawing 0 here would be a confident lie.
+        setRevealed({ status: 'unavailable', amount: null })
+      })
+  }, [])
+
   // Materialize a wallet object + resolve its address into state, then auto-scan
   const materialize = useCallback(async (w: SecretKeyWallet) => {
     const addr = await w.getAddress()
@@ -293,7 +346,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     setAddress(addr)
     setTxHistory(loadHistory(addr))
     startScan(w)
-  }, [startScan])
+    startRevealedRead(addr)
+  }, [startScan, startRevealedRead])
 
   // Async now: CipherSeed encipherment runs Argon2d before the words exist. Callers show a busy
   // state over it — the phrase-reveal screen cannot render until this resolves.
@@ -548,6 +602,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     setContacts({})
     setContactAddresses({})
     setScan(SCAN_IDLE)
+    // Bump the generation so an in-flight read cannot land on the locked (or next) identity.
+    revealedGenRef.current++
+    setRevealed(REVEALED_IDLE)
     setWallet(null)
     setAddress(null)
     setTxHistory([])
@@ -563,8 +620,11 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const rescan = useCallback(() => {
-    if (wallet && address) startScan(wallet)
-  }, [wallet, address, startScan])
+    if (wallet && address) {
+      startScan(wallet)
+      startRevealedRead(address)   // same trigger, same cadence — both balances refresh together
+    }
+  }, [wallet, address, startScan, startRevealedRead])
 
   const recordSent = useCallback((params: NewSentParams) => {
     if (!address) return
@@ -912,7 +972,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
   return (
     <Ctx.Provider value={{
-      walletExists, wallet, address, nostrNpub, nostrPubkeyHex, scan, txHistory,
+      walletExists, wallet, address, nostrNpub, nostrPubkeyHex, scan, revealed, txHistory,
       messagingStatus, messages,
       createRecoveryPhrase, createWallet, unlock, restore, lock, getMnemonic, rescan, recordSent,
       recordSentMessage, contacts, acceptContact, contactAddresses, setManualTariAddress,

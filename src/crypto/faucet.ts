@@ -29,6 +29,7 @@ import {
   sealTransaction,
 } from '@tari-project/ootle'
 import { IndexerProvider } from '@tari-project/ootle-indexer'
+import { extractAccountAddress } from './accountAddress'
 import { nextMaxEpoch } from './epoch'
 import { dryRunFee, withFeeMargin } from './feeProbe'
 import type { SecretKeyWallet } from '@tari-project/ootle-secret-key-wallet'
@@ -57,6 +58,18 @@ export interface ClaimResult {
   outcome: ClaimOutcome
   /** The confidential amount deposited (µtTARI) if committed. */
   amount: bigint
+  /**
+   * The wallet's Ootle ACCOUNT COMPONENT address, read out of the committed result's up-substates.
+   *
+   * The claim is the one transaction Caravel runs that executes `CreateAccount`, so it is the one
+   * chance to learn this address — it cannot be derived client-side (see accountAddress.ts). The
+   * caller persists it; nothing here writes to storage, keeping this module free of a storage
+   * dependency exactly as it is free of a React one.
+   *
+   * Undefined whenever the address could not be read: a non-committed outcome, a timed-out poll, or
+   * a result shape we did not recognise. Never an error — the claim itself is unaffected.
+   */
+  accountAddress?: string
 }
 
 function toHexStr(bytes: Uint8Array): string {
@@ -65,8 +78,15 @@ function toHexStr(bytes: Uint8Array): string {
   return s
 }
 
-/** Poll the indexer for the claim tx's final decision (up to ~32s). */
-async function pollOutcome(txId: string): Promise<ClaimOutcome> {
+/**
+ * Poll the indexer for the claim tx's final decision (up to ~32s), and on a commit also read the
+ * account component address out of the SAME response.
+ *
+ * The address extraction rides along here rather than in a second request because this response
+ * already contains it — the previous version parsed `final_decision` out of the body and threw the
+ * rest away. Nothing about the polling loop or its timings changes.
+ */
+async function pollOutcome(txId: string, ownerPkHex: string): Promise<{ outcome: ClaimOutcome; accountAddress?: string }> {
   for (let i = 0; i < 8; i++) {
     await new Promise<void>(r => setTimeout(r, 4_000))
     try {
@@ -74,11 +94,15 @@ async function pollOutcome(txId: string): Promise<ClaimOutcome> {
       if (!res.ok) continue
       const json = await res.json() as { result?: { Finalized?: { final_decision?: string } } }
       const decision = json.result?.Finalized?.final_decision
-      if (decision === 'Commit') return 'Commit'
-      if (decision) return 'Reject'
+      if (decision === 'Commit') {
+        // Only a COMMIT creates substates. A rejected transaction's result carries no Accept diff,
+        // so there is nothing to read and nothing to store.
+        return { outcome: 'Commit', accountAddress: extractAccountAddress(json, ownerPkHex) ?? undefined }
+      }
+      if (decision) return { outcome: 'Reject' }
     } catch { /* transient */ }
   }
-  return 'Timeout'
+  return { outcome: 'Timeout' }
 }
 
 /**
@@ -145,9 +169,9 @@ export async function claimFaucet(
   const txId = sub.transaction_id as string
 
   log('Confirming on-chain…')
-  const outcome = await pollOutcome(txId)
+  const { outcome, accountAddress } = await pollOutcome(txId, ownerPkHex)
   provider.stopWatcher?.()
-  return { txId, outcome, amount: stealthAmount }
+  return { txId, outcome, amount: stealthAmount, accountAddress }
 }
 
 // The instruction recipe, lifted out so the pricing build and the real build are provably the same

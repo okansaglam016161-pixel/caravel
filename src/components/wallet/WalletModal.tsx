@@ -21,6 +21,26 @@ const MONO = 'var(--font-mono)'
 const HIDDEN = '••••••'
 // 2dp + thousands separators (design headline / activity amounts).
 const fmt2 = (µt: bigint | number) => (Number(µt) / 1_000_000).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
+/**
+ * µtTARI → a 2dp display string, computed ENTIRELY in bigint.
+ *
+ * NOT a bug fix. fmt2 above divides through `Number`, and it was worth checking whether that costs
+ * anything here: it does not. At 2dp the two agree for EVERY value in the u64 range and beyond —
+ * Number's error only exceeds half a hundredth of a TARI past ~1e20 µtTARI, which is five orders of
+ * magnitude above the whole TARI supply. The tests pin that agreement.
+ *
+ * This exists because the revealed-balance path is new code under a "no Number() on amounts" rail,
+ * and honouring the rail literally costs one line of arithmetic: round half-up to the nearest
+ * hundredth, then group the whole part. Identical output to fmt2 means the public row and the
+ * private hero can never write the same figure differently.
+ */
+const fmtMicrotariExact = (µt: bigint): string => {
+  const hundredths = (µt + 5_000n) / 10_000n     // + half a hundredth, then truncate = round half-up
+  const whole = hundredths / 100n
+  const cents = hundredths % 100n
+  return `${whole.toLocaleString('en-US')}.${cents.toString().padStart(2, '0')}`
+}
 // Fee: trimmed decimals (design shows "0.0042" / "0.01").
 const fmtFee = (µt: bigint) => (Number(µt) / 1_000_000).toString()
 
@@ -87,7 +107,7 @@ function ReceivedActivityRow({ row, hidden }: { row: Extract<ActivityRow, { kind
 }
 
 export default function WalletModal({ onClose }: { onClose: () => void }) {
-  const { wallet, address, scan, rescan, txHistory, messages, recordSent, balanceHidden, setBalanceHidden } = useWallet()
+  const { wallet, address, scan, revealed, rescan, txHistory, messages, recordSent, balanceHidden, setBalanceHidden } = useWallet()
 
   const [tab, setTab] = useState<Tab>('overview')
   const [addrCopied, setAddrCopied] = useState(false)
@@ -273,6 +293,81 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
     )
   }
 
+  // ── PUBLIC (revealed) balance row — M1, read-only ──
+  //
+  // Secondary to the confidential hero by design: private is what Caravel is for, public is the
+  // opt-in. Rendered as its own muted row rather than a second figure inside the hero card so the
+  // two can never read as parts of one number.
+  //
+  // THE TWO ARE NEVER SUMMED. They are different states of the same asset, and adding them would
+  // invent a "total" the protocol does not have — worse, it would hide the very distinction this
+  // feature exists to surface.
+  function publicBalanceRow() {
+    const rowBase = { borderRadius: 12, padding: '13px 15px', background: 'var(--surface-raised)', border: '1px solid rgba(var(--border-rgb),0.12)' } as const
+    const label = { ...balLabel, fontSize: 10, color: 'var(--text-muted-dim)' } as const
+    const note = { fontSize: 12, color: 'var(--text-muted-dim)', lineHeight: 1.45 } as const
+
+    // Hidden alongside the hero — one toggle covers both, or the "hide balance" gesture leaks.
+    if (balanceHidden) {
+      return (
+        <div style={rowBase}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span style={label}>PUBLIC BALANCE</span>
+            <span style={{ fontFamily: MONO, fontSize: 14, fontWeight: 600, color: 'var(--text-faint)', letterSpacing: '0.1em' }}>{HIDDEN}</span>
+          </div>
+        </div>
+      )
+    }
+
+    if (revealed.status === 'idle' || revealed.status === 'loading') {
+      return (
+        <div style={rowBase}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span style={label}>PUBLIC BALANCE</span>
+            <span style={{ fontSize: 12, color: 'var(--text-faint-dim)' }}>Checking…</span>
+          </div>
+        </div>
+      )
+    }
+
+    // UNAVAILABLE — the read threw, so we do not know. Say that; never draw a confident 0.
+    if (revealed.status === 'unavailable') {
+      return (
+        <div style={{ ...rowBase, border: '1px solid rgba(var(--warn-rgb),0.25)', background: 'rgba(var(--warn-rgb),0.04)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+            <span style={{ ...label, color: 'var(--warn-300)' }}>PUBLIC BALANCE</span>
+            <span onClick={rescan} style={{ fontSize: 12, fontWeight: 600, color: 'var(--teal-500)', cursor: 'pointer' }}>Retry</span>
+          </div>
+          <div style={{ ...note, color: 'var(--warn-300)' }}>Public balance unavailable — could not reach the indexer. Your confidential balance above is unaffected.</div>
+        </div>
+      )
+    }
+
+    // EMPTY — the common case, and a true zero rather than an unknown one.
+    if (revealed.amount === 0n) {
+      return (
+        <div style={rowBase}>
+          <div style={{ ...label, marginBottom: 6 }}>PUBLIC BALANCE</div>
+          <div style={note}>Nothing revealed. Your entire balance is confidential.</div>
+        </div>
+      )
+    }
+
+    // A real revealed balance.
+    return (
+      <div style={rowBase}>
+        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 6 }}>
+          <span style={label}>PUBLIC BALANCE</span>
+          <span style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+            <span style={{ fontFamily: MONO, fontSize: 18, fontWeight: 700, color: 'var(--text-body)' }}>{fmtMicrotariExact(revealed.amount ?? 0n)}</span>
+            <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-muted-dim)' }}>TARI</span>
+          </span>
+        </div>
+        <div style={note}>Visible to anyone on-chain. Not included in the confidential balance above.</div>
+      </div>
+    )
+  }
+
   const tabItem = (t: Tab) => {
     const on = tab === t
     return (
@@ -328,6 +423,7 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
           {tab === 'overview' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
               {balanceWidget()}
+              {publicBalanceRow()}
 
               {shortAddr && (
                 <div onClick={copyAddr} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 14px', borderRadius: 11, background: 'var(--surface-raised)', border: '1px solid rgba(var(--border-rgb),0.12)', cursor: 'pointer' }}>

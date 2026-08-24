@@ -2,10 +2,11 @@
 //   "Overview · faucet panel" (8 states). All logic (phase, claim, verify-effect, cooldown,
 //   deadline, HIGH_BALANCE, refs) is preserved verbatim; only the JSX mirrors the design markup.
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useRef } from 'react'
 import { useWallet } from '../../context/WalletContext'
 import { claimFaucet, type ClaimResult } from '../../crypto/faucet'
 import { saveAccountAddress } from '../../crypto/accountStore'
+import { useBalanceSettle } from './useBalanceSettle'
 
 type Phase = 'idle' | 'claiming' | 'verifying' | 'done' | 'lagging' | 'error'
 
@@ -34,25 +35,27 @@ export default function FaucetClaimPanel() {
   const canClaim = !!wallet && !!address && !busy && !cooldown
 
   // While verifying, watch for the real balance rise; periodically rescan; time out to "lagging".
-  useEffect(() => {
-    if (phase !== 'verifying') return
-    if (balance !== null && balance > preBalance.current) {
+  // The loop itself now lives in useBalanceSettle, shared with the conceal flow — behaviour here is
+  // unchanged, it is only no longer the only copy of it.
+  useBalanceSettle({
+    active: phase === 'verifying',
+    balance,
+    before: preBalance.current,
+    deadlineAt: deadline.current,
+    rescan,
+    onRose: (delta) => {
       setPhase('done')
-      setMsg(`Added ${fmt(balance - preBalance.current)} tTARI. You can now send and register a name.`)
+      setMsg(`Added ${fmt(delta)} tTARI. You can now send and register a name.`)
       setCooldown(true)
-      const t = setTimeout(() => setCooldown(false), 60_000)
-      return () => clearTimeout(t)
-    }
-    const iv = setInterval(() => {
-      if (Date.now() > deadline.current) {
-        setPhase('lagging')
-        setMsg(`Claim committed on-chain (tx ${shortTx(lastTx.current)}), but your balance hasn't updated yet. Tap Refresh in a moment.`)
-      } else {
-        rescan()
-      }
-    }, 8_000)
-    return () => clearInterval(iv)
-  }, [phase, balance, rescan])
+      // Was a cleanup-returning timeout inside the effect; a plain timer is equivalent here because
+      // the cooldown is a one-shot that should survive this component's re-renders either way.
+      setTimeout(() => setCooldown(false), 60_000)
+    },
+    onDeadline: () => {
+      setPhase('lagging')
+      setMsg(`Claim committed on-chain (tx ${shortTx(lastTx.current)}), but your balance hasn't updated yet. Tap Refresh in a moment.`)
+    },
+  })
 
   async function claim() {
     if (!wallet || !address) return

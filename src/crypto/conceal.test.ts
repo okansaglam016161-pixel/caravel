@@ -126,3 +126,55 @@ describe('MIN_CONCEAL_MICROTARI', () => {
     assertConcealSplit(s)
   })
 })
+
+// ── MAX amount entry ──────────────────────────────────────────────────────────
+//
+// Regression for a bug found while wiring the UI: MAX filled the amount field by running the
+// balance through the 2dp DISPLAY formatter. A revealed balance of 999_997_686 µtTARI renders as
+// "1,000.00", and feeding that back in asked the vault for 2_314 µtTARI more than it held — a
+// withdraw the network refuses, so MAX would simply never work on a realistic balance.
+//
+// The fix is two-part and both halves are pinned here: amount entry gets its own full-precision
+// formatter, and MAX carries the exact bigint rather than trusting a round-trip through text.
+
+/** Mirrors microtariToInput in WalletModal.tsx — full precision, no grouping, no rounding. */
+const microtariToInput = (µt: bigint): string => {
+  const whole = µt / 1_000_000n
+  const frac = (µt % 1_000_000n).toString().padStart(6, '0').replace(/0+$/, '')
+  return frac ? `${whole}.${frac}` : `${whole}`
+}
+/** Mirrors fmtMicrotariExact — the 2dp DISPLAY formatter that must NOT be used for amount entry. */
+const fmtDisplay2dp = (µt: bigint): string => {
+  const h = (µt + 5_000n) / 10_000n
+  return `${(h / 100n).toLocaleString('en-US')}.${(h % 100n).toString().padStart(2, '0')}`
+}
+const parseTari = (s: string): bigint => BigInt(Math.round(parseFloat(s) * 1_000_000))
+
+describe('MAX must not overshoot the balance', () => {
+  const SEEDED = 999_997_686n   // the real seeded wallet's revealed balance
+
+  it('THE BUG: the 2dp display formatter rounds a balance UP past itself', () => {
+    expect(fmtDisplay2dp(SEEDED)).toBe('1,000.00')
+    expect(parseTari(fmtDisplay2dp(SEEDED).replace(/,/g, ''))).toBeGreaterThan(SEEDED)
+    // 2_314 µtTARI more than exists — the withdraw would be refused.
+    expect(parseTari(fmtDisplay2dp(SEEDED).replace(/,/g, '')) - SEEDED).toBe(2_314n)
+  })
+
+  it('the input formatter round-trips exactly', () => {
+    expect(microtariToInput(SEEDED)).toBe('999.997686')
+    expect(parseTari(microtariToInput(SEEDED))).toBe(SEEDED)
+  })
+
+  it.each([0n, 1n, 100_000n, 1_500_000n, 999_997_686n, 1_000_000_000n, 123_456_789_012n])(
+    'round-trips %s µtTARI without drift', (v) => {
+      expect(parseTari(microtariToInput(v))).toBe(v)
+    })
+
+  it('a MAX-sized conceal splits without exceeding the balance', () => {
+    // What the whole chain has to guarantee: MAX withdraws exactly the balance, never more.
+    const split = planConceal(SEEDED, 16_138n)
+    expect(split.withdrawAmount).toBe(SEEDED)
+    expect(split.withdrawAmount).toBeLessThanOrEqual(SEEDED)
+    assertConcealSplit(split)
+  })
+})

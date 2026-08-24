@@ -211,17 +211,36 @@ async function pollOutcome(txId: string, ownerPkHex: string): Promise<{ outcome:
 }
 
 /**
- * Move `amountMicrotari` of revealed TARI into a stealth output owned by this wallet.
+ * A priced, built, signed conceal — everything except pressing send.
  *
- * The fee is discovered by dry run and paid out of the amount, so `amount - fee` lands private.
- * Returns once the transaction has a final on-chain decision; the caller still refreshes both
- * balances afterwards.
+ * The flow is deliberately two-phase so the fee a user approves is the fee the transaction pays.
+ * A separate "quote the fee" call would have to price one transaction and submit a different one,
+ * and any drift between them is either a rejection or a surprise. Here the dry run happens once,
+ * during prepare, and `submit` sends the very envelope that was priced.
  */
-export async function concealFunds(
+export interface PreparedConceal {
+  /** Measured fee including margin (µtTARI) — what the review screen shows and the tx pays. */
+  feeMicrotari: bigint
+  /** What will land private: the amount moved minus the fee. */
+  concealedAmount: bigint
+  /** Total leaving the vault — the withdraw, and the statement's revealed input. */
+  withdrawAmount: bigint
+  /** Send it. Resolves once the transaction has a final on-chain decision. */
+  submit: (onProgress?: (msg: string) => void) => Promise<ConcealResult>
+}
+
+/**
+ * Price and build a conceal without sending it.
+ *
+ * Does all the network work that can fail for boring reasons — connecting, resolving the account's
+ * vaults, reading the epoch, the dry run — so the review screen can show a real fee and the confirm
+ * step is just a submission.
+ */
+export async function prepareConceal(
   wallet: SecretKeyWallet,
   ownerAddress: string,
   { amountMicrotari, onProgress }: ConcealParams,
-): Promise<ConcealResult> {
+): Promise<PreparedConceal> {
   const log = (m: string) => onProgress?.(m)
 
   if (amountMicrotari < MIN_CONCEAL_MICROTARI) {
@@ -277,30 +296,50 @@ export async function concealFunds(
     return { envelope: sealTransaction(signed), split }
   }
 
-  log('Estimating network fee…')
+  log('Estimating network fee\u2026')
   const probe = await buildEnvelope(FEE_PROBE_MICROTARI, true)
   const cost = await dryRunFee(INDEXER_URL, probe.envelope)
   const fee = withFeeMargin(cost)
   if (fee >= amountMicrotari) {
-    throw new Error(`The network fee (${fee} µtTARI) exceeds the amount being made private. Try a larger amount.`)
+    throw new Error(`The network fee (${fee} \u00b5tTARI) exceeds the amount being made private. Try a larger amount.`)
   }
 
-  log('Building…')
+  log('Building\u2026')
   const real = await buildEnvelope(fee, false)
 
-  log('Submitting…')
-  const sub = await provider.submitTransaction(real.envelope)
-  const txId = sub.transaction_id as string
+  return {
+    feeMicrotari: fee,
+    concealedAmount: real.split.stealthAmount,
+    withdrawAmount: real.split.withdrawAmount,
+    submit: async (onSubmitProgress?: (msg: string) => void) => {
+      const slog = (m: string) => onSubmitProgress?.(m)
+      slog('Submitting\u2026')
+      const sub = await provider.submitTransaction(real.envelope)
+      const txId = sub.transaction_id as string
 
-  log('Confirming on-chain…')
-  const { outcome, accountAddress: confirmedAccount } = await pollOutcome(txId, ownerPkHex)
-  provider.stopWatcher?.()
+      slog('Confirming on-chain\u2026')
+      const { outcome, accountAddress: confirmedAccount } = await pollOutcome(txId, ownerPkHex)
+      provider.stopWatcher?.()
 
-  // The free capture: a conceal runs CreateAccount, so a wallet that never stored its address from
-  // a claim gets one here. saveAccountAddress is first-write-wins, so a repeat is a no-op.
-  if (confirmedAccount) saveAccountAddress(ownerAddress, confirmedAccount)
+      // The free capture: a conceal runs CreateAccount, so a wallet that never stored its address
+      // from a claim gets one here. saveAccountAddress is first-write-wins, so a repeat is a no-op.
+      if (confirmedAccount) saveAccountAddress(ownerAddress, confirmedAccount)
 
-  return { txId, outcome, concealedAmount: real.split.stealthAmount, feeMicrotari: fee, accountAddress: confirmedAccount }
+      return { txId, outcome, concealedAmount: real.split.stealthAmount, feeMicrotari: fee, accountAddress: confirmedAccount }
+    },
+  }
+}
+
+/**
+ * Prepare and submit in one call. The one-shot form, for callers with nothing to review.
+ */
+export async function concealFunds(
+  wallet: SecretKeyWallet,
+  ownerAddress: string,
+  params: ConcealParams,
+): Promise<ConcealResult> {
+  const prepared = await prepareConceal(wallet, ownerAddress, params)
+  return prepared.submit(params.onProgress)
 }
 
 function toHexStr(bytes: Uint8Array): string {

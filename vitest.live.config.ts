@@ -1,3 +1,5 @@
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vitest/config'
 
 // LIVE tests only — the ones that hit the real network. Kept in a SEPARATE config from
@@ -11,7 +13,18 @@ import { defineConfig } from 'vitest/config'
 // modules under test are TypeScript with extensionless imports (the project's bundler convention),
 // which Node's own resolver cannot follow. Going through Vite means the live checks exercise the
 // REAL shipped modules rather than a reimplementation of them.
+// The same alias vite.config.ts and vitest.config.ts carry: tari-cipherseed is vendored as source,
+// so anything importing it resolves through the specifier the app uses. Needed here as soon as a
+// live script touches derivation.ts — all three configs must agree, or the app and its tests would
+// silently exercise different code.
+const ROOT = path.dirname(fileURLToPath(import.meta.url))
+
 export default defineConfig({
+  resolve: {
+    alias: {
+      'tari-cipherseed': path.join(ROOT, 'vendor/tari-cipherseed/src/index.ts'),
+    },
+  },
   test: {
     environment: 'node',
     include: ['scripts/**/*.live.ts'],

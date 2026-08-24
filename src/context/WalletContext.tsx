@@ -30,6 +30,7 @@ import { deleteBlobs } from '../messaging/blobCache'
 import { mediaBlobKeys } from '../messaging/sendMedia'
 import { loadContacts, setContactState, removeContact, type ContactMap } from '../messaging/contactStore'
 import { loadTariAddresses, setTariAddress, type TariAddressMap } from '../messaging/tariAddressStore'
+import { recoverAccountAddress } from '../crypto/accountRecovery'
 import { fetchRevealedBalance } from '../crypto/revealedBalance'
 import { DEFAULT_RELAYS } from '../config/relays'
 
@@ -346,7 +347,12 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     setAddress(addr)
     setTxHistory(loadHistory(addr))
     startScan(w)
-    startRevealedRead(addr)
+    // Recover the account address BEFORE reading the revealed balance — the read needs it, and a
+    // wallet that claimed before M1 (or was restored on another device) has none stored. The probe
+    // short-circuits without touching the network when an address is already known, so this is a
+    // no-op for every wallet after its first unlock. It cannot fail the read: recovery resolving to
+    // null simply leaves the balance at 0, which is what it would have been anyway.
+    void recoverAccountAddress(w, addr).finally(() => startRevealedRead(addr))
   }, [startScan, startRevealedRead])
 
   // Async now: CipherSeed encipherment runs Argon2d before the words exist. Callers show a busy

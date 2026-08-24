@@ -182,3 +182,45 @@ describe('accountStore', () => {
     expect(loadAccountAddress(WALLET_A)).toBeNull()
   })
 })
+
+// ── The DRY-RUN result shape ──────────────────────────────────────────────────
+//
+// Account recovery reads the address out of a dry run rather than a committed transaction, and the
+// two endpoints nest their payload differently — the dry run has no `Finalized` wrapper and no
+// `execution_result` level. Both fixtures below are real: the dry-run one is the body
+// /transactions/dry-run returned for a CreateAccount-only simulation on 2026-08-24, which reported
+// the same component a real claim had already created for that key.
+
+/** A dry-run result, shaped as /transactions/dry-run returns it. */
+function dryRun(upSubstates: unknown[]) {
+  return {
+    transaction_id: 'a'.repeat(64),
+    result: { finalize: { result: { Accept: { up_substates: upSubstates, down_substates: [], fee_withdrawals: [] } } } },
+  }
+}
+
+describe('extractAccountAddress — dry-run nesting', () => {
+  it('reads the address from a dry-run result', () => {
+    expect(extractAccountAddress(dryRun([component(ACCOUNT, OWNER)]), OWNER)).toBe(ACCOUNT)
+  })
+
+  it('applies the same owner guard to a dry run', () => {
+    // A simulation is not a weaker source of truth than a commit — the guards must not relax.
+    expect(extractAccountAddress(dryRun([component(ACCOUNT, OTHER_OWNER)]), OWNER)).toBeNull()
+  })
+
+  it('applies the same template guard to a dry run', () => {
+    expect(extractAccountAddress(dryRun([component(ACCOUNT, OWNER, 'f'.repeat(64))]), OWNER)).toBeNull()
+  })
+
+  it('returns null for a REJECTED dry run', () => {
+    // The shape seen when the simulation fails, e.g. "No vault for resource" when the account was
+    // not declared as an input. There is no Accept diff, so there is nothing to read.
+    const rejected = { result: { finalize: { result: { Reject: { ExecutionFailure: 'At instruction #3: Panic!' } } } } }
+    expect(extractAccountAddress(rejected, OWNER)).toBeNull()
+  })
+
+  it('still reads a committed result — the two nestings coexist', () => {
+    expect(extractAccountAddress(committed([component(ACCOUNT, OWNER)]), OWNER)).toBe(ACCOUNT)
+  })
+})

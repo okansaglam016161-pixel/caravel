@@ -45,20 +45,31 @@ function obj(v: unknown): Record<string, unknown> | null {
 }
 
 /**
- * The up-substates of a COMMITTED transaction result, or `[]` for any other shape.
+ * The up-substates of a transaction result, or `[]` for any other shape.
  *
- * The path is long and version-specific, so it is walked one checked step at a time rather than
- * with a cast: `result.Finalized.execution_result.finalize.result.Accept.up_substates`. A rejected
- * transaction has `Reject` instead of `Accept` and correctly yields nothing.
+ * TWO NESTINGS, because the two endpoints that carry this do not agree:
+ *
+ *   committed  /transactions/{id}/result   result.Finalized.execution_result.finalize.result.Accept
+ *   dry run    /transactions/dry-run       result.finalize.result.Accept
+ *
+ * Both are walked one checked step at a time rather than with a cast, and both are tried — the
+ * caller should not have to know which endpoint its JSON came from. A rejected transaction has
+ * `Reject` instead of `Accept` under either nesting and correctly yields nothing.
  */
 function upSubstates(resultJson: unknown): unknown[] {
   const root = obj(resultJson)
-  const finalized = obj(root?.result) && obj(obj(root?.result)?.Finalized)
-  const exec = obj(finalized?.execution_result)
-  const finalize = obj(exec?.finalize)
-  const accept = obj(obj(finalize?.result)?.Accept)
-  const ups = accept?.up_substates
-  return Array.isArray(ups) ? ups : []
+  const result = obj(root?.result)
+
+  // Committed shape.
+  const finalized = obj(result?.Finalized)
+  const committed = obj(obj(obj(obj(finalized?.execution_result)?.finalize)?.result)?.Accept)?.up_substates
+  if (Array.isArray(committed)) return committed
+
+  // Dry-run shape — shallower, and carries no `Finalized` wrapper.
+  const dryRun = obj(obj(obj(result?.finalize)?.result)?.Accept)?.up_substates
+  if (Array.isArray(dryRun)) return dryRun
+
+  return []
 }
 
 /**

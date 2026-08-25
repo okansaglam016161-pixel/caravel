@@ -22,14 +22,25 @@ export interface BalanceSettleOptions {
   active: boolean
   /** The balance being watched. `null` means "not known yet" and never counts as movement. */
   balance: bigint | null
+  /**
+   * Which way the watched balance is expected to move.
+   *
+   * A conceal, a reveal and a faucet claim all make a balance RISE, and that was the only case
+   * until sends needed settling. A SEND has no rise to watch — the money leaves — so the only local
+   * evidence it landed is the spent-from balance FALLING. Same loop, same deadline, opposite
+   * comparison.
+   *
+   * Defaults to 'rise', so every existing caller is unchanged.
+   */
+  direction?: 'rise' | 'fall'
   /** The balance captured BEFORE the transaction, so a rise can be detected. */
   before: bigint
   /** Absolute epoch-ms cutoff, after which we stop waiting and report the lag. */
   deadlineAt: number
   /** Trigger a fresh scan. */
   rescan: () => void
-  /** The balance rose. Receives the delta. */
-  onRose: (delta: bigint) => void
+  /** The balance moved in the watched direction. Receives the ABSOLUTE delta, always positive. */
+  onSettled: (delta: bigint) => void
   /** The deadline passed without movement. The transaction is still fine. */
   onDeadline: () => void
   /** How often to rescan while waiting. */
@@ -37,19 +48,27 @@ export interface BalanceSettleOptions {
 }
 
 /** What the settle loop should do at a given moment. */
-export type SettleAction = 'rose' | 'deadline' | 'wait'
+export type SettleAction = 'settled' | 'deadline' | 'wait'
 
 /**
  * The loop's decision, as a pure function — so the rules can be tested without a renderer.
  *
- * ORDER MATTERS: a rise wins over an expired deadline. A transaction whose output appears in the
+ * ORDER MATTERS: movement wins over an expired deadline. A transaction whose effect appears in the
  * same instant the deadline passes has succeeded and must be reported as such, not as a lag.
  *
  * `null` balance is "not known yet" — a scan in flight, or one that failed — and never counts as
- * movement. Treating unknown as zero would let a failed scan read as a balance that never rose.
+ * movement. Treating unknown as zero would let a failed scan read as a balance that never moved,
+ * and on a 'fall' watch it would be worse still: zero is BELOW any positive `before`, so an
+ * unknown balance would look exactly like a completed spend.
  */
-export function settleAction(balance: bigint | null, before: bigint, now: number, deadlineAt: number): SettleAction {
-  if (balance !== null && balance > before) return 'rose'
+export function settleAction(
+  balance: bigint | null,
+  before: bigint,
+  now: number,
+  deadlineAt: number,
+  direction: 'rise' | 'fall' = 'rise',
+): SettleAction {
+  if (balance !== null && (direction === 'rise' ? balance > before : balance < before)) return 'settled'
   if (now > deadlineAt) return 'deadline'
   return 'wait'
 }
@@ -68,15 +87,16 @@ export function useBalanceSettle({
   before,
   deadlineAt,
   rescan,
-  onRose,
+  onSettled,
   onDeadline,
+  direction = 'rise',
   pollMs = 8_000,
 }: BalanceSettleOptions): void {
   const rescanRef = useRef(rescan)
-  const roseRef = useRef(onRose)
+  const settledRef = useRef(onSettled)
   const deadlineRef = useRef(onDeadline)
   rescanRef.current = rescan
-  roseRef.current = onRose
+  settledRef.current = onSettled
   deadlineRef.current = onDeadline
 
   useEffect(() => {
@@ -84,18 +104,21 @@ export function useBalanceSettle({
 
     // Movement is checked on every render, not only on a tick: the scan that finds the output may
     // land between ticks, and waiting up to a full interval to notice would be needless delay.
-    if (settleAction(balance, before, Date.now(), deadlineAt) === 'rose') {
-      roseRef.current(balance! - before)
+    // The absolute delta, so a caller never has to know which way it was watching.
+    const delta = () => (balance! > before ? balance! - before : before - balance!)
+
+    if (settleAction(balance, before, Date.now(), deadlineAt, direction) === 'settled') {
+      settledRef.current(delta())
       return
     }
 
     const iv = setInterval(() => {
-      switch (settleAction(balance, before, Date.now(), deadlineAt)) {
-        case 'rose': roseRef.current(balance! - before); break
+      switch (settleAction(balance, before, Date.now(), deadlineAt, direction)) {
+        case 'settled': settledRef.current(delta()); break
         case 'deadline': deadlineRef.current(); break
         default: rescanRef.current()
       }
     }, pollMs)
     return () => clearInterval(iv)
-  }, [active, balance, before, deadlineAt, pollMs])
+  }, [active, balance, before, deadlineAt, pollMs, direction])
 }

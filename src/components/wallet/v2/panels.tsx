@@ -14,7 +14,7 @@
 
 import type { ReactNode } from 'react'
 import { QRCodeSVG } from 'qrcode.react'
-import { C, MONO, border, tealBorder, tealFill } from './tokens'
+import { C, MONO, border, tealBorder, tealFill, warnFill } from './tokens'
 import { Alert, Check, Copy, Eye, EyeOff, Shield, Spinner } from './icons'
 import {
   AmountField, Body, Button, DetailCard, DetailRow, FieldLabel, Panel, PanelText,
@@ -120,10 +120,24 @@ const CheckDot = () => (
 
 // ══ SEND ══════════════════════════════════════════════════════════════════════
 
+/**
+ * WHERE THE MONEY IS SPENT FROM. The destination is always the recipient's stealth address, so this
+ * changes the sender's side only — which transaction is built, what the fee is, and crucially what
+ * is publicly visible about the payment.
+ */
+export type SendSource = 'private' | 'public'
+
 export type SendView =
-  | { step: 'form'; recipient: string; amount: string; note: string; available: bigint | null; canReview: boolean; error?: string }
+  | {
+      step: 'form'; recipient: string; amount: string; note: string
+      available: bigint | null; canReview: boolean; error?: string
+      source: SendSource
+      /** Both balances are funded, so the choice is real. When false the toggle is not shown. */
+      canChooseSource: boolean
+    }
   | {
       step: 'review'; recipient: string; amountMicrotari: bigint; note: string
+      source: SendSource
       feeMicrotari: bigint | null
       /**
        * The fee is a CEILING, not a measurement.
@@ -135,8 +149,12 @@ export type SendView =
        */
       feeIsCeiling?: boolean
     }
-  | { step: 'sending'; amountMicrotari: bigint; progress: string }
-  | { step: 'success'; recipient: string; amountMicrotari: bigint; feeMicrotari: bigint; txId: string }
+  | { step: 'sending'; amountMicrotari: bigint; progress: string; source: SendSource }
+  | {
+      step: 'success'; recipient: string; amountMicrotari: bigint; feeMicrotari: bigint; txId: string
+      /** The settle deadline passed. STILL A SUCCESS — different copy, same shape. */
+      lagged?: boolean
+    }
   | { step: 'error'; message: string }
   /** Broadcast but undecided. NOT a failure — the send may still land, so it must not read as one. */
   | { step: 'unconfirmed'; message: string; txId: string }
@@ -144,6 +162,7 @@ export type SendView =
 export interface SendPanelProps {
   view: SendView
   hidden: boolean
+  onSource: (s: SendSource) => void
   onRecipient: (v: string) => void
   onAmount: (v: string) => void
   onNote: (v: string) => void
@@ -159,27 +178,90 @@ export interface SendPanelProps {
 
 const shortAddr = (a: string) => (a.length > 26 ? `${a.slice(0, 14)}…${a.slice(-6)}` : a)
 
-export function SendPanel({ view, hidden, onRecipient, onAmount, onNote, onMax, onReview, onBack, onConfirm, onDone, onRetry, onCopyTx, onViewActivity }: SendPanelProps) {
+/**
+ * "Spend from" — shown only when both balances can actually fund a payment.
+ *
+ * A toggle offering an option that cannot work is worse than no toggle, so when only one side is
+ * funded the caller uses it silently and this never renders.
+ */
+function SourceToggle({ source, onSource }: { source: SendSource; onSource: (s: SendSource) => void }) {
+  const opt = (kind: SendSource, label: string, Icon: typeof Shield) => {
+    const on = kind === source
+    return (
+      <span role="radio" tabIndex={0} aria-checked={on}
+        onClick={() => onSource(kind)} onKeyDown={e => e.key === 'Enter' && onSource(kind)}
+        style={{
+          flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
+          padding: '9px 0', borderRadius: 9, cursor: 'pointer', userSelect: 'none',
+          fontSize: 13, fontWeight: on ? 700 : 600,
+          background: on ? C.inset : 'transparent',
+          color: on ? (kind === 'private' ? C.teal300 : C.body) : C.mutedDim,
+          boxShadow: on ? `inset 0 0 0 1px ${kind === 'private' ? 'rgba(45,224,198,0.3)' : 'rgba(120,150,210,0.28)'}` : 'none',
+        }}>
+        <Icon size={13} color={on ? (kind === 'private' ? C.teal : C.body) : C.mutedDim} />{label}
+      </span>
+    )
+  }
+  return (
+    <div>
+      <FieldLabel>SPEND FROM</FieldLabel>
+      <div style={{ display: 'flex', gap: 4, padding: 4, borderRadius: 12, background: C.trough, border: border(0.1) }}>
+        {opt('private', 'Private', Shield)}
+        {opt('public', 'Public', Eye)}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * What is actually true about this payment's privacy, per source.
+ *
+ * THE RECIPIENT'S SIDE IS PRIVATE EITHER WAY — value lands as a confidential output at their
+ * stealth address regardless of where it came from. What changes is the SENDER's side: spending
+ * from the public balance is a plain `withdraw` naming this account and a readable amount, so an
+ * observer learns this account paid out that much. Claiming otherwise would be the one dishonest
+ * thing this screen could do, so the public case says it plainly rather than reusing the private
+ * copy.
+ */
+function PrivacyNote({ source }: { source: SendSource }) {
+  const isPrivate = source === 'private'
+  return (
+    <div style={{
+      display: 'flex', gap: 9, padding: '11px 13px', borderRadius: 11, fontSize: 12, lineHeight: 1.5,
+      background: isPrivate ? tealFill(0.05) : warnFill(0.05),
+      border: isPrivate ? tealBorder(0.22) : '1px solid rgba(255,180,60,0.26)',
+      color: isPrivate ? C.teal300 : C.mutedDim,
+    }}>
+      {isPrivate ? <Shield size={14} color={C.teal} /> : <Eye size={14} color={C.warn} />}
+      {isPrivate
+        ? 'Private. The amount and your address stay hidden.'
+        : <span>They receive this privately — but <strong style={{ color: C.warn300, fontWeight: 600 }}>your spend is visible on-chain</strong>, because it comes out of your public balance.</span>}
+    </div>
+  )
+}
+
+export function SendPanel({ view, hidden, onSource, onRecipient, onAmount, onNote, onMax, onReview, onBack, onConfirm, onDone, onRetry, onCopyTx, onViewActivity }: SendPanelProps) {
   if (view.step === 'form') {
+    const isPrivate = view.source === 'private'
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
         <div>
           <FieldLabel>TO</FieldLabel>
           <TextField value={view.recipient} onChange={onRecipient} placeholder="otl_esm_… or @name" ariaLabel="Recipient" />
         </div>
+        {view.canChooseSource && <SourceToggle source={view.source} onSource={onSource} />}
         <AmountField
           value={view.amount} onChange={onAmount} onMax={onMax}
-          availableLabel="Available" availableValue={hidden ? '••••••' : view.available !== null ? fmt6(view.available) : '—'}
+          accent={isPrivate ? 'teal' : 'neutral'}
+          availableLabel={view.canChooseSource ? (isPrivate ? 'Private available' : 'Public available') : 'Available'}
+          availableValue={hidden ? '••••••' : view.available !== null ? fmt6(view.available) : '—'}
           error={view.error}
         />
         <div>
           <FieldLabel>PRIVATE NOTE · OPTIONAL</FieldLabel>
           <TextField value={view.note} onChange={onNote} placeholder="Only your recipient sees this" mono={false} multiline ariaLabel="Private note" />
         </div>
-        <div style={{ display: 'flex', gap: 9, padding: '11px 13px', borderRadius: 11, background: tealFill(0.05), border: tealBorder(0.22), fontSize: 12, color: C.teal300, lineHeight: 1.5 }}>
-          <Shield size={14} color={C.teal} />
-          Private. The amount and your address stay hidden.
-        </div>
+        <PrivacyNote source={view.source} />
         <Button tone={view.canReview ? 'primary' : 'disabled'} onClick={view.canReview ? onReview : undefined}>Review payment</Button>
       </div>
     )
@@ -191,11 +273,14 @@ export function SendPanel({ view, hidden, onRecipient, onAmount, onNote, onMax, 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
         <DetailCard>
           <DetailRow label="To" value={shortAddr(view.recipient)} valueColor={C.body} />
+          <DetailRow label="From" value={view.source === 'private' ? 'Private balance' : 'Public balance'}
+            valueColor={view.source === 'private' ? C.teal300 : C.bodyDim} />
           <DetailRow label="Amount" value={TARI(view.amountMicrotari)} valueColor={C.bright} />
           <DetailRow label="Network fee" last value={pricing
             ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><Spinner size={12} /><span style={{ fontFamily: 'inherit', fontSize: 12.5, color: C.faint }}>Pricing…</span></span>
             : view.feeIsCeiling ? `up to ${TARI(view.feeMicrotari!)}` : TARI(view.feeMicrotari!)} />
         </DetailCard>
+        <PrivacyNote source={view.source} />
         {view.note && (
           <div style={{ padding: '12px 14px', borderRadius: 11, background: C.trough, border: `1px dashed rgba(45,224,198,0.26)` }}>
             <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.12em', color: C.tealDim, marginBottom: 6 }}>PRIVATE NOTE</div>
@@ -229,7 +314,9 @@ export function SendPanel({ view, hidden, onRecipient, onAmount, onNote, onMax, 
           ring={{ fill: tealFill(0.1), border: tealBorder(0.35) }}
           icon={<Check color={C.teal} />}
           title="Sent"
-          sub={`${fmt6(view.amountMicrotari)} TARI to ${shortAddr(view.recipient)}`}
+          sub={view.lagged
+            ? `${fmt6(view.amountMicrotari)} TARI to ${shortAddr(view.recipient)}. Confirmed on the network — your balance hasn’t caught up yet, so tap Refresh in a moment. Nothing is at risk.`
+            : `${fmt6(view.amountMicrotari)} TARI to ${shortAddr(view.recipient)}`}
         />
         <DetailCard><DetailRow label="Network fee" value={TARI(view.feeMicrotari)} last /></DetailCard>
         <TxRow txId={view.txId} onCopy={() => onCopyTx(view.txId)} />

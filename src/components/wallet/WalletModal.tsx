@@ -33,20 +33,25 @@ import { useBalanceSettle } from './useBalanceSettle'
 import OnsRegisterPanel from './OnsRegisterPanel'
 import FaucetClaimPanel from './FaucetClaimPanel'
 import { sendConfidential, tariToMicrotari, MAX_FEE, type SendOutcome } from '../../crypto/confidentialSend'
+import {
+  MIN_PUBLIC_SEND_MICROTARI, assertValidRecipient, maxPublicSend, preparePublicSend,
+  type PreparedPublicSend,
+} from '../../crypto/publicSend'
+import { parseOotleAddress } from '@tari-project/ootle-wasm'
 import { buildActivity, type ActivityRow } from '../../crypto/activity'
 import { usePaymentResolution } from '../../hooks/usePaymentResolution'
 import WalletModalV2, { type MoveView, type Resulting, type WalletTab } from './v2/WalletModalV2'
 import { computeTotal } from './v2/total'
 import type { BalanceView } from './v2/balances'
 import type { Dir, EntryProps } from './v2/move'
-import { ActivityRowShell, type ActivityStatus, type SendView } from './v2/panels'
+import { ActivityRowShell, type ActivityStatus, type SendSource, type SendView } from './v2/panels'
 import { plainError } from './v2/plainError'
 import { toInput } from './v2/format'
 
 // The PUBLIC ↔ PRIVATE move. Its own state machine rather than SendStep's: a move has no recipient,
 // prices itself before review, and its terminal states carry different information.
 type MoveStep = 'idle' | 'form' | 'pricing' | 'review' | 'moving' | 'settling' | 'success' | 'error'
-type SendStep = 'form' | 'review' | 'sending' | 'success' | 'error'
+type SendStep = 'form' | 'review' | 'sending' | 'settling' | 'success' | 'error'
 
 /** A priced envelope, tagged with the direction that built it. */
 type PreparedMove =
@@ -116,6 +121,29 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
   const [sendError, setSendError] = useState('')
   const [sendFee, setSendFee] = useState<bigint | null>(null)
   const [sendOutcome, setSendOutcome] = useState<SendOutcome | null>(null)
+  /**
+   * Which balance the payment is spent from. The destination is always the recipient's stealth
+   * address, so this only changes the sender's side: which transaction is built, what it costs,
+   * and what is publicly visible.
+   *
+   * Defaults to private — the wallet's primary balance, and the one with nothing to disclose.
+   */
+  const [sendSource, setSendSource] = useState<SendSource>('private')
+  /** A priced, built public send, held between review and confirm. Null on the private path. */
+  const [sendPrepared, setSendPrepared] = useState<PreparedPublicSend | null>(null)
+  /**
+   * The exact µtTARI MAX asked for, when MAX was used — the M2 lesson, applied to Send.
+   *
+   * MAX must mean the whole spendable balance to the last microtari. Deriving it back out of the
+   * text field is a float round-trip through a lossy formatter, so the precise figure lives here
+   * and the string is only what the user sees. Cleared the moment they type, because then the
+   * string IS the intent.
+   */
+  const [sendExact, setSendExact] = useState<bigint | null>(null)
+  const [sendLagging, setSendLagging] = useState(false)
+  /** The spent-from balance captured BEFORE submitting, so the settle loop can see it fall. */
+  const sendPreBalance = useRef<bigint>(0n)
+  const sendDeadline = useRef<number>(0)
 
   const [moveStep, setMoveStep] = useState<MoveStep>('idle')
   const [moveDir, setMoveDir] = useState<Dir>('conceal')
@@ -168,12 +196,31 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
     before: movePreBalance.current,
     deadlineAt: moveDeadline.current,
     rescan,
-    onRose: () => { setMoveStep('success') },
+    onSettled: () => { setMoveStep('success') },
     onDeadline: () => {
       // NOT an error. The transaction committed; only the index is behind. Saying otherwise would
       // tell someone their funds did not move when they demonstrably did.
       setMoveLagging(true)
       setMoveStep('success')
+    },
+  })
+
+  // A committed send is not a visible send either. It has no rise to watch — the money leaves — so
+  // this watches the spent-from balance FALL. Which balance that is depends on the source.
+  useBalanceSettle({
+    active: sendStep === 'settling',
+    balance: sendSource === 'public'
+      ? (revealed.status === 'done' ? revealed.amount : null)
+      : balance,
+    before: sendPreBalance.current,
+    deadlineAt: sendDeadline.current,
+    direction: 'fall',
+    rescan,
+    onSettled: () => { setSendStep('success') },
+    onDeadline: () => {
+      // NOT an error. The payment committed; only the index is behind.
+      setSendLagging(true)
+      setSendStep('success')
     },
   })
 
@@ -224,27 +271,75 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
 
   function validateSendForm(): string | null {
     if (!wallet) return 'Your wallet is locked — unlock it before sending.'
-    if (!sendRecipient.startsWith('otl_esm_')) return 'That doesn’t look like a Tari address — it should start with otl_esm_.'
+    // The SAME recipient check on both paths. It is strictly better than the old prefix test: a
+    // mainnet address is well-formed and passes `startsWith`, and paying one would commit to keys
+    // nobody on this chain is watching. Unrecoverable either way, so it is checked either way.
+    try {
+      assertValidRecipient(sendRecipient, parseOotleAddress)
+    } catch (e) {
+      return e instanceof Error ? e.message : String(e)
+    }
     const amountTari = parseFloat(sendAmount)
     if (!isFinite(amountTari) || amountTari <= 0) return 'Enter an amount greater than zero.'
-    const amountMicrotari = tariToMicrotari(amountTari)
+    const amountMicrotari = sendExact ?? tariToMicrotari(amountTari)
+
+    if (sendSource === 'public') {
+      if (amountMicrotari < MIN_PUBLIC_SEND_MICROTARI) {
+        return `The smallest amount you can send from your public balance is ${toInput(MIN_PUBLIC_SEND_MICROTARI)} TARI.`
+      }
+      if (amountMicrotari > publicSendCeiling) {
+        return `Not enough public balance — the fee comes out of it too. Most you can send now: ${toInput(publicSendCeiling)} TARI.`
+      }
+      return null
+    }
+
     if (balance !== null && amountMicrotari + MAX_FEE > balance) {
       return `Not enough private balance — this needs ${toInput(amountMicrotari + MAX_FEE)} TARI including the fee, and you have ${toInput(balance)} TARI.`
     }
     return null
   }
 
-  function handleReview() {
+  /**
+   * Review.
+   *
+   * The two sources reach it differently, and the difference is honest rather than incidental. A
+   * PUBLIC send has a prepare/submit split, so it is priced here by dry run and the review shows an
+   * EXACT fee. A PRIVATE send has no such split — confidentialSend dry-runs inside submission — so
+   * its review can only show a ceiling. Neither is dressed up as the other.
+   */
+  async function handleReview() {
     const err = validateSendForm()
     if (err) { setSendValidationError(err); return }
     setSendValidationError('')
+    setSendPrepared(null)
+
+    if (sendSource !== 'public') { setSendStep('review'); return }
+
+    // Priced in place: review renders with a spinner on the fee row until this resolves.
     setSendStep('review')
+    setSendProgress('')
+    try {
+      if (!wallet || !address) return
+      const prepared = await preparePublicSend(wallet, address, parseOotleAddress, {
+        recipient: sendRecipient.trim(),
+        amountMicrotari: sendExact ?? tariToMicrotari(parseFloat(sendAmount)),
+        onProgress: setSendProgress,
+      })
+      setSendPrepared(prepared)
+    } catch (e) {
+      // Nothing has been sent, so the user can adjust and retry with no on-chain consequence.
+      setSendValidationError(plainError(e instanceof Error ? e.message : String(e)))
+      setSendStep('form')
+    }
   }
 
   function resetSend() {
     setSendRecipient(''); setSendAmount(''); setSendNote('')
     setSendStep('form'); setSendValidationError(''); setSendProgress('')
     setSendTxId(''); setSendError(''); setSendFee(null); setSendOutcome(null)
+    setSendPrepared(null); setSendExact(null); setSendLagging(false)
+    // `sendSource` is deliberately NOT reset — it is the user's standing preference for this
+    // session, and silently flipping it back after every payment would be its own surprise.
   }
 
   function resetMove() {
@@ -322,29 +417,40 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
 
   async function handleConfirmSend() {
     if (!wallet || !address) return
+    const amountMicrotari = sendExact ?? tariToMicrotari(parseFloat(sendAmount))
     setSendStep('sending')
     setSendProgress('Connecting…')
     setSendTxId('')
     setSendError('')
     try {
-      const result = await sendConfidential(wallet, address, {
-        recipient: sendRecipient,
-        amountMicrotari: tariToMicrotari(parseFloat(sendAmount)),
-        memo: sendNote || undefined,
-        onProgress: setSendProgress,
-      })
+      // PUBLIC submits the exact envelope that was priced at review; PRIVATE builds and submits in
+      // one call, as it always has. Neither path's builder changed.
+      const result = sendSource === 'public' && sendPrepared
+        ? await sendPrepared.submit(setSendProgress)
+        : await sendConfidential(wallet, address, {
+            recipient: sendRecipient,
+            amountMicrotari,
+            memo: sendNote || undefined,
+            onProgress: setSendProgress,
+          })
       setSendTxId(result.txId)
       setSendFee(result.feeMicrotari ?? null)
       setSendOutcome(result.outcome)
       recordSent({
         recipient: sendRecipient,
-        amountMicrotari: tariToMicrotari(parseFloat(sendAmount)),
+        amountMicrotari,
         note: sendNote || '',
         txHash: result.txId,
         outcome: result.outcome,
       })
       if (result.outcome === 'Commit') {
-        setSendStep('success')
+        // Committed, but the spend is not VISIBLE until the index catches up — the same 60–90s lag
+        // the move flow has. A send has no rise to watch, so the settle loop watches the
+        // spent-from balance FALL instead.
+        sendPreBalance.current = (sendSource === 'public' ? revealedAmount : balance) ?? 0n
+        sendDeadline.current = Date.now() + MOVE_SETTLE_MS
+        setSendLagging(false)
+        setSendStep('settling')
         rescan()
       } else {
         setSendError(
@@ -412,6 +518,20 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
       ? { privateAfter: privateAmount - m.p.revealedOutput, publicAfter: revealedAmount + m.p.revealedAmount }
       : { privateAfter: privateAmount + m.p.concealedAmount, publicAfter: revealedAmount - m.p.withdrawAmount }
   }
+
+  // ── Send: what each source can spend ──
+  //
+  // The ceilings differ because the fee comes from different places. A private send reserves the
+  // MAX_FEE ceiling out of the same balance; a public send withdraws `amount + fee` from the vault,
+  // which is what maxPublicSend accounts for.
+  const sendAvailable = sendSource === 'public' ? revealedAmount : balance
+  const publicSendCeiling = maxPublicSend(revealedAmount)
+  const sendCeiling = sendSource === 'public'
+    ? publicSendCeiling
+    : (balance !== null && balance > MAX_FEE ? balance - MAX_FEE : 0n)
+  /** Both sides can actually fund a payment, so the choice is real. */
+  const canChooseSource =
+    balance !== null && balance > MAX_FEE && publicSendCeiling >= MIN_PUBLIC_SEND_MICROTARI
 
   const moveView: MoveView =
     moveStep === 'form' ? {
@@ -490,24 +610,36 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
     },
   ]
 
+  const sendAmountMicro = sendExact ?? tariToMicrotari(parseFloat(sendAmount) || 0)
+
   const sendView: SendView =
     sendStep === 'review' ? {
-      step: 'review', recipient: sendRecipient,
-      amountMicrotari: tariToMicrotari(parseFloat(sendAmount) || 0),
+      step: 'review', recipient: sendRecipient, source: sendSource,
+      amountMicrotari: sendPrepared?.recipientAmount ?? sendAmountMicro,
       note: sendNote,
-      // A CEILING, not a measurement. sendConfidential dry-runs inside submission and has no
-      // prepare/submit split, so before confirming this is the only honest figure. The success
-      // screen then shows what was actually paid.
-      feeMicrotari: MAX_FEE, feeIsCeiling: true,
+      // PUBLIC prices itself before review, so this is an exact measured fee. PRIVATE cannot —
+      // sendConfidential dry-runs inside submission — so it can only offer a ceiling, and says so.
+      ...(sendSource === 'public'
+        ? { feeMicrotari: sendPrepared?.feeMicrotari ?? null }
+        : { feeMicrotari: MAX_FEE, feeIsCeiling: true }),
     }
     : sendStep === 'sending' ? {
-      step: 'sending', amountMicrotari: tariToMicrotari(parseFloat(sendAmount) || 0),
-      progress: sendProgress || 'Building the private proof and broadcasting. Don’t close this window.',
+      step: 'sending', source: sendSource, amountMicrotari: sendAmountMicro,
+      progress: sendProgress || 'Building the payment and broadcasting. Don’t close this window.',
+    }
+    : sendStep === 'settling' ? {
+      step: 'success', recipient: sendRecipient,
+      amountMicrotari: sendAmountMicro,
+      feeMicrotari: sendFee ?? (sendSource === 'public' ? (sendPrepared?.feeMicrotari ?? MAX_FEE) : MAX_FEE),
+      txId: sendTxId,
     }
     : sendStep === 'success' ? {
       step: 'success', recipient: sendRecipient,
-      amountMicrotari: tariToMicrotari(parseFloat(sendAmount) || 0),
-      feeMicrotari: sendFee ?? MAX_FEE, txId: sendTxId,
+      amountMicrotari: sendAmountMicro,
+      feeMicrotari: sendFee ?? (sendSource === 'public' ? (sendPrepared?.feeMicrotari ?? MAX_FEE) : MAX_FEE),
+      txId: sendTxId,
+      // A passed deadline is still a success — the payment committed, only the index is behind.
+      lagged: sendLagging,
     }
     // A TIMEOUT IS NOT A FAILURE. It was broadcast and may still land, so it must not wear the
     // red card that says nothing left the wallet.
@@ -517,7 +649,9 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
     : sendStep === 'error' ? { step: 'error', message: sendError || 'Unknown error.' }
     : {
       step: 'form', recipient: sendRecipient, amount: sendAmount, note: sendNote,
-      available: balance, canReview: !!sendRecipient && !!sendAmount,
+      source: sendSource, canChooseSource,
+      available: sendAvailable,
+      canReview: !!sendRecipient && !!sendAmount,
       error: sendValidationError || undefined,
     }
 
@@ -563,11 +697,14 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
           overviewExtras={<><FaucetClaimPanel /><OnsRegisterPanel /></>}
           send={{
             view: sendView, hidden: balanceHidden,
+            onSource: s => { setSendSource(s); setSendExact(null); setSendValidationError('') },
             onRecipient: v => { setSendRecipient(v); setSendValidationError('') },
-            onAmount: v => { setSendAmount(v); setSendValidationError('') },
+            onAmount: v => { setSendAmount(v); setSendExact(null); setSendValidationError('') },
             onNote: setSendNote,
-            onMax: () => { if (balance !== null) setSendAmount(toInput(balance > MAX_FEE ? balance - MAX_FEE : 0n)) },
-            onReview: handleReview,
+            // EXACT BIGINT per source. The string is only what the user sees; the precise figure
+            // rides in sendExact so nothing round-trips through a lossy formatter.
+            onMax: () => { setSendExact(sendCeiling); setSendAmount(toInput(sendCeiling)); setSendValidationError('') },
+            onReview: () => void handleReview(),
             onBack: () => setSendStep('form'),
             onConfirm: () => void handleConfirmSend(),
             onDone: resetSend,

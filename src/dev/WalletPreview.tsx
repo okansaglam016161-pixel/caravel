@@ -131,7 +131,7 @@ function Drive() {
   const [onsName, setOnsName] = useState('')
   const [copied, setCopied] = useState(false)
   const [addrReady, setAddrReady] = useState(true)
-  const [send, setSend] = useState<SendView>({ step: 'form', recipient: '', amount: '', note: '', available: PRIVATE, canReview: false })
+  const [send, setSend] = useState<SendView>({ step: 'form', recipient: '', amount: '', note: '', available: PRIVATE, canReview: false, source: 'private', canChooseSource: true })
   const [refreshing, setRefreshing] = useState(false)
   const [emptyActivity, setEmptyActivity] = useState(false)
   const [incomplete, setIncomplete] = useState(false)
@@ -257,23 +257,24 @@ function Drive() {
       onRecipient: v => setSend(s0 => s0.step === 'form' ? { ...s0, recipient: v, canReview: !!v && !!s0.amount } : s0),
       onAmount: v => setSend(s0 => s0.step === 'form' ? { ...s0, amount: v, canReview: !!s0.recipient && !!v } : s0),
       onNote: v => setSend(s0 => s0.step === 'form' ? { ...s0, note: v } : s0),
+      onSource: (src) => setSend(s0 => s0.step === 'form' ? { ...s0, source: src } : s0),
       onMax: () => setSend(s0 => s0.step === 'form' ? { ...s0, amount: toInput(privV > SEND_FEE ? privV - SEND_FEE : 0n), canReview: !!s0.recipient } : s0),
       onReview: () => setSend(s0 => {
         if (s0.step !== 'form') return s0
         const a = parse(s0.amount)
-        setTimeout(() => setSend({ step: 'review', recipient: s0.recipient, amountMicrotari: a, note: s0.note, feeMicrotari: SEND_FEE }), 1300)
-        return { step: 'review', recipient: s0.recipient, amountMicrotari: a, note: s0.note, feeMicrotari: null }
+        setTimeout(() => setSend({ step: 'review', recipient: s0.recipient, amountMicrotari: a, note: s0.note, feeMicrotari: SEND_FEE, source: s0.source }), 1300)
+        return { step: 'review', recipient: s0.recipient, amountMicrotari: a, note: s0.note, feeMicrotari: null, source: s0.source }
       }),
       onBack: () => setSend(s0 => s0.step === 'review'
-        ? { step: 'form', recipient: s0.recipient, amount: toInput(s0.amountMicrotari), note: s0.note, available: privV, canReview: true }
+        ? { step: 'form', recipient: s0.recipient, amount: toInput(s0.amountMicrotari), note: s0.note, available: privV, canReview: true, source: s0.source, canChooseSource: true }
         : s0),
       onConfirm: () => setSend(s0 => {
         if (s0.step !== 'review') return s0
         setTimeout(() => setSend({ step: 'success', recipient: s0.recipient, amountMicrotari: s0.amountMicrotari, feeMicrotari: SEND_FEE, txId: TXID }), 1800)
-        return { step: 'sending', amountMicrotari: s0.amountMicrotari, progress: 'Building the private proof and broadcasting. Don’t close this window.' }
+        return { step: 'sending', amountMicrotari: s0.amountMicrotari, progress: 'Building the payment and broadcasting. Don’t close this window.', source: s0.source }
       }),
-      onDone: () => setSend({ step: 'form', recipient: '', amount: '', note: '', available: privV, canReview: false }),
-      onRetry: () => setSend({ step: 'form', recipient: '', amount: '', note: '', available: privV, canReview: false }),
+      onDone: () => setSend({ step: 'form', recipient: '', amount: '', note: '', available: privV, canReview: false, source: 'private', canChooseSource: true }),
+      onRetry: () => setSend({ step: 'form', recipient: '', amount: '', note: '', available: privV, canReview: false, source: 'private', canChooseSource: true }),
       onCopyTx: t => navigator.clipboard?.writeText(t).catch(() => {}),
       onViewActivity: () => setTab('activity'),
     },
@@ -322,10 +323,10 @@ function Drive() {
         </Group>
         <Group title="Send state">
           {([
-            ['Form', { step: 'form', recipient: '', amount: '', note: '', available: privV, canReview: false }],
-            ['Review · pricing', { step: 'review', recipient: ADDRESS, amountMicrotari: 1_500_000n, note: 'lunch', feeMicrotari: null }],
-            ['Review · priced', { step: 'review', recipient: ADDRESS, amountMicrotari: 1_500_000n, note: 'lunch', feeMicrotari: SEND_FEE }],
-            ['Sending', { step: 'sending', amountMicrotari: 1_500_000n, progress: 'Building the private proof and broadcasting. Don’t close this window.' }],
+            ['Form', { step: 'form', recipient: '', amount: '', note: '', available: privV, canReview: false, source: 'private', canChooseSource: true }],
+            ['Review · pricing', { step: 'review', recipient: ADDRESS, amountMicrotari: 1_500_000n, note: 'lunch', feeMicrotari: null, source: 'private' }],
+            ['Review · priced', { step: 'review', recipient: ADDRESS, amountMicrotari: 1_500_000n, note: 'lunch', feeMicrotari: SEND_FEE, source: 'private' }],
+            ['Sending', { step: 'sending', amountMicrotari: 1_500_000n, progress: 'Building the payment and broadcasting. Don’t close this window.', source: 'private' }],
             ['Success', { step: 'success', recipient: ADDRESS, amountMicrotari: 1_500_000n, feeMicrotari: SEND_FEE, txId: TXID }],
             ['Unconfirmed', { step: 'unconfirmed', message: 'Broadcast, but the network hasn’t confirmed it yet. Don’t resend — it will appear in Activity.', txId: TXID }],
             ['Error · verbatim', { step: 'error', message: SEND_ERROR }],
@@ -384,8 +385,8 @@ function still(over: Partial<WalletModalV2Props>): WalletModalV2Props {
     scanSummary: { status: 'done', scanned: 1247, owned: 6, progressScanned: 1247 },
     total: computeTotal({ privateBalance: ready(PRIVATE), publicBalance: ready(PUBLIC), privateIncomplete: false, settling: false }),
     send: {
-      view: { step: 'form', recipient: '', amount: '', note: '', available: PRIVATE, canReview: false },
-      hidden: false, onRecipient: noop, onAmount: noop, onNote: noop, onMax: noop,
+      view: { step: 'form', recipient: '', amount: '', note: '', available: PRIVATE, canReview: false, source: 'private', canChooseSource: true },
+      hidden: false, onSource: noop, onRecipient: noop, onAmount: noop, onNote: noop, onMax: noop,
       onReview: noop, onBack: noop, onConfirm: noop, onDone: noop, onRetry: noop,
       onCopyTx: noop, onViewActivity: noop,
     },
@@ -399,7 +400,7 @@ const faucetAt = (phase: FaucetPhase, extra: Record<string, unknown> = {}) =>
 const onsAt = (status: OnsStatus, name = 'okan') =>
   ({ ons: { status, name, feeMicrotari: ONS_FEE, txId: TXID, onName: noop, onCheck: noop, onRegister: noop, onConfirm: noop, onReset: noop, onCopyTx: noop } })
 const sendAt = (view: SendView) =>
-  ({ tab: 'send' as WalletTab, send: { view, hidden: false, onRecipient: noop, onAmount: noop, onNote: noop, onMax: noop, onReview: noop, onBack: noop, onConfirm: noop, onDone: noop, onRetry: noop, onCopyTx: noop, onViewActivity: noop } })
+  ({ tab: 'send' as WalletTab, send: { view, hidden: false, onSource: noop, onRecipient: noop, onAmount: noop, onNote: noop, onMax: noop, onReview: noop, onBack: noop, onConfirm: noop, onDone: noop, onRetry: noop, onCopyTx: noop, onViewActivity: noop } })
 
 function Gallery() {
   const r = (a: bigint, d: Dir) => d === 'conceal'
@@ -450,11 +451,14 @@ function Gallery() {
     { label: 'NAME · FAILED', props: still(onsAt('error')) },
 
     // ── Send ──
-    { label: 'SEND · FORM', props: still(sendAt({ step: 'form', recipient: '', amount: '', note: '', available: PRIVATE, canReview: false })) },
-    { label: 'SEND · FORM, FILLED', props: still(sendAt({ step: 'form', recipient: '@okan', amount: '1.5', note: 'lunch', available: PRIVATE, canReview: true })) },
-    { label: 'SEND · REVIEW, PRICING', props: still(sendAt({ step: 'review', recipient: ADDRESS, amountMicrotari: 1_500_000n, note: 'lunch', feeMicrotari: null })) },
-    { label: 'SEND · REVIEW, PRICED', props: still(sendAt({ step: 'review', recipient: ADDRESS, amountMicrotari: 1_500_000n, note: 'lunch', feeMicrotari: SEND_FEE })) },
-    { label: 'SEND · SENDING', props: still(sendAt({ step: 'sending', amountMicrotari: 1_500_000n, progress: 'Building the private proof and broadcasting. Don’t close this window.' })) },
+    { label: 'SEND · FORM', props: still(sendAt({ step: 'form', recipient: '', amount: '', note: '', available: PRIVATE, canReview: false, source: 'private', canChooseSource: true })) },
+    { label: 'SEND · SOURCE = PUBLIC (honest note)', props: still(sendAt({ step: 'form', recipient: '@okan', amount: '1.5', note: '', available: PUBLIC, canReview: true, source: 'public', canChooseSource: true })) },
+    { label: 'SEND · REVIEW FROM PUBLIC', props: still(sendAt({ step: 'review', recipient: ADDRESS, amountMicrotari: 1_500_000n, note: 'lunch', feeMicrotari: 14_456n, source: 'public' })) },
+    { label: 'SEND · SENT, INDEX LAGGING', props: still(sendAt({ step: 'success', recipient: ADDRESS, amountMicrotari: 1_500_000n, feeMicrotari: SEND_FEE, txId: TXID, lagged: true })) },
+    { label: 'SEND · FORM, FILLED', props: still(sendAt({ step: 'form', recipient: '@okan', amount: '1.5', note: 'lunch', available: PRIVATE, canReview: true, source: 'private', canChooseSource: true })) },
+    { label: 'SEND · REVIEW, PRICING', props: still(sendAt({ step: 'review', recipient: ADDRESS, amountMicrotari: 1_500_000n, note: 'lunch', feeMicrotari: null, source: 'private' })) },
+    { label: 'SEND · REVIEW, PRICED', props: still(sendAt({ step: 'review', recipient: ADDRESS, amountMicrotari: 1_500_000n, note: 'lunch', feeMicrotari: SEND_FEE, source: 'private' })) },
+    { label: 'SEND · SENDING', props: still(sendAt({ step: 'sending', amountMicrotari: 1_500_000n, progress: 'Building the payment and broadcasting. Don’t close this window.', source: 'private' })) },
     { label: 'SEND · SENT', props: still(sendAt({ step: 'success', recipient: ADDRESS, amountMicrotari: 1_500_000n, feeMicrotari: SEND_FEE, txId: TXID })) },
     { label: 'SEND · NOT CONFIRMED YET', props: still(sendAt({ step: 'unconfirmed', message: 'Broadcast, but the network hasn’t confirmed it yet. Don’t resend — it will appear in Activity.', txId: TXID })) },
     { label: 'SEND · FAILED', props: still(sendAt({ step: 'error', message: SEND_ERROR })) },

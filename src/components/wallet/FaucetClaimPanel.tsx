@@ -43,7 +43,7 @@ export default function FaucetClaimPanel() {
     before: preBalance.current,
     deadlineAt: deadline.current,
     rescan,
-    onRose: (delta) => {
+    onSettled: (delta: bigint) => {
       setPhase('done')
       setMsg(`Added ${fmt(delta)} TARI. You can now send it, make it public, or register a name.`)
       setCooldown(true)

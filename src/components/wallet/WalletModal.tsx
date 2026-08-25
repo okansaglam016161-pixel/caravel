@@ -32,7 +32,7 @@ import { loadAccountAddress } from '../../crypto/accountStore'
 import { useBalanceSettle } from './useBalanceSettle'
 import OnsRegisterPanel from './OnsRegisterPanel'
 import FaucetClaimPanel from './FaucetClaimPanel'
-import { sendConfidential, tariToMicrotari, MAX_FEE, type SendOutcome } from '../../crypto/confidentialSend'
+import { sendConfidential, tariToMicrotari, maxStealthSend, MAX_FEE, type SendOutcome } from '../../crypto/confidentialSend'
 import {
   MIN_PUBLIC_SEND_MICROTARI, assertValidRecipient, maxPublicSend, preparePublicSend,
   type PreparedPublicSend,
@@ -46,6 +46,8 @@ import type { BalanceView } from './v2/balances'
 import type { Dir, EntryProps } from './v2/move'
 import { ActivityRowShell, type ActivityStatus, type SendSource, type SendView } from './v2/panels'
 import { plainError } from './v2/plainError'
+import { resolveSendPath } from './v2/sendPath'
+import { GenerationGuard } from './v2/generation'
 import { toInput } from './v2/format'
 
 // The PUBLIC ↔ PRIVATE move. Its own state machine rather than SendStep's: a move has no recipient,
@@ -141,8 +143,9 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
    */
   const [sendExact, setSendExact] = useState<bigint | null>(null)
   const [sendLagging, setSendLagging] = useState(false)
-  /** The spent-from balance captured BEFORE submitting, so the settle loop can see it fall. */
-  const sendPreBalance = useRef<bigint>(0n)
+  /** The spent-from balance captured BEFORE submitting, so the settle loop can see it fall.
+   *  `null` when the read was not settled at that moment — never zero. */
+  const sendPreBalance = useRef<bigint | null>(null)
   const sendDeadline = useRef<number>(0)
 
   const [moveStep, setMoveStep] = useState<MoveStep>('idle')
@@ -164,8 +167,17 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
   const [moveExact, setMoveExact] = useState<bigint | null>(null)
   const [moveLagging, setMoveLagging] = useState(false)
   /** The balance being watched, captured BEFORE submitting so the settle loop can see it rise. */
-  const movePreBalance = useRef<bigint>(0n)
+  const movePreBalance = useRef<bigint | null>(null)
   const moveDeadline = useRef<number>(0)
+  /**
+   * Discards a pricing result the user has already walked away from.
+   *
+   * Back is live while a move is being priced, so the probe can resolve after the screen is gone.
+   * Without this it writes anyway and the dismissed review card returns holding a signed envelope —
+   * on the reveal path, a cancelled irreversible action reappearing armed.
+   */
+  const moveGen = useRef(new GenerationGuard())
+  const sendGen = useRef(new GenerationGuard())
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) { if (e.key === 'Escape') onClose() }
@@ -293,8 +305,13 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
       return null
     }
 
-    if (balance !== null && amountMicrotari + MAX_FEE > balance) {
-      return `Not enough private balance — this needs ${toInput(amountMicrotari + MAX_FEE)} TARI including the fee, and you have ${toInput(balance)} TARI.`
+    // Against the REACHABLE ceiling, not the balance. A stealth send spends one output, so a total
+    // that is spread across many cannot be sent in one payment — and saying so here beats an
+    // "Insufficient funds" failure after the user has confirmed.
+    if (amountMicrotari > privateSendCeiling) {
+      return privateSendCeiling === 0n
+        ? 'You have no private funds to send yet.'
+        : `The most you can send privately in one payment is ${toInput(privateSendCeiling)} TARI.`
     }
     return null
   }
@@ -316,6 +333,7 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
     if (sendSource !== 'public') { setSendStep('review'); return }
 
     // Priced in place: review renders with a spinner on the fee row until this resolves.
+    const token = sendGen.current.begin()
     setSendStep('review')
     setSendProgress('')
     try {
@@ -325,8 +343,10 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
         amountMicrotari: sendExact ?? tariToMicrotari(parseFloat(sendAmount)),
         onProgress: setSendProgress,
       })
+      if (sendGen.current.isStale(token)) return
       setSendPrepared(prepared)
     } catch (e) {
+      if (sendGen.current.isStale(token)) return
       // Nothing has been sent, so the user can adjust and retry with no on-chain consequence.
       setSendValidationError(plainError(e instanceof Error ? e.message : String(e)))
       setSendStep('form')
@@ -334,6 +354,7 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
   }
 
   function resetSend() {
+    sendGen.current.cancel()
     setSendRecipient(''); setSendAmount(''); setSendNote('')
     setSendStep('form'); setSendValidationError(''); setSendProgress('')
     setSendTxId(''); setSendError(''); setSendFee(null); setSendOutcome(null)
@@ -343,6 +364,7 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
   }
 
   function resetMove() {
+    moveGen.current.cancel()
     setMoveStep('idle')
     // `moveDir` is deliberately NOT reset — it is set fresh by whichever entry is pressed.
     setMoveAmount(''); setMoveError(''); setMoveProgress('')
@@ -358,6 +380,7 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
    */
   async function handlePrepareMove() {
     if (!wallet || !address) return
+    const token = moveGen.current.begin()
     setMoveStep('pricing')
     setMoveProgress('')
     setMoveError('')
@@ -370,9 +393,13 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
       const prepared: PreparedMove = moveDir === 'reveal'
         ? { dir: 'reveal', p: await prepareReveal(wallet, address, { amountMicrotari, onProgress: setMoveProgress }) }
         : { dir: 'conceal', p: await prepareConceal(wallet, address, { amountMicrotari, onProgress: setMoveProgress }) }
+      // The user may have pressed Back while this was on the wire. Drop it rather than re-arming
+      // a screen they dismissed.
+      if (moveGen.current.isStale(token)) return
       setMovePrepared(prepared)
       setMoveStep('review')
     } catch (e) {
+      if (moveGen.current.isStale(token)) return
       // Back to the form, with the reason: nothing has been sent, so the user can adjust and retry
       // without any on-chain consequence.
       setMoveError(plainError(e instanceof Error ? e.message : String(e)))
@@ -393,9 +420,11 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
         // Committed, but not yet VISIBLE — hand off to the settle loop rather than declaring success
         // against a balance the indexer has not caught up to. The "before" reading has to be the
         // balance the loop will WATCH, which is direction-dependent.
-        movePreBalance.current = (movePrepared.dir === 'reveal'
+        // No `?? 0n`. An unknown baseline stays unknown, so the loop cannot manufacture a verdict
+        // from a number nobody measured — see useBalanceSettle's `before`.
+        movePreBalance.current = movePrepared.dir === 'reveal'
           ? (revealed.status === 'done' ? revealed.amount : null)
-          : balance) ?? 0n
+          : balance
         moveDeadline.current = Date.now() + MOVE_SETTLE_MS
         setMoveLagging(false)
         setMoveStep('settling')
@@ -423,10 +452,16 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
     setSendTxId('')
     setSendError('')
     try {
-      // PUBLIC submits the exact envelope that was priced at review; PRIVATE builds and submits in
-      // one call, as it always has. Neither path's builder changed.
-      const result = sendSource === 'public' && sendPrepared
-        ? await sendPrepared.submit(setSendProgress)
+      // NO FALLBACK. resolveSendPath refuses rather than quietly spending the other balance — see
+      // v2/sendPath.ts for why this is a function and not a ternary.
+      const path = resolveSendPath(sendSource, sendPrepared)
+      if (path.kind === 'refuse') {
+        setSendError(path.reason)
+        setSendStep('error')
+        return
+      }
+      const result = path.kind === 'public'
+        ? await path.prepared.submit(setSendProgress)
         : await sendConfidential(wallet, address, {
             recipient: sendRecipient,
             amountMicrotari,
@@ -447,7 +482,9 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
         // Committed, but the spend is not VISIBLE until the index catches up — the same 60–90s lag
         // the move flow has. A send has no rise to watch, so the settle loop watches the
         // spent-from balance FALL instead.
-        sendPreBalance.current = (sendSource === 'public' ? revealedAmount : balance) ?? 0n
+        sendPreBalance.current = sendSource === 'public'
+          ? (revealed.status === 'done' ? revealed.amount : null)
+          : balance
         sendDeadline.current = Date.now() + MOVE_SETTLE_MS
         setSendLagging(false)
         setSendStep('settling')
@@ -470,6 +507,14 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
 
   const revealedAmount = revealed.status === 'done' ? (revealed.amount ?? 0n) : 0n
   const privateAmount = balance ?? 0n
+  /**
+   * The private outputs themselves, not just their sum.
+   *
+   * Both private-side ceilings depend on the SHAPE of the balance rather than its total: a stealth
+   * send spends one output, a reveal spends at most MAX_STEALTH_INPUTS. Passing the total to either
+   * offers amounts the builder cannot honour — the bug the M9 integration pass found on both.
+   */
+  const outputValues = scan.utxos.map(u => u.amount)
 
   const privateBalance: BalanceView =
     status === 'error' ? { status: 'unavailable' }
@@ -506,7 +551,7 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
   // leaving the vault, a reveal pays it from the private side ON TOP — which is what maxRevealable
   // accounts for, along with the small stealth reserve.
   const enteredMicro = moveExact ?? (moveAmount === '' ? 0n : tariToMicrotari(parseFloat(moveAmount) || 0))
-  const ceiling = moveDir === 'conceal' ? revealedAmount : maxRevealable(privateAmount)
+  const ceiling = moveDir === 'conceal' ? revealedAmount : maxRevealable(outputValues)
   const minAmount = moveDir === 'conceal' ? MIN_CONCEAL_MICROTARI : MIN_REVEAL_MICROTARI
   const belowMin = moveAmount !== '' && enteredMicro < minAmount
   const overCeiling = moveAmount !== '' && enteredMicro > ceiling
@@ -526,12 +571,11 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
   // which is what maxPublicSend accounts for.
   const sendAvailable = sendSource === 'public' ? revealedAmount : balance
   const publicSendCeiling = maxPublicSend(revealedAmount)
-  const sendCeiling = sendSource === 'public'
-    ? publicSendCeiling
-    : (balance !== null && balance > MAX_FEE ? balance - MAX_FEE : 0n)
+  const privateSendCeiling = maxStealthSend(outputValues)
+  const sendCeiling = sendSource === 'public' ? publicSendCeiling : privateSendCeiling
   /** Both sides can actually fund a payment, so the choice is real. */
   const canChooseSource =
-    balance !== null && balance > MAX_FEE && publicSendCeiling >= MIN_PUBLIC_SEND_MICROTARI
+    privateSendCeiling > 0n && publicSendCeiling >= MIN_PUBLIC_SEND_MICROTARI
 
   const moveView: MoveView =
     moveStep === 'form' ? {
@@ -604,7 +648,7 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
         : balance === null ? 'Checking your private balance…'
         // E2 — the trap the M4 report found. Named before an amount is typed, not after.
         : !hasAccount ? 'Still identifying this wallet’s account — try again in a moment'
-        : maxRevealable(privateAmount) < MIN_REVEAL_MICROTARI ? 'Not enough private balance to cover an amount plus the fee'
+        : maxRevealable(outputValues) < MIN_REVEAL_MICROTARI ? 'Not enough private balance to cover an amount plus the fee'
         : undefined,
       onClick: () => { setMoveDir('reveal'); setMoveStep('form'); setMoveAmount(''); setMoveExact(null); setMoveError('') },
     },
@@ -705,7 +749,8 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
             // rides in sendExact so nothing round-trips through a lossy formatter.
             onMax: () => { setSendExact(sendCeiling); setSendAmount(toInput(sendCeiling)); setSendValidationError('') },
             onReview: () => void handleReview(),
-            onBack: () => setSendStep('form'),
+            // Back out of review: whatever is being priced must not come back and re-arm it.
+            onBack: () => { sendGen.current.cancel(); setSendPrepared(null); setSendStep('form') },
             onConfirm: () => void handleConfirmSend(),
             onDone: resetSend,
             onRetry: resetSend,

@@ -33,8 +33,20 @@ export interface BalanceSettleOptions {
    * Defaults to 'rise', so every existing caller is unchanged.
    */
   direction?: 'rise' | 'fall'
-  /** The balance captured BEFORE the transaction, so a rise can be detected. */
-  before: bigint
+  /**
+   * The balance captured BEFORE the transaction, so movement can be detected.
+   *
+   * `null` means the baseline was NOT KNOWN when the transaction committed — the read was in
+   * flight or had failed. It is deliberately not a number: encoding unknown as zero breaks both
+   * directions, in opposite and equally wrong ways. On a RISE watch, zero is below any real
+   * balance, so the very next poll reports success the transaction has not achieved yet. On a FALL
+   * watch, nothing is below zero, so it can never settle and always runs to the deadline. Same
+   * zero-versus-unavailable discipline as the balance reads themselves.
+   *
+   * With a null baseline the loop waits and then reports the lag honestly — the transaction
+   * committed, and we simply could not verify the effect locally.
+   */
+  before: bigint | null
   /** Absolute epoch-ms cutoff, after which we stop waiting and report the lag. */
   deadlineAt: number
   /** Trigger a fresh scan. */
@@ -60,15 +72,19 @@ export type SettleAction = 'settled' | 'deadline' | 'wait'
  * movement. Treating unknown as zero would let a failed scan read as a balance that never moved,
  * and on a 'fall' watch it would be worse still: zero is BELOW any positive `before`, so an
  * unknown balance would look exactly like a completed spend.
+ *
+ * `null` BEFORE is the same idea from the other side: no baseline, so no comparison is possible and
+ * nothing can be claimed. The loop waits out the deadline and reports the lag rather than inventing
+ * a verdict from a number nobody measured.
  */
 export function settleAction(
   balance: bigint | null,
-  before: bigint,
+  before: bigint | null,
   now: number,
   deadlineAt: number,
   direction: 'rise' | 'fall' = 'rise',
 ): SettleAction {
-  if (balance !== null && (direction === 'rise' ? balance > before : balance < before)) return 'settled'
+  if (balance !== null && before !== null && (direction === 'rise' ? balance > before : balance < before)) return 'settled'
   if (now > deadlineAt) return 'deadline'
   return 'wait'
 }
@@ -104,8 +120,9 @@ export function useBalanceSettle({
 
     // Movement is checked on every render, not only on a tick: the scan that finds the output may
     // land between ticks, and waiting up to a full interval to notice would be needless delay.
-    // The absolute delta, so a caller never has to know which way it was watching.
-    const delta = () => (balance! > before ? balance! - before : before - balance!)
+    // The absolute delta, so a caller never has to know which way it was watching. Only ever
+    // called on the 'settled' branch, where both values are known.
+    const delta = () => (balance! > before! ? balance! - before! : before! - balance!)
 
     if (settleAction(balance, before, Date.now(), deadlineAt, direction) === 'settled') {
       settledRef.current(delta())

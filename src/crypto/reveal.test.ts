@@ -16,15 +16,14 @@
 // pin the refusals that keep a degenerate split from ever reaching a transaction builder.
 
 import { describe, expect, it } from 'vitest'
+import { MAX_STEALTH_INPUTS, selectStealthInputs } from './stealthUtxos'
 import {
-  MAX_STEALTH_INPUTS,
   MIN_REVEAL_MICROTARI,
   MIN_STEALTH_CHANGE,
   REVEAL_FEE_RESERVE,
   assertRevealSplit,
   maxRevealable,
   planReveal,
-  selectStealthInputs,
 } from './reveal'
 import { planConceal } from './conceal'
 
@@ -217,8 +216,8 @@ describe('selectStealthInputs — preference order', () => {
 
 describe('selectStealthInputs — refusals', () => {
   it('refuses when the wallet holds nothing spendable', () => {
-    expect(() => selectStealthInputs([], 1n * TARI)).toThrow(/holds no spendable stealth outputs/)
-    expect(() => selectStealthInputs([utxo(0n)], 1n * TARI)).toThrow(/holds no spendable stealth outputs/)
+    expect(() => selectStealthInputs([], 1n * TARI)).toThrow(/holds no spendable outputs/)
+    expect(() => selectStealthInputs([utxo(0n)], 1n * TARI)).toThrow(/holds no spendable outputs/)
   })
 
   it('refuses with the real numbers when the balance cannot cover the target', () => {
@@ -298,14 +297,14 @@ describe('the balance equation holds end to end', () => {
 
 describe('maxRevealable', () => {
   it('holds back the fee reserve AND a stealth crumb', () => {
-    expect(maxRevealable(1_000n * TARI)).toBe(1_000n * TARI - REVEAL_FEE_RESERVE - MIN_STEALTH_CHANGE)
+    expect(maxRevealable([1_000n * TARI])).toBe(1_000n * TARI - REVEAL_FEE_RESERVE - MIN_STEALTH_CHANGE)
   })
 
   it('KEEPS EVERY BUILD OFF THE ZERO-OUTPUT PATH — the reason the crumb exists', () => {
     // MAX selects every output, so the PRICING build (which reserves the full probe) would have
     // zero change and therefore no stealth output at all. The crumb guarantees one in both builds.
     const balance = 999_597_686n
-    const amount = maxRevealable(balance)
+    const amount = maxRevealable([balance])
     const sel = selectStealthInputs([utxo(balance)], amount + REVEAL_FEE_RESERVE)
 
     const priced = planReveal(amount, REVEAL_FEE_RESERVE, sel.total)
@@ -319,19 +318,19 @@ describe('maxRevealable', () => {
 
   it('MAX never asks for more than the wallet holds', () => {
     for (const balance of [51_001n, 100_000n, 999_997_686n, 1_000n * TARI, 2n ** 70n]) {
-      const amount = maxRevealable(balance)
+      const amount = maxRevealable([balance])
       expect(amount + REVEAL_FEE_RESERVE).toBeLessThanOrEqual(balance)
     }
   })
 
   it('returns 0n — never a negative — when the balance cannot cover the reserve', () => {
     for (const balance of [0n, 1n, 50_000n, REVEAL_FEE_RESERVE + MIN_STEALTH_CHANGE]) {
-      expect(maxRevealable(balance)).toBe(0n)
+      expect(maxRevealable([balance])).toBe(0n)
     }
   })
 
   it('is exact one µtTARI above the reserve', () => {
-    expect(maxRevealable(REVEAL_FEE_RESERVE + MIN_STEALTH_CHANGE + 1n)).toBe(1n)
+    expect(maxRevealable([REVEAL_FEE_RESERVE + MIN_STEALTH_CHANGE + 1n])).toBe(1n)
   })
 })
 
@@ -374,7 +373,7 @@ describe('MAX must publish the exact number, not a rounded one', () => {
     })
 
   it('a MAX-sized reveal is coverable by the balance it came from', () => {
-    const amount = maxRevealable(PRIVATE)
+    const amount = maxRevealable([PRIVATE])
     const sel = selectStealthInputs([utxo(PRIVATE)], amount + REVEAL_FEE_RESERVE)
     const split = planReveal(amount, 16_138n, sel.total)
     assertRevealSplit(split)
@@ -401,7 +400,7 @@ describe('the constants hang together', () => {
 // ── What the FORM depends on (M3 C2) ─────────────────────────────────────────
 //
 // The reveal form's MAX, its ceiling check and its "leaves this much private" note are all one
-// number — maxRevealable(privateBalance) — read three ways. These pin the relationships between
+// number — maxRevealable([privateBalance]) — read three ways. These pin the relationships between
 // them, so a change to the reserve cannot make the button offer an amount the form then rejects,
 // or the note quote a figure that is not what is actually left behind.
 
@@ -414,7 +413,7 @@ describe('the reveal form’s ceiling, MAX and crumb note agree', () => {
     // the M2 failure in a new place. Checked through the same predicate the form uses.
     const reviewBlocked = (entered: bigint, ceiling: bigint) => entered > ceiling || entered < MIN_REVEAL_MICROTARI
     for (const b of BALANCES) {
-      const ceiling = maxRevealable(b)
+      const ceiling = maxRevealable([b])
       if (ceiling < MIN_REVEAL_MICROTARI) continue      // the direction is not offered at all
       expect(reviewBlocked(ceiling, ceiling)).toBe(false)
     }
@@ -424,14 +423,14 @@ describe('the reveal form’s ceiling, MAX and crumb note agree', () => {
     // The note renders `privateAmount - spendCeiling`. It must equal what CP1 holds back, or the
     // user is told a number that does not match the balance they are left with.
     for (const b of BALANCES) {
-      if (maxRevealable(b) === 0n) continue
-      expect(b - maxRevealable(b)).toBe(REVEAL_FEE_RESERVE + MIN_STEALTH_CHANGE)
+      if (maxRevealable([b]) === 0n) continue
+      expect(b - maxRevealable([b])).toBe(REVEAL_FEE_RESERVE + MIN_STEALTH_CHANGE)
     }
   })
 
   it('a MAX reveal is buildable end to end at a realistic fee', () => {
     for (const b of BALANCES) {
-      const amount = maxRevealable(b)
+      const amount = maxRevealable([b])
       if (amount < MIN_REVEAL_MICROTARI) continue
       const sel = selectStealthInputs([utxo(b)], amount + REVEAL_FEE_RESERVE)
       const split = planReveal(amount, 16_138n, sel.total)
@@ -442,12 +441,12 @@ describe('the reveal form’s ceiling, MAX and crumb note agree', () => {
   })
 
   it('the entry point only offers reveal when MAX clears the floor', () => {
-    // `canReveal = maxRevealable(private) >= MIN_REVEAL_MICROTARI`. Below that the card must not
+    // `canReveal = maxRevealable([private]) >= MIN_REVEAL_MICROTARI`. Below that the card must not
     // offer the direction at all, rather than offering it and refusing at the first step.
     const justBelow = MIN_REVEAL_MICROTARI + REVEAL_FEE_RESERVE + MIN_STEALTH_CHANGE - 1n
     const justAt = MIN_REVEAL_MICROTARI + REVEAL_FEE_RESERVE + MIN_STEALTH_CHANGE
-    expect(maxRevealable(justBelow) >= MIN_REVEAL_MICROTARI).toBe(false)
-    expect(maxRevealable(justAt) >= MIN_REVEAL_MICROTARI).toBe(true)
+    expect(maxRevealable([justBelow]) >= MIN_REVEAL_MICROTARI).toBe(false)
+    expect(maxRevealable([justAt]) >= MIN_REVEAL_MICROTARI).toBe(true)
   })
 
   it('the input formatter round-trips MAX exactly at every realistic balance', () => {
@@ -456,7 +455,7 @@ describe('the reveal form’s ceiling, MAX and crumb note agree', () => {
     // rather than at a clean threshold. Every balance a wallet can plausibly hold sits orders of
     // magnitude under that; the case that does not is pinned separately below.
     for (const b of [51_001n, 1n * TARI, 980_000_000n, 999_997_686n, 123_456_789_012n, 100_000_000_000_000n]) {
-      const ceiling = maxRevealable(b)
+      const ceiling = maxRevealable([b])
       if (ceiling === 0n) continue
       expect(parseTari(microtariToInput(ceiling))).toBe(ceiling)
     }
@@ -472,9 +471,95 @@ describe('the reveal form’s ceiling, MAX and crumb note agree', () => {
     // "simplifies" the form to re-parse its own field, the number below is what would be published.
     // u64 max — above any plausible balance, but the whole TARI supply is the same order of
     // magnitude (~1.8e19 µtTARI), so this is the boundary the rail actually has to survive.
-    const ceiling = maxRevealable(18_446_744_073_709_551_615n)
+    const ceiling = maxRevealable([18_446_744_073_709_551_615n])
     const roundTripped = parseTari(microtariToInput(ceiling))
     expect(roundTripped).not.toBe(ceiling)
     expect(roundTripped).toBeLessThan(ceiling)   // silently reveals LESS than MAX offered
+  })
+})
+
+// ── MAX must never offer what the selection cannot reach ────────────────────
+//
+// The M9 integration pass found MAX offering the whole balance while selection capped at 8 inputs,
+// so every press failed at Review. The cap is now 64 — which the protocol permits many times over
+// (STEALTH_LIMITS.max_inputs = 1000) — so a realistic wallet is fully reachable and MAX offers the
+// real balance. The ceiling logic still has to hold at the boundary, which is what this pins.
+
+describe('maxRevealable respects the input cap', () => {
+  const reserve = REVEAL_FEE_RESERVE + MIN_STEALTH_CHANGE
+
+  /** The real seeded-wallet distribution — 15 outputs, comfortably inside the cap. */
+  const FRAGMENTED = [
+    245_949_129n, 199_985_542n, 199_985_542n, 100_000_000n, 100_000_000n, 100_000_000n,
+    47_985_543n, 47_985_543n, 43_985_543n, 7_000_000n, 5_985_462n, 3_956_464n,
+    2_971_007n, 985_544n, 971_009n,
+  ]
+
+  it('a realistic wallet is FULLY reachable — MAX is the whole balance', () => {
+    // The point of raising the cap: 15 outputs are no longer a limitation.
+    const total = FRAGMENTED.reduce((s, v) => s + v, 0n)
+    expect(maxRevealable(FRAGMENTED)).toBe(total - reserve)
+  })
+
+  it('MAX selects successfully on that wallet, using every output', () => {
+    const offered = maxRevealable(FRAGMENTED)
+    const sel = selectStealthInputs(FRAGMENTED.map(value => ({ value })), offered + REVEAL_FEE_RESERVE)
+    expect(sel.inputs.length).toBe(FRAGMENTED.length)
+    const split = planReveal(offered, 16_138n, sel.total)
+    assertRevealSplit(split)
+    expect(split.changeAmount).toBeGreaterThan(0n)
+  })
+
+  it('BEYOND THE CAP: offers the top-64 sum, not the total', () => {
+    // 100 equal outputs — only 64 can be gathered in one transfer.
+    const many = Array.from({ length: 100 }, () => 10_000_000n)
+    const total = many.reduce((s, v) => s + v, 0n)
+    const top64 = 10_000_000n * BigInt(MAX_STEALTH_INPUTS)
+    expect(maxRevealable(many)).toBe(top64 - reserve)
+    expect(maxRevealable(many)).toBeLessThan(total - reserve)
+  })
+
+  it('BEYOND THE CAP: what it offers still selects, landing exactly on the cap', () => {
+    const many = Array.from({ length: 100 }, () => 10_000_000n)
+    const offered = maxRevealable(many)
+    const sel = selectStealthInputs(many.map(value => ({ value })), offered + REVEAL_FEE_RESERVE)
+    expect(sel.inputs.length).toBe(MAX_STEALTH_INPUTS)
+    assertRevealSplit(planReveal(offered, 16_138n, sel.total))
+  })
+
+  it('the total-based figure would have been refused past the cap', () => {
+    const many = Array.from({ length: 100 }, () => 10_000_000n)
+    const total = many.reduce((s, v) => s + v, 0n)
+    expect(() => selectStealthInputs(many.map(value => ({ value })), (total - reserve) + REVEAL_FEE_RESERVE))
+      .toThrow(/too many small outputs/)
+  })
+
+  it('ignores zero-value outputs when picking the top N', () => {
+    expect(maxRevealable([0n, 100_000_000n, 0n, 50_000_000n])).toBe(150_000_000n - reserve)
+  })
+
+  it('returns 0n when nothing is reachable', () => {
+    expect(maxRevealable([])).toBe(0n)
+    expect(maxRevealable([1n, 2n])).toBe(0n)
+    expect(maxRevealable([reserve])).toBe(0n)
+  })
+
+  it('EVERY offered MAX selects successfully, across many shapes', () => {
+    const shapes = [
+      FRAGMENTED,
+      Array.from({ length: 30 }, (_, i) => BigInt(i + 1) * 1_000_000n),
+      Array.from({ length: 200 }, () => 5_000_000n),
+      Array.from({ length: 64 }, () => 20_000_000n),
+      Array.from({ length: 65 }, () => 20_000_000n),
+      [500_000_000n],
+      [60_000n, 60_000n, 60_000n],
+    ]
+    for (const shape of shapes) {
+      const offered = maxRevealable(shape)
+      if (offered < MIN_REVEAL_MICROTARI) continue
+      const sel = selectStealthInputs(shape.map(value => ({ value })), offered + REVEAL_FEE_RESERVE)
+      expect(sel.inputs.length).toBeLessThanOrEqual(MAX_STEALTH_INPUTS)
+      assertRevealSplit(planReveal(offered, 16_138n, sel.total))
+    }
   })
 })

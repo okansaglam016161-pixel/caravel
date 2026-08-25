@@ -104,3 +104,38 @@ describe('settleAction — direction: fall', () => {
     expect(settleAction(4n, 5n, NOW, LATER)).toBe('wait')
   })
 })
+
+// ── F3: an unknown baseline is not zero ──────────────────────────────────────
+//
+// Found by the M9 integration pass. The baseline used to default to 0n when the watched read had
+// not settled, which breaks BOTH directions in opposite ways — and both silently.
+
+describe('settleAction — a null baseline', () => {
+  it('RISE: never reports a success it has not seen', () => {
+    // With before = 0n this returned 'settled' on the first poll, because any real balance is
+    // above zero — a false success for a transaction whose effect had not landed.
+    expect(settleAction(700_000_000n, null, NOW, LATER, 'rise')).toBe('wait')
+    expect(settleAction(0n, null, NOW, LATER, 'rise')).toBe('wait')
+  })
+
+  it('FALL: waits rather than settling on a phantom drop', () => {
+    expect(settleAction(4_000_000n, null, NOW, LATER, 'fall')).toBe('wait')
+  })
+
+  it('still reports the lag once the deadline passes, in both directions', () => {
+    // The honest outcome: the transaction committed, we could not verify it locally.
+    expect(settleAction(700_000_000n, null, NOW, PASSED, 'rise')).toBe('deadline')
+    expect(settleAction(4_000_000n, null, NOW, PASSED, 'fall')).toBe('deadline')
+  })
+
+  it('both unknown is still just a wait', () => {
+    expect(settleAction(null, null, NOW, LATER)).toBe('wait')
+    expect(settleAction(null, null, NOW, PASSED)).toBe('deadline')
+  })
+
+  it('a known baseline of zero still works — zero is a real balance', () => {
+    // The fix must not confuse "no baseline" with "a baseline that happens to be zero".
+    expect(settleAction(1n, 0n, NOW, LATER, 'rise')).toBe('settled')
+    expect(settleAction(0n, 1n, NOW, LATER, 'fall')).toBe('settled')
+  })
+})

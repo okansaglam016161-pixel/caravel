@@ -109,7 +109,10 @@ import { extractAccountAddress } from './accountAddress'
 import { loadAccountAddress, saveAccountAddress } from './accountStore'
 import { nextMaxEpoch } from './epoch'
 import { dryRunFee, withFeeMargin } from './feeProbe'
-import { StaticSigner, scanOwnedUtxos, type OwnedUtxo } from './stealthUtxos'
+import { probeFeeFor } from './confidentialSend'
+import {
+  StaticSigner, reachableTotal, scanOwnedUtxos, selectStealthInputs, type OwnedUtxo,
+} from './stealthUtxos'
 
 const INDEXER_URL = 'https://ootle-indexer-a.tari.com'
 
@@ -156,17 +159,6 @@ export const MIN_STEALTH_CHANGE = 1_000n
  * past.
  */
 export const MIN_REVEAL_MICROTARI = 100_000n
-
-/**
- * Most stealth inputs one reveal may spend.
- *
- * Every input adds a commitment to the statement, a one-time signature to the envelope, and cost to
- * the fee. Unbounded, a wallet holding many small outputs would build a transaction that prices
- * fine in simulation and is then refused for size AFTER the user confirmed an irreversible action.
- * A bound turns that into an honest refusal beforehand. 8 covers any realistic wallet here; a user
- * who genuinely needs more can reveal twice, or consolidate with a self-send first.
- */
-export const MAX_STEALTH_INPUTS = 8
 
 export type RevealOutcome = 'Commit' | 'Reject' | 'Timeout'
 
@@ -272,100 +264,21 @@ export function assertRevealSplit(split: RevealSplit): void {
 }
 
 /**
- * The largest amount MAX may offer for a given private balance.
+ * The largest amount MAX may offer, given the OUTPUTS the wallet actually holds.
+ *
+ * TAKES THE OUTPUTS, NOT THE TOTAL. A transfer can spend at most MAX_STEALTH_INPUTS of them, so on
+ * a wallet fragmented past that cap the balance is not reachable in one transaction — and offering
+ * it anyway is the "available-then-broken" failure the M4 report ruled unacceptable. For any wallet
+ * within the cap (which is nearly all of them, at 64) this is simply the whole balance.
  *
  * Reserves the fee probe AND MIN_STEALTH_CHANGE, so the priced build and the real one both carry a
- * stealth change output (see MIN_STEALTH_CHANGE). Returns 0n when the balance cannot cover the
- * reserve at all, which the caller should treat as "MAX is not available", never as an amount.
- *
- * EXACT BIGINT, and it must stay that way: this feeds an amount field whose value is published
- * permanently, and the M2 lesson was that routing a balance through a display formatter overshoots
- * it. Nothing here rounds.
+ * stealth change output. Returns 0n when nothing is reachable — treat that as "MAX unavailable",
+ * never as an amount. EXACT BIGINT: this feeds an amount field whose value is published permanently.
  */
-export function maxRevealable(privateTotal: bigint): bigint {
+export function maxRevealable(outputValues: readonly bigint[]): bigint {
+  const reachable = reachableTotal(outputValues)
   const reserve = REVEAL_FEE_RESERVE + MIN_STEALTH_CHANGE
-  return privateTotal > reserve ? privateTotal - reserve : 0n
-}
-
-// ── Stealth input selection ───────────────────────────────────────────────────
-
-/** The minimum a candidate must expose to be selectable. Keeps selection testable without a chain. */
-export interface Spendable { value: bigint }
-
-export interface InputSelection<T extends Spendable> {
-  /** The UTXOs to spend, in the order they will be added to the statement. */
-  inputs: T[]
-  /** Their summed value — the `inputTotal` planReveal balances against. */
-  total: bigint
-}
-
-/**
- * Choose stealth UTXOs covering `target` (= amount + fee).
- *
- * THE ORDER OF PREFERENCE, and why each step is where it is:
- *
- *   1. An EXACT single match, if one exists. One input, no change output, smallest possible
- *      transaction — and no change means no opportunity to compute one wrongly.
- *   2. Otherwise the SMALLEST single UTXO that covers the target. One input still, and it locks the
- *      least value; it also leaves the wallet's larger outputs intact for later. This mirrors what
- *      the send path has always done.
- *   3. Otherwise accumulate LARGEST-FIRST until covered. Largest-first minimises the number of
- *      inputs, which is what the fee and MAX_STEALTH_INPUTS both care about.
- *
- * Refuses rather than improvising when the wallet cannot cover the target, or when covering it
- * would need more inputs than MAX_STEALTH_INPUTS — both with the actual numbers, because an
- * irreversible action deserves to fail with a reason the user can act on.
- *
- * DETERMINISTIC for a given candidate list: sorts are stable and the input order is the indexer's,
- * so the transaction priced by the dry run is built from the same inputs as the one submitted.
- */
-export function selectStealthInputs<T extends Spendable>(utxos: T[], target: bigint): InputSelection<T> {
-  if (target <= 0n) throw new Error('Reveal target must be greater than zero.')
-
-  // Zero-value outputs cannot help cover anything and would only inflate the input count.
-  const usable = utxos.filter(u => u.value > 0n)
-  if (usable.length === 0) {
-    throw new Error('No private funds found to reveal. This wallet holds no spendable stealth outputs.')
-  }
-
-  const available = usable.reduce((s, u) => s + u.value, 0n)
-  if (available < target) {
-    throw new Error(
-      `Not enough private funds. This reveal needs ${target} µtTARI (amount + network fee), ` +
-      `and the wallet holds ${available} µtTARI across ${usable.length} output(s).`,
-    )
-  }
-
-  // 1 — exact single match.
-  const exact = usable.find(u => u.value === target)
-  if (exact) return { inputs: [exact], total: exact.value }
-
-  // 2 — smallest single UTXO that covers it.
-  const covering = usable.filter(u => u.value > target).sort((a, b) => (a.value < b.value ? -1 : a.value > b.value ? 1 : 0))
-  const single = covering[0]
-  if (single) return { inputs: [single], total: single.value }
-
-  // 3 — largest-first accumulation.
-  const descending = [...usable].sort((a, b) => (a.value > b.value ? -1 : a.value < b.value ? 1 : 0))
-  const inputs: T[] = []
-  let total = 0n
-  for (const u of descending) {
-    inputs.push(u)
-    total += u.value
-    if (total >= target) break
-  }
-
-  // `available >= target` was checked above, so the loop always reaches the target; the only way to
-  // arrive here over budget is needing too many inputs to get there.
-  if (inputs.length > MAX_STEALTH_INPUTS) {
-    throw new Error(
-      `Your private balance is spread across too many small outputs to reveal ${target} µtTARI in one ` +
-      `transaction (it would need ${inputs.length}, and the limit is ${MAX_STEALTH_INPUTS}). ` +
-      `Reveal a smaller amount, or send yourself a payment first to consolidate.`,
-    )
-  }
-
-  return { inputs, total }
+  return reachable > reserve ? reachable - reserve : 0n
 }
 
 // ── Transaction ───────────────────────────────────────────────────────────────
@@ -625,7 +538,13 @@ export async function prepareReveal(
   }
 
   log('Estimating network fee…')
-  const probe = await buildEnvelope(REVEAL_FEE_RESERVE, true)
+  // SAME SHAPE AS THE REAL BUILD. Reserving the full probe fee can leave zero change, and a reveal
+  // with zero change emits NO stealth output at all — a structurally different (and cheaper)
+  // transaction than the one submitted. Outputs dominate the fee (PER_OUTPUT 6 000 000 points vs
+  // PER_INPUT 42 000), so pricing one fewer understates it badly enough to be rejected for
+  // underpayment. MIN_STEALTH_CHANGE happens to keep MAX's probe change positive today, which is
+  // luck rather than design — probeFeeFor makes it structural.
+  const probe = await buildEnvelope(probeFeeFor(selection.total, amountMicrotari, REVEAL_FEE_RESERVE), true)
   const cost = await dryRunFee(INDEXER_URL, probe.envelope)
   const fee = withFeeMargin(cost)
 

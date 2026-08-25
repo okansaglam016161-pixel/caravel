@@ -196,4 +196,7 @@ a:hover { color: var(--accL); }
 .cv-msg-flash-light { animation: cv-flash-light 1.6s ease-out; }
 
 @keyframes cv-pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
+/* Indeterminate sweep for the M4 settling bar. Deliberately has no percentage: the move is already
+   finished at that point and we are waiting on an index, so a determinate bar would be a lie. */
+@keyframes cv-slide { 0% { transform: translateX(-60%); } 100% { transform: translateX(260%); } }
 @keyframes cv-breathe { 0%, 100% { box-shadow: 0 0 0 0 rgba(var(--teal-500-rgb), 0.35); } 50% { box-shadow: 0 0 0 4px rgba(var(--teal-500-rgb), 0); } }

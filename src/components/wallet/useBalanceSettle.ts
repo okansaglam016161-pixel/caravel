@@ -59,6 +59,47 @@ export interface BalanceSettleOptions {
   pollMs?: number
 }
 
+// ── ONE DRIVER AT A TIME (M9 F7) ─────────────────────────────────────────────
+//
+// More than one of these loops can be alive at once, and it is not a rare shape: settling runs for
+// up to 150 seconds, tabs stay mounted, so switching to Move mid-send-settle and starting a move
+// leaves two loops polling. The faucet's claim makes three.
+//
+// Nothing is CORRUPTED by that — each loop watches its own balance in its own direction and reaches
+// its own verdict. What goes wrong is the polling: `rescan()` is global, restarts the whole stealth
+// scan, and N loops fire it on N independent 8-second timers. The scans overlap, each one's result
+// invalidates the last, and the balances the loops are watching thrash while they watch them.
+//
+// So rescans are LEASED. The first active loop takes the lease and drives; the others still tick,
+// still evaluate `settleAction` on every render and every tick, and still reach 'settled' or
+// 'deadline' exactly when they otherwise would — they simply do not start a second scan, because
+// the driver's scan already refreshes the balance they are reading. The lease is released on
+// cleanup, so when the driver finishes, the next loop picks it up on its following tick.
+//
+// Module-level rather than a context: the callers are in three different component trees and a
+// future fourth should get this without being wired for it.
+//
+// Exposed as a tiny object rather than a bare `let` so the rule can be TESTED without a renderer —
+// the same reason settleAction is a pure function. There is no jsdom here, and an invariant that
+// only holds inside an effect is an invariant nobody checks.
+export const rescanLease = (() => {
+  let holder: symbol | null = null
+  return {
+    /** Take the lease if it is free. Returns whether `id` holds it afterwards. */
+    claim(id: symbol): boolean {
+      if (holder === null) holder = id
+      return holder === id
+    },
+    /** Give it back — but only if `id` is the one holding it. A loop must never free another's. */
+    release(id: symbol): void {
+      if (holder === id) holder = null
+    },
+    holds(id: symbol): boolean { return holder === id },
+    /** Test-only: is anyone driving? */
+    free(): boolean { return holder === null },
+  }
+})()
+
 /** What the settle loop should do at a given moment. */
 export type SettleAction = 'settled' | 'deadline' | 'wait'
 
@@ -115,8 +156,15 @@ export function useBalanceSettle({
   settledRef.current = onSettled
   deadlineRef.current = onDeadline
 
+  // Identity for the rescan lease — stable for this hook instance, never compared by value.
+  const leaseId = useRef<symbol>(Symbol('settle'))
+
   useEffect(() => {
     if (!active) return
+
+    // Claim the lease if it is free. A loop that does not hold it still polls its own condition;
+    // it just does not start a competing scan. See rescanLease above.
+    rescanLease.claim(leaseId.current)
 
     // Movement is checked on every render, not only on a tick: the scan that finds the output may
     // land between ticks, and waiting up to a full interval to notice would be needless delay.
@@ -126,16 +174,23 @@ export function useBalanceSettle({
 
     if (settleAction(balance, before, Date.now(), deadlineAt, direction) === 'settled') {
       settledRef.current(delta())
-      return
+      // Settled without ever starting an interval — hand the lease straight back, or a loop that
+      // finished on its first render would hold it for the lifetime of the tab.
+      return () => rescanLease.release(leaseId.current)
     }
 
     const iv = setInterval(() => {
       switch (settleAction(balance, before, Date.now(), deadlineAt, direction)) {
         case 'settled': settledRef.current(delta()); break
         case 'deadline': deadlineRef.current(); break
-        default: rescanRef.current()
+        // Only the lease-holder scans. Everyone else reads the balance its scan produces, which is
+        // the same balance they would have asked for.
+        default: if (rescanLease.holds(leaseId.current)) rescanRef.current()
       }
     }, pollMs)
-    return () => clearInterval(iv)
+    return () => {
+      clearInterval(iv)
+      rescanLease.release(leaseId.current)
+    }
   }, [active, balance, before, deadlineAt, pollMs, direction])
 }

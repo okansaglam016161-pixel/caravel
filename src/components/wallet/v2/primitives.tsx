@@ -193,11 +193,6 @@ export function SettleBar({ caption }: { caption: string }) {
   )
 }
 
-/** Pulsing placeholder used by the loading balances. */
-export function Skeleton({ w, h, fill, mt = 0 }: { w: number; h: number; fill: string; mt?: number }) {
-  return <span style={{ display: 'block', width: w, height: h, borderRadius: h > 20 ? 7 : 5, background: fill, marginTop: mt, animation: 'cv-pulse 1.5s ease-in-out infinite' }} />
-}
-
 export const SectionLabel = ({ children }: { children: ReactNode }) => (
   <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.14em', color: C.faintDim, padding: '0 2px' }}>{children}</span>
 )

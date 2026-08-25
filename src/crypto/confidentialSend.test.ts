@@ -12,7 +12,7 @@
 
 import { describe, expect, it } from 'vitest'
 import {
-  MAX_FEE, assertStealthSendSplit, maxStealthSend, planStealthSend, probeFeeFor,
+  MAX_FEE, assertStealthSendSplit, describeMicrotari, maxStealthSend, planStealthSend, probeFeeFor,
 } from './confidentialSend'
 import { MAX_STEALTH_INPUTS, reachableTotal, selectStealthInputs } from './stealthUtxos'
 
@@ -268,5 +268,41 @@ describe('probe shape === submit shape', () => {
       const split = planStealthSend(amount, probeFeeFor(total, amount), total)
       assertStealthSendSplit(split)
     }
+  })
+})
+
+// ── The progress line's formatter (M9 C9) ────────────────────────────────────
+//
+// It was `(Number(selection.total) / Number(MICROTARI_PER_TARI)).toFixed(6)` — a float on an
+// amount, the one thing this module does not do, sitting in the line that tells the user how much
+// is being spent. "Only a log line" is how the first wrong amount always gets in.
+
+describe('describeMicrotari', () => {
+  it('formats a plain amount to six places', () => {
+    expect(describeMicrotari(1_014_537n)).toBe('1.014537')
+  })
+
+  it('pads the fraction — a dropped zero moves the decimal point', () => {
+    expect(describeMicrotari(1_000_001n)).toBe('1.000001')
+    expect(describeMicrotari(50_000n)).toBe('0.050000')
+  })
+
+  it('keeps trailing zeros, so the width is stable while a spend is reported', () => {
+    expect(describeMicrotari(2_500_000n)).toBe('2.500000')
+  })
+
+  it('handles zero and a bare sub-microtari boundary', () => {
+    expect(describeMicrotari(0n)).toBe('0.000000')
+    expect(describeMicrotari(1n)).toBe('0.000001')
+  })
+
+  it('is EXACT past 2^53, where the float version silently rounded', () => {
+    const huge = 9_007_199_254_740_993n           // 2^53 + 1 µtTARI
+    expect(BigInt(Number(huge))).not.toBe(huge)   // the old path really does lose the last unit
+    expect(describeMicrotari(huge)).toBe('9007199254.740993')
+  })
+
+  it('never emits an exponent, however large the amount', () => {
+    expect(describeMicrotari(10n ** 24n)).not.toMatch(/e/i)
   })
 })

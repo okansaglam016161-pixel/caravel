@@ -125,3 +125,25 @@ export function unreadableReasonText(reason: TotalUnreadableReason): string {
       return 'We couldn’t read all of your private balance, so a total would be too low. The figures below are what we can see.'
   }
 }
+
+/**
+ * The same fact as `private-incomplete`, said where a MAX button is offered.
+ *
+ * ── WHY THIS LIVES NEXT TO unreadableReasonText ──────────────────────────────
+ *
+ * They describe ONE condition and must not drift apart. The M9 cold read found the modal making two
+ * incompatible claims about the same truncated scan at the same moment: the hero refused a total
+ * because "a total would be too low", while MAX — computed from that identical partial set —
+ * offered a confident figure with no comment at all. A user reading both learns that the wallet
+ * does not know what it knows.
+ *
+ * MAX IS NOT WITHDRAWN, and that is deliberate. Unlike a total, a lower-bound maximum is still
+ * SAFE to act on: every output it was computed from is one we really hold and really can spend, so
+ * the amount is spendable — it is only possibly less than the true maximum. Refusing it would block
+ * a working action to avoid understating a number. So the figure stays and the uncertainty is
+ * stated, which is the honest half of what the total is doing.
+ */
+export function incompleteAvailableNote(): string {
+  return 'We couldn’t read all of your private balance, so this may be lower than your real maximum. It’s safe to send — there may simply be more.'
+}
+

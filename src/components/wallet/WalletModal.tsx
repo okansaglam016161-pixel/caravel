@@ -41,7 +41,7 @@ import { parseOotleAddress } from '@tari-project/ootle-wasm'
 import { buildActivity, type ActivityRow } from '../../crypto/activity'
 import { usePaymentResolution } from '../../hooks/usePaymentResolution'
 import WalletModalV2, { type MoveView, type Resulting, type WalletTab } from './v2/WalletModalV2'
-import { computeTotal } from './v2/total'
+import { computeTotal, incompleteAvailableNote } from './v2/total'
 import type { BalanceView } from './v2/balances'
 import type { Dir, EntryProps } from './v2/move'
 import { ActivityRowShell, type ActivityStatus, type SendSource, type SendView } from './v2/panels'
@@ -305,8 +305,9 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
       return null
     }
 
-    // Against the REACHABLE ceiling, not the balance. A stealth send spends one output, so a total
-    // that is spread across many cannot be sent in one payment — and saying so here beats an
+    // Against the REACHABLE ceiling, not the balance. A stealth send spends up to
+    // MAX_STEALTH_INPUTS outputs, so a balance spread across more than that — or across dust the
+    // selector cannot reach — is not all sendable in one payment. Saying so here beats an
     // "Insufficient funds" failure after the user has confirmed.
     if (amountMicrotari > privateSendCeiling) {
       return privateSendCeiling === 0n
@@ -326,7 +327,10 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
    */
   async function handleReview() {
     const err = validateSendForm()
-    if (err) { setSendValidationError(err); return }
+    // Through the translator like every other error on this screen: most of what this returns is
+    // already plain, but assertValidRecipient's message comes from a fund module and a future check
+    // added here would arrive in µtTARI by default. plainError leaves plain text alone.
+    if (err) { setSendValidationError(plainError(err)); return }
     setSendValidationError('')
     setSendPrepared(null)
 
@@ -511,7 +515,7 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
    * The private outputs themselves, not just their sum.
    *
    * Both private-side ceilings depend on the SHAPE of the balance rather than its total: a stealth
-   * send spends one output, a reveal spends at most MAX_STEALTH_INPUTS. Passing the total to either
+   * send and a reveal each spend at most MAX_STEALTH_INPUTS of them. Passing the total to either
    * offers amounts the builder cannot honour — the bug the M9 integration pass found on both.
    */
   const outputValues = scan.utxos.map(u => u.amount)
@@ -534,15 +538,21 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
    * a lower bound, so a sum would be quietly too small) and `revealed.status` (unavailable is "we
    * do not know", not zero). computeTotal owns the precedence; this only supplies the facts.
    *
-   * `settling` is the move flow's own settle window, not a refresh. A refresh is a re-read and the
-   * total simply goes back to loading; a settle means a committed move is working its way through
-   * the index, which is a different claim — "a correct number is coming on its own".
+   * `settling` is EITHER write path's settle window, not a refresh. A refresh is a re-read and the
+   * total simply goes back to loading; a settle means a committed transaction is working its way
+   * through the index, which is a different claim — "a correct number is coming on its own".
+   *
+   * A SEND COUNTS AS MUCH AS A MOVE. Only the move was wired here at first, so during a send's
+   * settle window the hero kept rendering its pre-send figure as fact — stale, confident, and
+   * specifically wrong by the amount just sent, which is the number the user is looking at the hero
+   * to check. M7's rule does not distinguish between the two: what matters is that something
+   * committed and the index is behind.
    */
   const total = computeTotal({
     privateBalance,
     privateIncomplete: scan.incomplete,
     publicBalance,
-    settling: moveStep === 'settling',
+    settling: moveStep === 'settling' || sendStep === 'settling',
   })
 
 
@@ -550,15 +560,36 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
   // direction because the fee comes from different places: a conceal carves it out of the amount
   // leaving the vault, a reveal pays it from the private side ON TOP — which is what maxRevealable
   // accounts for, along with the small stealth reserve.
+  /**
+   * Set when the private figures — and therefore the private MAX — came from a truncated scan.
+   *
+   * PRIVATE ONLY. The public balance is a single substate read: it is either known exactly or
+   * unavailable, never partial, so a public MAX is never a lower bound and must not carry a caveat
+   * that would be simply untrue.
+   */
+  const privateFiguresIncomplete = scan.incomplete && status === 'done'
+
   const enteredMicro = moveExact ?? (moveAmount === '' ? 0n : tariToMicrotari(parseFloat(moveAmount) || 0))
   const ceiling = moveDir === 'conceal' ? revealedAmount : maxRevealable(outputValues)
   const minAmount = moveDir === 'conceal' ? MIN_CONCEAL_MICROTARI : MIN_REVEAL_MICROTARI
   const belowMin = moveAmount !== '' && enteredMicro < minAmount
   const overCeiling = moveAmount !== '' && enteredMicro > ceiling
 
-  /** Balances after this move lands. The M4 report's gap #10 — the number users actually want. */
+  /**
+   * Balances after this move lands. The M4 report's gap #10 — the number users actually want.
+   *
+   * Every input must be a real reading, never a gating zero. `balance === null` and a non-'done'
+   * revealed read are both refused below, which is what makes `privateAmount`/`revealedAmount` safe
+   * to use past this point — their `?? 0n` fallbacks cannot be reached here.
+   *
+   * AN INCOMPLETE SCAN IS REFUSED TOO (M9 CP3). It is not a missing reading, it is a LOWER BOUND
+   * one, so the arithmetic still runs and still produces a specific, plausible, too-small "Private
+   * after". That is the same confident-wrong-number this modal refuses in the hero and now
+   * qualifies at MAX; a projection is no place to make an exception. No projection is shown, and
+   * the amount and fee above it are unaffected.
+   */
   function resultingFor(m: PreparedMove): Resulting | null {
-    if (balance === null || revealed.status !== 'done') return null
+    if (balance === null || revealed.status !== 'done' || scan.incomplete) return null
     return m.dir === 'reveal'
       ? { privateAfter: privateAmount - m.p.revealedOutput, publicAfter: revealedAmount + m.p.revealedAmount }
       : { privateAfter: privateAmount + m.p.concealedAmount, publicAfter: revealedAmount - m.p.withdrawAmount }
@@ -601,8 +632,15 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
           : moveError || undefined,
       // Said BEFORE they notice it: a private balance that stops just short of zero after "move
       // everything" reads as a bug, or as funds gone astray on an irreversible action.
+      // Both notes can be true at once and both matter, so they are joined rather than ranked —
+      // the leftover explains the number, the incompleteness qualifies it.
       leftoverNote: moveDir === 'reveal' && moveExact !== null && privateAmount > ceiling
-        ? `About ${toInput(privateAmount - ceiling)} TARI stays private to cover the fee. It’s still yours and still spendable.`
+        ? [
+            `About ${toInput(privateAmount - ceiling)} TARI stays private to cover the fee. It’s still yours and still spendable.`,
+            privateFiguresIncomplete ? incompleteAvailableNote() : '',
+          ].filter(Boolean).join(' ')
+        : moveDir === 'reveal' && privateFiguresIncomplete
+        ? incompleteAvailableNote()
         : undefined,
     }
     // PRICING IS NOT ITS OWN SCREEN. The design prices inside review: the fee row spins and the
@@ -683,8 +721,11 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
       step: 'sending', source: sendSource, amountMicrotari: sendAmountMicro,
       progress: sendProgress || 'Building the payment and broadcasting. Don’t close this window.',
     }
+    // Its OWN step now, not a success card shown early (M9 F6). The payment is finished either
+    // way; what differs is that the balance behind this screen has not moved yet, and saying
+    // nothing about that left the user comparing a "Sent" with a stale figure.
     : sendStep === 'settling' ? {
-      step: 'success', recipient: sendRecipient,
+      step: 'settling', recipient: sendRecipient,
       amountMicrotari: sendAmountMicro,
       feeMicrotari: sendFee ?? (sendSource === 'public' ? (sendPrepared?.feeMicrotari ?? MAX_FEE) : MAX_FEE),
       txId: sendTxId,
@@ -707,6 +748,7 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
       step: 'form', recipient: sendRecipient, amount: sendAmount, note: sendNote,
       source: sendSource, canChooseSource,
       available: sendAvailable,
+      availabilityNote: sendSource === 'private' && privateFiguresIncomplete ? incompleteAvailableNote() : undefined,
       canReview: !!sendRecipient && !!sendAmount,
       error: sendValidationError || undefined,
     }

@@ -13,11 +13,13 @@ import { saveAccountAddress } from '../../crypto/accountStore'
 import { useBalanceSettle } from './useBalanceSettle'
 import { FaucetPanel, type FaucetPhase } from './v2/panels'
 import { plainError } from './v2/plainError'
+import { fmt2 } from './v2/format'
 
 type Phase = 'idle' | 'claiming' | 'verifying' | 'done' | 'lagging' | 'error'
 
 const HIGH_BALANCE = 100_000_000n // 100 tTARI — "you already have plenty"
-const fmt = (µt: bigint) => (Number(µt) / 1_000_000).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+// Was `Number(µt) / 1_000_000` — the same float-on-an-amount the rail forbids, hiding in a panel
+// rather than in crypto, which is why the C9 fix nearly stopped one site short. See fmt2.
 const shortTx = (t: string | null) => (t ? `${t.slice(0, 8)}…${t.slice(-6)}` : '')
 
 
@@ -46,7 +48,7 @@ export default function FaucetClaimPanel() {
     rescan,
     onSettled: (delta: bigint) => {
       setPhase('done')
-      setMsg(`Added ${fmt(delta)} TARI. You can now send it, make it public, or register a name.`)
+      setMsg(`Added ${fmt2(delta)} TARI. You can now send it, make it public, or register a name.`)
       setCooldown(true)
       // Was a cleanup-returning timeout inside the effect; a plain timer is equivalent here because
       // the cooldown is a one-shot that should survive this component's re-renders either way.

@@ -1,4 +1,4 @@
-import { Fragment, useState, useEffect, useLayoutEffect, useMemo, useRef, type ReactNode } from 'react'
+import { Fragment, useState, useEffect, useCallback, useLayoutEffect, useMemo, useRef, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import * as nip19 from 'nostr-tools/nip19'
 import Logo from '../primitives/Logo'
@@ -7,6 +7,7 @@ import WalletModal from '../wallet/WalletModal'
 import { assertValidRecipient } from '../../crypto/publicSend'
 import { parseOotleAddress } from '@tari-project/ootle-wasm'
 import { computeTotal, unreadableReasonText } from '../wallet/v2/total'
+import { plainError } from '../wallet/v2/plainError'
 import { totalPillValue } from '../wallet/v2/TotalHero'
 import ProfilePanel from '../wallet/ProfilePanel'
 import { compareMessages, sortKey, type CaravelMessage, type Group } from '../../messaging/types'
@@ -312,7 +313,21 @@ export default function ChatApp() {
   const [confirming, setConfirming] = useState(false)  // inline confirm panel shown
   const [payBusy, setPayBusy] = useState(false)        // payment/message in flight
   const [payProgress, setPayProgress] = useState<string | null>(null)
-  const [payError, setPayError] = useState<string | null>(null)
+  const [payError, setPayErrorRaw] = useState<string | null>(null)
+  /**
+   * EVERY pay error goes through the translator (M9 C10).
+   *
+   * This screen spends the same money through the same builders as the wallet's Send tab, and those
+   * builders speak µtTARI and "output(s)" on purpose — their messages are quoted in tests and in
+   * on-chain reconciliation notes, so they are not softened at source. The wallet modal translates
+   * at its boundary; chat had no boundary and showed them raw, so the identical failure read as
+   * "amount is spread across too many small outputs" here and as plain English three tabs away.
+   *
+   * plainError passes anything it does not recognise through UNCHANGED, so routing the fixed
+   * strings and network rejections through it too costs nothing and means no future call site can
+   * forget. That is the point of wrapping the setter rather than the call sites.
+   */
+  const setPayError = useCallback((m: string | null) => setPayErrorRaw(m === null ? null : plainError(m)), [])
   // Persistent, must-acknowledge banner for the two dangerous outcomes: a payment that went
   // through but whose message failed (orphan), or a payment left unconfirmed (timeout).
   const [payAlert, setPayAlert] = useState<{ kind: 'orphan' | 'timeout'; txId: string; amountTari: string } | null>(null)
@@ -2033,7 +2048,7 @@ export default function ChatApp() {
                   <button
                     onClick={toggleTari}
                     disabled={payBusy || !!editing}
-                    title={editing ? 'Finish editing first' : 'Attach confidential payment'}
+                    title={editing ? 'Finish editing first' : 'Attach a payment'}
                     style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 46, height: 46, flexShrink: 0, borderRadius: 12, border: 'none', background: 'var(--teal-grad)', cursor: payBusy ? 'default' : 'pointer', boxShadow: '0 0 18px rgba(var(--teal-500-rgb),0.28)', padding: 0 }}
                   >
                     <svg width={22} height={22} viewBox="0 0 24 24" fill="none" stroke="var(--ink-on-accent)" strokeWidth={2.3} strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>

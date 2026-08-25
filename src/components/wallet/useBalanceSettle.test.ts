@@ -5,8 +5,8 @@
 // whether a user is told their transaction worked — the interval plumbing around them is not where
 // the risk is.
 
-import { describe, expect, it } from 'vitest'
-import { settleAction } from './useBalanceSettle'
+import { afterEach, describe, expect, it } from 'vitest'
+import { rescanLease, settleAction } from './useBalanceSettle'
 
 const NOW = 1_700_000_000_000
 const LATER = NOW + 150_000     // inside the window
@@ -137,5 +137,70 @@ describe('settleAction — a null baseline', () => {
     // The fix must not confuse "no baseline" with "a baseline that happens to be zero".
     expect(settleAction(1n, 0n, NOW, LATER, 'rise')).toBe('settled')
     expect(settleAction(0n, 1n, NOW, LATER, 'fall')).toBe('settled')
+  })
+})
+
+// ── The rescan lease (M9 F7) ─────────────────────────────────────────────────
+//
+// More than one settle loop can be alive at once — settling runs up to 150s, tabs stay mounted, so
+// switching to Move mid-send-settle and starting a move leaves two, and a faucet claim makes three.
+// Each still reaches its own verdict; what went wrong was that each also fired the GLOBAL rescan()
+// on its own 8-second timer, so the scans overlapped and invalidated one another while the loops
+// watched the balances they were thrashing.
+//
+// The rule is one driver. These pin it without a renderer, which is the point of lifting it out of
+// the effect — an invariant that only holds inside useEffect is one nobody checks.
+
+describe('rescanLease', () => {
+  const A = Symbol('a'), B = Symbol('b'), C = Symbol('c')
+  afterEach(() => { for (const s of [A, B, C]) rescanLease.release(s) })
+
+  it('the first claimant drives', () => {
+    expect(rescanLease.claim(A)).toBe(true)
+    expect(rescanLease.holds(A)).toBe(true)
+  })
+
+  it('a second loop does NOT get it — that is the whole fix', () => {
+    rescanLease.claim(A)
+    expect(rescanLease.claim(B)).toBe(false)
+    expect(rescanLease.holds(B)).toBe(false)
+  })
+
+  it('never two drivers, however many loops pile on', () => {
+    for (const s of [A, B, C]) rescanLease.claim(s)
+    expect([A, B, C].filter(s => rescanLease.holds(s))).toHaveLength(1)
+  })
+
+  it('a non-holder cannot free the holder — a loop must not end another loop’s drive', () => {
+    rescanLease.claim(A)
+    rescanLease.release(B)
+    expect(rescanLease.holds(A)).toBe(true)
+  })
+
+  it('releasing hands off to the next loop, so the survivor keeps polling', () => {
+    rescanLease.claim(A)
+    rescanLease.claim(B)          // refused, still ticking
+    rescanLease.release(A)        // A settles or unmounts
+    expect(rescanLease.claim(B)).toBe(true)
+  })
+
+  it('is free again once every loop has gone', () => {
+    rescanLease.claim(A)
+    rescanLease.release(A)
+    expect(rescanLease.free()).toBe(true)
+  })
+
+  it('claim is idempotent for the holder — re-running the effect must not drop the lease', () => {
+    // The effect re-runs on every balance change, and each run claims again. If a repeat claim
+    // reset or stole the lease the driver would flicker while it polls.
+    rescanLease.claim(A)
+    expect(rescanLease.claim(A)).toBe(true)
+    expect(rescanLease.holds(A)).toBe(true)
+  })
+
+  it('a released lease is not held by its old owner', () => {
+    rescanLease.claim(A)
+    rescanLease.release(A)
+    expect(rescanLease.holds(A)).toBe(false)
   })
 })

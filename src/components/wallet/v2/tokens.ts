@@ -56,7 +56,6 @@ export const C = {
 export const border = (a: number) => `1px solid rgba(120,150,210,${a})`
 export const tealBorder = (a: number) => `1px solid rgba(45,224,198,${a})`
 export const warnBorder = (a: number) => `1px solid rgba(255,180,60,${a})`
-export const dangerBorder = (a: number) => `1px solid rgba(255,122,122,${a})`
 export const tealFill = (a: number) => `rgba(45,224,198,${a})`
 export const warnFill = (a: number) => `rgba(255,180,60,${a})`
 

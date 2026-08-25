@@ -149,7 +149,7 @@ export async function sendConfidential(
   // Because the measured fee is below the ceiling, the pinned inputs still cover it and the surplus
   // simply comes back as a slightly larger change output.
   const selection = selectStealthInputs(utxos, amountMicrotari + MAX_FEE)
-  log(`Spending ${selection.inputs.length} output(s) totalling ${(Number(selection.total) / Number(MICROTARI_PER_TARI)).toFixed(6)} TARI`)
+  log(`Spending ${describeMicrotari(selection.total)} TARI from ${selection.inputs.length} payment${selection.inputs.length === 1 ? '' : 's'} you’ve received`)
 
   // Build outputs
   const recipientOutput = createOutput({
@@ -388,6 +388,22 @@ export function probeFeeFor(inputTotal: bigint, amountMicrotari: bigint, ceiling
 export function maxStealthSend(outputValues: readonly bigint[]): bigint {
   const reachable = reachableTotal(outputValues)
   return reachable > MAX_FEE ? reachable - MAX_FEE : 0n
+}
+
+/**
+ * µtTARI → a TARI decimal, for the progress log the user actually reads.
+ *
+ * BIGINT ONLY. The old line did `Number(total) / Number(MICROTARI_PER_TARI)`, which is the one
+ * thing this codebase does not do with an amount: past 2^53 µtTARI the division silently rounds,
+ * and the number it rounds is the size of the spend being reported. It was "only a log line", but
+ * the whole rail exists because that argument is how the first wrong amount always gets in.
+ *
+ * String arithmetic, no float anywhere: whole part, then six padded fractional digits.
+ */
+export function describeMicrotari(microtari: bigint): string {
+  const whole = microtari / MICROTARI_PER_TARI
+  const frac = (microtari % MICROTARI_PER_TARI).toString().padStart(6, '0')
+  return `${whole}.${frac}`
 }
 
 export function tariToMicrotari(tari: number): bigint {

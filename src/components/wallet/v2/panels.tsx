@@ -18,7 +18,7 @@ import { C, MONO, border, tealBorder, tealFill, warnFill } from './tokens'
 import { Alert, Check, Copy, Eye, EyeOff, Shield, Spinner } from './icons'
 import {
   AmountField, Body, Button, DetailCard, DetailRow, FieldLabel, Panel, PanelText,
-  StatusBlock, SubHeader, TextField, TxRow,
+  SettleBar, StatusBlock, SubHeader, TextField, TxRow,
 } from './primitives'
 import { fmt6 } from './format'
 
@@ -131,6 +131,14 @@ export type SendView =
   | {
       step: 'form'; recipient: string; amount: string; note: string
       available: bigint | null; canReview: boolean; error?: string
+      /**
+       * What is uncertain about `available` — and therefore about MAX.
+       *
+       * The total refuses to show a number on an incomplete scan; MAX drew from the same truncated
+       * set and offered a figure without comment, so the same modal made two different claims about
+       * the same balance. This is the second one owning up.
+       */
+      availabilityNote?: string
       source: SendSource
       /** Both balances are funded, so the choice is real. When false the toggle is not shown. */
       canChooseSource: boolean
@@ -150,6 +158,17 @@ export type SendView =
       feeIsCeiling?: boolean
     }
   | { step: 'sending'; amountMicrotari: bigint; progress: string; source: SendSource }
+  /**
+   * BROADCAST AND COMMITTED — the balance has not caught up yet.
+   *
+   * The send used to jump from 'sending' straight to 'Sent' while a settle loop ran invisibly
+   * underneath, so the screen said the payment was done and the balance behind it still showed the
+   * old figure, for up to a minute, with nothing to explain the gap. The move flow has always shown
+   * this window. Same shape, same honesty: the payment IS finished, only the index is behind.
+   */
+  | {
+      step: 'settling'; recipient: string; amountMicrotari: bigint; feeMicrotari: bigint; txId: string
+    }
   | {
       step: 'success'; recipient: string; amountMicrotari: bigint; feeMicrotari: bigint; txId: string
       /** The settle deadline passed. STILL A SUCCESS — different copy, same shape. */
@@ -255,6 +274,7 @@ export function SendPanel({ view, hidden, onSource, onRecipient, onAmount, onNot
           accent={isPrivate ? 'teal' : 'neutral'}
           availableLabel={view.canChooseSource ? (isPrivate ? 'Private available' : 'Public available') : 'Available'}
           availableValue={hidden ? '••••••' : view.available !== null ? fmt6(view.available) : '—'}
+          note={view.availabilityNote}
           error={view.error}
         />
         <div>
@@ -303,6 +323,25 @@ export function SendPanel({ view, hidden, onSource, onRecipient, onAmount, onNot
           <span style={{ fontSize: 16, fontWeight: 700, color: C.bright, textAlign: 'center' }}>Sending {fmt6(view.amountMicrotari)} TARI</span>
           <span style={{ fontSize: 13, color: C.mutedDim, textAlign: 'center', maxWidth: 300, lineHeight: 1.5 }}>{view.progress}</span>
         </span>
+      </div>
+    )
+  }
+
+  // The payment is FINISHED. This window is the index catching up — same treatment the move flow
+  // gives it, so the two never tell the user different stories about the same wait.
+  if (view.step === 'settling') {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+        <StatusBlock
+          ring={{ fill: tealFill(0.1), border: tealBorder(0.35) }}
+          icon={<Check color={C.teal} />}
+          title="Sent"
+          sub={`${fmt6(view.amountMicrotari)} TARI to ${shortAddr(view.recipient)}. Your balance updates in about a minute.`}
+        />
+        <SettleBar caption="Updating your balance — the payment itself is finished." />
+        <DetailCard><DetailRow label="Network fee" value={TARI(view.feeMicrotari)} last /></DetailCard>
+        <TxRow txId={view.txId} onCopy={() => onCopyTx(view.txId)} />
+        <Button tone="neutral" onClick={onDone}>Done</Button>
       </div>
     )
   }

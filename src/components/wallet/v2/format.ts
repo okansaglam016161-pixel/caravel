@@ -33,6 +33,25 @@ export function toInput(microtari: bigint): string {
   return frac ? `${whole}.${frac}` : `${whole}`
 }
 
+/**
+ * Rounded display for prose — "12,847.50". Two decimals, grouped, BIGINT ONLY.
+ *
+ * Exists because the faucet had its own `Number(µt) / 1_000_000` doing this, which is the same
+ * silent-rounding bug as any other float on an amount and was missed once already because it lived
+ * in a panel rather than in crypto. There is now one place to do it.
+ *
+ * Rounds HALF-UP on the third decimal, in integer arithmetic: scale to hundredths, add half a
+ * hundredth's worth of µtTARI, truncate.
+ */
+export function fmt2(microtari: bigint): string {
+  const neg = microtari < 0n
+  const v = neg ? -microtari : microtari
+  const hundredths = (v + 5_000n) / 10_000n          // 12_847_503_210 → 1_284_750
+  const whole = (hundredths / 100n).toLocaleString('en-US')
+  const frac = (hundredths % 100n).toString().padStart(2, '0')
+  return `${neg ? '-' : ''}${whole}.${frac}`
+}
+
 /** Masked stand-in used when the hide toggle is on. Width roughly matches a real figure. */
 export const MASK = '••••••••'
 export const MASK_SHORT = '••••••'

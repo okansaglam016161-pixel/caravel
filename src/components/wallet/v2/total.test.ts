@@ -5,7 +5,7 @@
 // between "a number is coming" and "we can't read this".
 
 import { describe, expect, it } from 'vitest'
-import { computeTotal, unreadableReasonText, type BalanceStatus, type TotalInputs } from './total'
+import { computeTotal, incompleteAvailableNote, unreadableReasonText, type BalanceStatus, type TotalInputs } from './total'
 
 const ready = (v: bigint): BalanceStatus => ({ status: 'ready', microtari: v })
 const LOADING: BalanceStatus = { status: 'loading' }
@@ -169,5 +169,38 @@ describe('unreadableReasonText', () => {
     for (const r of ['public-unavailable', 'private-unavailable', 'both-unavailable', 'private-incomplete'] as const) {
       expect(unreadableReasonText(r)).not.toMatch(/µtTARI|UTXO|output|indexer|substate/i)
     }
+  })
+})
+
+// ── MAX and the total must not contradict each other (M9 C8) ─────────────────
+//
+// The cold read found the modal making two incompatible claims about one truncated scan at the
+// same moment: the hero refused a total because "a total would be too low", while MAX — computed
+// from that identical partial set — offered a confident figure and said nothing. These pin the
+// agreement, because the two strings live in different functions and nothing but a test stops them
+// drifting apart again.
+
+describe('incompleteAvailableNote', () => {
+  it('says the same thing the total says about the same condition', () => {
+    const note = incompleteAvailableNote()
+    const total = unreadableReasonText('private-incomplete')
+    // Both must name the cause — a private balance that could not be read in full.
+    for (const s of [note, total]) expect(s).toMatch(/couldn’t read all of your private balance/i)
+  })
+
+  it('does NOT withdraw the figure the way the total does', () => {
+    // The asymmetry is deliberate and is the reason these are two strings and not one. A lower-
+    // bound TOTAL is wrong. A lower-bound MAXIMUM is still spendable — every output it counted is
+    // one we really hold — so the note qualifies it instead of refusing it.
+    expect(incompleteAvailableNote()).toMatch(/safe to send/i)
+    expect(unreadableReasonText('private-incomplete')).toMatch(/too low/i)
+  })
+
+  it('carries no jargon, like every other string on this screen', () => {
+    expect(incompleteAvailableNote()).not.toMatch(/µtTARI|UTXO|output|indexer|substate|scan/i)
+  })
+
+  it('is about the MAXIMUM, not about a balance being wrong', () => {
+    expect(incompleteAvailableNote()).toMatch(/maximum/i)
   })
 })

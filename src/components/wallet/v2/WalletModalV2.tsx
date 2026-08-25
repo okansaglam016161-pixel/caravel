@@ -27,7 +27,7 @@ import {
   ActivityPanel, FaucetPanel, OnsPanel, ReceivePanel, SendPanel,
   type FaucetPanelProps, type OnsPanelProps, type SendPanelProps,
 } from './panels'
-import { PrivateHero, PublicRow, type BalanceView } from './balances'
+import type { BalanceView } from './balances'
 import { TotalHero } from './TotalHero'
 import type { TotalView } from './total'
 import {
@@ -74,11 +74,16 @@ export interface WalletModalV2Props {
   privateBalance: BalanceView
   publicBalance: BalanceView
   /**
-   * The combined balance. When present it becomes the HERO and the two balances above render as
-   * its breakdown instead of as separate cards — see TotalHero for why the breakdown stays visible
-   * even when the total itself cannot be shown.
+   * The combined balance — THE HERO. The two balances above render as its breakdown rather than as
+   * separate cards; see TotalHero for why the breakdown stays visible even when the total itself
+   * cannot be shown.
+   *
+   * REQUIRED since M9 CP3. It was optional while M7's total was landing, with the pre-total layout
+   * kept behind a `total ? … : …` fallback. Every call site has passed a total since, and
+   * computeTotal cannot return undefined, so the fallback was unreachable in the app AND in the
+   * preview — a second balance layout that nobody could see and no test could reach, drifting.
    */
-  total?: TotalView
+  total: TotalView
   hidden: boolean
   networkChip?: string
   move: MoveView
@@ -159,12 +164,7 @@ export default function WalletModalV2(p: WalletModalV2Props) {
 
           {tab === 'overview' && <>
             {p.inFlightText && <InFlightBanner text={p.inFlightText} />}
-            {p.total
-              ? <TotalHero total={p.total} privateBalance={p.privateBalance} publicBalance={p.publicBalance} hidden={p.hidden} />
-              : <>
-                  <PrivateHero balance={p.privateBalance} hidden={p.hidden} onRetry={p.onRetryBalance} />
-                  <PublicRow balance={p.publicBalance} hidden={p.hidden} onRetry={p.onRetryBalance} />
-                </>}
+            <TotalHero total={p.total} privateBalance={p.privateBalance} publicBalance={p.publicBalance} hidden={p.hidden} />
             {/* The design's own loading footer, shown whenever a read is actually in flight — so a
                 Refresh press is acknowledged even when the previous values are still on screen. */}
             {(p.refreshing || p.privateBalance.status === 'loading' || p.publicBalance.status === 'loading') && (

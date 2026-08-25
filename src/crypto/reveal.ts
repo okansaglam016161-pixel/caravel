@@ -6,6 +6,33 @@
 // — including for anyone who later learns which account is yours. So the number the user typed is
 // the number that gets published, exactly, and every guard in this file exists to keep it that way.
 //
+// ── VERIFIED ON-CHAIN ─────────────────────────────────────────────────────────
+//
+// Proven architecture: tx 723d6720fb6225a3b7910c9076fb1026f591e910b098ab1fc8587f88a0623481,
+// committed on Esmeralda 2026-08-25. A 1 TARI reveal, reconciling to the microtari — both
+// invariants below, checked against the network's own record rather than against this file:
+//
+//   revealed_output_amount   1_014_537  =  1_000_000 amount + 14_537 fee          [invariant 1]
+//   3_985_544 input − 1_014_537 revealed − 2_971_007 change  =  0                 [invariant 2]
+//
+// The vault went DOWN at v3 and UP at v4 — not up at v0 — which is the proof that CreateAccount
+// REUSED the declared account rather than minting a fresh one. That failure is silent (the deposit
+// would land in a component thrown away at the end of the transaction), so it is worth naming the
+// evidence that rules it out.
+//
+// The 2_971_007 change output trial-decrypts with this wallet's view key, and a dry run SPENDING it
+// was accepted by the network — so its recovered mask produces a valid balance proof and its nonce
+// a valid one-time spend signature. The change is not stranded.
+//
+// The input's value is the one figure not directly readable: the spent substate is pruned. It
+// follows from the two verified figures, and from the engine having verified the balance proof —
+// which IS the check that inputs = outputs + change, and is the only thing that checks it.
+//
+// FEE OVERCHARGE IS NOT REFUNDED, as on the send path. The receipt reported total_fees_paid 14_537
+// against total_fee_overcharge 4_596 (actual consumption 9_941), and there was no refund among the
+// up-substates — the vault rose by exactly 1_000_000. The reserved fee is what the wallet pays, and
+// what the UI must therefore show.
+//
 // ── WHY REVEAL IS STRUCTURALLY BIGGER THAN CONCEAL ────────────────────────────
 //
 // Conceal is faucet-claim-minus-one-instruction: withdraw revealed funds, hand the bucket to a

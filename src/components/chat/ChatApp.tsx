@@ -4,6 +4,8 @@ import * as nip19 from 'nostr-tools/nip19'
 import Logo from '../primitives/Logo'
 import { useWallet } from '../../context/WalletContext'
 import WalletModal from '../wallet/WalletModal'
+import { assertValidRecipient } from '../../crypto/publicSend'
+import { parseOotleAddress } from '@tari-project/ootle-wasm'
 import { computeTotal, unreadableReasonText } from '../wallet/v2/total'
 import { totalPillValue } from '../wallet/v2/TotalHero'
 import ProfilePanel from '../wallet/ProfilePanel'
@@ -959,7 +961,16 @@ export default function ChatApp() {
   function validatePayment(): string | null {
     const amt = Number(payAmount)
     if (!payAmount.trim() || !isFinite(amt) || amt <= 0) return 'Enter an amount greater than 0.'
-    if (!effectivePayAddress.startsWith('otl_esm_')) return 'Enter a valid recipient Tari address (otl_esm_…).'
+    // THE SAME CHECK THE WALLET USES — parse, network byte, key length. A prefix test is not
+    // enough: a MAINNET address starts with otl_ too, is well-formed, and parses cleanly, so it
+    // passes `startsWith` and then commits the payment to keys nobody on this chain is watching.
+    // There is no bounce and no error at spend time, which makes it unrecoverable. This screen
+    // spends the same money as the wallet's Send tab and gets the same guard.
+    try {
+      assertValidRecipient(effectivePayAddress, parseOotleAddress)
+    } catch (e) {
+      return e instanceof Error ? e.message : String(e)
+    }
     if (payInsufficient) return 'Insufficient balance.'
     return null
   }

@@ -27,7 +27,8 @@ export default function FaucetClaimPanel() {
   const [p, setPhase] = useState<Phase>('idle')
   const [msg, setMsg] = useState<string | null>(null)
   const [cooldown, setCooldown] = useState(false)
-  const preBalance = useRef<bigint>(0n)
+  /** The balance before the claim, so the settle loop can see it rise. `null` = not known. */
+  const preBalance = useRef<bigint | null>(null)
   const deadline = useRef<number>(0)
   const lastTx = useRef<string | null>(null)
 
@@ -59,7 +60,13 @@ export default function FaucetClaimPanel() {
 
   async function claim() {
     if (!wallet || !address) return
-    preBalance.current = balance ?? 0n
+    // NOT `?? 0n`. This is a RISE watch, and zero is below any real balance — so an unknown
+    // baseline would satisfy `balance > before` on the very first poll and report "Tokens
+    // received" before the faucet's output had landed. That is not theoretical here: a claim is
+    // the flow a brand-new wallet runs, and its first scan is often still in flight at this
+    // moment. Unknown stays unknown; the loop then waits out the deadline and reports the lag
+    // honestly. See useBalanceSettle's `before`.
+    preBalance.current = balance
     setPhase('claiming')
     setMsg('Requesting test tokens (self-signed, no daemon)…')
     let r: ClaimResult

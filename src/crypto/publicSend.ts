@@ -366,6 +366,20 @@ export async function preparePublicSend(
   const cost = await dryRunFee(INDEXER_URL, probe.envelope)
   const fee = withFeeMargin(cost)
 
+  // ── THE PROBE→REAL FEE GUARD ──
+  //
+  // This path's OUTPUT COUNT is invariant — one stealth output, always — so it cannot suffer the
+  // shape divergence that rejected a MAX send. What it can suffer is a withdraw larger than the one
+  // simulated: `withdrawAmount` is `amount + fee`, so a fee above the reservation asks the vault
+  // for more than the dry run ever tried, and if the balance does not stretch it fails on-chain
+  // AFTER the user has confirmed. Refused here, where nothing has been sent.
+  if (fee > PUBLIC_SEND_FEE_RESERVE) {
+    throw new Error(
+      `The network fee (${fee} µtTARI) exceeds the ${PUBLIC_SEND_FEE_RESERVE} µtTARI this payment reserved for it. ` +
+      `Fees have risen — try again, or send a smaller amount.`,
+    )
+  }
+
   log('Building…')
   const real = await buildEnvelope(fee, false)
 

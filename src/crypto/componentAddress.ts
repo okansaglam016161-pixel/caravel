@@ -1,5 +1,27 @@
 // Deriving a wallet's ACCOUNT COMPONENT address from its public key, client-side.
 //
+// ── STATUS: NOT ON ANY MONEY PATH. NOT DEAD EITHER. (M9 C5) ──────────────────
+//
+// Nothing in `src/` outside this file's own test imports it. No transaction built by Caravel today
+// calls it, and none should: every destination the wallet can currently reach is a stealth address
+// derived by the SDK, and the one component address the wallet needs for itself — its own account,
+// for reading the revealed balance and for spending public funds — is RECOVERED FROM THE CHAIN by
+// the free CreateAccount dry run, not derived here. That path is authoritative and cannot be wrong
+// by construction, which is precisely why it is the one in use.
+//
+// The M9 cold read caught the M6 commit message OVERCLAIMING this: it reads as if the derivation
+// were wired in and load-bearing. It is not, and was not. What it actually is:
+//
+//   A verified primitive kept in advance of a public-DESTINATION feature — paying someone by their
+//   component address, rather than only by their stealth address. That feature does not exist yet.
+//   When it does, this is what it will need, and the 12 golden vectors below (produced by the
+//   engine itself, not by this code) are what make it safe to trust on the day it is wired.
+//
+// DO NOT WIRE IT to satisfy a build error or to "use the thing we already have" — the recovery path
+// above is the correct source for our own address, and using a derivation where a lookup exists
+// trades a checkable fact for a hash nobody re-checked. DO NOT DELETE IT either: the vectors and
+// the mixed-encoding finding cost real work and are correct.
+//
 // ── WHY THIS IS THE MOST DANGEROUS FILE IN THE CODEBASE ───────────────────────
 //
 // A component address is where public TARI is deposited. Get this hash wrong by one byte and the

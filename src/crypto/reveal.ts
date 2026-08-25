@@ -288,9 +288,27 @@ export function maxRevealable(outputValues: readonly bigint[]): bigint {
 // TakeFromBucket must carry as a raw number — is written out explicitly and the two NAMED slots are
 // asserted against their expected ids at build time. If a future SDK changes the allocation order,
 // that assertion fires here instead of the transaction silently depositing the wrong bucket.
-const WS_ACCOUNT = 0
-const WS_BUCKET = 1
-const WS_TO_DEPOSIT = 2
+export const WS_ACCOUNT = 0
+export const WS_BUCKET = 1
+export const WS_TO_DEPOSIT = 2
+
+/**
+ * The workspace slots the fee-instruction builder must hand out, in order.
+ *
+ * EXPORTED SO IT CAN BE TESTED. The guard below is fund-critical — depositing the wrong bucket
+ * sends the surplus somewhere it cannot be recovered from — and until M9 it was asserted at runtime
+ * and verified by nothing, which is the same profile as the probe-shape bug: a claim stated
+ * confidently, believed, and never checked. `assertWorkspaceLayout` is that guard, lifted out so a
+ * test can pin the three ids without needing a live builder.
+ */
+export function assertWorkspaceLayout(accountSlotId: number, bucketSlotId: number): void {
+  if (accountSlotId !== WS_ACCOUNT || bucketSlotId !== WS_BUCKET) {
+    throw new Error(
+      `reveal: unexpected workspace layout (account ${accountSlotId}, bucket ${bucketSlotId}) — ` +
+      `the TakeFromBucket output slot ${WS_TO_DEPOSIT} can no longer be assumed free.`,
+    )
+  }
+}
 
 /**
  * The instruction recipe, lifted out so the pricing build and the real build are provably the same
@@ -328,12 +346,7 @@ function buildReveal(
       // order. Cheap, and the failure it prevents is a deposit of the wrong bucket.
       const accountSlot = b.resolveWorkspaceOffsetId('account')
       const bucketSlot = b.resolveWorkspaceOffsetId('bucket')
-      if (accountSlot.id !== WS_ACCOUNT || bucketSlot.id !== WS_BUCKET) {
-        throw new Error(
-          `reveal: unexpected workspace layout (account ${accountSlot.id}, bucket ${bucketSlot.id}) — ` +
-          `the TakeFromBucket output slot ${WS_TO_DEPOSIT} can no longer be assumed free.`,
-        )
-      }
+      assertWorkspaceLayout(accountSlot.id, bucketSlot.id)
 
       // ── THE SPLIT ──
       // The bucket holds `amount + fee`. Take exactly the amount out into its own bucket; whatever
@@ -547,6 +560,22 @@ export async function prepareReveal(
   const probe = await buildEnvelope(probeFeeFor(selection.total, amountMicrotari, REVEAL_FEE_RESERVE), true)
   const cost = await dryRunFee(INDEXER_URL, probe.envelope)
   const fee = withFeeMargin(cost)
+
+  // ── THE PROBE→REAL FEE GUARD ──
+  //
+  // A fee above what the probe RESERVED was never simulated, and on this path the consequence is
+  // structural rather than merely unpriced: the probe reserves the largest fee the transaction can
+  // pay, so its change is the smallest the real build can have. Let the real fee exceed it and the
+  // real change can fall to zero — which here emits NO stealth output at all, a different (and
+  // cheaper) transaction than the one that was priced. That is the same failure that rejected a MAX
+  // send, one step worse. Every builder in this codebase now refuses it in the same place.
+  const reserved = probeFeeFor(selection.total, amountMicrotari, REVEAL_FEE_RESERVE)
+  if (fee > reserved) {
+    throw new Error(
+      `The network fee (${fee} µtTARI) is higher than this reveal reserved for it (${reserved} µtTARI). ` +
+      `Fees have risen — try a smaller amount.`,
+    )
+  }
 
   // The pinned selection was made against the reserve. If fees have risen past it, the inputs may
   // no longer cover `amount + fee` — refuse with the real numbers rather than build a transaction

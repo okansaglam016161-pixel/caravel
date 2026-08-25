@@ -300,6 +300,16 @@ export async function prepareConceal(
   const probe = await buildEnvelope(FEE_PROBE_MICROTARI, true)
   const cost = await dryRunFee(INDEXER_URL, probe.envelope)
   const fee = withFeeMargin(cost)
+  // The probe→real fee guard, applied here for the same reason as the other three builders even
+  // though this path is the least exposed: its output count is invariant (one stealth output at any
+  // fee), so no shape can diverge. What remains true everywhere is that a fee above the reservation
+  // was never simulated, and building on an unsimulated number is how the MAX rejection happened.
+  if (fee > FEE_PROBE_MICROTARI) {
+    throw new Error(
+      `The network fee (${fee} µtTARI) exceeds the ${FEE_PROBE_MICROTARI} µtTARI this transaction reserved for it. ` +
+      `Fees have risen — try again in a moment.`,
+    )
+  }
   if (fee >= amountMicrotari) {
     throw new Error(`The network fee (${fee} \u00b5tTARI) exceeds the amount being made private. Try a larger amount.`)
   }

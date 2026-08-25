@@ -577,6 +577,18 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
   const canChooseSource =
     privateSendCeiling > 0n && publicSendCeiling >= MIN_PUBLIC_SEND_MICROTARI
 
+  // The amount to SHOW for a move that has been broadcast. Never `?? 0n`: these two steps run
+  // after the transaction is on the wire, so "0 tTARI moved" is a claim the wallet is in no
+  // position to make — and it is the one number a person reads to decide whether to send again.
+  // The builder's own figure when we have it, otherwise the amount the move was prepared with,
+  // otherwise what was typed. Same ladder the 'moving' step uses, and the same one the Send path
+  // has always used — no branch of it invents a zero.
+  const moveSettledAmount =
+    moveLanded
+    ?? (movePrepared
+      ? (movePrepared.dir === 'reveal' ? movePrepared.p.revealedAmount : movePrepared.p.concealedAmount)
+      : enteredMicro)
+
   const moveView: MoveView =
     moveStep === 'form' ? {
       step: 'form', dir: moveDir, amount: moveAmount, maxUsed: moveExact !== null,
@@ -615,10 +627,10 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
       progress: moveProgress || 'Submitting to the network — a few seconds.',
     }
     : moveStep === 'settling' ? {
-      step: 'settling', dir: moveDir, amountMicrotari: moveLanded ?? 0n, txId: moveTxId,
+      step: 'settling', dir: moveDir, amountMicrotari: moveSettledAmount, txId: moveTxId,
     }
     : moveStep === 'success' ? {
-      step: 'success', dir: moveDir, amountMicrotari: moveLanded ?? 0n, txId: moveTxId,
+      step: 'success', dir: moveDir, amountMicrotari: moveSettledAmount, txId: moveTxId,
       lagged: moveLagging,
       resulting: movePrepared ? resultingFor(movePrepared) : null,
     }

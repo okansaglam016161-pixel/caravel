@@ -18,6 +18,7 @@
 import { describe, expect, it } from 'vitest'
 import { MAX_STEALTH_INPUTS, selectStealthInputs } from './stealthUtxos'
 import {
+  WS_ACCOUNT, WS_BUCKET, WS_TO_DEPOSIT, assertWorkspaceLayout,
   MIN_REVEAL_MICROTARI,
   MIN_STEALTH_CHANGE,
   REVEAL_FEE_RESERVE,
@@ -561,5 +562,50 @@ describe('maxRevealable respects the input cap', () => {
       expect(sel.inputs.length).toBeLessThanOrEqual(MAX_STEALTH_INPUTS)
       assertRevealSplit(planReveal(offered, 16_138n, sel.total))
     }
+  })
+})
+
+// ── The workspace slot layout (M9 C6) ────────────────────────────────────────
+//
+// FUND-CRITICAL AND, UNTIL NOW, UNVERIFIED. TakeFromBucket's output slot is a RAW NUMBER — saveVar
+// cannot name it — so slot 2 is written out by hand and depends on the builder having handed out 0
+// and 1 to 'account' and 'bucket' first. Depositing the wrong bucket sends the surplus somewhere
+// unrecoverable.
+//
+// It was asserted at runtime and checked by nothing, which is exactly the profile of the
+// probe-shape bug: stated confidently, believed, never tested. These pin it.
+
+describe('assertWorkspaceLayout', () => {
+  it('the three slots are the ones the instruction chain hard-codes', () => {
+    expect(WS_ACCOUNT).toBe(0)
+    expect(WS_BUCKET).toBe(1)
+    expect(WS_TO_DEPOSIT).toBe(2)
+  })
+
+  it('accepts the layout the builder produces today (verified on-chain in M3)', () => {
+    expect(() => assertWorkspaceLayout(0, 1)).not.toThrow()
+  })
+
+  it.each([
+    ['account moved', 1, 1],
+    ['bucket moved', 0, 2],
+    ['both shifted by one', 1, 2],
+    ['reversed', 1, 0],
+  ])('REFUSES a changed allocation order (%s)', (_label, account, bucket) => {
+    // If a future SDK allocates differently, slot 2 may already be taken — and the deposit would
+    // reference a bucket that is not the one TakeFromBucket filled. This must fail loudly at build
+    // time rather than quietly on-chain.
+    expect(() => assertWorkspaceLayout(account, bucket)).toThrow(/unexpected workspace layout/)
+  })
+
+  it('names the slot that can no longer be assumed free', () => {
+    expect(() => assertWorkspaceLayout(3, 4)).toThrow(/TakeFromBucket output slot 2/)
+  })
+
+  it('the deposit slot never collides with the two named ones', () => {
+    expect(WS_TO_DEPOSIT).not.toBe(WS_ACCOUNT)
+    expect(WS_TO_DEPOSIT).not.toBe(WS_BUCKET)
+    // Sequential allocation from zero means the next free slot after two saveVars is exactly 2.
+    expect(WS_TO_DEPOSIT).toBe(WS_BUCKET + 1)
   })
 })

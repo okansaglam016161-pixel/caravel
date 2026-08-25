@@ -1,166 +1,108 @@
-//   Wallet modal — presentation transcribed element-for-element from the design file
-//   "Caravel Wallet Modal (Build).dc.html" (modal frame, balance ×6, send ×8, receive ×2,
-//   activity ×3, settings). Colours reference step-0 tokens (same values as the design hex).
-//   ALL logic — handlers, state, context bindings, validation — is preserved verbatim from the
-//   prior WalletModal; only the JSX mirrors the design markup. Dev decrypt panel removed.
+// The wallet modal — M4 (v2) presentation over the proven fund logic.
+//
+// ── WHAT THIS FILE IS, AND IS NOT ─────────────────────────────────────────────
+//
+// It is a RESKIN. Every handler below is the one that shipped: handlePrepareMove still calls
+// prepareConceal / prepareReveal and holds the built envelope, handleConfirmMove still submits that
+// exact envelope and hands off to useBalanceSettle with the direction-dependent balance,
+// handleConfirmSend still calls sendConfidential and records the outcome. Nothing under src/crypto
+// changed, and neither did useBalanceSettle. What changed is that the states now render through the
+// v2 components in ./v2, so the modal matches the approved design.
+//
+// The one genuinely new piece of logic is the DERIVATION at the bottom — turning the shipped state
+// machine into the props those components take. It computes no amounts of its own beyond
+// presentation; every figure it displays comes from a prepared envelope or a balance read.
+//
+// ── THE FOUR M4 GAPS, FIXED HERE ──────────────────────────────────────────────
+//
+//   E2  "Make public" is disabled WITH A REASON when the account address has not been recovered,
+//       rather than being offered and then failing at pricing — on the irreversible direction,
+//       after the user has typed an amount. See `entries`.
+//   E5  The hide toggle reaches the move amounts, not just the balance cards. See `hidden` on the
+//       amount card; the review screen is the deliberate exception, noted there.
+//   #10 Review shows the RESULTING balances. See `resultingFor`.
+//   #3  No base units reach the screen. Fund-module errors pass through plainError at this
+//       boundary; the modules keep their exact wording for logs and tests. See ./v2/plainError.
 
 import { useState, useEffect, useRef } from 'react'
 import { useWallet } from '../../context/WalletContext'
 import { MIN_CONCEAL_MICROTARI, prepareConceal, type PreparedConceal } from '../../crypto/conceal'
 import { MIN_REVEAL_MICROTARI, maxRevealable, prepareReveal, type PreparedReveal } from '../../crypto/reveal'
+import { loadAccountAddress } from '../../crypto/accountStore'
 import { useBalanceSettle } from './useBalanceSettle'
-import { Logo } from '../primitives'
 import OnsRegisterPanel from './OnsRegisterPanel'
 import FaucetClaimPanel from './FaucetClaimPanel'
 import { sendConfidential, tariToMicrotari, MAX_FEE, type SendOutcome } from '../../crypto/confidentialSend'
 import { buildActivity, type ActivityRow } from '../../crypto/activity'
 import { usePaymentResolution } from '../../hooks/usePaymentResolution'
-import { QRCodeSVG } from 'qrcode.react'
+import WalletModalV2, { type MoveView, type Resulting, type WalletTab } from './v2/WalletModalV2'
+import type { BalanceView } from './v2/balances'
+import type { Dir, EntryProps } from './v2/move'
+import { ActivityRowShell, type ActivityStatus, type SendView } from './v2/panels'
+import { plainError } from './v2/plainError'
+import { toInput } from './v2/format'
 
-type Tab = 'overview' | 'send' | 'receive' | 'activity'
+// The PUBLIC ↔ PRIVATE move. Its own state machine rather than SendStep's: a move has no recipient,
+// prices itself before review, and its terminal states carry different information.
+type MoveStep = 'idle' | 'form' | 'pricing' | 'review' | 'moving' | 'settling' | 'success' | 'error'
 type SendStep = 'form' | 'review' | 'sending' | 'success' | 'error'
 
-// The PUBLIC → PRIVATE move (M2). Deliberately its own little state machine rather than reusing
-// SendStep: a conceal has no recipient, prices itself before review, and its terminal states carry
-// different information. 'pricing' is the step SendStep has no analogue for — the dry run runs
-// between the form and the review so the fee shown is the fee paid.
-type MoveStep = 'idle' | 'form' | 'pricing' | 'review' | 'moving' | 'settling' | 'success' | 'error'
-
-/**
- * Which way the funds are going. ONE state machine serves both, because the steps are genuinely the
- * same shape — price, review, submit, settle — and two copies of that would drift apart exactly
- * where it matters least visibly and costs most (the settle loop, the error surface).
- *
- * What the direction changes is not the shape but the STAKES, and the UI says so:
- *   'conceal'  public → private. Safe and undoable. Plain confirm, no caution.
- *   'reveal'   private → public. IRREVERSIBLE — the amount is published on-chain and stays
- *              readable forever. Same flow, plus an amber caution and a different balance to watch
- *              settle (public rises, rather than confidential).
- */
-type MoveDir = 'conceal' | 'reveal'
-
-/** A priced envelope, tagged with the direction that built it — so the review screen cannot read a
- *  conceal's fields off a reveal, or vice versa. */
+/** A priced envelope, tagged with the direction that built it. */
 type PreparedMove =
   | { dir: 'conceal'; p: PreparedConceal }
   | { dir: 'reveal'; p: PreparedReveal }
 
 /**
- * How long to wait for a committed conceal to appear in the confidential balance.
+ * How long to wait for a committed move to appear in the balance it should raise.
  *
- * The indexer's /utxos listing lags consensus by 60–90s, so this is the faucet's 150s, for the same
- * reason: long enough to cover the observed lag, short enough that a genuinely stuck index does not
- * leave a spinner running forever. Passing it is not a failure — see the settling copy.
+ * The indexer trails consensus by 60–90s, so this is the faucet's 150s for the same reason: long
+ * enough to cover the observed lag, short enough that a stuck index does not spin forever. Passing
+ * it is NOT a failure — see the settle loop's onDeadline.
  */
 const MOVE_SETTLE_MS = 150_000
 
-const MONO = 'var(--font-mono)'
-const HIDDEN = '••••••'
-// 2dp + thousands separators (design headline / activity amounts).
-const fmt2 = (µt: bigint | number) => (Number(µt) / 1_000_000).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+// ── Activity rows ─────────────────────────────────────────────────────────────
+//
+// The source rule is unchanged and load-bearing: rows come from buildActivity, which merges wallet
+// sends with message-linked payments and deliberately ignores the balance scan — a private output
+// carries no sender, so the scan cannot tell an incoming payment from our own change.
+
+function SentRowV2({ row, hidden }: { row: Extract<ActivityRow, { kind: 'sent' }>; hidden: boolean }) {
+  const status: ActivityStatus =
+    row.outcome === 'Reject' ? 'failed'
+    : row.outcome === 'Timeout' ? 'unconfirmed'
+    : row.outcome === null ? 'sent'      // a chat send — outcome not tracked
+    : 'confirmed'
+  return <ActivityRowShell hidden={hidden} row={{
+    id: row.id, direction: 'out', title: row.counterparty, note: row.note,
+    status, amountMicrotari: row.amountMicrotari,
+  }} />
+}
 
 /**
- * µtTARI → a 2dp display string, computed ENTIRELY in bigint.
- *
- * NOT a bug fix. fmt2 above divides through `Number`, and it was worth checking whether that costs
- * anything here: it does not. At 2dp the two agree for EVERY value in the u64 range and beyond —
- * Number's error only exceeds half a hundredth of a TARI past ~1e20 µtTARI, which is five orders of
- * magnitude above the whole TARI supply. The tests pin that agreement.
- *
- * This exists because the revealed-balance path is new code under a "no Number() on amounts" rail,
- * and honouring the rail literally costs one line of arithmetic: round half-up to the nearest
- * hundredth, then group the whole part. Identical output to fmt2 means the public row and the
- * private hero can never write the same figure differently.
+ * An inflow. Its amount is resolved lazily and cache-first — which is why this is a component
+ * rather than a mapped object: the hook is per row, exactly as it was before.
  */
-/**
- * µtTARI → a full-precision decimal string for an AMOUNT INPUT. No grouping, no rounding.
- *
- * Distinct from fmtMicrotariExact, which rounds to 2dp for DISPLAY — and must not be reused here.
- * A balance of 999_997_686 µtTARI displays as "1,000.00", and feeding that back in as an amount
- * asks the vault for 2_314 µtTARI more than it holds, which the network refuses. Display rounding
- * and amount entry are different jobs.
- */
-const microtariToInput = (µt: bigint): string => {
-  const whole = µt / 1_000_000n
-  const frac = (µt % 1_000_000n).toString().padStart(6, '0').replace(/0+$/, '')
-  return frac ? `${whole}.${frac}` : `${whole}`
-}
-
-const fmtMicrotariExact = (µt: bigint): string => {
-  const hundredths = (µt + 5_000n) / 10_000n     // + half a hundredth, then truncate = round half-up
-  const whole = hundredths / 100n
-  const cents = hundredths % 100n
-  return `${whole.toLocaleString('en-US')}.${cents.toString().padStart(2, '0')}`
-}
-// Fee: trimmed decimals (design shows "0.0042" / "0.01").
-const fmtFee = (µt: bigint) => (Number(µt) / 1_000_000).toString()
-
-// Presentational row shell — the design markup, driven by already-computed display values so both
-// the sent (wallet + chat) and received (message-linked, resolved lazily) sources render identically.
-type RowKind = 'confirmed' | 'received' | 'notconf' | 'failed'
-function TxRowShell({ kind, title, sub, amount, amountColor, hidden, hasNote, status }: {
-  kind: RowKind; title: string; sub: string; amount: string; amountColor: string; hidden: boolean; hasNote: boolean; status: { t: string; c: string }
-}) {
-  const iconWrap: Record<RowKind, React.CSSProperties> = {
-    confirmed: { background: 'rgba(var(--teal-500-rgb),0.1)', border: '1px solid rgba(var(--teal-500-rgb),0.22)' },
-    received: { background: 'rgba(var(--border-rgb),0.07)', border: '1px solid rgba(var(--border-rgb),0.16)' },
-    notconf: { background: 'rgba(var(--warn-rgb),0.05)', border: '1px dashed rgba(var(--warn-rgb),0.34)' },
-    failed: { background: 'rgba(var(--danger-rgb),0.07)', border: '1px solid rgba(var(--danger-rgb),0.24)' },
-  }
-  const icon: Record<RowKind, React.ReactNode> = {
-    confirmed: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--teal-500)" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M12 19V5M5 12l7-7 7 7" /></svg>,
-    received: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v14M5 12l7 7 7-7" /></svg>,
-    notconf: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--warn)" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /><path d="M4.5 4.5l15 15" opacity="0.55" /></svg>,
-    failed: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--danger-500)" strokeWidth="2.4" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>,
-  }
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 13, padding: 13, borderRadius: 12, borderBottom: '1px solid rgba(var(--border-rgb),0.07)' }}>
-      <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 34, height: 34, borderRadius: 10, flexShrink: 0, ...iconWrap[kind] }}>{icon[kind]}</span>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-          <span style={{ fontSize: 14, fontWeight: 600, color: kind === 'failed' ? 'var(--text-muted)' : 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</span>
-          <span style={{ fontFamily: MONO, fontSize: 13, color: hidden ? 'var(--text-teal-label)' : amountColor, letterSpacing: hidden ? '0.1em' : undefined, flexShrink: 0, marginLeft: 8 }}>{hidden ? '••••' : amount}</span>
-        </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginTop: 3 }}>
-          <span style={{ fontSize: 12, color: hasNote ? 'var(--text-teal-dim)' : 'var(--text-faint)', fontStyle: hasNote ? 'italic' : 'normal', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{sub}</span>
-          <span style={{ fontSize: 11, fontWeight: 600, color: status.c, flexShrink: 0, marginLeft: 8 }}>{status.t}</span>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// An outflow — wallet-modal send (has an outcome) or a chat send (outcome not tracked → shown "Sent").
-function SentActivityRow({ row, hidden }: { row: Extract<ActivityRow, { kind: 'sent' }>; hidden: boolean }) {
-  const kind: RowKind = row.outcome === 'Reject' ? 'failed' : row.outcome === 'Timeout' ? 'notconf' : 'confirmed'
-  const amount = row.amountMicrotari !== null ? fmt2(row.amountMicrotari) : '—'
-  const amountColor = kind === 'failed' ? 'var(--text-faint-dim)' : 'var(--text-teal-label)'
-  const sub = row.note ? `“${row.note}”` : kind === 'notconf' ? 'Broadcast, never confirmed' : kind === 'failed' ? 'Nothing was taken' : 'No note'
-  const status = row.outcome === null ? { t: 'Sent', c: 'var(--teal-300)' }
-    : kind === 'failed' ? { t: 'Failed', c: 'var(--danger-300)' }
-    : kind === 'notconf' ? { t: 'Not confirmed', c: 'var(--warn-300)' }
-    : { t: 'Confirmed', c: 'var(--teal-300)' }
-  return <TxRowShell kind={kind} title={row.counterparty} sub={sub} amount={amount} amountColor={amountColor} hidden={hidden} hasNote={!!row.note} status={status} />
-}
-
-// An inflow — a message-linked received payment; its confidential amount is resolved lazily (M10.2).
-function ReceivedActivityRow({ row, hidden }: { row: Extract<ActivityRow, { kind: 'received' }>; hidden: boolean }) {
+function ReceivedRowV2({ row, hidden }: { row: Extract<ActivityRow, { kind: 'received' }>; hidden: boolean }) {
   const { state } = usePaymentResolution(row.utxoId)
-  let amount = '—'
-  let status: { t: string; c: string }
-  if (state.kind === 'resolved') { amount = fmt2(BigInt(state.amountMicrotari)); status = { t: 'Received', c: 'var(--teal-300)' } }
-  else if (state.kind === 'loading' || state.kind === 'retrying') { amount = '…'; status = { t: 'Resolving', c: 'var(--text-faint-dim)' } }
-  else status = state.reason === 'spent' ? { t: 'Spent', c: 'var(--text-faint-dim)' }
-    : state.reason === 'unreadable' ? { t: 'Unavailable', c: 'var(--text-faint-dim)' }
-    : { t: 'Pending', c: 'var(--warn-300)' }   // not_found / network — indexer lag, may still resolve
-  const sub = row.note ? `“${row.note}”` : 'No note'
-  return <TxRowShell kind="received" title={row.counterparty} sub={sub} amount={amount} amountColor="var(--text-teal-label)" hidden={hidden} hasNote={!!row.note} status={status} />
+  const status: ActivityStatus =
+    state.kind === 'resolved' ? 'received'
+    : state.kind === 'loading' || state.kind === 'retrying' ? 'checking'
+    : state.reason === 'spent' ? 'spent'
+    : state.reason === 'unreadable' ? 'unreadable'
+    : 'pending'   // not_found / network — indexer lag, may still resolve
+  return <ActivityRowShell hidden={hidden} row={{
+    id: row.id, direction: 'in', title: row.counterparty, note: row.note, status,
+    amountMicrotari: state.kind === 'resolved' ? BigInt(state.amountMicrotari) : null,
+  }} />
 }
+
+// ══════════════════════════════════════════════════════════════════════════════
 
 export default function WalletModal({ onClose }: { onClose: () => void }) {
   const { wallet, address, scan, revealed, rescan, txHistory, messages, recordSent, balanceHidden, setBalanceHidden } = useWallet()
 
-  const [tab, setTab] = useState<Tab>('overview')
+  const [tab, setTab] = useState<WalletTab>('overview')
   const [addrCopied, setAddrCopied] = useState(false)
 
   const [sendRecipient, setSendRecipient] = useState('')
@@ -175,7 +117,7 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
   const [sendOutcome, setSendOutcome] = useState<SendOutcome | null>(null)
 
   const [moveStep, setMoveStep] = useState<MoveStep>('idle')
-  const [moveDir, setMoveDir] = useState<MoveDir>('conceal')
+  const [moveDir, setMoveDir] = useState<Dir>('conceal')
   const [moveAmount, setMoveAmount] = useState('')
   const [moveError, setMoveError] = useState('')
   const [moveProgress, setMoveProgress] = useState('')
@@ -185,15 +127,14 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
   /**
    * The exact µtTARI MAX asked for, when MAX was used.
    *
-   * MAX must mean the WHOLE revealed balance to the last microtari. Deriving it back out of the
-   * text field means a float round-trip, and the field's own formatting is lossy — so the precise
-   * figure is kept here and the string is only what the user sees. Cleared the moment they type,
-   * because then the string IS the intent.
+   * MAX must mean the whole available balance to the last microtari. Deriving it back out of the
+   * text field means a float round-trip and the field's formatting is lossy — so the precise figure
+   * is kept here and the string is only what the user sees. Cleared the moment they type, because
+   * then the string IS the intent.
    */
   const [moveExact, setMoveExact] = useState<bigint | null>(null)
   const [moveLagging, setMoveLagging] = useState(false)
-  /** The balance being watched, captured BEFORE submitting so the settle loop can see it rise.
-   *  Which balance that is depends on the direction — see the settle loop below. */
+  /** The balance being watched, captured BEFORE submitting so the settle loop can see it rise. */
   const movePreBalance = useRef<bigint>(0n)
   const moveDeadline = useRef<number>(0)
 
@@ -206,19 +147,16 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
   const { status, balance } = scan
 
   // A committed move is not a visible move: the balances are read from an indexer that trails
-  // consensus by 60–90s. Firing one rescan() on commit — which is what this flow did at first —
-  // reads state without the new output, reports the old balance, and stops, so a successful
-  // conversion looks like nothing happened. This waits for it properly.
+  // consensus by 60–90s. Firing one rescan() on commit reads state without the new output, reports
+  // the old balance, and stops — so a successful conversion looks like nothing happened.
   //
   // WHICH BALANCE RISES DEPENDS ON THE DIRECTION, and watching the wrong one would report a lag
-  // that is not there: a conceal makes the CONFIDENTIAL balance rise, a reveal makes the PUBLIC one
-  // rise. Both directions also make the other side FALL, but a fall is the weaker signal — the
-  // private side falls by the whole input, not by the amount, and change lands separately — so the
-  // rise is what is polled for, in both cases.
+  // that is not there: a conceal raises the PRIVATE balance, a reveal raises the PUBLIC one. Both
+  // also make the other side fall, but a fall is the weaker signal — the private side falls by the
+  // whole input, not by the amount — so the rise is what is polled for, in both cases.
   //
-  // `null` while the read is loading or unavailable is deliberate and is what useBalanceSettle
-  // wants: "not known yet" never counts as movement, so a failed read cannot be mistaken for a
-  // balance that stayed put.
+  // `null` while the read is loading or unavailable is deliberate: "not known yet" never counts as
+  // movement, so a failed read cannot be mistaken for a balance that stayed put.
   const settleBalance = moveDir === 'reveal'
     ? (revealed.status === 'done' ? revealed.amount : null)
     : balance
@@ -237,21 +175,60 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
       setMoveStep('success')
     },
   })
-  const balanceStr = balance !== null ? fmt2(balance) : null
 
-  const shortAddr = address ? address.slice(0, 20) + '…' + address.slice(-6) : null
+  // ── Refresh feedback ────────────────────────────────────────────────────────
+  //
+  // REFRESHING AND LOADING ARE DIFFERENT FACTS, and conflating them produces a false empty state.
+  // `loading` means we have never had a value. `refreshing` means we have one and are re-reading
+  // it. A rescan genuinely restarts the stealth scan, so the private figure really does blank —
+  // that is honest. The revealed read is two short GETs and blanking a known public balance for
+  // them would be a flash of "you have nothing" that is not true, so the last known figure is held
+  // while it re-reads and the press is acknowledged by the header and footer instead.
+  const [refreshing, setRefreshing] = useState(false)
+  const lastRevealed = useRef<bigint | null>(null)
+  useEffect(() => {
+    if (revealed.status === 'done' && revealed.amount !== null) lastRevealed.current = revealed.amount
+  }, [revealed])
+  useEffect(() => {
+    if (!refreshing) return
+    const scanSettled = status === 'done' || status === 'error'
+    const revealedSettled = revealed.status === 'done' || revealed.status === 'unavailable'
+    if (scanSettled && revealedSettled) setRefreshing(false)
+  }, [refreshing, status, revealed.status])
 
-  function copyAddr() { if (address) { navigator.clipboard.writeText(address).catch(() => {}); setAddrCopied(true); setTimeout(() => setAddrCopied(false), 1800) } }
+  function handleRefresh() {
+    if (refreshing) return
+    setRefreshing(true)
+    rescan()
+  }
+
+  // ── E2: is there an account to deposit into? ────────────────────────────────
+  //
+  // A reveal must deposit into a specific account component and must declare it as a transaction
+  // input. The address is recovered in the background on unlock and that recovery can fail, so this
+  // is a real condition rather than a theoretical one. Re-read when the identity changes, when the
+  // revealed read settles (recovery precedes it), and when a move ends — a committed move captures
+  // the address for free.
+  const [hasAccount, setHasAccount] = useState(false)
+  useEffect(() => {
+    setHasAccount(!!address && !!loadAccountAddress(address))
+  }, [address, revealed.status, moveStep])
+
+  function copyAddr() {
+    if (!address) return
+    navigator.clipboard.writeText(address).catch(() => {})
+    setAddrCopied(true)
+    setTimeout(() => setAddrCopied(false), 1800)
+  }
 
   function validateSendForm(): string | null {
-    if (!wallet) return 'Wallet is locked — unlock before sending'
-    if (!sendRecipient.startsWith('otl_esm_')) return 'Invalid address — must start with otl_esm_'
+    if (!wallet) return 'Your wallet is locked — unlock it before sending.'
+    if (!sendRecipient.startsWith('otl_esm_')) return 'That doesn’t look like a Tari address — it should start with otl_esm_.'
     const amountTari = parseFloat(sendAmount)
-    if (!isFinite(amountTari) || amountTari <= 0) return 'Amount must be greater than 0'
+    if (!isFinite(amountTari) || amountTari <= 0) return 'Enter an amount greater than zero.'
     const amountMicrotari = tariToMicrotari(amountTari)
     if (balance !== null && amountMicrotari + MAX_FEE > balance) {
-      const needed = (Number(amountMicrotari + MAX_FEE) / 1_000_000).toFixed(6)
-      return `Insufficient balance — need ${needed} TARI (including ~0.01 TARI fee)`
+      return `Not enough private balance — this needs ${toInput(amountMicrotari + MAX_FEE)} TARI including the fee, and you have ${toInput(balance)} TARI.`
     }
     return null
   }
@@ -264,38 +241,24 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
   }
 
   function resetSend() {
-    setSendRecipient('')
-    setSendAmount('')
-    setSendNote('')
-    setSendStep('form')
-    setSendValidationError('')
-    setSendProgress('')
-    setSendTxId('')
-    setSendError('')
-    setSendFee(null)
-    setSendOutcome(null)
+    setSendRecipient(''); setSendAmount(''); setSendNote('')
+    setSendStep('form'); setSendValidationError(''); setSendProgress('')
+    setSendTxId(''); setSendError(''); setSendFee(null); setSendOutcome(null)
   }
 
   function resetMove() {
     setMoveStep('idle')
-    // `moveDir` is deliberately NOT reset — it is set fresh by whichever entry point is pressed, and
-    // clearing it here would only make the idle card's two buttons depend on stale state.
-    setMoveAmount('')
-    setMoveError('')
-    setMoveProgress('')
-    setMovePrepared(null)
-    setMoveExact(null)
-    setMoveLagging(false)
-    setMoveTxId('')
-    setMoveLanded(null)
+    // `moveDir` is deliberately NOT reset — it is set fresh by whichever entry is pressed.
+    setMoveAmount(''); setMoveError(''); setMoveProgress('')
+    setMovePrepared(null); setMoveExact(null); setMoveLagging(false)
+    setMoveTxId(''); setMoveLanded(null)
   }
 
   /**
    * Price the move: dry-run it and hold onto the built envelope.
    *
    * Everything that can fail for a boring reason happens here rather than after the user has
-   * confirmed — a dead indexer, an unresolvable account, a rejected simulation. Confirm then only
-   * submits.
+   * confirmed — a dead indexer, an unresolvable account, a rejected simulation. Confirm only submits.
    */
   async function handlePrepareMove() {
     if (!wallet || !address) return
@@ -314,9 +277,9 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
       setMovePrepared(prepared)
       setMoveStep('review')
     } catch (e) {
-      // Back to the form, with the reason: at this stage nothing has been sent, so the user can
-      // adjust the amount and try again without any on-chain consequence.
-      setMoveError(e instanceof Error ? e.message : String(e))
+      // Back to the form, with the reason: nothing has been sent, so the user can adjust and retry
+      // without any on-chain consequence.
+      setMoveError(plainError(e instanceof Error ? e.message : String(e)))
       setMoveStep('form')
     }
   }
@@ -331,9 +294,9 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
       setMoveTxId(result.txId)
       if (result.outcome === 'Commit') {
         setMoveLanded('revealedAmount' in result ? result.revealedAmount : result.concealedAmount)
-        // Committed, but not yet VISIBLE — hand off to the settle loop rather than declaring
-        // success against a balance the indexer has not caught up to yet. The "before" reading has
-        // to be the balance the loop will WATCH, which is direction-dependent.
+        // Committed, but not yet VISIBLE — hand off to the settle loop rather than declaring success
+        // against a balance the indexer has not caught up to. The "before" reading has to be the
+        // balance the loop will WATCH, which is direction-dependent.
         movePreBalance.current = (movePrepared.dir === 'reveal'
           ? (revealed.status === 'done' ? revealed.amount : null)
           : balance) ?? 0n
@@ -343,20 +306,15 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
         // Kick both reads now — each side lags differently and neither is worth waiting a poll for.
         rescan()
       } else {
-        // VERBATIM WHERE WE HAVE IT. A reveal is irreversible and this builder's instruction chain
-        // (TakeFromBucket → deposit → PayFeeFromBucket) had never run on-chain before M3, so a
-        // rejection is the most informative thing the network will ever tell us about it. There is
-        // no reason string on this response shape, so the outcome is reported precisely instead of
-        // being softened into "something went wrong".
         setMoveError(
           result.outcome === 'Reject'
             ? `The network rejected the transaction. Nothing was ${movePrepared.dir === 'reveal' ? 'made public' : 'moved'}, and no fee was taken.`
-            : 'The transaction did not reach a decision in time. It may still land — refresh your balances in a moment before retrying.',
+            : 'The transaction didn’t reach a decision in time. It may still land — refresh your balances in a moment before trying again.',
         )
         setMoveStep('error')
       }
     } catch (e) {
-      setMoveError(e instanceof Error ? e.message : String(e))
+      setMoveError(plainError(e instanceof Error ? e.message : String(e)))
       setMoveStep('error')
     }
   }
@@ -364,7 +322,7 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
   async function handleConfirmSend() {
     if (!wallet || !address) return
     setSendStep('sending')
-    setSendProgress('Connecting to indexer…')
+    setSendProgress('Connecting…')
     setSendTxId('')
     setSendError('')
     try {
@@ -390,725 +348,210 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
       } else {
         setSendError(
           result.outcome === 'Reject'
-            ? 'The network rejected this transaction. Nothing left your wallet and no fee was taken.'
-            : 'Broadcast, but the network has not confirmed it. Do not resend. It will appear in Activity.'
+            ? 'The network rejected this payment. Nothing left your wallet and no fee was taken.'
+            : 'Broadcast, but the network hasn’t confirmed it yet. Don’t resend — it will appear in Activity.',
         )
         setSendStep('error')
       }
     } catch (e) {
-      setSendError(e instanceof Error ? e.message : String(e))
+      setSendError(plainError(e instanceof Error ? e.message : String(e)))
       setSendStep('error')
     }
   }
 
+  // ══ DERIVATION — the shipped state, as the v2 components want it ═════════════
 
-  const eyeOpen = (c: string) => (<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" /><circle cx="12" cy="12" r="3" /></svg>)
-  const eyeOff = (c: string) => (<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" /><circle cx="12" cy="12" r="3" /><path d="M4 4l16 16" /></svg>)
+  const revealedAmount = revealed.status === 'done' ? (revealed.amount ?? 0n) : 0n
+  const privateAmount = balance ?? 0n
 
-  const spinnerSm = (
-    <span style={{ width: 13, height: 13, borderRadius: '50%', border: '2px solid rgba(var(--teal-500-rgb),0.2)', borderTopColor: 'var(--teal-500)', animation: 'cv-spin 0.8s linear infinite', flexShrink: 0 }} />
-  )
+  const privateBalance: BalanceView =
+    status === 'error' ? { status: 'unavailable' }
+    : balance === null ? { status: 'loading' }          // also covers the never-scanned case (M4 B0)
+    : { status: 'ready', microtari: balance }
 
-  const balLabel = { fontSize: 11, fontWeight: 600, letterSpacing: '0.14em' } as const
-  const balBig = { fontFamily: MONO, fontSize: 36, fontWeight: 700 } as const
-  const balTari = { fontSize: 15, fontWeight: 600, color: 'var(--teal-500)' } as const
+  const publicBalance: BalanceView =
+    revealed.status === 'done' ? { status: 'ready', microtari: revealed.amount ?? 0n }
+    : revealed.status === 'unavailable' ? { status: 'unavailable' }
+    : lastRevealed.current !== null ? { status: 'ready', microtari: lastRevealed.current }
+    : { status: 'loading' }
 
-  // ── Balance widget: the exact design card for the current state ──
-  function balanceWidget() {
-    const tealCard = (a: string) => ({ borderRadius: 14, padding: '22px 18px', textAlign: 'center' as const, background: `radial-gradient(320px 170px at 50% 0%, rgba(var(--teal-500-rgb),${a}), rgba(10,14,23,0))`, border: `1px solid rgba(var(--teal-500-rgb),0.2)` })
-    if (status === 'scanning' && balance === null) {
-      return (
-        <div style={{ ...tealCard('0.1'), border: '1px solid rgba(var(--teal-500-rgb),0.18)' }}>
-          <div style={{ ...balLabel, color: 'var(--text-teal-dim)', marginBottom: 14 }}>CONFIDENTIAL BALANCE</div>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 11, marginBottom: 10 }}>
-            <span style={{ width: 22, height: 22, borderRadius: '50%', border: '2px solid rgba(var(--teal-500-rgb),0.2)', borderTopColor: 'var(--teal-500)', animation: 'cv-spin 0.8s linear infinite' }} />
-            <span style={{ fontFamily: MONO, fontSize: 24, fontWeight: 600, color: 'var(--text-teal-label)' }}>scanning…</span>
-          </div>
-          <div style={{ fontFamily: MONO, fontSize: 12, color: 'var(--text-teal-dim)' }}>{scan.progress.scanned} outputs checked</div>
-        </div>
-      )
-    }
-    if (status === 'error') {
-      return (
-        <div style={{ borderRadius: 14, padding: '22px 18px', textAlign: 'center', background: 'rgba(var(--danger-rgb),0.04)', border: '1px solid rgba(var(--danger-rgb),0.28)' }}>
-          <div style={{ ...balLabel, color: 'var(--text-faint-dim)', marginBottom: 12 }}>CONFIDENTIAL BALANCE</div>
-          <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--danger-300)', marginBottom: 6 }}>Scan failed</div>
-          <div style={{ fontSize: 13, color: 'var(--text-muted-dim)', marginBottom: 14 }}>Could not reach the Esmeralda indexer.</div>
-          <span onClick={rescan} style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '9px 18px', borderRadius: 10, background: 'rgba(var(--danger-rgb),0.08)', border: '1px solid rgba(var(--danger-rgb),0.3)', color: 'var(--danger-300)', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--danger-300)" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v5h-5" /></svg>Retry scan
-          </span>
-        </div>
-      )
-    }
-    if (balanceHidden && balance !== null) {
-      return (
-        <div style={tealCard('0.1')}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 10 }}>
-            <span style={{ ...balLabel, color: 'var(--text-teal-dim)' }}>CONFIDENTIAL BALANCE</span>
-            <span onClick={() => setBalanceHidden(false)} style={{ cursor: 'pointer', display: 'inline-flex' }}>{eyeOff('var(--teal-500)')}</span>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'center', gap: 9 }}>
-            <span style={{ ...balBig, color: 'var(--text-teal-label)', letterSpacing: '0.1em' }}>{HIDDEN}</span><span style={balTari}>TARI</span>
-          </div>
-        </div>
-      )
-    }
-    if (balance === 0n || (balance === null && status === 'done')) {
-      return (
-        <div style={{ borderRadius: 14, padding: '22px 18px', textAlign: 'center', background: 'var(--surface-raised)', border: '1px solid rgba(var(--border-rgb),0.14)' }}>
-          <div style={{ ...balLabel, color: 'var(--text-faint-dim)', marginBottom: 10 }}>CONFIDENTIAL BALANCE</div>
-          <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'center', gap: 9, marginBottom: 8 }}>
-            <span style={{ ...balBig, color: 'var(--text-faint)' }}>0.00</span><span style={{ ...balTari, color: 'var(--text-faint-dim)' }}>TARI</span>
-          </div>
-          <div style={{ fontSize: 13, color: 'var(--text-muted-dim)' }}>Claim testnet funds below to get started.</div>
-          {/* Refresh belongs HERE most of all. A zero balance is exactly the state a wallet sits in
-              while a just-committed conceal — or an incoming payment — waits out the indexer's
-              60–90s lag, and it was the one state with no way to re-scan: the control only rendered
-              beside a non-zero balance, so the user who most needed it could not reach it. */}
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 12, fontSize: 12, color: 'var(--text-muted-dim)' }}>
-            <span>{scan.totalScanned} UTXOs scanned</span>
-            <span onClick={rescan} style={{ color: 'var(--teal-500)', fontWeight: 600, cursor: 'pointer' }}>Refresh</span>
-          </div>
-        </div>
-      )
-    }
-    // DONE (positive balance)
-    return (
-      <div style={tealCard('0.13')}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 10 }}>
-          <span style={{ ...balLabel, color: 'var(--text-teal-dim)' }}>CONFIDENTIAL BALANCE</span>
-          <span onClick={() => setBalanceHidden(true)} style={{ cursor: 'pointer', display: 'inline-flex' }}>{eyeOpen('var(--text-teal-dim)')}</span>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'center', gap: 9, marginBottom: scan.incomplete ? 14 : 0 }}>
-          <span style={{ ...balBig, color: 'var(--text-bright)' }}>{balanceStr ?? '—'}</span><span style={balTari}>TARI</span>
-        </div>
-        {scan.incomplete && (
-          <div style={{ display: 'flex', gap: 9, padding: '10px 12px', borderRadius: 10, background: 'rgba(var(--warn-rgb),0.05)', border: '1px solid rgba(var(--warn-rgb),0.25)', fontSize: 12, color: 'var(--warn-300)', textAlign: 'left', lineHeight: 1.45, marginBottom: 12 }}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--warn)" strokeWidth="2" strokeLinecap="round" style={{ flexShrink: 0, marginTop: 1 }}><path d="M12 8v5M12 17h.01" /><circle cx="12" cy="12" r="9" /></svg>
-            The indexer returned its maximum result set — there may be more outputs. Balance may be understated.
-          </div>
-        )}
-        {/* Live-app addition (deliberate deviation from the static design card): scan summary + manual refresh. */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: scan.incomplete ? 0 : 12, fontSize: 12, color: 'var(--text-teal-dim)' }}>
-          <span>{scan.totalScanned} UTXOs scanned · {scan.utxos.length} owned</span>
-          <span onClick={rescan} style={{ color: 'var(--teal-500)', fontWeight: 600, cursor: 'pointer' }}>Refresh</span>
-        </div>
-      </div>
-    )
+  // The amount the form is currently asking for, and the guards around it. `ceiling` differs by
+  // direction because the fee comes from different places: a conceal carves it out of the amount
+  // leaving the vault, a reveal pays it from the private side ON TOP — which is what maxRevealable
+  // accounts for, along with the small stealth reserve.
+  const enteredMicro = moveExact ?? (moveAmount === '' ? 0n : tariToMicrotari(parseFloat(moveAmount) || 0))
+  const ceiling = moveDir === 'conceal' ? revealedAmount : maxRevealable(privateAmount)
+  const minAmount = moveDir === 'conceal' ? MIN_CONCEAL_MICROTARI : MIN_REVEAL_MICROTARI
+  const belowMin = moveAmount !== '' && enteredMicro < minAmount
+  const overCeiling = moveAmount !== '' && enteredMicro > ceiling
+
+  /** Balances after this move lands. The M4 report's gap #10 — the number users actually want. */
+  function resultingFor(m: PreparedMove): Resulting | null {
+    if (balance === null || revealed.status !== 'done') return null
+    return m.dir === 'reveal'
+      ? { privateAfter: privateAmount - m.p.revealedOutput, publicAfter: revealedAmount + m.p.revealedAmount }
+      : { privateAfter: privateAmount + m.p.concealedAmount, publicAfter: revealedAmount - m.p.withdrawAmount }
   }
 
-  // ── PUBLIC (revealed) balance row — M1, read-only ──
-  //
-  // Secondary to the confidential hero by design: private is what Caravel is for, public is the
-  // opt-in. Rendered as its own muted row rather than a second figure inside the hero card so the
-  // two can never read as parts of one number.
-  //
-  // THE TWO ARE NEVER SUMMED. They are different states of the same asset, and adding them would
-  // invent a "total" the protocol does not have — worse, it would hide the very distinction this
-  // feature exists to surface.
-  function publicBalanceRow() {
-    const rowBase = { borderRadius: 12, padding: '13px 15px', background: 'var(--surface-raised)', border: '1px solid rgba(var(--border-rgb),0.12)' } as const
-    const label = { ...balLabel, fontSize: 10, color: 'var(--text-muted-dim)' } as const
-    const note = { fontSize: 12, color: 'var(--text-muted-dim)', lineHeight: 1.45 } as const
-
-    // Hidden alongside the hero — one toggle covers both, or the "hide balance" gesture leaks.
-    if (balanceHidden) {
-      return (
-        <div style={rowBase}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <span style={label}>PUBLIC BALANCE</span>
-            <span style={{ fontFamily: MONO, fontSize: 14, fontWeight: 600, color: 'var(--text-faint)', letterSpacing: '0.1em' }}>{HIDDEN}</span>
-          </div>
-        </div>
-      )
+  const moveView: MoveView =
+    moveStep === 'form' ? {
+      step: 'form', dir: moveDir, amount: moveAmount, maxUsed: moveExact !== null,
+      available: moveDir === 'conceal' ? revealedAmount : privateAmount,
+      canReview: moveAmount !== '' && !belowMin && !overCeiling,
+      error: belowMin ? `The smallest amount you can move is ${toInput(minAmount)} TARI.`
+        : overCeiling ? (moveDir === 'reveal'
+            ? `More than you can make public — the fee comes out of your private balance too. Most you can move now: ${toInput(ceiling)} TARI.`
+            : 'More than your public balance.')
+          : moveError || undefined,
+      // Said BEFORE they notice it: a private balance that stops just short of zero after "move
+      // everything" reads as a bug, or as funds gone astray on an irreversible action.
+      leftoverNote: moveDir === 'reveal' && moveExact !== null && privateAmount > ceiling
+        ? `About ${toInput(privateAmount - ceiling)} TARI stays private to cover the fee. It’s still yours and still spendable.`
+        : undefined,
     }
-
-    if (revealed.status === 'idle' || revealed.status === 'loading') {
-      return (
-        <div style={rowBase}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <span style={label}>PUBLIC BALANCE</span>
-            <span style={{ fontSize: 12, color: 'var(--text-faint-dim)' }}>Checking…</span>
-          </div>
-        </div>
-      )
+    // PRICING IS NOT ITS OWN SCREEN. The design prices inside review: the fee row spins and the
+    // confirm button stays inert, so the user reads the amount and direction while it resolves
+    // instead of watching a blank card.
+    : moveStep === 'pricing' ? {
+      step: 'review', dir: moveDir, amountMicrotari: enteredMicro, feeMicrotari: null, resulting: null,
     }
-
-    // UNAVAILABLE — the read threw, so we do not know. Say that; never draw a confident 0.
-    if (revealed.status === 'unavailable') {
-      return (
-        <div style={{ ...rowBase, border: '1px solid rgba(var(--warn-rgb),0.25)', background: 'rgba(var(--warn-rgb),0.04)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-            <span style={{ ...label, color: 'var(--warn-300)' }}>PUBLIC BALANCE</span>
-            <span onClick={rescan} style={{ fontSize: 12, fontWeight: 600, color: 'var(--teal-500)', cursor: 'pointer' }}>Retry</span>
-          </div>
-          <div style={{ ...note, color: 'var(--warn-300)' }}>Public balance unavailable — could not reach the indexer. Your confidential balance above is unaffected.</div>
-        </div>
-      )
+    : moveStep === 'review' && movePrepared ? {
+      step: 'review', dir: movePrepared.dir,
+      amountMicrotari: movePrepared.dir === 'reveal' ? movePrepared.p.revealedAmount : movePrepared.p.concealedAmount,
+      feeMicrotari: movePrepared.p.feeMicrotari,
+      resulting: resultingFor(movePrepared),
+      // The amber arrow, label and confirm button carry the signal; no three-facts block.
+      showPermanenceNote: false,
     }
-
-    // EMPTY — the common case, and a true zero rather than an unknown one.
-    if (revealed.amount === 0n) {
-      return (
-        <div style={rowBase}>
-          <div style={{ ...label, marginBottom: 6 }}>PUBLIC BALANCE</div>
-          <div style={note}>Nothing revealed. Your entire balance is confidential.</div>
-        </div>
-      )
-    }
-
-    // A real revealed balance.
-    return (
-      <div style={rowBase}>
-        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 6 }}>
-          <span style={label}>PUBLIC BALANCE</span>
-          <span style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-            <span style={{ fontFamily: MONO, fontSize: 18, fontWeight: 700, color: 'var(--text-body)' }}>{fmtMicrotariExact(revealed.amount ?? 0n)}</span>
-            <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-muted-dim)' }}>TARI</span>
-          </span>
-        </div>
-        <div style={note}>Visible to anyone on-chain. Not included in the confidential balance above.</div>
-      </div>
-    )
-  }
-
-  // ── MOVE FUNDS: both directions (M2 conceal, M3 reveal) ──
-  //
-  // ONE panel, one state machine, two directions — because the steps really are the same shape and
-  // the differences are all in what is at stake:
-  //
-  //   PUBLIC → PRIVATE (conceal, M2)   Safe, and undoable by revealing again. Plain confirm.
-  //   PRIVATE → PUBLIC (reveal, M3)    IRREVERSIBLE. The amount lands as a readable integer in an
-  //                                    account vault and stays in the chain's history forever, and
-  //                                    it links this wallet's account to that figure. Same flow,
-  //                                    plus an amber caution and a different balance to watch.
-  //
-  // Both are priced BEFORE review, not after: prepare* runs the dry run and hands back a built,
-  // signed envelope, so the fee on the review screen is the fee the transaction pays rather than an
-  // estimate that might drift. On the reveal side that also means the whole instruction chain has
-  // already been simulated by the network before the user is asked to confirm anything.
-  function moveFundsPanel() {
-    const revealedAmount = revealed.status === 'done' ? (revealed.amount ?? 0n) : 0n
-    const privateAmount = balance ?? 0n
-
-    // What each direction can offer. Conceal moves the whole revealed balance (the fee is carved out
-    // of it); reveal has to leave the fee AND a small stealth reserve behind, which is what
-    // maxRevealable works out — see its note, and the MAX copy below.
-    const canConceal = revealed.status === 'done' && revealedAmount > 0n
-    const maxReveal = balance !== null ? maxRevealable(privateAmount) : 0n
-    const canReveal = balance !== null && maxReveal >= MIN_REVEAL_MICROTARI
-
-    // Nothing to move in either direction, or we do not reliably know what there is — no affordance.
-    if (!canConceal && !canReveal && moveStep === 'idle') return null
-
-    const isReveal = moveDir === 'reveal'
-    // The balance this direction spends from, and the floor it must clear.
-    const sourceAmount = isReveal ? privateAmount : revealedAmount
-    const spendCeiling = isReveal ? maxReveal : revealedAmount
-    const minAmount = isReveal ? MIN_REVEAL_MICROTARI : MIN_CONCEAL_MICROTARI
-
-    const card = { borderRadius: 12, padding: '15px 15px 16px', background: 'var(--surface-raised)', border: '1px solid rgba(var(--border-rgb),0.12)' } as const
-    const chip = (text: string, tone: 'public' | 'private') => (
-      <span style={{
-        display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 10px', borderRadius: 100, fontSize: 11, fontWeight: 700, letterSpacing: '0.04em',
-        background: tone === 'private' ? 'rgba(var(--teal-500-rgb),0.1)' : 'rgba(var(--border-rgb),0.1)',
-        border: `1px solid ${tone === 'private' ? 'rgba(var(--teal-500-rgb),0.3)' : 'rgba(var(--border-rgb),0.2)'}`,
-        color: tone === 'private' ? 'var(--teal-300)' : 'var(--text-muted-dim)',
-      }}>
-        <span style={{ width: 5, height: 5, borderRadius: '50%', background: tone === 'private' ? 'var(--teal-500)' : 'var(--text-faint-dim)' }} />
-        {text}
-      </span>
-    )
-    const arrow = (
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h13M13 6l6 6-6 6" /></svg>
-    )
-    // THE DIRECTION IS UNMISSABLE, and it is rendered from `moveDir` rather than written out twice,
-    // so the chips can never disagree with the transaction being built.
-    const direction = (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, marginBottom: 14 }}>
-        {isReveal
-          ? <>{chip('PRIVATE', 'private')}{arrow}{chip('PUBLIC', 'public')}</>
-          : <>{chip('PUBLIC', 'public')}{arrow}{chip('PRIVATE', 'private')}</>}
-      </div>
-    )
-    const line = (l: string, r: string, strong = false) => (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '9px 0', borderBottom: '1px solid rgba(var(--border-rgb),0.08)' }}>
-        <span style={{ fontSize: 13, color: 'var(--text-muted-dim)' }}>{l}</span>
-        <span style={{ fontFamily: MONO, fontSize: 13, fontWeight: strong ? 700 : 500, color: strong ? 'var(--text-bright)' : 'var(--text-body-dim)' }}>{r}</span>
-      </div>
-    )
-
-    // THE AMBER CAUTION — reveal only.
-    //
-    // Deliberately NOT a friction: no checkbox, no typed confirmation, no second dialog. Those are
-    // for actions a user might take by accident, and nobody arrives here by accident — they chose a
-    // direction, typed an amount and pressed Review. What they may not have is the FACT, so the
-    // caution states it plainly and gets out of the way.
-    //
-    // The wording is calm on purpose. "Warning" and red would read as "this might go wrong", which
-    // is false — it will work exactly as described, and that is the point. Amber, and the three
-    // things that are actually true: it becomes readable, it stays readable, and concealing it
-    // again later does not erase the record.
-    const caution = (
-      <div style={{ display: 'flex', gap: 10, padding: '11px 12px', borderRadius: 10, marginBottom: 13, background: 'rgba(var(--warn-rgb),0.06)', border: '1px solid rgba(var(--warn-rgb),0.28)' }}>
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--warn)" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 1 }}>
-          <circle cx="12" cy="12" r="9" /><path d="M12 8v5" /><path d="M12 16.5h.01" />
-        </svg>
-        <div>
-          <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--warn-300)', marginBottom: 3 }}>This becomes publicly visible</div>
-          <div style={{ fontSize: 12, color: 'var(--text-body-dim)', lineHeight: 1.5 }}>
-            The amount will be readable on-chain by anyone, tied to this wallet’s account, and it stays
-            that way permanently. Making it private again later adds a new record — it doesn’t remove this one.
-          </div>
-        </div>
-      </div>
-    )
-
-    // IDLE — the entry point, alongside the balances it acts on. Each direction appears only when it
-    // has something to move, so the card never offers a move that would fail at the first step.
-    if (moveStep === 'idle') {
-      const entry = (label: string, sub: string, dir: MoveDir) => (
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
-          <div>
-            <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>{label}</div>
-            <div style={{ fontSize: 12, color: 'var(--text-muted-dim)', marginTop: 3 }}>{sub}</div>
-          </div>
-          <span onClick={() => { setMoveDir(dir); setMoveStep('form'); setMoveAmount(''); setMoveExact(null); setMoveError('') }}
-            style={{ padding: '9px 14px', borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: 'pointer', color: 'var(--teal-300)', background: 'rgba(var(--teal-500-rgb),0.08)', border: '1px solid rgba(var(--teal-500-rgb),0.3)', flexShrink: 0 }}>
-            Move
-          </span>
-        </div>
-      )
-      return (
-        <div style={{ ...card, display: 'flex', flexDirection: 'column', gap: 0 }}>
-          {canConceal && entry('Make private', 'Move your public balance into confidential outputs.', 'conceal')}
-          {canConceal && canReveal && <div style={{ height: 1, background: 'rgba(var(--border-rgb),0.1)', margin: '13px 0' }} />}
-          {canReveal && entry('Make public', 'Move confidential funds into your public balance.', 'reveal')}
-        </div>
-      )
-    }
-
-    // FORM — amount entry with MAX.
-    if (moveStep === 'form') {
-      const entered = moveExact ?? (moveAmount === '' ? 0n : tariToMicrotari(parseFloat(moveAmount) || 0))
-      const belowMin = moveAmount !== '' && entered < minAmount
-      const overBalance = moveAmount !== '' && entered > spendCeiling
-      const bad = belowMin || overBalance || moveAmount === ''
-      const maxWasUsed = moveExact !== null
-      return (
-        <div style={card}>
-          {direction}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-            <input value={moveAmount} onChange={e => { setMoveAmount(e.target.value); setMoveExact(null); setMoveError('') }} placeholder="0.00" inputMode="decimal"
-              style={{ flex: 1, padding: '11px 13px', borderRadius: 10, background: 'var(--surface-inset)', border: `1px solid ${bad && moveAmount !== '' ? 'rgba(var(--danger-rgb),0.4)' : 'rgba(var(--border-rgb),0.18)'}`, color: 'var(--text-bright)', fontFamily: MONO, fontSize: 15, outline: 'none' }} />
-            {/* MAX CARRIES THE EXACT BIGINT, in both directions, and the text field is only what the
-                user sees. Deriving the amount back out of that string would be a float round-trip
-                through a formatter that rounds — the M2 bug, where a balance rendered at 2dp asked
-                the vault for more than it held. It matters more here: on the reveal side the amount
-                is PUBLISHED, so a rounded figure would not merely fail, it would succeed at the
-                wrong number, permanently.
-
-                The two ceilings differ because the fee comes from different places. Conceal moves
-                the whole revealed balance and carves the fee out of it, so MAX is the balance.
-                Reveal pays the fee from the stealth inputs on top of the amount, so MAX is
-                maxRevealable() — the balance minus the fee reserve and a small stealth crumb. */}
-            <span onClick={() => { setMoveExact(spendCeiling); setMoveAmount(microtariToInput(spendCeiling)); setMoveError('') }}
-              style={{ padding: '11px 13px', borderRadius: 10, fontSize: 12, fontWeight: 700, cursor: 'pointer', color: 'var(--teal-300)', background: 'rgba(var(--teal-500-rgb),0.08)', border: '1px solid rgba(var(--teal-500-rgb),0.28)' }}>MAX</span>
-          </div>
-          <div style={{ fontSize: 12, color: 'var(--text-muted-dim)', marginBottom: 12 }}>
-            Available {isReveal ? 'private' : 'public'}: <span style={{ fontFamily: MONO, color: 'var(--text-body-dim)' }}>{fmtMicrotariExact(sourceAmount)} TARI</span>
-          </div>
-          {/* SAY IT BEFORE THEY WONDER. Reveal-MAX cannot empty the private balance: the fee is paid
-              from the stealth inputs, and CP1 holds back a crumb on top so every build carries a
-              real change output. Left unsaid, a private balance that stops just short of zero looks
-              like a bug — or worse, like funds went missing on an irreversible action. */}
-          {isReveal && maxWasUsed && (
-            <div style={{ fontSize: 12, color: 'var(--text-muted-dim)', marginBottom: 12, lineHeight: 1.5, padding: '9px 11px', borderRadius: 9, background: 'rgba(var(--border-rgb),0.06)' }}>
-              Revealing this much leaves <span style={{ fontFamily: MONO, color: 'var(--text-body-dim)' }}>{fmtMicrotariExact(privateAmount - spendCeiling)} TARI</span> private —
-              the network fee plus a small reserve. It stays yours and stays spendable.
-            </div>
-          )}
-          {belowMin && <div style={{ fontSize: 12, color: 'var(--danger-300)', marginBottom: 10 }}>Minimum {fmtMicrotariExact(minAmount)} TARI.</div>}
-          {overBalance && (
-            <div style={{ fontSize: 12, color: 'var(--danger-300)', marginBottom: 10 }}>
-              {isReveal
-                ? `More than you can reveal — the fee comes out of your private balance too. Most you can reveal now: ${fmtMicrotariExact(spendCeiling)} TARI.`
-                : 'More than your public balance.'}
-            </div>
-          )}
-          {moveError && <div style={{ fontSize: 12, color: 'var(--danger-300)', marginBottom: 10, lineHeight: 1.45 }}>{moveError}</div>}
-          <div style={{ display: 'flex', gap: 8 }}>
-            <span onClick={() => setMoveStep('idle')} style={{ flex: 1, textAlign: 'center', padding: 11, borderRadius: 10, fontSize: 13, fontWeight: 600, cursor: 'pointer', color: 'var(--text-muted-dim)', border: '1px solid rgba(var(--border-rgb),0.18)' }}>Cancel</span>
-            <span onClick={() => { if (!bad) void handlePrepareMove() }}
-              style={{ flex: 2, textAlign: 'center', padding: 11, borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: bad ? 'not-allowed' : 'pointer', opacity: bad ? 0.45 : 1, color: 'var(--teal-300)', background: 'rgba(var(--teal-500-rgb),0.1)', border: '1px solid rgba(var(--teal-500-rgb),0.32)' }}>Review</span>
-          </div>
-        </div>
-      )
-    }
-
-    // PRICING — the dry run, between form and review.
-    if (moveStep === 'pricing') {
-      return (
-        <div style={card}>
-          {direction}
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, padding: '10px 0', fontSize: 13, color: 'var(--text-muted-dim)' }}>
-            {spinnerSm}{moveProgress || 'Checking the network fee…'}
-          </div>
-        </div>
-      )
-    }
-
-    // REVIEW — the numbers, and for a reveal the caution above them.
-    if (moveStep === 'review' && movePrepared) {
-      if (movePrepared.dir === 'reveal') {
-        const r = movePrepared.p
-        return (
-          <div style={card}>
-            {direction}
-            {caution}
-            {/* The published figure FIRST and emphasised: it is the one number that outlives this
-                transaction, so it is the one the eye should land on. */}
-            {line('Becomes public', `${fmtMicrotariExact(r.revealedAmount)} TARI`, true)}
-            {line('Network fee', `${fmtMicrotariExact(r.feeMicrotari)} TARI`)}
-            {line('Spent from private', `${fmtMicrotariExact(r.revealedOutput)} TARI`)}
-            {r.changeAmount > 0n && line('Returned to private', `${fmtMicrotariExact(r.changeAmount)} TARI`)}
-            <div style={{ fontSize: 11.5, color: 'var(--text-faint)', marginTop: 9 }}>
-              Spending {r.inputCount} confidential output{r.inputCount === 1 ? '' : 's'} worth {fmtMicrotariExact(r.inputTotal)} TARI.
-            </div>
-            <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
-              <span onClick={() => setMoveStep('form')} style={{ flex: 1, textAlign: 'center', padding: 11, borderRadius: 10, fontSize: 13, fontWeight: 600, cursor: 'pointer', color: 'var(--text-muted-dim)', border: '1px solid rgba(var(--border-rgb),0.18)' }}>Back</span>
-              <span onClick={() => void handleConfirmMove()}
-                style={{ flex: 2, textAlign: 'center', padding: 11, borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: 'pointer', color: 'var(--ink-on-teal, #04120f)', background: 'var(--teal-500)' }}>Make public</span>
-            </div>
-          </div>
-        )
-      }
-      // Conceal — plain confirm. No caution: this direction increases privacy.
-      const c = movePrepared.p
-      return (
-        <div style={card}>
-          {direction}
-          {line('Moving from public', `${fmtMicrotariExact(c.withdrawAmount)} TARI`)}
-          {line('Network fee', `${fmtMicrotariExact(c.feeMicrotari)} TARI`)}
-          {line('Becomes private', `${fmtMicrotariExact(c.concealedAmount)} TARI`, true)}
-          <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
-            <span onClick={() => setMoveStep('form')} style={{ flex: 1, textAlign: 'center', padding: 11, borderRadius: 10, fontSize: 13, fontWeight: 600, cursor: 'pointer', color: 'var(--text-muted-dim)', border: '1px solid rgba(var(--border-rgb),0.18)' }}>Back</span>
-            <span onClick={() => void handleConfirmMove()}
-              style={{ flex: 2, textAlign: 'center', padding: 11, borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: 'pointer', color: 'var(--ink-on-teal, #04120f)', background: 'var(--teal-500)' }}>Make private</span>
-          </div>
-        </div>
-      )
-    }
-
-    // MOVING — in flight. The entry point is gone from the tree while this renders, so there is
-    // nothing to press twice.
-    if (moveStep === 'moving') {
-      const inFlight = movePrepared
+    : moveStep === 'moving' ? {
+      step: 'moving', dir: moveDir,
+      amountMicrotari: movePrepared
         ? (movePrepared.dir === 'reveal' ? movePrepared.p.revealedAmount : movePrepared.p.concealedAmount)
-        : 0n
-      return (
-        <div style={{ ...card, border: '1px solid rgba(var(--teal-500-rgb),0.28)' }}>
-          {direction}
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, fontSize: 13, color: 'var(--text-teal-label)', marginBottom: 6 }}>
-            {spinnerSm}Making {fmtMicrotariExact(inFlight)} TARI {isReveal ? 'public' : 'private'}
-          </div>
-          <div style={{ fontSize: 12, color: 'var(--text-muted-dim)', textAlign: 'center' }}>{moveProgress || 'Submitting…'}</div>
-        </div>
-      )
+        : enteredMicro,
+      progress: moveProgress || 'Submitting to the network — a few seconds.',
+    }
+    : moveStep === 'settling' ? {
+      step: 'settling', dir: moveDir, amountMicrotari: moveLanded ?? 0n, txId: moveTxId,
+    }
+    : moveStep === 'success' ? {
+      step: 'success', dir: moveDir, amountMicrotari: moveLanded ?? 0n, txId: moveTxId,
+      lagged: moveLagging,
+      resulting: movePrepared ? resultingFor(movePrepared) : null,
+    }
+    : moveStep === 'error' ? {
+      step: 'error', dir: moveDir, message: moveError || 'Unknown error.', txId: moveTxId || undefined,
+    }
+    : { step: 'idle' }
+
+  // ── Entry availability. An absent control cannot explain itself, so nothing here hides. ──
+  const balancesUnknown = status === 'error' && revealed.status === 'unavailable'
+  const entries: EntryProps[] = [
+    {
+      dir: 'conceal',
+      disabledReason:
+        !wallet ? 'Unlock your wallet to move funds'
+        : revealed.status === 'unavailable' ? 'Your public balance is unavailable right now'
+        : revealed.status !== 'done' ? 'Checking your public balance…'
+        : revealedAmount <= 0n ? 'Nothing public to move'
+        : undefined,
+      onClick: () => { setMoveDir('conceal'); setMoveStep('form'); setMoveAmount(''); setMoveExact(null); setMoveError('') },
+    },
+    {
+      dir: 'reveal',
+      disabledReason:
+        !wallet ? 'Unlock your wallet to move funds'
+        : status === 'error' ? 'Your private balance is unavailable right now'
+        : balance === null ? 'Checking your private balance…'
+        // E2 — the trap the M4 report found. Named before an amount is typed, not after.
+        : !hasAccount ? 'Still identifying this wallet’s account — try again in a moment'
+        : maxRevealable(privateAmount) < MIN_REVEAL_MICROTARI ? 'Not enough private balance to cover an amount plus the fee'
+        : undefined,
+      onClick: () => { setMoveDir('reveal'); setMoveStep('form'); setMoveAmount(''); setMoveExact(null); setMoveError('') },
+    },
+  ]
+
+  const sendView: SendView =
+    sendStep === 'review' ? {
+      step: 'review', recipient: sendRecipient,
+      amountMicrotari: tariToMicrotari(parseFloat(sendAmount) || 0),
+      note: sendNote,
+      // A CEILING, not a measurement. sendConfidential dry-runs inside submission and has no
+      // prepare/submit split, so before confirming this is the only honest figure. The success
+      // screen then shows what was actually paid.
+      feeMicrotari: MAX_FEE, feeIsCeiling: true,
+    }
+    : sendStep === 'sending' ? {
+      step: 'sending', amountMicrotari: tariToMicrotari(parseFloat(sendAmount) || 0),
+      progress: sendProgress || 'Building the private proof and broadcasting. Don’t close this window.',
+    }
+    : sendStep === 'success' ? {
+      step: 'success', recipient: sendRecipient,
+      amountMicrotari: tariToMicrotari(parseFloat(sendAmount) || 0),
+      feeMicrotari: sendFee ?? MAX_FEE, txId: sendTxId,
+    }
+    // A TIMEOUT IS NOT A FAILURE. It was broadcast and may still land, so it must not wear the
+    // red card that says nothing left the wallet.
+    : sendStep === 'error' && sendOutcome === 'Timeout' ? {
+      step: 'unconfirmed', message: sendError, txId: sendTxId,
+    }
+    : sendStep === 'error' ? { step: 'error', message: sendError || 'Unknown error.' }
+    : {
+      step: 'form', recipient: sendRecipient, amount: sendAmount, note: sendNote,
+      available: balance, canReview: !!sendRecipient && !!sendAmount,
+      error: sendValidationError || undefined,
     }
 
-    // SETTLING — committed on-chain, waiting for the indexer to catch up on the side that rises.
-    if (moveStep === 'settling') {
-      return (
-        <div style={{ ...card, border: '1px solid rgba(var(--teal-500-rgb),0.28)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, fontSize: 13, color: 'var(--text-teal-label)', marginBottom: 6 }}>
-            {spinnerSm}Settling on-chain…
-          </div>
-          <div style={{ fontSize: 12, color: 'var(--text-muted-dim)', textAlign: 'center', lineHeight: 1.45 }}>
-            {fmtMicrotariExact(moveLanded ?? 0n)} TARI is now {isReveal ? 'public' : 'private'}. Your {isReveal ? 'public' : 'confidential'} balance
-            updates once the network indexes it — usually under a minute.
-          </div>
-        </div>
-      )
-    }
-
-    if (moveStep === 'success') {
-      return (
-        <div style={{ ...card, border: '1px solid rgba(var(--teal-500-rgb),0.3)' }}>
-          <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-bright)', marginBottom: 4 }}>
-            {fmtMicrotariExact(moveLanded ?? 0n)} TARI is now {isReveal ? 'public' : 'private'}
-          </div>
-          <div style={{ fontSize: 12, color: 'var(--text-muted-dim)', marginBottom: 12, lineHeight: 1.45 }}>
-            {moveLagging
-              ? `Confirmed on-chain. Your ${isReveal ? 'public' : 'confidential'} balance hasn’t caught up yet — the network is still indexing. Tap Refresh in a moment; nothing is at risk.`
-              : isReveal
-                ? 'Your confidential balance dropped by that much plus the fee, and any change came back private.'
-                : 'Your public balance dropped by that much plus the fee.'}
-          </div>
-          {moveTxId && hashRow(moveTxId)}
-          <span onClick={resetMove} style={{ display: 'block', textAlign: 'center', marginTop: 12, padding: 10, borderRadius: 10, fontSize: 13, fontWeight: 600, cursor: 'pointer', color: 'var(--teal-300)', border: '1px solid rgba(var(--teal-500-rgb),0.28)' }}>Done</span>
-        </div>
-      )
-    }
-
-    // ERROR — the actual message, verbatim.
-    //
-    // This mattered for conceal, which had never run on-chain before M2. It matters MORE for a
-    // reveal: the instruction chain is new (TakeFromBucket → deposit → PayFeeFromBucket), the action
-    // is irreversible, and the network's own words are the only thing that can tell us which link
-    // failed. A generic "something went wrong" would throw that away on the one path where it is
-    // least affordable.
-    return (
-      <div style={{ ...card, border: '1px solid rgba(var(--danger-rgb),0.3)', background: 'rgba(var(--danger-rgb),0.04)' }}>
-        <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--danger-300)', marginBottom: 6 }}>The move did not go through</div>
-        <div style={{ fontSize: 12, color: 'var(--text-body-dim)', marginBottom: 12, lineHeight: 1.5, wordBreak: 'break-word' }}>{moveError || 'Unknown error.'}</div>
-        <div style={{ fontSize: 12, color: 'var(--text-muted-dim)', marginBottom: 12 }}>Nothing moved — your balances are unchanged.</div>
-        {moveTxId && hashRow(moveTxId)}
-        <span onClick={resetMove} style={{ display: 'block', textAlign: 'center', marginTop: 12, padding: 10, borderRadius: 10, fontSize: 13, fontWeight: 600, cursor: 'pointer', color: 'var(--text-muted-dim)', border: '1px solid rgba(var(--border-rgb),0.18)' }}>Close</span>
-      </div>
-    )
-  }
-
-  const tabItem = (t: Tab) => {
-    const on = tab === t
-    return (
-      <span key={t} onClick={() => setTab(t)} style={{ flex: 1, textAlign: 'center', padding: '9px 0', borderRadius: 9, cursor: 'pointer', fontSize: 13, fontWeight: on ? 700 : 600, background: on ? 'var(--surface-inset)' : 'transparent', color: on ? 'var(--text-bright)' : 'var(--text-muted-dim)', boxShadow: on ? 'inset 0 0 0 1px rgba(var(--teal-500-rgb),0.22)' : 'none' }}>
-        {t.charAt(0).toUpperCase() + t.slice(1)}
-      </span>
-    )
-  }
-
-  const copyIcon = (c = 'var(--teal-500)') => (<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>)
-  const hashRow = (h: string) => (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '11px 14px', borderRadius: 11, background: 'var(--surface-raised)', border: '1px solid rgba(var(--border-rgb),0.12)' }}>
-      <span style={{ fontFamily: MONO, fontSize: 12, color: 'var(--text-body-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{h.slice(0, 8)}…{h.slice(-4)}</span>
-      <span onClick={() => navigator.clipboard.writeText(h).catch(() => {})} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, color: 'var(--teal-500)', cursor: 'pointer', flexShrink: 0, marginLeft: 8 }}>{copyIcon()}Copy</span>
-    </div>
-  )
+  const activity = buildActivity(txHistory, messages)
 
   return (
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(5,8,14,0.78)', backdropFilter: 'blur(3px)', zIndex: 200 }} />
-
-      <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', width: 'min(460px, 94vw)', maxHeight: '88vh', background: 'var(--surface)', borderRadius: 20, border: '1px solid rgba(var(--border-rgb),0.2)', boxShadow: '0 30px 90px rgba(0,0,0,0.65)', zIndex: 201, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-
-        {/* Header */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 18px', borderBottom: '1px solid rgba(var(--border-rgb),0.1)', flexShrink: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <Logo size={20} mono />
-            <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>Wallet</span>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 10px', borderRadius: 100, background: 'rgba(var(--warn-rgb),0.06)', border: '1px solid rgba(var(--warn-rgb),0.28)' }}>
-              <span style={{ width: 5, height: 5, borderRadius: '50%', background: 'var(--warn)' }} />
-              <span style={{ fontFamily: MONO, fontSize: 10, color: 'var(--warn-300)' }}>Esmeralda testnet</span>
-            </span>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ padding: '3px 7px', borderRadius: 6, border: '1px solid rgba(var(--border-rgb),0.18)', fontFamily: MONO, fontSize: 10, color: 'var(--text-faint-dim)' }}>Esc</span>
-            <span onClick={onClose} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, border: '1px solid rgba(var(--border-rgb),0.16)', cursor: 'pointer' }}>
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth="2.2" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
-            </span>
-          </div>
-        </div>
-
-        {/* Tab bar */}
-        <div style={{ padding: '14px 18px 0', flexShrink: 0 }}>
-          <div style={{ display: 'flex', gap: 4, padding: 5, borderRadius: 12, background: 'var(--surface-trough)', border: '1px solid rgba(var(--border-rgb),0.1)' }}>
-            {(['overview', 'send', 'receive', 'activity'] as Tab[]).map(tabItem)}
-          </div>
-        </div>
-
-        {/* Content */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: 18 }}>
-
-          {/* ═══ OVERVIEW ═══ */}
-          {tab === 'overview' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-              {balanceWidget()}
-              {publicBalanceRow()}
-              {moveFundsPanel()}
-
-              {shortAddr && (
-                <div onClick={copyAddr} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 14px', borderRadius: 11, background: 'var(--surface-raised)', border: '1px solid rgba(var(--border-rgb),0.12)', cursor: 'pointer' }}>
-                  <span style={{ fontFamily: MONO, fontSize: 12, color: addrCopied ? 'var(--teal-300)' : 'var(--text-body-dim)' }}>{addrCopied ? 'Copied' : shortAddr}</span>
-                  {copyIcon()}
-                </div>
-              )}
-
-              <FaucetClaimPanel />
-
-              <div style={{ display: 'flex', gap: 10 }}>
-                <div onClick={() => setTab('send')} style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 13, borderRadius: 12, background: 'var(--teal-grad)', color: 'var(--ink-on-accent)', fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--ink-on-accent)" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round"><path d="M12 19V5M5 12l7-7 7 7" /></svg>Send
-                </div>
-                <div onClick={() => setTab('receive')} style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 13, borderRadius: 12, background: 'var(--surface-raised)', border: '1px solid rgba(var(--teal-500-rgb),0.26)', color: 'var(--text-bright)', fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--teal-500)" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v14M5 12l7 7 7-7" /></svg>Receive
-                </div>
-              </div>
-
-              <OnsRegisterPanel />
-            </div>
-          )}
-
-          {/* ═══ SEND ═══ */}
-          {tab === 'send' && (
-            <div>
-              {sendStep === 'form' && (
-                <>
-                  <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.12em', color: 'var(--text-faint-dim)', marginBottom: 8 }}>RECIPIENT</div>
-                  <input value={sendRecipient} onChange={e => { setSendRecipient(e.target.value); setSendValidationError('') }} placeholder="otl_esm_… or @name" spellCheck={false} style={{ width: '100%', boxSizing: 'border-box', padding: '13px 15px', borderRadius: 11, background: 'var(--surface-raised)', border: '1px solid rgba(var(--border-rgb),0.14)', fontFamily: MONO, fontSize: 13, color: 'var(--text-body)', outline: 'none', marginBottom: 16 }} />
-
-                  <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.12em', color: 'var(--text-faint-dim)', marginBottom: 8 }}>AMOUNT</div>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '13px 15px', borderRadius: 11, background: 'var(--surface-raised)', border: `1px solid ${sendValidationError ? 'rgba(var(--danger-rgb),0.5)' : 'rgba(var(--border-rgb),0.14)'}`, marginBottom: sendValidationError ? 10 : 16 }}>
-                    <input type="number" min="0" value={sendAmount} onChange={e => { setSendAmount(e.target.value); setSendValidationError('') }} placeholder="0.00" style={{ background: 'none', border: 'none', outline: 'none', fontFamily: MONO, fontSize: 15, color: 'var(--text-body)', flex: 1 }} />
-                    <span style={{ fontSize: 12, fontWeight: 700, color: sendValidationError ? 'var(--danger-300)' : 'var(--teal-500)' }}>TARI</span>
-                  </div>
-                  {sendValidationError && (
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 12, marginBottom: 16 }}>
-                      <span style={{ color: 'var(--danger-300)' }}>{sendValidationError}</span>
-                      {balance !== null && <span style={{ fontFamily: MONO, color: 'var(--text-faint)' }}>available {fmt2(balance)}</span>}
-                    </div>
-                  )}
-
-                  <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.12em', color: 'var(--text-faint-dim)', marginBottom: 8 }}>PRIVATE NOTE · OPTIONAL</div>
-                  <textarea value={sendNote} onChange={e => setSendNote(e.target.value)} placeholder="Only your recipient sees this" rows={2} style={{ width: '100%', boxSizing: 'border-box', padding: '13px 15px', borderRadius: 11, background: 'var(--surface-raised)', border: `1px ${sendNote ? 'solid' : 'dashed'} rgba(var(--teal-500-rgb),0.24)`, fontSize: 13, color: sendNote ? 'var(--text-body)' : 'var(--text-faint-dim)', outline: 'none', resize: 'vertical', fontFamily: 'inherit', fontStyle: sendNote ? 'normal' : 'italic', marginBottom: 16 }} />
-
-                  <div style={{ display: 'flex', gap: 9, padding: '11px 13px', borderRadius: 11, background: 'rgba(var(--teal-500-rgb),0.05)', border: '1px solid rgba(var(--teal-500-rgb),0.22)', fontSize: 12, color: 'var(--teal-300)', lineHeight: 1.5, marginBottom: 16 }}>
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--teal-500)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 1 }}><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
-                    Confidential. The amount and your address stay hidden on chain.
-                  </div>
-
-                  {(() => { const on = !!sendRecipient && !!sendAmount; return (
-                    <div onClick={on ? handleReview : undefined} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 13, borderRadius: 12, background: on ? 'var(--teal-grad)' : 'rgba(16,21,31,0.6)', border: on ? 'none' : '1px solid rgba(var(--border-rgb),0.12)', color: on ? 'var(--ink-on-accent)' : 'var(--text-disabled)', fontSize: 14, fontWeight: 700, cursor: on ? 'pointer' : 'default' }}>Review payment</div>
-                  ) })()}
-                </>
-              )}
-
-              {sendStep === 'review' && (
-                <>
-                  <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 16 }}>Confirm payment</div>
-                  <div style={{ borderRadius: 12, background: 'var(--surface-raised)', border: '1px solid rgba(var(--border-rgb),0.12)', overflow: 'hidden', marginBottom: 16 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '13px 15px', borderBottom: '1px solid rgba(var(--border-rgb),0.08)' }}><span style={{ fontSize: 13, color: 'var(--text-muted-dim)' }}>To</span><span style={{ fontFamily: MONO, fontSize: 13, color: 'var(--text-body)' }}>{sendRecipient.length > 24 ? sendRecipient.slice(0, 14) + '…' + sendRecipient.slice(-6) : sendRecipient}</span></div>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '13px 15px', borderBottom: '1px solid rgba(var(--border-rgb),0.08)' }}><span style={{ fontSize: 13, color: 'var(--text-muted-dim)' }}>Amount</span><span style={{ fontFamily: MONO, fontSize: 15, fontWeight: 600, color: 'var(--text-bright)' }}>{sendAmount} TARI</span></div>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '13px 15px' }}><span style={{ fontSize: 13, color: 'var(--text-muted-dim)' }}>Network fee</span><span style={{ fontFamily: MONO, fontSize: 13, color: 'var(--text-muted)' }}>≤ {fmtFee(MAX_FEE)} TARI</span></div>
-                  </div>
-                  {sendNote && (
-                    <div style={{ padding: '12px 14px', borderRadius: 11, background: 'rgba(10,14,23,0.6)', border: '1px dashed rgba(var(--teal-500-rgb),0.26)', marginBottom: 16 }}>
-                      <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.12em', color: 'var(--text-teal-dim)', marginBottom: 6 }}>PRIVATE NOTE</div>
-                      <div style={{ fontSize: 13, color: 'var(--text-note)', fontStyle: 'italic' }}>“{sendNote}”</div>
-                    </div>
-                  )}
-                  <div style={{ display: 'flex', gap: 10 }}>
-                    <div onClick={() => setSendStep('form')} style={{ flex: '0 0 110px', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 13, borderRadius: 12, border: '1px solid rgba(var(--border-rgb),0.2)', color: 'var(--text-muted)', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>Back</div>
-                    <div onClick={handleConfirmSend} style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 13, borderRadius: 12, background: 'var(--teal-grad)', color: 'var(--ink-on-accent)', fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>Confirm and send</div>
-                  </div>
-                </>
-              )}
-
-              {sendStep === 'sending' && (
-                <div style={{ padding: '44px 20px', borderRadius: 16, background: 'var(--surface)', border: '1px solid rgba(var(--teal-500-rgb),0.24)', textAlign: 'center' }}>
-                  <span style={{ display: 'inline-flex', width: 44, height: 44, borderRadius: '50%', border: '3px solid rgba(var(--teal-500-rgb),0.18)', borderTopColor: 'var(--teal-500)', animation: 'cv-spin 0.9s linear infinite', marginBottom: 20 }} />
-                  <div style={{ fontSize: 17, fontWeight: 700, color: 'var(--text-bright)', marginBottom: 8 }}>Sending {sendAmount} TARI</div>
-                  <div style={{ fontSize: 13, color: 'var(--text-muted-dim)', lineHeight: 1.5, maxWidth: 280, margin: '0 auto' }}>{sendProgress || 'Building the confidential proof and broadcasting. Do not close this window.'}</div>
-                </div>
-              )}
-
-              {sendStep === 'success' && (
-                <div style={{ padding: '32px 20px 20px', borderRadius: 16, background: 'linear-gradient(170deg, rgba(var(--teal-500-rgb),0.07), var(--surface) 62%)', border: '1px solid rgba(var(--teal-500-rgb),0.34)', textAlign: 'center' }}>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 52, height: 52, borderRadius: '50%', background: 'rgba(var(--teal-500-rgb),0.14)', border: '1px solid rgba(var(--teal-500-rgb),0.4)', marginBottom: 16 }}>
-                    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="var(--teal-500)" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
-                  </span>
-                  <div style={{ fontSize: 20, fontWeight: 800, color: 'var(--text-bright)', marginBottom: 6 }}>Sent</div>
-                  <div style={{ fontSize: 14, color: 'var(--text-teal-label)', marginBottom: 20 }}>{sendAmount} TARI to {sendRecipient.slice(0, 10)}…{sendRecipient.slice(-4)}</div>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '11px 14px', borderRadius: 11, background: 'var(--surface-raised)', border: '1px solid rgba(var(--border-rgb),0.12)', marginBottom: 10 }}>
-                    <span style={{ fontSize: 13, color: 'var(--text-muted-dim)' }}>Fee</span>
-                    <span style={{ fontFamily: MONO, fontSize: 13, color: 'var(--text-bright)' }}>{sendFee !== null ? `${fmtFee(sendFee)} TARI` : `≤ ${fmtFee(MAX_FEE)} TARI`}</span>
-                  </div>
-                  {sendTxId && <div style={{ marginBottom: 18 }}>{hashRow(sendTxId)}</div>}
-                  <div onClick={resetSend} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 13, borderRadius: 12, background: 'var(--surface-raised)', border: '1px solid rgba(var(--teal-500-rgb),0.26)', color: 'var(--text-bright)', fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>Done</div>
-                </div>
-              )}
-
-              {sendStep === 'error' && sendOutcome !== 'Timeout' && (
-                <div style={{ padding: '32px 20px 20px', borderRadius: 16, background: 'var(--surface)', border: '1px solid rgba(var(--danger-rgb),0.3)', textAlign: 'center' }}>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 52, height: 52, borderRadius: '50%', background: 'rgba(var(--danger-rgb),0.1)', border: '1px solid rgba(var(--danger-rgb),0.35)', marginBottom: 16 }}>
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--danger-500)" strokeWidth="2.6" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
-                  </span>
-                  <div style={{ fontSize: 20, fontWeight: 800, color: 'var(--danger-300)', marginBottom: 6 }}>Rejected</div>
-                  <div style={{ fontSize: 14, color: 'var(--text-muted-dim)', lineHeight: 1.5, marginBottom: 20, maxWidth: 300, marginLeft: 'auto', marginRight: 'auto' }}>{sendError}</div>
-                  <div style={{ display: 'flex', gap: 10 }}>
-                    <div onClick={resetSend} style={{ flex: '0 0 110px', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 13, borderRadius: 12, border: '1px solid rgba(var(--border-rgb),0.2)', color: 'var(--text-muted)', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>Cancel</div>
-                    <div onClick={() => { setSendStep('review'); setSendError('') }} style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 13, borderRadius: 12, background: 'rgba(var(--danger-rgb),0.08)', border: '1px solid rgba(var(--danger-rgb),0.3)', color: 'var(--danger-300)', fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>Try again</div>
-                  </div>
-                </div>
-              )}
-
-              {sendStep === 'error' && sendOutcome === 'Timeout' && (
-                <div style={{ padding: '32px 20px 20px', borderRadius: 16, background: 'var(--surface)', border: '1px solid rgba(var(--warn-rgb),0.3)', textAlign: 'center' }}>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 52, height: 52, borderRadius: '50%', background: 'rgba(var(--warn-rgb),0.1)', border: '1px solid rgba(var(--warn-rgb),0.35)', marginBottom: 16 }}>
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--warn)" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg>
-                  </span>
-                  <div style={{ fontSize: 20, fontWeight: 800, color: 'var(--warn-300)', marginBottom: 6 }}>Not confirmed yet</div>
-                  <div style={{ fontSize: 14, color: 'var(--text-muted-dim)', lineHeight: 1.5, marginBottom: 18, maxWidth: 300, marginLeft: 'auto', marginRight: 'auto' }}>{sendError}</div>
-                  {sendTxId && <div style={{ marginBottom: 18 }}>{hashRow(sendTxId)}</div>}
-                  <div onClick={() => { resetSend(); setTab('activity') }} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 13, borderRadius: 12, background: 'var(--surface-raised)', border: '1px solid rgba(var(--teal-500-rgb),0.26)', color: 'var(--text-bright)', fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>View in Activity</div>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* ═══ RECEIVE ═══ */}
-          {tab === 'receive' && (
-            !address ? (
-              <div style={{ padding: '24px 20px', borderRadius: 16, background: 'var(--surface)', border: '1px solid rgba(var(--border-rgb),0.16)', textAlign: 'center' }}>
-                <div style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 178, height: 178, borderRadius: 14, background: 'var(--surface-raised)', border: '1px dashed rgba(var(--border-rgb),0.2)', marginBottom: 16 }}>
-                  <span style={{ width: 30, height: 30, borderRadius: '50%', border: '3px solid rgba(var(--border-rgb),0.15)', borderTopColor: 'var(--text-muted-dim)', animation: 'cv-spin 0.9s linear infinite' }} />
-                </div>
-                <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 6 }}>Deriving your address</div>
-                <div style={{ fontSize: 13, color: 'var(--text-faint)', marginBottom: 14, lineHeight: 1.5 }}>This happens locally, in your browser.</div>
-                <div style={{ height: 42, borderRadius: 11, background: 'var(--surface-raised)', border: '1px solid rgba(var(--border-rgb),0.1)', marginBottom: 12 }} />
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 13, borderRadius: 12, background: 'rgba(16,21,31,0.6)', border: '1px solid rgba(var(--border-rgb),0.12)', color: 'var(--text-disabled)', fontSize: 14, fontWeight: 700 }}>Copy address</div>
-              </div>
-            ) : (
-              <div style={{ padding: '24px 20px', borderRadius: 16, background: 'var(--surface)', border: '1px solid rgba(var(--border-rgb),0.16)', textAlign: 'center' }}>
-                <div style={{ display: 'inline-flex', padding: 14, borderRadius: 14, background: 'var(--text-bright)', marginBottom: 16 }}>
-                  <QRCodeSVG value={address} size={150} bgColor="#EAFBF7" fgColor="#04120F" level="M" />
-                </div>
-                <div style={{ fontSize: 13, color: 'var(--text-muted-dim)', marginBottom: 14, lineHeight: 1.5 }}>Share this address to receive confidential payments.</div>
-                <div style={{ padding: '13px 15px', borderRadius: 11, background: 'var(--surface-raised)', border: '1px solid rgba(var(--border-rgb),0.12)', fontFamily: MONO, fontSize: 12, color: 'var(--text-body-dim)', lineHeight: 1.6, wordBreak: 'break-all', textAlign: 'left', marginBottom: 12 }}>{address}</div>
-                <div onClick={copyAddr} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, padding: 13, borderRadius: 12, background: 'var(--teal-grad)', color: 'var(--ink-on-accent)', fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>
-                  {copyIcon('var(--ink-on-accent)')}{addrCopied ? 'Copied' : 'Copy address'}
-                </div>
-              </div>
-            )
-          )}
-
-          {/* ═══ ACTIVITY ═══ */}
-          {tab === 'activity' && (() => {
-            // Derived from the two authoritative sources (wallet sends + message-linked payments),
-            // never the blind scan — see buildActivity. Balance still counts all owned UTXOs.
-            const activity = buildActivity(txHistory, messages)
-            return activity.length === 0 ? (
-              <div style={{ padding: '56px 24px', borderRadius: 16, background: 'var(--surface)', border: '1px solid rgba(var(--border-rgb),0.16)', textAlign: 'center' }}>
-                <Logo size={40} mono style={{ opacity: 0.3, marginBottom: 16 }} />
-                <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-muted)', marginBottom: 6 }}>No transactions yet</div>
-                <div style={{ fontSize: 13, color: 'var(--text-faint)', lineHeight: 1.5, maxWidth: 250, margin: '0 auto' }}>Payments you send and receive will appear here.</div>
-              </div>
-            ) : (
-              <div style={{ padding: 0, borderRadius: 16 }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '4px 13px 12px', borderBottom: '1px solid rgba(var(--border-rgb),0.07)' }}>
-                  <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.12em', color: 'var(--text-faint-dim)' }}>CONFIDENTIAL</span>
-                  <span onClick={() => setBalanceHidden(v => !v)} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 12, fontWeight: 600, color: balanceHidden ? 'var(--teal-500)' : 'var(--text-teal-dim)', cursor: 'pointer' }}>
-                    {balanceHidden ? eyeOff('var(--teal-500)') : eyeOpen('var(--text-teal-dim)')}{balanceHidden ? 'Show amounts' : 'Hide amounts'}
-                  </span>
-                </div>
-                {activity.map(row => row.kind === 'sent'
-                  ? <SentActivityRow key={row.id} row={row} hidden={balanceHidden} />
-                  : <ReceivedActivityRow key={row.id} row={row} hidden={balanceHidden} />)}
-              </div>
-            )
-          })()}
-
-        </div>
+      <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', zIndex: 201, display: 'flex' }}>
+        <WalletModalV2
+          privateBalance={privateBalance}
+          publicBalance={publicBalance}
+          hidden={balanceHidden}
+          networkChip="Esmeralda testnet"
+          refreshing={refreshing}
+          move={moveView}
+          entries={entries}
+          lockedText={balancesUnknown ? 'Unavailable while balances are unknown' : undefined}
+          tab={tab}
+          onTab={setTab}
+          onToggleHidden={() => setBalanceHidden(v => !v)}
+          onRefresh={handleRefresh}
+          onClose={onClose}
+          onBack={resetMove}
+          onAmountChange={v => { setMoveAmount(v); setMoveExact(null); setMoveError('') }}
+          onMax={() => { setMoveExact(ceiling); setMoveAmount(toInput(ceiling)); setMoveError('') }}
+          onReview={() => void handlePrepareMove()}
+          onConfirm={() => void handleConfirmMove()}
+          onDone={resetMove}
+          onRetryMove={() => { setMoveStep('form'); setMoveError('') }}
+          onCopyTx={t => { navigator.clipboard.writeText(t).catch(() => {}) }}
+          onRetryBalance={handleRefresh}
+          faucet={undefined}
+          overviewExtras={<><FaucetClaimPanel /><OnsRegisterPanel /></>}
+          send={{
+            view: sendView, hidden: balanceHidden,
+            onRecipient: v => { setSendRecipient(v); setSendValidationError('') },
+            onAmount: v => { setSendAmount(v); setSendValidationError('') },
+            onNote: setSendNote,
+            onMax: () => { if (balance !== null) setSendAmount(toInput(balance > MAX_FEE ? balance - MAX_FEE : 0n)) },
+            onReview: handleReview,
+            onBack: () => setSendStep('form'),
+            onConfirm: () => void handleConfirmSend(),
+            onDone: resetSend,
+            onRetry: resetSend,
+            onCopyTx: t => { navigator.clipboard.writeText(t).catch(() => {}) },
+            onViewActivity: () => { resetSend(); setTab('activity') },
+          }}
+          receive={{ address, copied: addrCopied, onCopy: copyAddr }}
+          activityEmpty={activity.length === 0}
+          activity={activity.map(row => row.kind === 'sent'
+            ? <SentRowV2 key={row.id} row={row} hidden={balanceHidden} />
+            : <ReceivedRowV2 key={row.id} row={row} hidden={balanceHidden} />)}
+        />
       </div>
     </>
   )

@@ -122,7 +122,19 @@ const CheckDot = () => (
 
 export type SendView =
   | { step: 'form'; recipient: string; amount: string; note: string; available: bigint | null; canReview: boolean; error?: string }
-  | { step: 'review'; recipient: string; amountMicrotari: bigint; note: string; feeMicrotari: bigint | null }
+  | {
+      step: 'review'; recipient: string; amountMicrotari: bigint; note: string
+      feeMicrotari: bigint | null
+      /**
+       * The fee is a CEILING, not a measurement.
+       *
+       * The move flow prices itself before review, so it shows an exact figure. A send does its dry
+       * run inside submission and has no prepare/submit split, so before confirming, a ceiling is
+       * the only honest thing we can say — and saying it as though it were exact would be a
+       * quieter kind of lie. The success screen then shows what was actually paid.
+       */
+      feeIsCeiling?: boolean
+    }
   | { step: 'sending'; amountMicrotari: bigint; progress: string }
   | { step: 'success'; recipient: string; amountMicrotari: bigint; feeMicrotari: bigint; txId: string }
   | { step: 'error'; message: string }
@@ -182,7 +194,7 @@ export function SendPanel({ view, hidden, onRecipient, onAmount, onNote, onMax, 
           <DetailRow label="Amount" value={TARI(view.amountMicrotari)} valueColor={C.bright} />
           <DetailRow label="Network fee" last value={pricing
             ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><Spinner size={12} /><span style={{ fontFamily: 'inherit', fontSize: 12.5, color: C.faint }}>Pricing…</span></span>
-            : TARI(view.feeMicrotari!)} />
+            : view.feeIsCeiling ? `up to ${TARI(view.feeMicrotari!)}` : TARI(view.feeMicrotari!)} />
         </DetailCard>
         {view.note && (
           <div style={{ padding: '12px 14px', borderRadius: 11, background: C.trough, border: `1px dashed rgba(45,224,198,0.26)` }}>
@@ -475,10 +487,18 @@ function RowIcon({ look }: { look: RowLook }) {
   )
 }
 
-export function ActivityPanel({ rows, hidden, onToggleHidden }: {
-  rows: ActivityRowView[]; hidden: boolean; onToggleHidden: () => void
+/**
+ * The list shell: header, hide toggle, empty state.
+ *
+ * TAKES CHILDREN RATHER THAN A ROW ARRAY, because a received row resolves its amount through a
+ * hook and hooks cannot be called in a loop over a dynamic array. The shipped list solved this the
+ * same way — one component per received row — and that arrangement is preserved exactly, so the
+ * per-row cache-first fetch with bounded backoff keeps working as it does today.
+ */
+export function ActivityPanel({ empty, hidden, onToggleHidden, children }: {
+  empty: boolean; hidden: boolean; onToggleHidden: () => void; children?: ReactNode
 }) {
-  if (rows.length === 0) {
+  if (empty) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14, padding: '44px 0 40px' }}>
         <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 46, height: 46, borderRadius: 13, background: C.raised, border: border(0.14) }}>
@@ -504,12 +524,13 @@ export function ActivityPanel({ rows, hidden, onToggleHidden }: {
           {hidden ? 'Show amounts' : 'Hide amounts'}
         </span>
       </div>
-      {rows.map(r => <ActivityRow key={r.id} row={r} hidden={hidden} />)}
+      {children}
     </div>
   )
 }
 
-function ActivityRow({ row, hidden }: { row: ActivityRowView; hidden: boolean }) {
+/** One row. Presentational — the caller decides what state it is in. */
+export function ActivityRowShell({ row, hidden }: { row: ActivityRowView; hidden: boolean }) {
   const look = lookFor(row)
   const st = STATUS[row.status]
   const dead = look === 'failed'

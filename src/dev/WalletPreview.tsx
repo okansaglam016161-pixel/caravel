@@ -15,7 +15,7 @@
 
 import { useState } from 'react'
 import WalletModalV2, { WALLET_TABS, type MoveView, type WalletModalV2Props, type WalletTab } from '../components/wallet/v2/WalletModalV2'
-import type { ActivityRowView, FaucetPhase, OnsStatus, SendView } from '../components/wallet/v2/panels'
+import { ActivityRowShell, type ActivityRowView, type FaucetPhase, type OnsStatus, type SendView } from '../components/wallet/v2/panels'
 import type { BalanceView } from '../components/wallet/v2/balances'
 import type { Dir, EntryProps } from '../components/wallet/v2/move'
 import { C, MONO, border, tealBorder, tealFill } from '../components/wallet/v2/tokens'
@@ -215,7 +215,8 @@ function Drive() {
     onRetryMove: () => openMove(dir),
     onCopyTx: t => navigator.clipboard?.writeText(t).catch(() => {}),
     onRetryBalance: () => { setScenario('both'); runRefresh() },
-    activity: emptyActivity ? [] : ACTIVITY,
+    activity: emptyActivity ? undefined : ACTIVITY.map(r => <ActivityRowShell key={r.id} row={r} hidden={hidden} />),
+    activityEmpty: emptyActivity,
 
     tab, onTab: setTab,
     faucet: {
@@ -368,7 +369,7 @@ function still(over: Partial<WalletModalV2Props>): WalletModalV2Props {
     faucet: { phase: 'idle', onClaim: noop, onRefresh: noop },
     ons: { status: 'idle', name: '', onName: noop, onCheck: noop, onRegister: noop, onConfirm: noop, onReset: noop, onCopyTx: noop },
     receive: { address: ADDRESS, copied: false, onCopy: noop },
-    activity: ACTIVITY,
+    activity: ACTIVITY.map(r => <ActivityRowShell key={r.id} row={r} hidden={false} />),
     send: {
       view: { step: 'form', recipient: '', amount: '', note: '', available: PRIVATE, canReview: false },
       hidden: false, onRecipient: noop, onAmount: noop, onNote: noop, onMax: noop,
@@ -451,8 +452,8 @@ function Gallery() {
 
     // ── Activity ──
     { label: 'ACTIVITY · EVERY ROW STATE', props: still({ tab: 'activity' }) },
-    { label: 'ACTIVITY · AMOUNTS HIDDEN', props: still({ tab: 'activity', hidden: true }) },
-    { label: 'ACTIVITY · EMPTY', props: still({ tab: 'activity', activity: [] }) },
+    { label: 'ACTIVITY · AMOUNTS HIDDEN', props: still({ tab: 'activity', hidden: true, activity: ACTIVITY.map(r => <ActivityRowShell key={r.id} row={r} hidden />) }) },
+    { label: 'ACTIVITY · EMPTY', props: still({ tab: 'activity', activity: undefined, activityEmpty: true }) },
 
     // ── Refresh ──
     { label: 'REFRESHING · BOTH BALANCES RE-READ', props: still({ refreshing: true, privateBalance: LOADING, publicBalance: LOADING, entries: [], lockedText: 'Checking your balances…' }) },

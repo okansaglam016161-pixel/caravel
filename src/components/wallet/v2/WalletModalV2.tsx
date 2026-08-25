@@ -25,7 +25,7 @@ import {
 } from './primitives'
 import {
   ActivityPanel, FaucetPanel, OnsPanel, ReceivePanel, SendPanel,
-  type ActivityRowView, type FaucetPanelProps, type OnsPanelProps, type SendPanelProps,
+  type FaucetPanelProps, type OnsPanelProps, type SendPanelProps,
 } from './panels'
 import { PrivateHero, PublicRow, type BalanceView } from './balances'
 import {
@@ -97,11 +97,21 @@ export interface WalletModalV2Props {
   // ── The areas beyond the balance card. Omit one and its tab renders nothing. ──
   tab?: WalletTab
   onTab?: (t: WalletTab) => void
+  /**
+   * Faucet and name panels as DATA — used by the preview harness, which has no real logic behind
+   * them. The app passes `overviewExtras` instead: those two panels own their own state machines
+   * (claim, cooldown, the settle loop; check/estimate/register) and reskinning them meant keeping
+   * that logic where it lives rather than lifting it up here.
+   */
   faucet?: FaucetPanelProps
   ons?: OnsPanelProps
+  /** Rendered at the foot of Overview — the app's own stateful panels. */
+  overviewExtras?: ReactNode
   send?: SendPanelProps
   receive?: { address: string | null; copied: boolean; onCopy: () => void }
-  activity?: ActivityRowView[]
+  /** Pre-rendered rows — see ActivityPanel for why this is children, not data. */
+  activity?: ReactNode
+  activityEmpty?: boolean
   /**
    * A balance refresh is running.
    *
@@ -159,11 +169,16 @@ export default function WalletModalV2(p: WalletModalV2Props) {
             <MoveList entries={p.entries} lockedText={p.lockedText} lockedIsFlight={p.lockedIsFlight} />
             {p.faucet && <FaucetPanel {...p.faucet} />}
             {p.ons && <OnsPanel {...p.ons} />}
+            {p.overviewExtras}
           </>}
 
           {tab === 'send' && p.send && <SendPanel {...p.send} />}
           {tab === 'receive' && p.receive && <ReceivePanel {...p.receive} />}
-          {tab === 'activity' && <ActivityPanel rows={p.activity ?? []} hidden={p.hidden} onToggleHidden={p.onToggleHidden} />}
+          {tab === 'activity' && (
+            <ActivityPanel empty={p.activityEmpty ?? !p.activity} hidden={p.hidden} onToggleHidden={p.onToggleHidden}>
+              {p.activity}
+            </ActivityPanel>
+          )}
         </Body>
       </ModalShell>
     )

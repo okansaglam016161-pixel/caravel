@@ -15,7 +15,7 @@
 import type { ReactNode } from 'react'
 import { QRCodeSVG } from 'qrcode.react'
 import { C, MONO, border, tealBorder, tealFill } from './tokens'
-import { Alert, Check, Copy, Retry, Shield, Spinner } from './icons'
+import { Alert, Check, Copy, Eye, EyeOff, Shield, Spinner } from './icons'
 import {
   AmountField, Body, Button, DetailCard, DetailRow, FieldLabel, Panel, PanelText,
   StatusBlock, SubHeader, TextField, TxRow,
@@ -399,21 +399,147 @@ export function OnsPanel({ status, name, policyError, message, feeMicrotari, txI
   )
 }
 
-// ══ Activity (placeholder — not redesigned in this stage) ═════════════════════
+// ══ ACTIVITY ══════════════════════════════════════════════════════════════════
+//
+// SAME CONTENT AND SAME BEHAVIOUR AS THE SHIPPED LIST, RESTYLED. The structure is not reinvented:
+// rows still come from the two authoritative sources buildActivity() merges — wallet-modal sends
+// and message-linked payments — never from the blind balance scan, because a private output carries
+// no sender and the scan cannot tell an incoming payment from our own change.
+//
+// A RECEIVED ROW'S AMOUNT IS RESOLVED LAZILY, so it has its own little state machine and every one
+// of those states is representable here: checking, resolved, already-spent, unreadable, and the
+// indexer-lag case that may still resolve. The shipped list called these "Resolving", "Spent" and
+// "Pending"; those are our words for our machinery, so they are said plainly instead.
+//
+// The hide toggle covers the amounts in this list too — the same gesture as the balance cards.
 
-export function ActivityPlaceholder({ onRefresh }: { onRefresh: () => void }) {
+export type ActivityStatus =
+  | 'confirmed' | 'sent' | 'failed' | 'unconfirmed'          // outflows
+  | 'received' | 'checking' | 'spent' | 'unreadable' | 'pending'  // inflows
+
+export interface ActivityRowView {
+  id: string
+  direction: 'out' | 'in'
+  /** "Sent to otl_esm_1t…f4a2", "Received from npub1abcd…wxyz". Already shortened by the caller. */
+  title: string
+  note: string
+  status: ActivityStatus
+  /** null when the amount is not known here — another device's send, or still being checked. */
+  amountMicrotari: bigint | null
+}
+
+const STATUS: Record<ActivityStatus, { label: string; color: string }> = {
+  confirmed: { label: 'Confirmed', color: C.teal300 },
+  sent: { label: 'Sent', color: C.teal300 },
+  failed: { label: 'Failed', color: C.dangerText },
+  unconfirmed: { label: 'Not confirmed', color: C.warn300 },
+  received: { label: 'Received', color: C.teal300 },
+  checking: { label: 'Checking…', color: C.faintDim },
+  spent: { label: 'Already spent', color: C.faintDim },
+  unreadable: { label: 'Unavailable', color: C.faintDim },
+  pending: { label: 'Still arriving', color: C.warn300 },
+}
+
+/** The four visual treatments a row can take, keyed off what actually happened to the money. */
+type RowLook = 'out-ok' | 'in-ok' | 'pending' | 'failed'
+function lookFor(r: ActivityRowView): RowLook {
+  if (r.status === 'failed') return 'failed'
+  if (r.status === 'unconfirmed' || r.status === 'pending' || r.status === 'checking') return 'pending'
+  return r.direction === 'out' ? 'out-ok' : 'in-ok'
+}
+
+const LOOK: Record<RowLook, { bg: string; bd: string; stroke: string; dashed?: boolean }> = {
+  'out-ok': { bg: tealFill(0.1), bd: tealBorder(0.22), stroke: C.teal },
+  'in-ok': { bg: 'rgba(120,150,210,0.07)', bd: border(0.16), stroke: C.mutedDim },
+  pending: { bg: 'rgba(255,180,60,0.05)', bd: '1px dashed rgba(255,180,60,0.34)', stroke: C.warn },
+  failed: { bg: 'rgba(255,122,122,0.07)', bd: '1px solid rgba(255,122,122,0.24)', stroke: C.danger },
+}
+
+function RowIcon({ look }: { look: RowLook }) {
+  const l = LOOK[look]
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14, padding: '26px 0' }}>
-      <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 44, height: 44, borderRadius: '50%', background: C.raised, border: border(0.14) }}>
-        <Retry size={18} color={C.faint} />
-      </span>
-      <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5 }}>
-        <span style={{ fontSize: 14, fontWeight: 700, color: C.muted }}>Nothing here yet</span>
-        <span style={{ fontSize: 13, color: C.faint, textAlign: 'center', maxWidth: 260, lineHeight: 1.5 }}>
-          Payments you send and receive will show up here.
+    <span style={{
+      display: 'flex', alignItems: 'center', justifyContent: 'center', width: 34, height: 34,
+      borderRadius: 10, flexShrink: 0, background: l.bg, border: l.bd,
+    }}>
+      {look === 'failed' ? (
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={l.stroke} strokeWidth="2.4" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
+      ) : look === 'pending' ? (
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={l.stroke} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg>
+      ) : (
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={l.stroke} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+          {look === 'out-ok' ? <path d="M12 19V5M5 12l7-7 7 7" /> : <path d="M12 5v14M5 12l7 7 7-7" />}
+        </svg>
+      )}
+    </span>
+  )
+}
+
+export function ActivityPanel({ rows, hidden, onToggleHidden }: {
+  rows: ActivityRowView[]; hidden: boolean; onToggleHidden: () => void
+}) {
+  if (rows.length === 0) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14, padding: '44px 0 40px' }}>
+        <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 46, height: 46, borderRadius: 13, background: C.raised, border: border(0.14) }}>
+          <Shield size={20} color={C.faintDim} />
         </span>
-      </span>
-      <Button tone="neutral" onClick={onRefresh}>Refresh</Button>
+        <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
+          <span style={{ fontSize: 15, fontWeight: 700, color: C.muted }}>No payments yet</span>
+          <span style={{ fontSize: 13, color: C.faint, textAlign: 'center', maxWidth: 250, lineHeight: 1.5 }}>
+            Payments you send and receive will appear here.
+          </span>
+        </span>
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 2px 11px', borderBottom: '1px solid rgba(120,150,210,0.07)' }}>
+        <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.14em', color: C.faintDim }}>PRIVATE PAYMENTS</span>
+        <span role="button" tabIndex={0} onClick={onToggleHidden} onKeyDown={e => e.key === 'Enter' && onToggleHidden()}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 12, fontWeight: 600, color: hidden ? C.teal : C.tealDim, cursor: 'pointer', userSelect: 'none' }}>
+          {hidden ? <EyeOff size={13} color={C.teal} /> : <Eye size={13} color={C.tealDim} />}
+          {hidden ? 'Show amounts' : 'Hide amounts'}
+        </span>
+      </div>
+      {rows.map(r => <ActivityRow key={r.id} row={r} hidden={hidden} />)}
+    </div>
+  )
+}
+
+function ActivityRow({ row, hidden }: { row: ActivityRowView; hidden: boolean }) {
+  const look = lookFor(row)
+  const st = STATUS[row.status]
+  const dead = look === 'failed'
+  const amount = row.status === 'checking' ? '…' : row.amountMicrotari !== null ? fmt6(row.amountMicrotari) : '—'
+  const sub = row.note
+    ? `“${row.note}”`
+    : row.status === 'unconfirmed' ? 'Sent, never confirmed'
+    : row.status === 'failed' ? 'Nothing left your wallet'
+    : 'No note'
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 13, padding: '13px 2px', borderBottom: '1px solid rgba(120,150,210,0.07)' }}>
+      <RowIcon look={look} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8 }}>
+          <span style={{ fontSize: 14, fontWeight: 600, color: dead ? C.muted : C.primary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.title}</span>
+          <span style={{
+            fontFamily: MONO, fontSize: 13, flexShrink: 0,
+            letterSpacing: hidden ? '0.1em' : undefined,
+            color: hidden ? C.tealLabel : dead ? C.faintDim : C.tealLabel,
+          }}>{hidden ? '••••' : amount}</span>
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, marginTop: 3 }}>
+          <span style={{
+            fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            color: row.note ? '#C7E4DD' : C.faint, fontStyle: row.note ? 'italic' : 'normal',
+          }}>{sub}</span>
+          <span style={{ fontSize: 11, fontWeight: 700, color: st.color, flexShrink: 0 }}>{st.label}</span>
+        </div>
+      </div>
     </div>
   )
 }

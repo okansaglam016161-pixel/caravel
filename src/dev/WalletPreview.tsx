@@ -15,7 +15,7 @@
 
 import { useState } from 'react'
 import WalletModalV2, { WALLET_TABS, type MoveView, type WalletModalV2Props, type WalletTab } from '../components/wallet/v2/WalletModalV2'
-import type { FaucetPhase, OnsStatus, SendView } from '../components/wallet/v2/panels'
+import type { ActivityRowView, FaucetPhase, OnsStatus, SendView } from '../components/wallet/v2/panels'
 import type { BalanceView } from '../components/wallet/v2/balances'
 import type { Dir, EntryProps } from '../components/wallet/v2/move'
 import { C, MONO, border, tealBorder, tealFill } from '../components/wallet/v2/tokens'
@@ -35,6 +35,23 @@ const SEND_ERROR =
 const REAL_ERROR =
   'The network rejected this transaction in simulation: FailedToExecuteInstruction ' +
   '{ instruction: 4, error: "Bucket 1 not found in workspace — TakeFromBucket consumed it" }'
+
+/**
+ * One row per state the shipped Activity can actually reach — both directions, every outcome, and
+ * the full lazy-resolution machine a received row runs through. Newest first, as buildActivity sorts.
+ */
+const ACTIVITY: ActivityRowView[] = [
+  { id: 'a1', direction: 'out', title: 'Sent to otl_esm_1t…224p', note: 'lunch', status: 'confirmed', amountMicrotari: 1_500_000n },
+  { id: 'a2', direction: 'in', title: 'Received from npub1abcd…wxyz', note: 'thanks!', status: 'received', amountMicrotari: 12_000_000n },
+  { id: 'a3', direction: 'in', title: 'Received from npub1qqrs…m2k9', note: '', status: 'checking', amountMicrotari: null },
+  { id: 'a4', direction: 'out', title: 'Sent to @okan', note: 'rent', status: 'sent', amountMicrotari: 250_000_000n },
+  { id: 'a5', direction: 'out', title: 'Sent to otl_esm_1kq…8f31', note: '', status: 'unconfirmed', amountMicrotari: 5_000_000n },
+  { id: 'a6', direction: 'in', title: 'Received from npub1z8vk…4tql', note: 'split the bill', status: 'pending', amountMicrotari: null },
+  { id: 'a7', direction: 'out', title: 'Sent from another device', note: '', status: 'confirmed', amountMicrotari: null },
+  { id: 'a8', direction: 'in', title: 'Received from npub1h3ne…9wsd', note: 'coffee', status: 'spent', amountMicrotari: 900_000n },
+  { id: 'a9', direction: 'out', title: 'Sent to otl_esm_1m4…c7de', note: '', status: 'failed', amountMicrotari: 2_000_000n },
+  { id: 'a10', direction: 'in', title: 'Received from npub1v0pq…s6xa', note: '', status: 'unreadable', amountMicrotari: null },
+]
 
 const ready = (v: bigint): BalanceView => ({ status: 'ready', microtari: v })
 const LOADING: BalanceView = { status: 'loading' }
@@ -114,10 +131,22 @@ function Drive() {
   const [copied, setCopied] = useState(false)
   const [addrReady, setAddrReady] = useState(true)
   const [send, setSend] = useState<SendView>({ step: 'form', recipient: '', amount: '', note: '', available: PRIVATE, canReview: false })
+  const [refreshing, setRefreshing] = useState(false)
+  const [emptyActivity, setEmptyActivity] = useState(false)
 
-  const { priv, pub } = balancesFor(scenario)
-  const privV = priv.status === 'ready' ? priv.microtari : 0n
-  const pubV = pub.status === 'ready' ? pub.microtari : 0n
+  const settled = balancesFor(scenario)
+  // A refresh re-reads BOTH balances, so both drop to their loading treatment for the duration —
+  // which is exactly what the real scan does, and the whole point of showing it.
+  const priv = refreshing ? LOADING : settled.priv
+  const pub = refreshing ? LOADING : settled.pub
+  const privV = settled.priv.status === 'ready' ? settled.priv.microtari : 0n
+  const pubV = settled.pub.status === 'ready' ? settled.pub.microtari : 0n
+
+  function runRefresh() {
+    if (refreshing) return
+    setRefreshing(true)
+    setTimeout(() => setRefreshing(false), 1600)
+  }
 
   const parse = (s: string): bigint => {
     if (!/^\d*\.?\d*$/.test(s) || s === '' || s === '.') return 0n
@@ -162,7 +191,9 @@ function Drive() {
     move, entries, lockedText: locked, lockedIsFlight: lockedFlight,
     inFlightText: scenario === 'inFlight' ? 'Making 1.000000 TARI public' : undefined,
     onToggleHidden: () => setHidden(h => !h),
-    onRefresh: () => {}, onClose: () => setMove({ step: 'idle' }),
+    refreshing,
+    onRefresh: runRefresh,
+    onClose: () => setMove({ step: 'idle' }),
     onBack: () => setMove({ step: 'idle' }),
     onAmountChange: v => refreshForm(dir, v, false),
     onMax: () => {
@@ -183,7 +214,8 @@ function Drive() {
     onDone: () => setMove({ step: 'idle' }),
     onRetryMove: () => openMove(dir),
     onCopyTx: t => navigator.clipboard?.writeText(t).catch(() => {}),
-    onRetryBalance: () => setScenario('both'),
+    onRetryBalance: () => { setScenario('both'); runRefresh() },
+    activity: emptyActivity ? [] : ACTIVITY,
 
     tab, onTab: setTab,
     faucet: {
@@ -253,6 +285,11 @@ function Drive() {
         <Group title="Toggles">
           <button onClick={() => setHidden(h => !h)} style={btn(hidden)}>Hide balances {hidden ? '· on' : '· off'}</button>
           <button onClick={() => setShowFacts(f => !f)} style={btn(showFacts)}>Permanence note {showFacts ? '· on' : '· off'}</button>
+          <button onClick={() => setEmptyActivity(e => !e)} style={btn(emptyActivity)}>Activity empty {emptyActivity ? '· on' : '· off'}</button>
+        </Group>
+        <Group title="Refresh" note="Or press Refresh in the modal header">
+          <button onClick={runRefresh} style={btn(refreshing)}>{refreshing ? 'Refreshing…' : 'Run a refresh (1.6s)'}</button>
+          <button onClick={() => setRefreshing(r => !r)} style={btn(false)}>Hold refreshing {refreshing ? 'off' : 'on'}</button>
         </Group>
         <Group title="Tab">
           {WALLET_TABS.map(t => (
@@ -331,6 +368,7 @@ function still(over: Partial<WalletModalV2Props>): WalletModalV2Props {
     faucet: { phase: 'idle', onClaim: noop, onRefresh: noop },
     ons: { status: 'idle', name: '', onName: noop, onCheck: noop, onRegister: noop, onConfirm: noop, onReset: noop, onCopyTx: noop },
     receive: { address: ADDRESS, copied: false, onCopy: noop },
+    activity: ACTIVITY,
     send: {
       view: { step: 'form', recipient: '', amount: '', note: '', available: PRIVATE, canReview: false },
       hidden: false, onRecipient: noop, onAmount: noop, onNote: noop, onMax: noop,
@@ -410,7 +448,14 @@ function Gallery() {
     // ── Receive / Activity ──
     { label: 'RECEIVE · ADDRESS + QR', props: still({ tab: 'receive' }) },
     { label: 'RECEIVE · PREPARING', props: still({ tab: 'receive', receive: { address: null, copied: false, onCopy: noop } }) },
-    { label: 'ACTIVITY · EMPTY', props: still({ tab: 'activity' }) },
+
+    // ── Activity ──
+    { label: 'ACTIVITY · EVERY ROW STATE', props: still({ tab: 'activity' }) },
+    { label: 'ACTIVITY · AMOUNTS HIDDEN', props: still({ tab: 'activity', hidden: true }) },
+    { label: 'ACTIVITY · EMPTY', props: still({ tab: 'activity', activity: [] }) },
+
+    // ── Refresh ──
+    { label: 'REFRESHING · BOTH BALANCES RE-READ', props: still({ refreshing: true, privateBalance: LOADING, publicBalance: LOADING, entries: [], lockedText: 'Checking your balances…' }) },
   ]
 
   return (

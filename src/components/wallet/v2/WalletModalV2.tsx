@@ -24,8 +24,8 @@ import {
   StatusBlock, SubHeader, TabBar, TxRow, iconBtn,
 } from './primitives'
 import {
-  ActivityPlaceholder, FaucetPanel, OnsPanel, ReceivePanel, SendPanel,
-  type FaucetPanelProps, type OnsPanelProps, type SendPanelProps,
+  ActivityPanel, FaucetPanel, OnsPanel, ReceivePanel, SendPanel,
+  type ActivityRowView, type FaucetPanelProps, type OnsPanelProps, type SendPanelProps,
 } from './panels'
 import { PrivateHero, PublicRow, type BalanceView } from './balances'
 import {
@@ -101,7 +101,16 @@ export interface WalletModalV2Props {
   ons?: OnsPanelProps
   send?: SendPanelProps
   receive?: { address: string | null; copied: boolean; onCopy: () => void }
-  onRefreshActivity?: () => void
+  activity?: ActivityRowView[]
+  /**
+   * A balance refresh is running.
+   *
+   * SEPARATE FROM the balances' own `loading` status, because they are different facts: `loading`
+   * is "we have never had a value", `refreshing` is "we have one and are re-reading it". The
+   * control has to acknowledge the press either way — a Refresh that visibly does nothing reads as
+   * broken, and this is a wallet whose whole async story is that reads lag.
+   */
+  refreshing?: boolean
 }
 
 const TARI = (n: bigint) => `${fmt6(n)} TARI`
@@ -115,8 +124,14 @@ export default function WalletModalV2(p: WalletModalV2Props) {
     return (
       <ModalShell>
         <RootHeader chip={p.networkChip} right={<>
-          <span role="button" tabIndex={0} onClick={p.onRefresh} onKeyDown={e => e.key === 'Enter' && p.onRefresh()}
-            style={{ fontSize: 13, fontWeight: 700, color: C.teal, cursor: 'pointer', marginRight: 4, userSelect: 'none' }}>Refresh</span>
+          {p.refreshing ? (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 13, fontWeight: 700, color: C.tealDim, marginRight: 4 }}>
+              <Spinner size={12} />Refreshing…
+            </span>
+          ) : (
+            <span role="button" tabIndex={0} onClick={p.onRefresh} onKeyDown={e => e.key === 'Enter' && p.onRefresh()}
+              style={{ fontSize: 13, fontWeight: 700, color: C.teal, cursor: 'pointer', marginRight: 4, userSelect: 'none' }}>Refresh</span>
+          )}
           <span role="button" tabIndex={0} onClick={p.onToggleHidden} onKeyDown={e => e.key === 'Enter' && p.onToggleHidden()}
             aria-label={p.hidden ? 'Show balances' : 'Hide balances'}
             style={p.hidden
@@ -133,6 +148,14 @@ export default function WalletModalV2(p: WalletModalV2Props) {
             {p.inFlightText && <InFlightBanner text={p.inFlightText} />}
             <PrivateHero balance={p.privateBalance} hidden={p.hidden} onRetry={p.onRetryBalance} />
             <PublicRow balance={p.publicBalance} hidden={p.hidden} onRetry={p.onRetryBalance} />
+            {/* The design's own loading footer, shown whenever a read is actually in flight — so a
+                Refresh press is acknowledged even when the previous values are still on screen. */}
+            {(p.refreshing || p.privateBalance.status === 'loading' || p.publicBalance.status === 'loading') && (
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, padding: '2px 0 6px' }}>
+                <Spinner size={13} />
+                <span style={{ fontSize: 12.5, color: C.mutedDim }}>Checking your balances…</span>
+              </div>
+            )}
             <MoveList entries={p.entries} lockedText={p.lockedText} lockedIsFlight={p.lockedIsFlight} />
             {p.faucet && <FaucetPanel {...p.faucet} />}
             {p.ons && <OnsPanel {...p.ons} />}
@@ -140,7 +163,7 @@ export default function WalletModalV2(p: WalletModalV2Props) {
 
           {tab === 'send' && p.send && <SendPanel {...p.send} />}
           {tab === 'receive' && p.receive && <ReceivePanel {...p.receive} />}
-          {tab === 'activity' && <ActivityPlaceholder onRefresh={p.onRefreshActivity ?? p.onRefresh} />}
+          {tab === 'activity' && <ActivityPanel rows={p.activity ?? []} hidden={p.hidden} onToggleHidden={p.onToggleHidden} />}
         </Body>
       </ModalShell>
     )

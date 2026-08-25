@@ -13,7 +13,7 @@ import { Copy, Spinner } from './icons'
 export function ModalShell({ children }: { children: ReactNode }) {
   return (
     <div style={{
-      width: `min(${MODAL_WIDTH}px, 94vw)`, borderRadius: 20, background: C.modal,
+      width: `min(${MODAL_WIDTH}px, 94vw)`, maxHeight: '88vh', borderRadius: 20, background: C.modal,
       border: border(0.14), boxShadow: '0 30px 80px rgba(0,0,0,0.55)', overflow: 'hidden',
       display: 'flex', flexDirection: 'column',
     }}>{children}</div>
@@ -62,8 +62,15 @@ export function SubHeader({ title, onBack, onClose }: { title: string; onBack?: 
   )
 }
 
+// Scrolls rather than growing: with tabs and panels the overview can outrun the viewport, and a
+// modal that pushes its own confirm button off-screen is worse than one that scrolls.
 export function Body({ children, gap = 12 }: { children: ReactNode; gap?: number }) {
-  return <div style={{ display: 'flex', flexDirection: 'column', gap, padding: '20px 22px 22px' }}>{children}</div>
+  return (
+    <div style={{
+      display: 'flex', flexDirection: 'column', gap, padding: '20px 22px 22px',
+      overflowY: 'auto', minHeight: 0,
+    }}>{children}</div>
+  )
 }
 
 // ── Buttons ───────────────────────────────────────────────────────────────────
@@ -194,3 +201,154 @@ export function Skeleton({ w, h, fill, mt = 0 }: { w: number; h: number; fill: s
 export const SectionLabel = ({ children }: { children: ReactNode }) => (
   <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.14em', color: C.faintDim, padding: '0 2px' }}>{children}</span>
 )
+
+// ── Panels, fields and tabs ───────────────────────────────────────────────────
+//
+// Added for the panels the Claude Design canvas never covered — faucet, send, receive, ONS. They
+// are built from the SAME vocabulary the designed screens use (the card radii, the trough insets,
+// the four button tones, the teal/amber split) rather than a parallel set, so the modal reads as
+// one product whichever tab you are on.
+
+export type PanelTone = 'neutral' | 'teal' | 'amber' | 'danger'
+
+const panelTone: Record<PanelTone, { bg: string; bd: string }> = {
+  neutral: { bg: C.raised, bd: border(0.14) },
+  teal: { bg: tealFill(0.05), bd: tealBorder(0.3) },
+  amber: { bg: C.raised, bd: '1px solid rgba(255,180,60,0.28)' },
+  danger: { bg: 'rgba(255,122,122,0.04)', bd: '1px solid rgba(255,122,122,0.28)' },
+}
+
+/**
+ * A standalone card inside a tab — the faucet and ONS panels.
+ *
+ * Same 14px radius and 18px padding as the balance cards, so a panel sitting under the hero reads
+ * as part of the same stack rather than a bolted-on widget.
+ */
+export function Panel({ tone = 'neutral', title, titleColor, meta, metaColor, children }: {
+  tone?: PanelTone; title: ReactNode; titleColor?: string; meta?: ReactNode; metaColor?: string; children: ReactNode
+}) {
+  const t = panelTone[tone]
+  return (
+    <div style={{ padding: 18, borderRadius: 14, background: t.bg, border: t.bd }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 6 }}>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 9, fontSize: 14, fontWeight: 700, color: titleColor ?? C.primary }}>{title}</span>
+        {meta && <span style={{ fontFamily: MONO, fontSize: 12, color: metaColor ?? C.faintDim, flexShrink: 0 }}>{meta}</span>}
+      </div>
+      {children}
+    </div>
+  )
+}
+
+export const PanelText = ({ children, color = C.mutedDim }: { children: ReactNode; color?: string }) => (
+  <div style={{ fontSize: 13, color, lineHeight: 1.5, marginBottom: 14 }}>{children}</div>
+)
+
+/** Small caps label above a field. */
+export const FieldLabel = ({ children }: { children: ReactNode }) => (
+  <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.14em', color: C.faintDim, marginBottom: 8 }}>{children}</div>
+)
+
+export function TextField({ value, onChange, placeholder, mono = true, invalid, multiline, prefix, ariaLabel, readOnly }: {
+  value: string; onChange: (v: string) => void; placeholder?: string; mono?: boolean
+  invalid?: boolean; multiline?: boolean; prefix?: ReactNode; ariaLabel?: string; readOnly?: boolean
+}) {
+  const shell: CSSProperties = {
+    display: 'flex', alignItems: multiline ? 'flex-start' : 'center', gap: 9,
+    padding: '13px 15px', borderRadius: 11, background: C.trough,
+    border: invalid ? '1px solid rgba(255,122,122,0.45)' : border(0.14),
+  }
+  const inner: CSSProperties = {
+    flex: 1, minWidth: 0, background: 'transparent', border: 'none', outline: 'none', padding: 0,
+    fontFamily: mono ? MONO : 'inherit', fontSize: 13.5, color: C.body, resize: 'vertical',
+  }
+  return (
+    <div style={shell}>
+      {prefix}
+      {multiline
+        ? <textarea value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} rows={2} aria-label={ariaLabel} readOnly={readOnly} style={inner} />
+        : <input value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} spellCheck={false} aria-label={ariaLabel} readOnly={readOnly} style={inner} />}
+    </div>
+  )
+}
+
+/**
+ * The generic amount input shell. The move flow's AmountCard is this plus direction copy —
+ * ONE visual treatment for "type a number of TARI", wherever it appears.
+ */
+export function AmountField({ value, onChange, onMax, maxUsed, accent = 'teal', availableLabel, availableValue, note, error, readOnly }: {
+  value: string; onChange: (v: string) => void
+  onMax?: () => void; maxUsed?: boolean
+  accent?: 'teal' | 'neutral'
+  availableLabel?: string; availableValue?: ReactNode
+  note?: ReactNode; error?: ReactNode; readOnly?: boolean
+}) {
+  const teal = accent === 'teal'
+  return (
+    <div style={{
+      padding: '16px 18px', borderRadius: 14, background: C.trough,
+      border: error ? '1px solid rgba(255,122,122,0.4)' : teal ? tealBorder(0.28) : border(0.22),
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 8 }}>
+        <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.14em', color: C.faintDim }}>AMOUNT</span>
+        {availableLabel && (
+          <span style={{ fontSize: 12, color: C.faint }}>
+            {availableLabel} · <span style={{ fontFamily: MONO, color: C.muted }}>{availableValue}</span>
+          </span>
+        )}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+        <input
+          value={value} onChange={e => onChange(e.target.value)} readOnly={readOnly}
+          inputMode="decimal" placeholder="0.000000" aria-label="Amount in TARI"
+          style={{ flex: 1, minWidth: 0, background: 'transparent', border: 'none', outline: 'none', padding: 0, fontFamily: MONO, fontSize: 26, fontWeight: 600, color: C.bright }}
+        />
+        <span style={{ fontFamily: MONO, fontSize: 14, color: C.tealDim, flexShrink: 0 }}>TARI</span>
+        {onMax && (
+          <span role="button" tabIndex={0} onClick={onMax} onKeyDown={e => e.key === 'Enter' && onMax()} style={{
+            padding: '5px 12px', borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: 'pointer', flexShrink: 0, userSelect: 'none',
+            background: maxUsed ? C.maxActive : teal ? tealFill(0.1) : C.inset,
+            border: maxUsed ? border(0.4) : teal ? tealBorder(0.3) : border(0.22),
+            color: maxUsed ? C.body : teal ? C.teal300 : C.muted,
+          }}>MAX</span>
+        )}
+      </div>
+      {error
+        ? <div style={{ fontSize: 12, color: C.dangerText, marginTop: 10, lineHeight: 1.5 }}>{error}</div>
+        : note ? <div style={{ fontSize: 12, color: C.mutedDim, marginTop: 10, lineHeight: 1.5 }}>{note}</div> : null}
+    </div>
+  )
+}
+
+/**
+ * Top-level navigation.
+ *
+ * THE DESIGN CANVAS HAS NO TAB BAR — it draws one focused card and navigates by pushing sub-views
+ * with a back arrow. But the shipped modal has four areas and dropping any of them would be an
+ * information-architecture change, not a reskin. So both models coexist: tabs select the area,
+ * and flows inside an area still push a sub-view. Styled from the same vocabulary — a trough rail
+ * with a raised active pill, teal only on the selection.
+ */
+export function TabBar<T extends string>({ tabs, active, onSelect }: {
+  tabs: readonly T[]; active: T; onSelect: (t: T) => void
+}) {
+  return (
+    <div style={{ display: 'flex', gap: 4, padding: 4, borderRadius: 12, background: C.trough, border: border(0.1) }}>
+      {tabs.map(t => {
+        const on = t === active
+        return (
+          <span
+            key={t} role="tab" tabIndex={0} aria-selected={on}
+            onClick={() => onSelect(t)} onKeyDown={e => e.key === 'Enter' && onSelect(t)}
+            style={{
+              flex: 1, textAlign: 'center', padding: '8px 0', borderRadius: 9, cursor: 'pointer',
+              fontSize: 13, fontWeight: on ? 700 : 600, userSelect: 'none',
+              background: on ? C.inset : 'transparent',
+              color: on ? C.bright : C.mutedDim,
+              boxShadow: on ? `inset 0 0 0 1px rgba(45,224,198,0.22)` : 'none',
+            }}
+          >{t.charAt(0).toUpperCase() + t.slice(1)}</span>
+        )
+      })}
+    </div>
+  )
+}

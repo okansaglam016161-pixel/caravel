@@ -11,10 +11,10 @@
 // balance and account state the builders already read.
 
 import type { ReactNode } from 'react'
-import { C, MONO, border, tealBorder, tealFill, warnFill } from './tokens'
+import { C, border, tealBorder, tealFill, warnFill } from './tokens'
 import { Arrow, Eye, Lock, Shield, Spinner } from './icons'
 import { MASK_SHORT, fmt6 } from './format'
-import { SectionLabel } from './primitives'
+import { AmountField, SectionLabel } from './primitives'
 
 export type Dir = 'conceal' | 'reveal'
 
@@ -159,53 +159,19 @@ export interface AmountCardProps {
 }
 
 export function AmountCard({ dir, value, onChange, onMax, maxUsed, available, hidden, leftoverNote, error }: AmountCardProps) {
-  const isConceal = dir === 'conceal'
   return (
-    <div style={{
-      padding: '16px 18px', borderRadius: 14, background: C.trough,
-      border: error ? '1px solid rgba(255,122,122,0.4)' : isConceal ? tealBorder(0.28) : border(0.22),
-    }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 8 }}>
-        <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.14em', color: C.faintDim }}>AMOUNT</span>
-        <span style={{ fontSize: 12, color: C.faint }}>
-          {hidden ? 'Available' : DIR[dir].avail} ·{' '}
-          <span style={{ fontFamily: MONO, color: C.muted, letterSpacing: hidden ? '0.08em' : undefined }}>
-            {hidden ? MASK_SHORT : available !== null ? fmt6(available) : '—'}
-          </span>
-        </span>
-      </div>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
-        <input
-          value={hidden ? MASK_SHORT : value}
-          onChange={e => onChange(e.target.value)}
-          readOnly={hidden}
-          inputMode="decimal"
-          placeholder="0.000000"
-          aria-label={`Amount to ${DIR[dir].title.toLowerCase()}`}
-          style={{
-            flex: 1, minWidth: 0, background: 'transparent', border: 'none', outline: 'none', padding: 0,
-            fontFamily: MONO, fontSize: 26, fontWeight: 600, color: C.bright,
-            letterSpacing: hidden ? '0.08em' : undefined,
-          }}
-        />
-        <span style={{ fontFamily: MONO, fontSize: 14, color: C.tealDim, flexShrink: 0 }}>TARI</span>
-        <span
-          role="button" tabIndex={0} onClick={onMax} onKeyDown={e => e.key === 'Enter' && onMax()}
-          style={{
-            padding: '5px 12px', borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: 'pointer',
-            flexShrink: 0, userSelect: 'none',
-            background: maxUsed ? C.maxActive : isConceal ? tealFill(0.1) : C.inset,
-            border: maxUsed ? border(0.4) : isConceal ? tealBorder(0.3) : border(0.22),
-            color: maxUsed ? C.body : isConceal ? C.teal300 : C.muted,
-          }}
-        >MAX</span>
-      </div>
-      {error
-        ? <div style={{ fontSize: 12, color: C.dangerText, marginTop: 10, lineHeight: 1.5 }}>{error}</div>
-        : leftoverNote
-          ? <div style={{ fontSize: 12, color: C.mutedDim, marginTop: 10, lineHeight: 1.5 }}>{leftoverNote}</div>
-          : null}
-    </div>
+    <AmountField
+      value={hidden ? MASK_SHORT : value}
+      onChange={onChange}
+      onMax={onMax}
+      maxUsed={maxUsed}
+      readOnly={hidden}
+      accent={dir === 'conceal' ? 'teal' : 'neutral'}
+      availableLabel={hidden ? 'Available' : DIR[dir].avail}
+      availableValue={hidden ? MASK_SHORT : available !== null ? fmt6(available) : '—'}
+      note={leftoverNote}
+      error={error}
+    />
   )
 }
 

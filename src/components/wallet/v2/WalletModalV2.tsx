@@ -21,14 +21,26 @@ import { C, tealBorder, tealFill } from './tokens'
 import { Alert, Check, Eye, EyeOff, Shield, Spinner } from './icons'
 import {
   Body, Button, DetailCard, DetailRow, FeeRow, ModalShell, RootHeader, SettleBar,
-  StatusBlock, SubHeader, TxRow, iconBtn,
+  StatusBlock, SubHeader, TabBar, TxRow, iconBtn,
 } from './primitives'
+import {
+  ActivityPlaceholder, FaucetPanel, OnsPanel, ReceivePanel, SendPanel,
+  type FaucetPanelProps, type OnsPanelProps, type SendPanelProps,
+} from './panels'
 import { PrivateHero, PublicRow, type BalanceView } from './balances'
 import {
   AmountCard, DIR, DirectionChips, InFlightBanner, MoveList, PermanenceNote,
   type Dir, type EntryProps,
 } from './move'
 import { fmt6 } from './format'
+
+/**
+ * Top-level areas. The design canvas navigates by pushing sub-views and draws no tab bar, but the
+ * shipped modal has these four and dropping one would be an IA change rather than a reskin — so
+ * tabs select the area and flows inside an area still push a sub-view.
+ */
+export const WALLET_TABS = ['overview', 'send', 'receive', 'activity'] as const
+export type WalletTab = (typeof WALLET_TABS)[number]
 
 /** Balances after the move lands — the number the M4 report found missing from both reviews. */
 export interface Resulting { privateAfter: bigint; publicAfter: bigint }
@@ -81,6 +93,15 @@ export interface WalletModalV2Props {
   onRetryMove: () => void
   onCopyTx: (txId: string) => void
   onRetryBalance?: () => void
+
+  // ── The areas beyond the balance card. Omit one and its tab renders nothing. ──
+  tab?: WalletTab
+  onTab?: (t: WalletTab) => void
+  faucet?: FaucetPanelProps
+  ons?: OnsPanelProps
+  send?: SendPanelProps
+  receive?: { address: string | null; copied: boolean; onCopy: () => void }
+  onRefreshActivity?: () => void
 }
 
 const TARI = (n: bigint) => `${fmt6(n)} TARI`
@@ -88,8 +109,9 @@ const TARI = (n: bigint) => `${fmt6(n)} TARI`
 export default function WalletModalV2(p: WalletModalV2Props) {
   const m = p.move
 
-  // ── Root view: the two balances and the move entries ──
+  // ── Root view: the tab bar, and whichever area is selected ──
   if (m.step === 'idle') {
+    const tab = p.tab ?? 'overview'
     return (
       <ModalShell>
         <RootHeader chip={p.networkChip} right={<>
@@ -104,11 +126,21 @@ export default function WalletModalV2(p: WalletModalV2Props) {
           </span>
           <span role="button" tabIndex={0} onClick={p.onClose} onKeyDown={e => e.key === 'Enter' && p.onClose()} style={iconBtn} aria-label="Close">✕</span>
         </>} />
-        <Body>
-          {p.inFlightText && <InFlightBanner text={p.inFlightText} />}
-          <PrivateHero balance={p.privateBalance} hidden={p.hidden} onRetry={p.onRetryBalance} />
-          <PublicRow balance={p.publicBalance} hidden={p.hidden} onRetry={p.onRetryBalance} />
-          <MoveList entries={p.entries} lockedText={p.lockedText} lockedIsFlight={p.lockedIsFlight} />
+        <Body gap={14}>
+          {p.onTab && <TabBar tabs={WALLET_TABS} active={tab} onSelect={p.onTab} />}
+
+          {tab === 'overview' && <>
+            {p.inFlightText && <InFlightBanner text={p.inFlightText} />}
+            <PrivateHero balance={p.privateBalance} hidden={p.hidden} onRetry={p.onRetryBalance} />
+            <PublicRow balance={p.publicBalance} hidden={p.hidden} onRetry={p.onRetryBalance} />
+            <MoveList entries={p.entries} lockedText={p.lockedText} lockedIsFlight={p.lockedIsFlight} />
+            {p.faucet && <FaucetPanel {...p.faucet} />}
+            {p.ons && <OnsPanel {...p.ons} />}
+          </>}
+
+          {tab === 'send' && p.send && <SendPanel {...p.send} />}
+          {tab === 'receive' && p.receive && <ReceivePanel {...p.receive} />}
+          {tab === 'activity' && <ActivityPlaceholder onRefresh={p.onRefreshActivity ?? p.onRefresh} />}
         </Body>
       </ModalShell>
     )

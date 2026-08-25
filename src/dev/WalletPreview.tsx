@@ -14,7 +14,8 @@
 //   GALLERY  — every state at once, laid out like the design canvas, for comparing at a glance.
 
 import { useState } from 'react'
-import WalletModalV2, { type MoveView, type WalletModalV2Props } from '../components/wallet/v2/WalletModalV2'
+import WalletModalV2, { WALLET_TABS, type MoveView, type WalletModalV2Props, type WalletTab } from '../components/wallet/v2/WalletModalV2'
+import type { FaucetPhase, OnsStatus, SendView } from '../components/wallet/v2/panels'
 import type { BalanceView } from '../components/wallet/v2/balances'
 import type { Dir, EntryProps } from '../components/wallet/v2/move'
 import { C, MONO, border, tealBorder, tealFill } from '../components/wallet/v2/tokens'
@@ -26,6 +27,11 @@ const PUBLIC = 994_997_686n           // 994.997686 — the vault after the same
 const FEE = 14_537n                   // the fee that reveal actually paid on-chain
 const RESERVE = 51_000n               // REVEAL_FEE_RESERVE + MIN_STEALTH_CHANGE
 const TXID = '723d6720fb6225a3b7910c9076fb1026f591e910b098ab1fc8587f88a0623481'
+const ADDRESS = 'otl_esm_1tnay4uzgpe0cvu4tzwfmhdhtvc3pq97szrnteetuz2dvqmjk2ecwq34fnsm8hz7tk43xrur8d2y6mye4w3shjq4qj5sm7xvpq7yqqngs8224p'
+const SEND_FEE = 16_138n
+const ONS_FEE = 21_400n
+const SEND_ERROR =
+  'The network rejected this transaction: InsufficientFeesPaid { required: 16138, paid: 12000 }'
 const REAL_ERROR =
   'The network rejected this transaction in simulation: FailedToExecuteInstruction ' +
   '{ instruction: 4, error: "Bucket 1 not found in workspace — TakeFromBucket consumed it" }'
@@ -101,6 +107,13 @@ function Drive() {
   const [hidden, setHidden] = useState(false)
   const [showFacts, setShowFacts] = useState(true)
   const [move, setMove] = useState<MoveView>({ step: 'idle' })
+  const [tab, setTab] = useState<WalletTab>('overview')
+  const [faucet, setFaucet] = useState<FaucetPhase>('idle')
+  const [ons, setOns] = useState<OnsStatus>('idle')
+  const [onsName, setOnsName] = useState('')
+  const [copied, setCopied] = useState(false)
+  const [addrReady, setAddrReady] = useState(true)
+  const [send, setSend] = useState<SendView>({ step: 'form', recipient: '', amount: '', note: '', available: PRIVATE, canReview: false })
 
   const { priv, pub } = balancesFor(scenario)
   const privV = priv.status === 'ready' ? priv.microtari : 0n
@@ -171,6 +184,56 @@ function Drive() {
     onRetryMove: () => openMove(dir),
     onCopyTx: t => navigator.clipboard?.writeText(t).catch(() => {}),
     onRetryBalance: () => setScenario('both'),
+
+    tab, onTab: setTab,
+    faucet: {
+      phase: faucet, received: 1_000_000_000n, balance: privV,
+      onClaim: () => {
+        setFaucet('claiming')
+        setTimeout(() => setFaucet('verifying'), 1400)
+        setTimeout(() => setFaucet('done'), 3200)
+      },
+      onRefresh: () => setFaucet('done'),
+    },
+    ons: {
+      status: ons, name: onsName || 'yourname', feeMicrotari: ONS_FEE, txId: TXID,
+      policyError: /[^a-z0-9_]/.test(onsName) ? 'Letters, numbers and underscores only.' : undefined,
+      onName: v => { setOnsName(v.toLowerCase()); setOns('idle') },
+      onCheck: () => { setOns('checking'); setTimeout(() => setOns(onsName === 'taken' ? 'taken' : 'available'), 1200) },
+      onRegister: () => { setOns('estimating'); setTimeout(() => setOns('confirm'), 1200) },
+      onConfirm: () => { setOns('registering'); setTimeout(() => setOns('done'), 1600) },
+      onReset: () => setOns('idle'),
+      onCopyTx: t => navigator.clipboard?.writeText(t).catch(() => {}),
+    },
+    receive: {
+      address: addrReady ? ADDRESS : null, copied,
+      onCopy: () => { setCopied(true); setTimeout(() => setCopied(false), 1800) },
+    },
+    send: {
+      view: send, hidden,
+      onRecipient: v => setSend(s0 => s0.step === 'form' ? { ...s0, recipient: v, canReview: !!v && !!s0.amount } : s0),
+      onAmount: v => setSend(s0 => s0.step === 'form' ? { ...s0, amount: v, canReview: !!s0.recipient && !!v } : s0),
+      onNote: v => setSend(s0 => s0.step === 'form' ? { ...s0, note: v } : s0),
+      onMax: () => setSend(s0 => s0.step === 'form' ? { ...s0, amount: toInput(privV > SEND_FEE ? privV - SEND_FEE : 0n), canReview: !!s0.recipient } : s0),
+      onReview: () => setSend(s0 => {
+        if (s0.step !== 'form') return s0
+        const a = parse(s0.amount)
+        setTimeout(() => setSend({ step: 'review', recipient: s0.recipient, amountMicrotari: a, note: s0.note, feeMicrotari: SEND_FEE }), 1300)
+        return { step: 'review', recipient: s0.recipient, amountMicrotari: a, note: s0.note, feeMicrotari: null }
+      }),
+      onBack: () => setSend(s0 => s0.step === 'review'
+        ? { step: 'form', recipient: s0.recipient, amount: toInput(s0.amountMicrotari), note: s0.note, available: privV, canReview: true }
+        : s0),
+      onConfirm: () => setSend(s0 => {
+        if (s0.step !== 'review') return s0
+        setTimeout(() => setSend({ step: 'success', recipient: s0.recipient, amountMicrotari: s0.amountMicrotari, feeMicrotari: SEND_FEE, txId: TXID }), 1800)
+        return { step: 'sending', amountMicrotari: s0.amountMicrotari, progress: 'Building the private proof and broadcasting. Don’t close this window.' }
+      }),
+      onDone: () => setSend({ step: 'form', recipient: '', amount: '', note: '', available: privV, canReview: false }),
+      onRetry: () => setSend({ step: 'form', recipient: '', amount: '', note: '', available: privV, canReview: false }),
+      onCopyTx: t => navigator.clipboard?.writeText(t).catch(() => {}),
+      onViewActivity: () => setTab('activity'),
+    },
   }
 
   const jump = (label: string, v: MoveView) => (
@@ -190,6 +253,40 @@ function Drive() {
         <Group title="Toggles">
           <button onClick={() => setHidden(h => !h)} style={btn(hidden)}>Hide balances {hidden ? '· on' : '· off'}</button>
           <button onClick={() => setShowFacts(f => !f)} style={btn(showFacts)}>Permanence note {showFacts ? '· on' : '· off'}</button>
+        </Group>
+        <Group title="Tab">
+          {WALLET_TABS.map(t => (
+            <button key={t} onClick={() => { setTab(t); setMove({ step: 'idle' }) }} style={btn(tab === t)}>
+              {t.charAt(0).toUpperCase() + t.slice(1)}
+            </button>
+          ))}
+        </Group>
+        <Group title="Faucet panel" note="Shown on Overview">
+          {(['idle', 'locked', 'claiming', 'verifying', 'done', 'lagging', 'error', 'cooldown', 'plenty'] as FaucetPhase[]).map(f => (
+            <button key={f} onClick={() => { setFaucet(f); setTab('overview') }} style={btn(faucet === f)}>{f}</button>
+          ))}
+        </Group>
+        <Group title="Name panel" note="Type “taken” in the field to see the taken state">
+          {(['idle', 'checking', 'available', 'taken', 'estimating', 'confirm', 'registering', 'done', 'error'] as OnsStatus[]).map(o => (
+            <button key={o} onClick={() => { setOns(o); setTab('overview') }} style={btn(ons === o)}>{o}</button>
+          ))}
+        </Group>
+        <Group title="Send state">
+          {([
+            ['Form', { step: 'form', recipient: '', amount: '', note: '', available: privV, canReview: false }],
+            ['Review · pricing', { step: 'review', recipient: ADDRESS, amountMicrotari: 1_500_000n, note: 'lunch', feeMicrotari: null }],
+            ['Review · priced', { step: 'review', recipient: ADDRESS, amountMicrotari: 1_500_000n, note: 'lunch', feeMicrotari: SEND_FEE }],
+            ['Sending', { step: 'sending', amountMicrotari: 1_500_000n, progress: 'Building the private proof and broadcasting. Don’t close this window.' }],
+            ['Success', { step: 'success', recipient: ADDRESS, amountMicrotari: 1_500_000n, feeMicrotari: SEND_FEE, txId: TXID }],
+            ['Unconfirmed', { step: 'unconfirmed', message: 'Broadcast, but the network hasn’t confirmed it yet. Don’t resend — it will appear in Activity.', txId: TXID }],
+            ['Error · verbatim', { step: 'error', message: SEND_ERROR }],
+          ] as [string, SendView][]).map(([label, v]) => (
+            <button key={label} onClick={() => { setSend(v); setTab('send') }} style={btn(send.step === v.step)}>{label}</button>
+          ))}
+        </Group>
+        <Group title="Receive">
+          <button onClick={() => { setAddrReady(true); setTab('receive') }} style={btn(addrReady)}>Address ready</button>
+          <button onClick={() => { setAddrReady(false); setTab('receive') }} style={btn(!addrReady)}>Preparing address</button>
         </Group>
         <Group title="Jump to a move state" note="Bypasses the flow — for states that are hard to reach">
           {jump('Form · make private', { step: 'form', dir: 'conceal', amount: '100', maxUsed: false, available: pubV, canReview: true })}
@@ -230,9 +327,27 @@ function still(over: Partial<WalletModalV2Props>): WalletModalV2Props {
     onToggleHidden: noop, onRefresh: noop, onClose: noop, onBack: noop,
     onAmountChange: noop, onMax: noop, onReview: noop, onConfirm: noop,
     onDone: noop, onRetryMove: noop, onCopyTx: noop, onRetryBalance: noop,
+    tab: 'overview', onTab: noop,
+    faucet: { phase: 'idle', onClaim: noop, onRefresh: noop },
+    ons: { status: 'idle', name: '', onName: noop, onCheck: noop, onRegister: noop, onConfirm: noop, onReset: noop, onCopyTx: noop },
+    receive: { address: ADDRESS, copied: false, onCopy: noop },
+    send: {
+      view: { step: 'form', recipient: '', amount: '', note: '', available: PRIVATE, canReview: false },
+      hidden: false, onRecipient: noop, onAmount: noop, onNote: noop, onMax: noop,
+      onReview: noop, onBack: noop, onConfirm: noop, onDone: noop, onRetry: noop,
+      onCopyTx: noop, onViewActivity: noop,
+    },
     ...over,
   }
 }
+
+/** Shorthands so the gallery entries below stay one line each. */
+const faucetAt = (phase: FaucetPhase, extra: Record<string, unknown> = {}) =>
+  ({ faucet: { phase, received: 1_000_000_000n, balance: 250_000_000n, onClaim: noop, onRefresh: noop, ...extra } })
+const onsAt = (status: OnsStatus, name = 'okan') =>
+  ({ ons: { status, name, feeMicrotari: ONS_FEE, txId: TXID, onName: noop, onCheck: noop, onRegister: noop, onConfirm: noop, onReset: noop, onCopyTx: noop } })
+const sendAt = (view: SendView) =>
+  ({ tab: 'send' as WalletTab, send: { view, hidden: false, onRecipient: noop, onAmount: noop, onNote: noop, onMax: noop, onReview: noop, onBack: noop, onConfirm: noop, onDone: noop, onRetry: noop, onCopyTx: noop, onViewActivity: noop } })
 
 function Gallery() {
   const r = (a: bigint, d: Dir) => d === 'conceal'
@@ -261,6 +376,41 @@ function Gallery() {
     { label: 'SUCCESS · SETTLED', props: still({ move: { step: 'success', dir: 'reveal', amountMicrotari: 1_000_000n, txId: TXID, lagged: false, resulting: r(1_000_000n, 'reveal') } }) },
     { label: 'SUCCESS · INDEX LAGGING (still a success)', props: still({ move: { step: 'success', dir: 'reveal', amountMicrotari: 1_000_000n, txId: TXID, lagged: true, resulting: null } }) },
     { label: 'ERROR · VERBATIM NETWORK TEXT', props: still({ move: { step: 'error', dir: 'reveal', message: REAL_ERROR, txId: TXID } }) },
+
+    // ── Faucet ──
+    { label: 'FAUCET · IDLE', props: still(faucetAt('idle')) },
+    { label: 'FAUCET · CLAIMING', props: still(faucetAt('claiming')) },
+    { label: 'FAUCET · CHECKING BALANCE', props: still(faucetAt('verifying')) },
+    { label: 'FAUCET · RECEIVED', props: still(faucetAt('done')) },
+    { label: 'FAUCET · SENT, NOT VISIBLE YET', props: still(faucetAt('lagging')) },
+    { label: 'FAUCET · ALREADY CLAIMED', props: still(faucetAt('cooldown')) },
+    { label: 'FAUCET · ALREADY HAS PLENTY', props: still(faucetAt('plenty')) },
+    { label: 'FAUCET · UNAVAILABLE', props: still(faucetAt('error')) },
+
+    // ── Name (ONS) ──
+    { label: 'NAME · IDLE', props: still(onsAt('idle', '')) },
+    { label: 'NAME · CHECKING', props: still(onsAt('checking')) },
+    { label: 'NAME · AVAILABLE', props: still(onsAt('available')) },
+    { label: 'NAME · TAKEN', props: still(onsAt('taken')) },
+    { label: 'NAME · CONFIRM THE FEE', props: still(onsAt('confirm')) },
+    { label: 'NAME · REGISTERING', props: still(onsAt('registering')) },
+    { label: 'NAME · REGISTERED', props: still(onsAt('done')) },
+    { label: 'NAME · FAILED', props: still(onsAt('error')) },
+
+    // ── Send ──
+    { label: 'SEND · FORM', props: still(sendAt({ step: 'form', recipient: '', amount: '', note: '', available: PRIVATE, canReview: false })) },
+    { label: 'SEND · FORM, FILLED', props: still(sendAt({ step: 'form', recipient: '@okan', amount: '1.5', note: 'lunch', available: PRIVATE, canReview: true })) },
+    { label: 'SEND · REVIEW, PRICING', props: still(sendAt({ step: 'review', recipient: ADDRESS, amountMicrotari: 1_500_000n, note: 'lunch', feeMicrotari: null })) },
+    { label: 'SEND · REVIEW, PRICED', props: still(sendAt({ step: 'review', recipient: ADDRESS, amountMicrotari: 1_500_000n, note: 'lunch', feeMicrotari: SEND_FEE })) },
+    { label: 'SEND · SENDING', props: still(sendAt({ step: 'sending', amountMicrotari: 1_500_000n, progress: 'Building the private proof and broadcasting. Don’t close this window.' })) },
+    { label: 'SEND · SENT', props: still(sendAt({ step: 'success', recipient: ADDRESS, amountMicrotari: 1_500_000n, feeMicrotari: SEND_FEE, txId: TXID })) },
+    { label: 'SEND · NOT CONFIRMED YET', props: still(sendAt({ step: 'unconfirmed', message: 'Broadcast, but the network hasn’t confirmed it yet. Don’t resend — it will appear in Activity.', txId: TXID })) },
+    { label: 'SEND · FAILED', props: still(sendAt({ step: 'error', message: SEND_ERROR })) },
+
+    // ── Receive / Activity ──
+    { label: 'RECEIVE · ADDRESS + QR', props: still({ tab: 'receive' }) },
+    { label: 'RECEIVE · PREPARING', props: still({ tab: 'receive', receive: { address: null, copied: false, onCopy: noop } }) },
+    { label: 'ACTIVITY · EMPTY', props: still({ tab: 'activity' }) },
   ]
 
   return (

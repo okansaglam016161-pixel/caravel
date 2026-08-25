@@ -36,6 +36,7 @@ import { sendConfidential, tariToMicrotari, MAX_FEE, type SendOutcome } from '..
 import { buildActivity, type ActivityRow } from '../../crypto/activity'
 import { usePaymentResolution } from '../../hooks/usePaymentResolution'
 import WalletModalV2, { type MoveView, type Resulting, type WalletTab } from './v2/WalletModalV2'
+import { computeTotal } from './v2/total'
 import type { BalanceView } from './v2/balances'
 import type { Dir, EntryProps } from './v2/move'
 import { ActivityRowShell, type ActivityStatus, type SendView } from './v2/panels'
@@ -375,6 +376,25 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
     : lastRevealed.current !== null ? { status: 'ready', microtari: lastRevealed.current }
     : { status: 'loading' }
 
+  /**
+   * The combined balance.
+   *
+   * Fed from the SAME flags the two reads already expose — `scan.incomplete` (the private figure is
+   * a lower bound, so a sum would be quietly too small) and `revealed.status` (unavailable is "we
+   * do not know", not zero). computeTotal owns the precedence; this only supplies the facts.
+   *
+   * `settling` is the move flow's own settle window, not a refresh. A refresh is a re-read and the
+   * total simply goes back to loading; a settle means a committed move is working its way through
+   * the index, which is a different claim — "a correct number is coming on its own".
+   */
+  const total = computeTotal({
+    privateBalance,
+    privateIncomplete: scan.incomplete,
+    publicBalance,
+    settling: moveStep === 'settling',
+  })
+
+
   // The amount the form is currently asking for, and the guards around it. `ceiling` differs by
   // direction because the fee comes from different places: a conceal carves it out of the amount
   // leaving the vault, a reveal pays it from the private side ON TOP — which is what maxRevealable
@@ -510,9 +530,18 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
         <WalletModalV2
           privateBalance={privateBalance}
           publicBalance={publicBalance}
+          total={total}
           hidden={balanceHidden}
           networkChip="Esmeralda testnet"
           refreshing={refreshing}
+          // The literal scan diagnostic, restored beside Refresh. Private scan only — the public
+          // balance is a vault read with nothing to enumerate.
+          scanSummary={{
+            status,
+            scanned: scan.totalScanned,
+            owned: scan.utxos.length,
+            progressScanned: scan.progress.scanned,
+          }}
           move={moveView}
           entries={entries}
           lockedText={balancesUnknown ? 'Unavailable while balances are unknown' : undefined}

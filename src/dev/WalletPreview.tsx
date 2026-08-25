@@ -17,6 +17,7 @@ import { useState } from 'react'
 import WalletModalV2, { WALLET_TABS, type MoveView, type WalletModalV2Props, type WalletTab } from '../components/wallet/v2/WalletModalV2'
 import { ActivityRowShell, type ActivityRowView, type FaucetPhase, type OnsStatus, type SendView } from '../components/wallet/v2/panels'
 import type { BalanceView } from '../components/wallet/v2/balances'
+import { computeTotal } from '../components/wallet/v2/total'
 import type { Dir, EntryProps } from '../components/wallet/v2/move'
 import { C, MONO, border, tealBorder, tealFill } from '../components/wallet/v2/tokens'
 import { fmt6, toInput } from '../components/wallet/v2/format'
@@ -133,6 +134,7 @@ function Drive() {
   const [send, setSend] = useState<SendView>({ step: 'form', recipient: '', amount: '', note: '', available: PRIVATE, canReview: false })
   const [refreshing, setRefreshing] = useState(false)
   const [emptyActivity, setEmptyActivity] = useState(false)
+  const [incomplete, setIncomplete] = useState(false)
 
   const settled = balancesFor(scenario)
   // A refresh re-reads BOTH balances, so both drop to their loading treatment for the duration —
@@ -188,6 +190,14 @@ function Drive() {
 
   const props: WalletModalV2Props = {
     privateBalance: priv, publicBalance: pub, hidden, networkChip: 'Esmeralda testnet',
+    total: computeTotal({
+      privateBalance: priv, publicBalance: pub, privateIncomplete: incomplete,
+      settling: move.step === 'settling',
+    }),
+    scanSummary: {
+      status: refreshing ? 'scanning' : priv.status === 'unavailable' ? 'error' : priv.status === 'loading' ? 'scanning' : 'done',
+      scanned: 1247, owned: 6, progressScanned: 812,
+    },
     move, entries, lockedText: locked, lockedIsFlight: lockedFlight,
     inFlightText: scenario === 'inFlight' ? 'Making 1.000000 TARI public' : undefined,
     onToggleHidden: () => setHidden(h => !h),
@@ -287,6 +297,7 @@ function Drive() {
           <button onClick={() => setHidden(h => !h)} style={btn(hidden)}>Hide balances {hidden ? '· on' : '· off'}</button>
           <button onClick={() => setShowFacts(f => !f)} style={btn(showFacts)}>Permanence note {showFacts ? '· on' : '· off'}</button>
           <button onClick={() => setEmptyActivity(e => !e)} style={btn(emptyActivity)}>Activity empty {emptyActivity ? '· on' : '· off'}</button>
+          <button onClick={() => setIncomplete(i => !i)} style={btn(incomplete)}>Scan incomplete {incomplete ? '· on' : '· off'}</button>
         </Group>
         <Group title="Refresh" note="Or press Refresh in the modal header">
           <button onClick={runRefresh} style={btn(refreshing)}>{refreshing ? 'Refreshing…' : 'Run a refresh (1.6s)'}</button>
@@ -370,6 +381,8 @@ function still(over: Partial<WalletModalV2Props>): WalletModalV2Props {
     ons: { status: 'idle', name: '', onName: noop, onCheck: noop, onRegister: noop, onConfirm: noop, onReset: noop, onCopyTx: noop },
     receive: { address: ADDRESS, copied: false, onCopy: noop },
     activity: ACTIVITY.map(r => <ActivityRowShell key={r.id} row={r} hidden={false} />),
+    scanSummary: { status: 'done', scanned: 1247, owned: 6, progressScanned: 1247 },
+    total: computeTotal({ privateBalance: ready(PRIVATE), publicBalance: ready(PUBLIC), privateIncomplete: false, settling: false }),
     send: {
       view: { step: 'form', recipient: '', amount: '', note: '', available: PRIVATE, canReview: false },
       hidden: false, onRecipient: noop, onAmount: noop, onNote: noop, onMax: noop,
@@ -454,6 +467,23 @@ function Gallery() {
     { label: 'ACTIVITY · EVERY ROW STATE', props: still({ tab: 'activity' }) },
     { label: 'ACTIVITY · AMOUNTS HIDDEN', props: still({ tab: 'activity', hidden: true, activity: ACTIVITY.map(r => <ActivityRowShell key={r.id} row={r} hidden />) }) },
     { label: 'ACTIVITY · EMPTY', props: still({ tab: 'activity', activity: undefined, activityEmpty: true }) },
+
+    // ── The total ──
+    { label: 'TOTAL · BOTH CONFIDENT', props: still({}) },
+    { label: 'TOTAL · SETTLING (a move is in flight)', props: still({ total: computeTotal({ privateBalance: ready(PRIVATE), publicBalance: ready(PUBLIC), privateIncomplete: false, settling: true }) }) },
+    { label: 'TOTAL · SETTLING, MID-RESCAN', props: still({ privateBalance: LOADING, publicBalance: LOADING, total: computeTotal({ privateBalance: LOADING, publicBalance: LOADING, privateIncomplete: false, settling: true }) }) },
+    { label: 'TOTAL · “—” PUBLIC UNAVAILABLE', props: still({ publicBalance: UNAVAIL, total: computeTotal({ privateBalance: ready(PRIVATE), publicBalance: UNAVAIL, privateIncomplete: false, settling: false }) }) },
+    { label: 'TOTAL · “—” PRIVATE UNAVAILABLE', props: still({ privateBalance: UNAVAIL, total: computeTotal({ privateBalance: UNAVAIL, publicBalance: ready(PUBLIC), privateIncomplete: false, settling: false }) }) },
+    { label: 'TOTAL · “—” SCAN INCOMPLETE', props: still({ total: computeTotal({ privateBalance: ready(PRIVATE), publicBalance: ready(PUBLIC), privateIncomplete: true, settling: false }) }) },
+    { label: 'TOTAL · “—” BOTH UNAVAILABLE', props: still({ privateBalance: UNAVAIL, publicBalance: UNAVAIL, total: computeTotal({ privateBalance: UNAVAIL, publicBalance: UNAVAIL, privateIncomplete: false, settling: false }) }) },
+    { label: 'TOTAL · LOADING', props: still({ privateBalance: LOADING, publicBalance: LOADING, total: computeTotal({ privateBalance: LOADING, publicBalance: LOADING, privateIncomplete: false, settling: false }) }) },
+    { label: 'TOTAL · HIDDEN', props: still({ hidden: true }) },
+
+    // ── The scan diagnostic ──
+    { label: 'SCAN STRIP · SCANNED · OWNED', props: still({}) },
+    { label: 'SCAN STRIP · SCANNING', props: still({ scanSummary: { status: 'scanning', scanned: 0, owned: 0, progressScanned: 812 } }) },
+    { label: 'SCAN STRIP · SCAN FAILED', props: still({ scanSummary: { status: 'error', scanned: 0, owned: 0, progressScanned: 0 }, privateBalance: UNAVAIL, total: computeTotal({ privateBalance: UNAVAIL, publicBalance: ready(PUBLIC), privateIncomplete: false, settling: false }) }) },
+    { label: 'SCAN STRIP · NEVER SCANNED', props: still({ scanSummary: { status: 'idle', scanned: 0, owned: 0, progressScanned: 0 } }) },
 
     // ── Refresh ──
     { label: 'REFRESHING · BOTH BALANCES RE-READ', props: still({ refreshing: true, privateBalance: LOADING, publicBalance: LOADING, entries: [], lockedText: 'Checking your balances…' }) },

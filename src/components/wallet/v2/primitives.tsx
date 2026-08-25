@@ -352,3 +352,66 @@ export function TabBar<T extends string>({ tabs, active, onSelect }: {
     </div>
   )
 }
+
+/**
+ * The scan diagnostic strip: what the last private scan actually did, paired with Refresh.
+ *
+ * DELIBERATELY LITERAL. The M4 report argued these figures were plumbing and recommended replacing
+ * them with a freshness line ("Updated just now"). That recommendation is overridden here on
+ * purpose: on a testnet wallet the raw counts are the fastest way to answer "did my scan run, and
+ * did it see my outputs" — which is a question the user actually asks, and which "Updated just now"
+ * cannot answer. It is a diagnostic, and it is placed and styled as one.
+ *
+ * THE COUNTS DESCRIBE THE PRIVATE SCAN ONLY. Public balance is a vault read — two short GETs
+ * against a known substate, with nothing to enumerate — so there is no count to show for it and
+ * pretending otherwise would be worse than silence.
+ *
+ * Refresh lives here rather than in the header so the control and the evidence of what it did sit
+ * together, and so the literal figures have room to be literal.
+ */
+export interface ScanSummary {
+  status: 'idle' | 'scanning' | 'done' | 'error'
+  /** Total outputs the last completed scan examined. */
+  scanned: number
+  /** How many of them turned out to be ours. */
+  owned: number
+  /** Live count while a scan is running. */
+  progressScanned: number
+}
+
+export function ScanStrip({ scan, refreshing, onRefresh }: {
+  scan: ScanSummary; refreshing?: boolean; onRefresh: () => void
+}) {
+  const text = scan.status === 'scanning'
+    ? `${scan.progressScanned.toLocaleString('en-US')} UTXOs scanned…`
+    : scan.status === 'error'
+      ? 'Scan failed'
+      : scan.status === 'done' || scan.scanned > 0
+        // The literal figures, as they were before the redesign.
+        ? `${scan.scanned.toLocaleString('en-US')} UTXOs scanned · ${scan.owned.toLocaleString('en-US')} owned`
+        : ''
+
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
+      padding: '8px 22px', borderBottom: '1px solid rgba(120,150,210,0.08)',
+      background: C.trough, flexShrink: 0,
+    }}>
+      <span style={{
+        fontFamily: MONO, fontSize: 11, letterSpacing: '0.02em',
+        color: scan.status === 'error' ? C.dangerText : C.faintDim,
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+      }}>{text}</span>
+      {refreshing ? (
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 700, color: C.tealDim, flexShrink: 0 }}>
+          <Spinner size={11} />Refreshing…
+        </span>
+      ) : (
+        <span role="button" tabIndex={0} onClick={onRefresh} onKeyDown={e => e.key === 'Enter' && onRefresh()}
+          style={{ fontSize: 12, fontWeight: 700, color: C.teal, cursor: 'pointer', userSelect: 'none', flexShrink: 0 }}>
+          Refresh
+        </span>
+      )}
+    </div>
+  )
+}

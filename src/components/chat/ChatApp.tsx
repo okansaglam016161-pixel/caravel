@@ -4,6 +4,8 @@ import * as nip19 from 'nostr-tools/nip19'
 import Logo from '../primitives/Logo'
 import { useWallet } from '../../context/WalletContext'
 import WalletModal from '../wallet/WalletModal'
+import { computeTotal, unreadableReasonText } from '../wallet/v2/total'
+import { totalPillValue } from '../wallet/v2/TotalHero'
 import ProfilePanel from '../wallet/ProfilePanel'
 import { compareMessages, sortKey, type CaravelMessage, type Group } from '../../messaging/types'
 import GroupThread from './GroupThread'
@@ -224,7 +226,7 @@ function PaymentMessageCard({ message, lid, flashed }: { message: CaravelMessage
 // ── Component ────────────────────────────────────────────────────────────────────
 
 export default function ChatApp() {
-  const { wallet, address, scan, messages, nostrPubkeyHex, messagingStatus, contacts, acceptContact, contactAddresses, setManualTariAddress, createMessagingProvider, recordSentMessage, deleteConversation, editMessage, reactMessage, getRelayStates, reconnectAll, balanceHidden, setBalanceHidden, groups, createGroup, acceptGroup, declineGroup, leaveGroup, reinviteGroup } = useWallet()
+  const { wallet, address, scan, revealed, messages, nostrPubkeyHex, messagingStatus, contacts, acceptContact, contactAddresses, setManualTariAddress, createMessagingProvider, recordSentMessage, deleteConversation, editMessage, reactMessage, getRelayStates, reconnectAll, balanceHidden, setBalanceHidden, groups, createGroup, acceptGroup, declineGroup, leaveGroup, reinviteGroup } = useWallet()
   const [walletOpen, setWalletOpen] = useState(false)
   const [profileOpen, setProfileOpen] = useState(false)
   // The user's own generated avatar (deterministic gradient from their pubkey hash) — used for the
@@ -1215,29 +1217,37 @@ export default function ChatApp() {
 
             {/* Balance widget — click to open wallet panel */}
             {(() => {
-              // Derive display value from shared scan state — no second scan
+              // THE TOTAL, not just the private balance. Same rules as the modal's hero, from the
+              // same shared state — no second scan, no second set of degradation rules. A pill
+              // showing only the private half would disagree with the wallet it opens.
               const { status, balance } = scan
               const isScanning = status === 'scanning'
-              const isDone = status === 'done'
-              const tTARI = balance !== null
-                ? (Number(balance) / 1_000_000).toFixed(6)
-                : null
-              const balanceValue = balanceHidden
-                ? '••••'
-                : isScanning && tTARI === null
-                  ? '···'          // first scan in progress, no prior result
-                  : isDone || (isScanning && tTARI !== null)
-                    ? (tTARI ?? '0.000000')
-                    : status === 'error'
-                      ? '?'
-                      : '—'       // idle (locked)
-              const balanceColor = balanceHidden || isDone || (isScanning && tTARI !== null)
+              const total = computeTotal({
+                privateBalance:
+                  status === 'error' ? { status: 'unavailable' }
+                  : balance === null ? { status: 'loading' }
+                  : { status: 'ready', microtari: balance },
+                privateIncomplete: scan.incomplete,
+                publicBalance:
+                  revealed.status === 'done' ? { status: 'ready', microtari: revealed.amount ?? 0n }
+                  : revealed.status === 'unavailable' ? { status: 'unavailable' }
+                  : { status: 'loading' },
+                // The pill has no move flow of its own; a settle shows here as an ordinary re-read.
+                settling: false,
+              })
+              const balanceValue = totalPillValue(total, balanceHidden)
+              // Bright only when the figure is a fact. A dash or an ellipsis stays muted so the
+              // pill never looks like it is reporting a balance it cannot vouch for.
+              const balanceColor = balanceHidden || total.status === 'ready'
                 ? 'var(--text-bright)'
                 : 'var(--text-muted-dim)'
+              const pillTitle = total.status === 'unreadable'
+                ? unreadableReasonText(total.reason)
+                : 'Open wallet'
               return (
                 <div
                   onClick={() => setWalletOpen(true)}
-                  title="Open wallet"
+                  title={pillTitle}
                   style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '13px 15px', borderRadius: 12, background: 'linear-gradient(140deg, rgba(var(--accRGB,45,224,198),0.1), rgba(18,165,148,0.04))', border: '1px solid rgba(var(--accRGB,45,224,198),0.22)', cursor: 'pointer', transition: 'border-color 0.15s' }}
                   onMouseEnter={e => (e.currentTarget.style.borderColor = 'rgba(var(--teal-500-rgb),0.45)')}
                   onMouseLeave={e => (e.currentTarget.style.borderColor = 'rgba(var(--accRGB,45,224,198),0.22)')}

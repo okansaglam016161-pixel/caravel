@@ -20,14 +20,16 @@ import type { ReactNode } from 'react'
 import { C, tealBorder, tealFill } from './tokens'
 import { Alert, Check, Eye, EyeOff, Shield, Spinner } from './icons'
 import {
-  Body, Button, DetailCard, DetailRow, FeeRow, ModalShell, RootHeader, SettleBar,
-  StatusBlock, SubHeader, TabBar, TxRow, iconBtn,
+  Body, Button, DetailCard, DetailRow, FeeRow, ModalShell, RootHeader, ScanStrip, SettleBar,
+  StatusBlock, SubHeader, TabBar, TxRow, iconBtn, type ScanSummary,
 } from './primitives'
 import {
   ActivityPanel, FaucetPanel, OnsPanel, ReceivePanel, SendPanel,
   type FaucetPanelProps, type OnsPanelProps, type SendPanelProps,
 } from './panels'
 import { PrivateHero, PublicRow, type BalanceView } from './balances'
+import { TotalHero } from './TotalHero'
+import type { TotalView } from './total'
 import {
   AmountCard, DIR, DirectionChips, InFlightBanner, MoveList, PermanenceNote,
   type Dir, type EntryProps,
@@ -71,6 +73,12 @@ export type MoveView =
 export interface WalletModalV2Props {
   privateBalance: BalanceView
   publicBalance: BalanceView
+  /**
+   * The combined balance. When present it becomes the HERO and the two balances above render as
+   * its breakdown instead of as separate cards — see TotalHero for why the breakdown stays visible
+   * even when the total itself cannot be shown.
+   */
+  total?: TotalView
   hidden: boolean
   networkChip?: string
   move: MoveView
@@ -121,6 +129,8 @@ export interface WalletModalV2Props {
    * broken, and this is a wallet whose whole async story is that reads lag.
    */
   refreshing?: boolean
+  /** Last private-scan diagnostics, shown beside Refresh. Omit to hide the strip entirely. */
+  scanSummary?: ScanSummary
 }
 
 const TARI = (n: bigint) => `${fmt6(n)} TARI`
@@ -134,14 +144,6 @@ export default function WalletModalV2(p: WalletModalV2Props) {
     return (
       <ModalShell>
         <RootHeader chip={p.networkChip} right={<>
-          {p.refreshing ? (
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 13, fontWeight: 700, color: C.tealDim, marginRight: 4 }}>
-              <Spinner size={12} />Refreshing…
-            </span>
-          ) : (
-            <span role="button" tabIndex={0} onClick={p.onRefresh} onKeyDown={e => e.key === 'Enter' && p.onRefresh()}
-              style={{ fontSize: 13, fontWeight: 700, color: C.teal, cursor: 'pointer', marginRight: 4, userSelect: 'none' }}>Refresh</span>
-          )}
           <span role="button" tabIndex={0} onClick={p.onToggleHidden} onKeyDown={e => e.key === 'Enter' && p.onToggleHidden()}
             aria-label={p.hidden ? 'Show balances' : 'Hide balances'}
             style={p.hidden
@@ -151,13 +153,18 @@ export default function WalletModalV2(p: WalletModalV2Props) {
           </span>
           <span role="button" tabIndex={0} onClick={p.onClose} onKeyDown={e => e.key === 'Enter' && p.onClose()} style={iconBtn} aria-label="Close">✕</span>
         </>} />
+        {p.scanSummary && <ScanStrip scan={p.scanSummary} refreshing={p.refreshing} onRefresh={p.onRefresh} />}
         <Body gap={14}>
           {p.onTab && <TabBar tabs={WALLET_TABS} active={tab} onSelect={p.onTab} />}
 
           {tab === 'overview' && <>
             {p.inFlightText && <InFlightBanner text={p.inFlightText} />}
-            <PrivateHero balance={p.privateBalance} hidden={p.hidden} onRetry={p.onRetryBalance} />
-            <PublicRow balance={p.publicBalance} hidden={p.hidden} onRetry={p.onRetryBalance} />
+            {p.total
+              ? <TotalHero total={p.total} privateBalance={p.privateBalance} publicBalance={p.publicBalance} hidden={p.hidden} />
+              : <>
+                  <PrivateHero balance={p.privateBalance} hidden={p.hidden} onRetry={p.onRetryBalance} />
+                  <PublicRow balance={p.publicBalance} hidden={p.hidden} onRetry={p.onRetryBalance} />
+                </>}
             {/* The design's own loading footer, shown whenever a read is actually in flight — so a
                 Refresh press is acknowledged even when the previous values are still on screen. */}
             {(p.refreshing || p.privateBalance.status === 'loading' || p.publicBalance.status === 'loading') && (

@@ -397,3 +397,84 @@ describe('the constants hang together', () => {
     expect(split.amount).toBe(MIN_REVEAL_MICROTARI)
   })
 })
+
+// ── What the FORM depends on (M3 C2) ─────────────────────────────────────────
+//
+// The reveal form's MAX, its ceiling check and its "leaves this much private" note are all one
+// number — maxRevealable(privateBalance) — read three ways. These pin the relationships between
+// them, so a change to the reserve cannot make the button offer an amount the form then rejects,
+// or the note quote a figure that is not what is actually left behind.
+
+describe('the reveal form’s ceiling, MAX and crumb note agree', () => {
+  const BALANCES = [980_000_000n, 999_997_686n, 1n * TARI, 51_001n, 2n ** 70n]
+
+  it('MAX always passes the form’s own validation', () => {
+    // The form disables Review when `entered > spendCeiling || entered < minAmount`, and MAX sets
+    // `entered = spendCeiling`. If those ever disagreed, pressing MAX would grey out the button —
+    // the M2 failure in a new place. Checked through the same predicate the form uses.
+    const reviewBlocked = (entered: bigint, ceiling: bigint) => entered > ceiling || entered < MIN_REVEAL_MICROTARI
+    for (const b of BALANCES) {
+      const ceiling = maxRevealable(b)
+      if (ceiling < MIN_REVEAL_MICROTARI) continue      // the direction is not offered at all
+      expect(reviewBlocked(ceiling, ceiling)).toBe(false)
+    }
+  })
+
+  it('the crumb the note quotes IS the reserve, exactly', () => {
+    // The note renders `privateAmount - spendCeiling`. It must equal what CP1 holds back, or the
+    // user is told a number that does not match the balance they are left with.
+    for (const b of BALANCES) {
+      if (maxRevealable(b) === 0n) continue
+      expect(b - maxRevealable(b)).toBe(REVEAL_FEE_RESERVE + MIN_STEALTH_CHANGE)
+    }
+  })
+
+  it('a MAX reveal is buildable end to end at a realistic fee', () => {
+    for (const b of BALANCES) {
+      const amount = maxRevealable(b)
+      if (amount < MIN_REVEAL_MICROTARI) continue
+      const sel = selectStealthInputs([utxo(b)], amount + REVEAL_FEE_RESERVE)
+      const split = planReveal(amount, 16_138n, sel.total)
+      assertRevealSplit(split)
+      expect(split.amount).toBe(amount)                       // published: exactly what MAX offered
+      expect(split.changeAmount).toBeGreaterThan(0n)          // never the zero-output path
+    }
+  })
+
+  it('the entry point only offers reveal when MAX clears the floor', () => {
+    // `canReveal = maxRevealable(private) >= MIN_REVEAL_MICROTARI`. Below that the card must not
+    // offer the direction at all, rather than offering it and refusing at the first step.
+    const justBelow = MIN_REVEAL_MICROTARI + REVEAL_FEE_RESERVE + MIN_STEALTH_CHANGE - 1n
+    const justAt = MIN_REVEAL_MICROTARI + REVEAL_FEE_RESERVE + MIN_STEALTH_CHANGE
+    expect(maxRevealable(justBelow) >= MIN_REVEAL_MICROTARI).toBe(false)
+    expect(maxRevealable(justAt) >= MIN_REVEAL_MICROTARI).toBe(true)
+  })
+
+  it('the input formatter round-trips MAX exactly at every realistic balance', () => {
+    // MEASURED, not assumed: the float path round-trips exactly well below ~1e16 µtTARI (about
+    // 10 million TARI), and starts drifting value-by-value as it approaches Number.MAX_SAFE_INTEGER
+    // rather than at a clean threshold. Every balance a wallet can plausibly hold sits orders of
+    // magnitude under that; the case that does not is pinned separately below.
+    for (const b of [51_001n, 1n * TARI, 980_000_000n, 999_997_686n, 123_456_789_012n, 100_000_000_000_000n]) {
+      const ceiling = maxRevealable(b)
+      if (ceiling === 0n) continue
+      expect(parseTari(microtariToInput(ceiling))).toBe(ceiling)
+    }
+  })
+
+  it('WHY MAX CARRIES THE BIGINT: the float re-parse drifts at extreme scale', () => {
+    // microtariToInput itself is exact bigint arithmetic and never drifts. parseFloat does — past
+    // roughly 2^53 hundredths of a TARI the decimal string cannot be recovered as a double.
+    //
+    // The UI never takes that round-trip for MAX: `moveExact` holds the exact bigint and
+    // handlePrepareMove reads `moveExact ?? tariToMicrotari(parseFloat(moveAmount))`, so the string
+    // is only ever what the user SEES. This test exists to keep that rail honest — if someone
+    // "simplifies" the form to re-parse its own field, the number below is what would be published.
+    // u64 max — above any plausible balance, but the whole TARI supply is the same order of
+    // magnitude (~1.8e19 µtTARI), so this is the boundary the rail actually has to survive.
+    const ceiling = maxRevealable(18_446_744_073_709_551_615n)
+    const roundTripped = parseTari(microtariToInput(ceiling))
+    expect(roundTripped).not.toBe(ceiling)
+    expect(roundTripped).toBeLessThan(ceiling)   // silently reveals LESS than MAX offered
+  })
+})

@@ -7,6 +7,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useWallet } from '../../context/WalletContext'
 import { MIN_CONCEAL_MICROTARI, prepareConceal, type PreparedConceal } from '../../crypto/conceal'
+import { MIN_REVEAL_MICROTARI, maxRevealable, prepareReveal, type PreparedReveal } from '../../crypto/reveal'
 import { useBalanceSettle } from './useBalanceSettle'
 import { Logo } from '../primitives'
 import OnsRegisterPanel from './OnsRegisterPanel'
@@ -24,6 +25,25 @@ type SendStep = 'form' | 'review' | 'sending' | 'success' | 'error'
 // different information. 'pricing' is the step SendStep has no analogue for — the dry run runs
 // between the form and the review so the fee shown is the fee paid.
 type MoveStep = 'idle' | 'form' | 'pricing' | 'review' | 'moving' | 'settling' | 'success' | 'error'
+
+/**
+ * Which way the funds are going. ONE state machine serves both, because the steps are genuinely the
+ * same shape — price, review, submit, settle — and two copies of that would drift apart exactly
+ * where it matters least visibly and costs most (the settle loop, the error surface).
+ *
+ * What the direction changes is not the shape but the STAKES, and the UI says so:
+ *   'conceal'  public → private. Safe and undoable. Plain confirm, no caution.
+ *   'reveal'   private → public. IRREVERSIBLE — the amount is published on-chain and stays
+ *              readable forever. Same flow, plus an amber caution and a different balance to watch
+ *              settle (public rises, rather than confidential).
+ */
+type MoveDir = 'conceal' | 'reveal'
+
+/** A priced envelope, tagged with the direction that built it — so the review screen cannot read a
+ *  conceal's fields off a reveal, or vice versa. */
+type PreparedMove =
+  | { dir: 'conceal'; p: PreparedConceal }
+  | { dir: 'reveal'; p: PreparedReveal }
 
 /**
  * How long to wait for a committed conceal to appear in the confidential balance.
@@ -155,10 +175,11 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
   const [sendOutcome, setSendOutcome] = useState<SendOutcome | null>(null)
 
   const [moveStep, setMoveStep] = useState<MoveStep>('idle')
+  const [moveDir, setMoveDir] = useState<MoveDir>('conceal')
   const [moveAmount, setMoveAmount] = useState('')
   const [moveError, setMoveError] = useState('')
   const [moveProgress, setMoveProgress] = useState('')
-  const [movePrepared, setMovePrepared] = useState<PreparedConceal | null>(null)
+  const [movePrepared, setMovePrepared] = useState<PreparedMove | null>(null)
   const [moveTxId, setMoveTxId] = useState('')
   const [moveLanded, setMoveLanded] = useState<bigint | null>(null)
   /**
@@ -171,7 +192,8 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
    */
   const [moveExact, setMoveExact] = useState<bigint | null>(null)
   const [moveLagging, setMoveLagging] = useState(false)
-  /** Confidential balance captured BEFORE submitting, so the settle loop can see it rise. */
+  /** The balance being watched, captured BEFORE submitting so the settle loop can see it rise.
+   *  Which balance that is depends on the direction — see the settle loop below. */
   const movePreBalance = useRef<bigint>(0n)
   const moveDeadline = useRef<number>(0)
 
@@ -183,13 +205,27 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
 
   const { status, balance } = scan
 
-  // A committed conceal is not a visible conceal: the scan reads the indexer's /utxos listing, which
-  // trails consensus by 60–90s. Firing one rescan() on commit — which is what this flow did at first
-  // — scans a listing without the new output, reports the old balance, and stops, so a successful
+  // A committed move is not a visible move: the balances are read from an indexer that trails
+  // consensus by 60–90s. Firing one rescan() on commit — which is what this flow did at first —
+  // reads state without the new output, reports the old balance, and stops, so a successful
   // conversion looks like nothing happened. This waits for it properly.
+  //
+  // WHICH BALANCE RISES DEPENDS ON THE DIRECTION, and watching the wrong one would report a lag
+  // that is not there: a conceal makes the CONFIDENTIAL balance rise, a reveal makes the PUBLIC one
+  // rise. Both directions also make the other side FALL, but a fall is the weaker signal — the
+  // private side falls by the whole input, not by the amount, and change lands separately — so the
+  // rise is what is polled for, in both cases.
+  //
+  // `null` while the read is loading or unavailable is deliberate and is what useBalanceSettle
+  // wants: "not known yet" never counts as movement, so a failed read cannot be mistaken for a
+  // balance that stayed put.
+  const settleBalance = moveDir === 'reveal'
+    ? (revealed.status === 'done' ? revealed.amount : null)
+    : balance
+
   useBalanceSettle({
     active: moveStep === 'settling',
-    balance,
+    balance: settleBalance,
     before: movePreBalance.current,
     deadlineAt: moveDeadline.current,
     rescan,
@@ -242,6 +278,8 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
 
   function resetMove() {
     setMoveStep('idle')
+    // `moveDir` is deliberately NOT reset — it is set fresh by whichever entry point is pressed, and
+    // clearing it here would only make the idle card's two buttons depend on stale state.
     setMoveAmount('')
     setMoveError('')
     setMoveProgress('')
@@ -265,12 +303,14 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
     setMoveProgress('')
     setMoveError('')
     try {
-      const prepared = await prepareConceal(wallet, address, {
-        // The exact figure when MAX was used; the typed value otherwise. Never a re-parse of a
-        // rounded display string.
-        amountMicrotari: moveExact ?? tariToMicrotari(parseFloat(moveAmount)),
-        onProgress: setMoveProgress,
-      })
+      // The exact figure when MAX was used; the typed value otherwise. NEVER a re-parse of a
+      // rounded display string — and on the reveal side that rail is load-bearing rather than
+      // merely tidy: this number is deposited into a public vault and stays readable forever, so a
+      // float round-trip would publish a figure the user did not choose.
+      const amountMicrotari = moveExact ?? tariToMicrotari(parseFloat(moveAmount))
+      const prepared: PreparedMove = moveDir === 'reveal'
+        ? { dir: 'reveal', p: await prepareReveal(wallet, address, { amountMicrotari, onProgress: setMoveProgress }) }
+        : { dir: 'conceal', p: await prepareConceal(wallet, address, { amountMicrotari, onProgress: setMoveProgress }) }
       setMovePrepared(prepared)
       setMoveStep('review')
     } catch (e) {
@@ -287,22 +327,30 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
     setMoveProgress('')
     setMoveError('')
     try {
-      const result = await movePrepared.submit(setMoveProgress)
+      const result = await movePrepared.p.submit(setMoveProgress)
       setMoveTxId(result.txId)
       if (result.outcome === 'Commit') {
-        setMoveLanded(result.concealedAmount)
+        setMoveLanded('revealedAmount' in result ? result.revealedAmount : result.concealedAmount)
         // Committed, but not yet VISIBLE — hand off to the settle loop rather than declaring
-        // success against a balance the indexer has not caught up to yet.
-        movePreBalance.current = balance ?? 0n
+        // success against a balance the indexer has not caught up to yet. The "before" reading has
+        // to be the balance the loop will WATCH, which is direction-dependent.
+        movePreBalance.current = (movePrepared.dir === 'reveal'
+          ? (revealed.status === 'done' ? revealed.amount : null)
+          : balance) ?? 0n
         moveDeadline.current = Date.now() + MOVE_SETTLE_MS
         setMoveLagging(false)
         setMoveStep('settling')
-        // The public side updates immediately — only the stealth listing lags — so kick both now.
+        // Kick both reads now — each side lags differently and neither is worth waiting a poll for.
         rescan()
       } else {
+        // VERBATIM WHERE WE HAVE IT. A reveal is irreversible and this builder's instruction chain
+        // (TakeFromBucket → deposit → PayFeeFromBucket) had never run on-chain before M3, so a
+        // rejection is the most informative thing the network will ever tell us about it. There is
+        // no reason string on this response shape, so the outcome is reported precisely instead of
+        // being softened into "something went wrong".
         setMoveError(
           result.outcome === 'Reject'
-            ? 'The network rejected the transaction. Nothing was moved.'
+            ? `The network rejected the transaction. Nothing was ${movePrepared.dir === 'reveal' ? 'made public' : 'moved'}, and no fee was taken.`
             : 'The transaction did not reach a decision in time. It may still land — refresh your balances in a moment before retrying.',
         )
         setMoveStep('error')
@@ -524,19 +572,40 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
     )
   }
 
-  // ── MOVE FUNDS: public → private (M2) ──
+  // ── MOVE FUNDS: both directions (M2 conceal, M3 reveal) ──
   //
-  // The SAFE direction, and the UI says so by saying nothing: no warning, no confirmation friction
-  // beyond a review of the numbers. Value ends up more private than it started, which is what this
-  // wallet is for. (The reverse direction, when it exists, is where the copy has to work harder.)
+  // ONE panel, one state machine, two directions — because the steps really are the same shape and
+  // the differences are all in what is at stake:
   //
-  // Priced BEFORE review, not after: prepareConceal runs the dry run and hands back a built,
+  //   PUBLIC → PRIVATE (conceal, M2)   Safe, and undoable by revealing again. Plain confirm.
+  //   PRIVATE → PUBLIC (reveal, M3)    IRREVERSIBLE. The amount lands as a readable integer in an
+  //                                    account vault and stays in the chain's history forever, and
+  //                                    it links this wallet's account to that figure. Same flow,
+  //                                    plus an amber caution and a different balance to watch.
+  //
+  // Both are priced BEFORE review, not after: prepare* runs the dry run and hands back a built,
   // signed envelope, so the fee on the review screen is the fee the transaction pays rather than an
-  // estimate that might drift.
+  // estimate that might drift. On the reveal side that also means the whole instruction chain has
+  // already been simulated by the network before the user is asked to confirm anything.
   function moveFundsPanel() {
     const revealedAmount = revealed.status === 'done' ? (revealed.amount ?? 0n) : 0n
-    // Nothing to move, or we do not reliably know what there is — either way, no affordance.
-    if (revealed.status !== 'done' || revealedAmount <= 0n) return null
+    const privateAmount = balance ?? 0n
+
+    // What each direction can offer. Conceal moves the whole revealed balance (the fee is carved out
+    // of it); reveal has to leave the fee AND a small stealth reserve behind, which is what
+    // maxRevealable works out — see its note, and the MAX copy below.
+    const canConceal = revealed.status === 'done' && revealedAmount > 0n
+    const maxReveal = balance !== null ? maxRevealable(privateAmount) : 0n
+    const canReveal = balance !== null && maxReveal >= MIN_REVEAL_MICROTARI
+
+    // Nothing to move in either direction, or we do not reliably know what there is — no affordance.
+    if (!canConceal && !canReveal && moveStep === 'idle') return null
+
+    const isReveal = moveDir === 'reveal'
+    // The balance this direction spends from, and the floor it must clear.
+    const sourceAmount = isReveal ? privateAmount : revealedAmount
+    const spendCeiling = isReveal ? maxReveal : revealedAmount
+    const minAmount = isReveal ? MIN_REVEAL_MICROTARI : MIN_CONCEAL_MICROTARI
 
     const card = { borderRadius: 12, padding: '15px 15px 16px', background: 'var(--surface-raised)', border: '1px solid rgba(var(--border-rgb),0.12)' } as const
     const chip = (text: string, tone: 'public' | 'private') => (
@@ -553,9 +622,13 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
     const arrow = (
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h13M13 6l6 6-6 6" /></svg>
     )
+    // THE DIRECTION IS UNMISSABLE, and it is rendered from `moveDir` rather than written out twice,
+    // so the chips can never disagree with the transaction being built.
     const direction = (
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, marginBottom: 14 }}>
-        {chip('PUBLIC', 'public')}{arrow}{chip('PRIVATE', 'private')}
+        {isReveal
+          ? <>{chip('PRIVATE', 'private')}{arrow}{chip('PUBLIC', 'public')}</>
+          : <>{chip('PUBLIC', 'public')}{arrow}{chip('PRIVATE', 'private')}</>}
       </div>
     )
     const line = (l: string, r: string, strong = false) => (
@@ -565,20 +638,52 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
       </div>
     )
 
-    // IDLE — the entry point, alongside the balance it acts on.
-    if (moveStep === 'idle') {
-      return (
-        <div style={card}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <div>
-              <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>Make private</div>
-              <div style={{ fontSize: 12, color: 'var(--text-muted-dim)', marginTop: 3 }}>Move your public balance into confidential outputs.</div>
-            </div>
-            <span onClick={() => { setMoveStep('form'); setMoveAmount(''); setMoveExact(null); setMoveError('') }}
-              style={{ padding: '9px 14px', borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: 'pointer', color: 'var(--teal-300)', background: 'rgba(var(--teal-500-rgb),0.08)', border: '1px solid rgba(var(--teal-500-rgb),0.3)', flexShrink: 0 }}>
-              Move
-            </span>
+    // THE AMBER CAUTION — reveal only.
+    //
+    // Deliberately NOT a friction: no checkbox, no typed confirmation, no second dialog. Those are
+    // for actions a user might take by accident, and nobody arrives here by accident — they chose a
+    // direction, typed an amount and pressed Review. What they may not have is the FACT, so the
+    // caution states it plainly and gets out of the way.
+    //
+    // The wording is calm on purpose. "Warning" and red would read as "this might go wrong", which
+    // is false — it will work exactly as described, and that is the point. Amber, and the three
+    // things that are actually true: it becomes readable, it stays readable, and concealing it
+    // again later does not erase the record.
+    const caution = (
+      <div style={{ display: 'flex', gap: 10, padding: '11px 12px', borderRadius: 10, marginBottom: 13, background: 'rgba(var(--warn-rgb),0.06)', border: '1px solid rgba(var(--warn-rgb),0.28)' }}>
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--warn)" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 1 }}>
+          <circle cx="12" cy="12" r="9" /><path d="M12 8v5" /><path d="M12 16.5h.01" />
+        </svg>
+        <div>
+          <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--warn-300)', marginBottom: 3 }}>This becomes publicly visible</div>
+          <div style={{ fontSize: 12, color: 'var(--text-body-dim)', lineHeight: 1.5 }}>
+            The amount will be readable on-chain by anyone, tied to this wallet’s account, and it stays
+            that way permanently. Making it private again later adds a new record — it doesn’t remove this one.
           </div>
+        </div>
+      </div>
+    )
+
+    // IDLE — the entry point, alongside the balances it acts on. Each direction appears only when it
+    // has something to move, so the card never offers a move that would fail at the first step.
+    if (moveStep === 'idle') {
+      const entry = (label: string, sub: string, dir: MoveDir) => (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>{label}</div>
+            <div style={{ fontSize: 12, color: 'var(--text-muted-dim)', marginTop: 3 }}>{sub}</div>
+          </div>
+          <span onClick={() => { setMoveDir(dir); setMoveStep('form'); setMoveAmount(''); setMoveExact(null); setMoveError('') }}
+            style={{ padding: '9px 14px', borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: 'pointer', color: 'var(--teal-300)', background: 'rgba(var(--teal-500-rgb),0.08)', border: '1px solid rgba(var(--teal-500-rgb),0.3)', flexShrink: 0 }}>
+            Move
+          </span>
+        </div>
+      )
+      return (
+        <div style={{ ...card, display: 'flex', flexDirection: 'column', gap: 0 }}>
+          {canConceal && entry('Make private', 'Move your public balance into confidential outputs.', 'conceal')}
+          {canConceal && canReveal && <div style={{ height: 1, background: 'rgba(var(--border-rgb),0.1)', margin: '13px 0' }} />}
+          {canReveal && entry('Make public', 'Move confidential funds into your public balance.', 'reveal')}
         </div>
       )
     }
@@ -586,27 +691,51 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
     // FORM — amount entry with MAX.
     if (moveStep === 'form') {
       const entered = moveExact ?? (moveAmount === '' ? 0n : tariToMicrotari(parseFloat(moveAmount) || 0))
-      const belowMin = moveAmount !== '' && entered < MIN_CONCEAL_MICROTARI
-      const overBalance = moveAmount !== '' && entered > revealedAmount
+      const belowMin = moveAmount !== '' && entered < minAmount
+      const overBalance = moveAmount !== '' && entered > spendCeiling
       const bad = belowMin || overBalance || moveAmount === ''
+      const maxWasUsed = moveExact !== null
       return (
         <div style={card}>
           {direction}
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
             <input value={moveAmount} onChange={e => { setMoveAmount(e.target.value); setMoveExact(null); setMoveError('') }} placeholder="0.00" inputMode="decimal"
               style={{ flex: 1, padding: '11px 13px', borderRadius: 10, background: 'var(--surface-inset)', border: `1px solid ${bad && moveAmount !== '' ? 'rgba(var(--danger-rgb),0.4)' : 'rgba(var(--border-rgb),0.18)'}`, color: 'var(--text-bright)', fontFamily: MONO, fontSize: 15, outline: 'none' }} />
-            {/* MAX is the WHOLE revealed balance, to the microtari: the amount is what leaves the
-                vault and the fee is carved out of it, so it can never ask for more than exists —
-                PROVIDED it is not rounded on the way through. Both the exact value and its
-                full-precision rendering are set. */}
-            <span onClick={() => { setMoveExact(revealedAmount); setMoveAmount(microtariToInput(revealedAmount)); setMoveError('') }}
+            {/* MAX CARRIES THE EXACT BIGINT, in both directions, and the text field is only what the
+                user sees. Deriving the amount back out of that string would be a float round-trip
+                through a formatter that rounds — the M2 bug, where a balance rendered at 2dp asked
+                the vault for more than it held. It matters more here: on the reveal side the amount
+                is PUBLISHED, so a rounded figure would not merely fail, it would succeed at the
+                wrong number, permanently.
+
+                The two ceilings differ because the fee comes from different places. Conceal moves
+                the whole revealed balance and carves the fee out of it, so MAX is the balance.
+                Reveal pays the fee from the stealth inputs on top of the amount, so MAX is
+                maxRevealable() — the balance minus the fee reserve and a small stealth crumb. */}
+            <span onClick={() => { setMoveExact(spendCeiling); setMoveAmount(microtariToInput(spendCeiling)); setMoveError('') }}
               style={{ padding: '11px 13px', borderRadius: 10, fontSize: 12, fontWeight: 700, cursor: 'pointer', color: 'var(--teal-300)', background: 'rgba(var(--teal-500-rgb),0.08)', border: '1px solid rgba(var(--teal-500-rgb),0.28)' }}>MAX</span>
           </div>
           <div style={{ fontSize: 12, color: 'var(--text-muted-dim)', marginBottom: 12 }}>
-            Available public: <span style={{ fontFamily: MONO, color: 'var(--text-body-dim)' }}>{fmtMicrotariExact(revealedAmount)} TARI</span>
+            Available {isReveal ? 'private' : 'public'}: <span style={{ fontFamily: MONO, color: 'var(--text-body-dim)' }}>{fmtMicrotariExact(sourceAmount)} TARI</span>
           </div>
-          {belowMin && <div style={{ fontSize: 12, color: 'var(--danger-300)', marginBottom: 10 }}>Minimum {fmtMicrotariExact(MIN_CONCEAL_MICROTARI)} TARI.</div>}
-          {overBalance && <div style={{ fontSize: 12, color: 'var(--danger-300)', marginBottom: 10 }}>More than your public balance.</div>}
+          {/* SAY IT BEFORE THEY WONDER. Reveal-MAX cannot empty the private balance: the fee is paid
+              from the stealth inputs, and CP1 holds back a crumb on top so every build carries a
+              real change output. Left unsaid, a private balance that stops just short of zero looks
+              like a bug — or worse, like funds went missing on an irreversible action. */}
+          {isReveal && maxWasUsed && (
+            <div style={{ fontSize: 12, color: 'var(--text-muted-dim)', marginBottom: 12, lineHeight: 1.5, padding: '9px 11px', borderRadius: 9, background: 'rgba(var(--border-rgb),0.06)' }}>
+              Revealing this much leaves <span style={{ fontFamily: MONO, color: 'var(--text-body-dim)' }}>{fmtMicrotariExact(privateAmount - spendCeiling)} TARI</span> private —
+              the network fee plus a small reserve. It stays yours and stays spendable.
+            </div>
+          )}
+          {belowMin && <div style={{ fontSize: 12, color: 'var(--danger-300)', marginBottom: 10 }}>Minimum {fmtMicrotariExact(minAmount)} TARI.</div>}
+          {overBalance && (
+            <div style={{ fontSize: 12, color: 'var(--danger-300)', marginBottom: 10 }}>
+              {isReveal
+                ? `More than you can reveal — the fee comes out of your private balance too. Most you can reveal now: ${fmtMicrotariExact(spendCeiling)} TARI.`
+                : 'More than your public balance.'}
+            </div>
+          )}
           {moveError && <div style={{ fontSize: 12, color: 'var(--danger-300)', marginBottom: 10, lineHeight: 1.45 }}>{moveError}</div>}
           <div style={{ display: 'flex', gap: 8 }}>
             <span onClick={() => setMoveStep('idle')} style={{ flex: 1, textAlign: 'center', padding: 11, borderRadius: 10, fontSize: 13, fontWeight: 600, cursor: 'pointer', color: 'var(--text-muted-dim)', border: '1px solid rgba(var(--border-rgb),0.18)' }}>Cancel</span>
@@ -629,14 +758,39 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
       )
     }
 
-    // REVIEW — plain confirm. No warning: this direction increases privacy.
+    // REVIEW — the numbers, and for a reveal the caution above them.
     if (moveStep === 'review' && movePrepared) {
+      if (movePrepared.dir === 'reveal') {
+        const r = movePrepared.p
+        return (
+          <div style={card}>
+            {direction}
+            {caution}
+            {/* The published figure FIRST and emphasised: it is the one number that outlives this
+                transaction, so it is the one the eye should land on. */}
+            {line('Becomes public', `${fmtMicrotariExact(r.revealedAmount)} TARI`, true)}
+            {line('Network fee', `${fmtMicrotariExact(r.feeMicrotari)} TARI`)}
+            {line('Spent from private', `${fmtMicrotariExact(r.revealedOutput)} TARI`)}
+            {r.changeAmount > 0n && line('Returned to private', `${fmtMicrotariExact(r.changeAmount)} TARI`)}
+            <div style={{ fontSize: 11.5, color: 'var(--text-faint)', marginTop: 9 }}>
+              Spending {r.inputCount} confidential output{r.inputCount === 1 ? '' : 's'} worth {fmtMicrotariExact(r.inputTotal)} TARI.
+            </div>
+            <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
+              <span onClick={() => setMoveStep('form')} style={{ flex: 1, textAlign: 'center', padding: 11, borderRadius: 10, fontSize: 13, fontWeight: 600, cursor: 'pointer', color: 'var(--text-muted-dim)', border: '1px solid rgba(var(--border-rgb),0.18)' }}>Back</span>
+              <span onClick={() => void handleConfirmMove()}
+                style={{ flex: 2, textAlign: 'center', padding: 11, borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: 'pointer', color: 'var(--ink-on-teal, #04120f)', background: 'var(--teal-500)' }}>Make public</span>
+            </div>
+          </div>
+        )
+      }
+      // Conceal — plain confirm. No caution: this direction increases privacy.
+      const c = movePrepared.p
       return (
         <div style={card}>
           {direction}
-          {line('Moving from public', `${fmtMicrotariExact(movePrepared.withdrawAmount)} TARI`)}
-          {line('Network fee', `${fmtMicrotariExact(movePrepared.feeMicrotari)} TARI`)}
-          {line('Becomes private', `${fmtMicrotariExact(movePrepared.concealedAmount)} TARI`, true)}
+          {line('Moving from public', `${fmtMicrotariExact(c.withdrawAmount)} TARI`)}
+          {line('Network fee', `${fmtMicrotariExact(c.feeMicrotari)} TARI`)}
+          {line('Becomes private', `${fmtMicrotariExact(c.concealedAmount)} TARI`, true)}
           <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
             <span onClick={() => setMoveStep('form')} style={{ flex: 1, textAlign: 'center', padding: 11, borderRadius: 10, fontSize: 13, fontWeight: 600, cursor: 'pointer', color: 'var(--text-muted-dim)', border: '1px solid rgba(var(--border-rgb),0.18)' }}>Back</span>
             <span onClick={() => void handleConfirmMove()}
@@ -649,18 +803,21 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
     // MOVING — in flight. The entry point is gone from the tree while this renders, so there is
     // nothing to press twice.
     if (moveStep === 'moving') {
+      const inFlight = movePrepared
+        ? (movePrepared.dir === 'reveal' ? movePrepared.p.revealedAmount : movePrepared.p.concealedAmount)
+        : 0n
       return (
         <div style={{ ...card, border: '1px solid rgba(var(--teal-500-rgb),0.28)' }}>
           {direction}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, fontSize: 13, color: 'var(--text-teal-label)', marginBottom: 6 }}>
-            {spinnerSm}Making {fmtMicrotariExact(movePrepared?.concealedAmount ?? 0n)} TARI private
+            {spinnerSm}Making {fmtMicrotariExact(inFlight)} TARI {isReveal ? 'public' : 'private'}
           </div>
           <div style={{ fontSize: 12, color: 'var(--text-muted-dim)', textAlign: 'center' }}>{moveProgress || 'Submitting…'}</div>
         </div>
       )
     }
 
-    // SETTLING — committed on-chain, waiting for the stealth listing to catch up.
+    // SETTLING — committed on-chain, waiting for the indexer to catch up on the side that rises.
     if (moveStep === 'settling') {
       return (
         <div style={{ ...card, border: '1px solid rgba(var(--teal-500-rgb),0.28)' }}>
@@ -668,7 +825,8 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
             {spinnerSm}Settling on-chain…
           </div>
           <div style={{ fontSize: 12, color: 'var(--text-muted-dim)', textAlign: 'center', lineHeight: 1.45 }}>
-            {fmtMicrotariExact(moveLanded ?? 0n)} TARI is now private. Your confidential balance updates once the network indexes the new output — usually under a minute.
+            {fmtMicrotariExact(moveLanded ?? 0n)} TARI is now {isReveal ? 'public' : 'private'}. Your {isReveal ? 'public' : 'confidential'} balance
+            updates once the network indexes it — usually under a minute.
           </div>
         </div>
       )
@@ -678,12 +836,14 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
       return (
         <div style={{ ...card, border: '1px solid rgba(var(--teal-500-rgb),0.3)' }}>
           <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-bright)', marginBottom: 4 }}>
-            {fmtMicrotariExact(moveLanded ?? 0n)} TARI is now private
+            {fmtMicrotariExact(moveLanded ?? 0n)} TARI is now {isReveal ? 'public' : 'private'}
           </div>
           <div style={{ fontSize: 12, color: 'var(--text-muted-dim)', marginBottom: 12, lineHeight: 1.45 }}>
             {moveLagging
-              ? 'Confirmed on-chain. Your confidential balance hasn’t caught up yet — the network is still indexing the new output. Tap Refresh in a moment; nothing is at risk.'
-              : 'Your public balance dropped by that much plus the fee.'}
+              ? `Confirmed on-chain. Your ${isReveal ? 'public' : 'confidential'} balance hasn’t caught up yet — the network is still indexing. Tap Refresh in a moment; nothing is at risk.`
+              : isReveal
+                ? 'Your confidential balance dropped by that much plus the fee, and any change came back private.'
+                : 'Your public balance dropped by that much plus the fee.'}
           </div>
           {moveTxId && hashRow(moveTxId)}
           <span onClick={resetMove} style={{ display: 'block', textAlign: 'center', marginTop: 12, padding: 10, borderRadius: 10, fontSize: 13, fontWeight: 600, cursor: 'pointer', color: 'var(--teal-300)', border: '1px solid rgba(var(--teal-500-rgb),0.28)' }}>Done</span>
@@ -691,8 +851,13 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
       )
     }
 
-    // ERROR — the actual message, verbatim. This path had never run on-chain before M2 shipped, so
-    // a generic "something went wrong" would throw away the one useful thing we have.
+    // ERROR — the actual message, verbatim.
+    //
+    // This mattered for conceal, which had never run on-chain before M2. It matters MORE for a
+    // reveal: the instruction chain is new (TakeFromBucket → deposit → PayFeeFromBucket), the action
+    // is irreversible, and the network's own words are the only thing that can tell us which link
+    // failed. A generic "something went wrong" would throw that away on the one path where it is
+    // least affordable.
     return (
       <div style={{ ...card, border: '1px solid rgba(var(--danger-rgb),0.3)', background: 'rgba(var(--danger-rgb),0.04)' }}>
         <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--danger-300)', marginBottom: 6 }}>The move did not go through</div>

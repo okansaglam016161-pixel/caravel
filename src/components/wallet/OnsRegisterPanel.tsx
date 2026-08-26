@@ -1,24 +1,18 @@
-//   "Register an @name" — presentation transcribed element-for-element from the design file's
-//   "Overview · ONS register" (8 states). All logic (status, check, register, canAct, policyErr,
-//   busy) preserved verbatim; only the JSX mirrors the design markup (live border colour as you type).
+//   "Register a name" — the M4 (v2) presentation over the SAME logic.
+//
+//   RESKIN, NOT REWRITE. The status machine, check(), the two-step estimate-then-confirm register
+//   (so a fee is always approved before anything is written), canAct, the policy validation and the
+//   busy handling are all untouched. Only the rendering moved onto v2's OnsPanel, so the card
+//   matches the rest of the modal.
 
 import { useState } from 'react'
 import { useWallet } from '../../context/WalletContext'
 import { validateOnsName, checkOnsAvailable, estimateOnsRegistration, registerOnsName, toOnsName } from '../../crypto/ons'
+import { OnsPanel, type OnsStatus } from './v2/panels'
+import { plainError } from './v2/plainError'
 
 type Status = 'idle' | 'checking' | 'available' | 'taken' | 'estimating' | 'confirm' | 'registering' | 'done' | 'error'
 
-/** µtTARI → tTARI, matching the send-flow fee display. */
-const fmtTari = (micro: bigint) => (Number(micro) / 1_000_000).toFixed(6)
-
-const CARD = { padding: 18, borderRadius: 14, background: 'var(--surface-raised)' } as const
-const TITLE = { fontSize: 14, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 4 } as const
-const DESC = { fontSize: 13, marginBottom: 14, lineHeight: 1.5 } as const
-const FIELD = { display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', borderRadius: 11, background: 'var(--surface-base)', marginBottom: 12 } as const
-const AT = { fontFamily: 'var(--font-mono)', fontSize: 15 } as const
-const NAMEINPUT: React.CSSProperties = { flex: 1, background: 'transparent', border: 'none', outline: 'none', fontFamily: 'var(--font-mono)', fontSize: 14 }
-const BTN = { display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 12, borderRadius: 11, fontSize: 14, fontWeight: 700 } as const
-const DISABLED_BTN = { ...BTN, background: 'rgba(16,21,31,0.6)', border: '1px solid rgba(var(--border-rgb),0.12)', color: 'var(--text-disabled)' } as const
 
 export default function OnsRegisterPanel() {
   const { wallet, address, nostrNpub } = useWallet()
@@ -68,118 +62,31 @@ export default function OnsRegisterPanel() {
     setMsg('People can now find you by name.')
   }
 
-  const spinner = (
-    <span style={{ width: 14, height: 14, borderRadius: '50%', border: '2px solid rgba(var(--border-rgb),0.2)', borderTopColor: 'var(--text-muted-dim)', animation: 'cv-spin 0.8s linear infinite' }} />
-  )
-
-  // ── DONE (check circle header + result row @name / npub) ──
-  if (status === 'done') {
-    return (
-      <div style={{ ...CARD, border: '1px solid rgba(var(--teal-500-rgb),0.3)', background: 'rgba(var(--teal-500-rgb),0.05)' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
-          <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 22, height: 22, borderRadius: '50%', background: 'rgba(var(--teal-500-rgb),0.16)' }}>
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--teal-500)" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
-          </span>
-          <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-bright)' }}>@{clean} is yours</span>
-        </div>
-        <div style={{ ...DESC, color: 'var(--text-teal-label)' }}>People can now find you by name.</div>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '11px 14px', borderRadius: 11, background: 'rgba(10,14,23,0.6)', border: '1px solid rgba(var(--teal-500-rgb),0.22)' }}>
-          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--text-bright)' }}>@{clean}</span>
-          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-teal-dim)' }}>{txId ? `${txId.slice(0, 6)}…${txId.slice(-4)}` : nostrNpub ? `${nostrNpub.slice(0, 9)}…${nostrNpub.slice(-4)}` : ''}</span>
-        </div>
-        <div onClick={() => { setName(''); reset('idle') }} style={{ ...BTN, marginTop: 12, background: 'var(--surface-inset)', border: '1px solid rgba(var(--teal-500-rgb),0.26)', color: 'var(--text-bright)', cursor: 'pointer' }}>Register another</div>
-      </div>
-    )
-  }
-
-  // ── ERROR (red circle-alert) ──
-  if (status === 'error') {
-    return (
-      <div style={{ ...CARD, border: '1px solid rgba(var(--danger-rgb),0.28)', background: 'rgba(var(--danger-rgb),0.04)' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--danger-500)" strokeWidth="2.2" strokeLinecap="round"><circle cx="12" cy="12" r="9" /><path d="M12 8v5M12 16h.01" /></svg>
-          <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--danger-300)' }}>Registration failed</span>
-        </div>
-        <div style={{ ...DESC, color: 'var(--text-muted-dim)' }}>{msg ?? 'The registration did not complete. Check Activity to confirm whether a fee was spent.'}</div>
-        <div onClick={() => reset('idle')} style={{ ...BTN, background: 'rgba(var(--danger-rgb),0.08)', border: '1px solid rgba(var(--danger-rgb),0.3)', color: 'var(--danger-300)', cursor: 'pointer' }}>Try again</div>
-      </div>
-    )
-  }
-
-  // ── CONFIRM (fee estimate → approve before spending) ──
-  if (status === 'confirm' && fee !== null) {
-    return (
-      <div style={{ ...CARD, border: '1px solid rgba(var(--teal-500-rgb),0.24)' }}>
-        <div style={TITLE}>Confirm registration</div>
-        <div style={{ ...DESC, color: 'var(--text-muted-dim)' }}>Registering an @name writes to the Tari network and costs a small fee, paid confidentially from your balance.</div>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '11px 14px', borderRadius: 11, background: 'var(--surface-base)', border: '1px solid rgba(var(--border-rgb),0.14)', marginBottom: 8 }}>
-          <span style={{ fontSize: 13, color: 'var(--text-muted-dim)' }}>Name</span>
-          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--text-bright)' }}>@{clean}</span>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '11px 14px', borderRadius: 11, background: 'var(--surface-base)', border: '1px solid rgba(var(--border-rgb),0.14)', marginBottom: 12 }}>
-          <span style={{ fontSize: 13, color: 'var(--text-muted-dim)' }}>Network fee</span>
-          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--text-bright)' }}>≈ {fmtTari(fee)} tTARI <span style={{ color: 'var(--text-faint-dim)' }}>({fee.toString()} µt)</span></span>
-        </div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <div onClick={() => reset('idle')} style={{ ...BTN, flex: 1, background: 'var(--surface-inset)', border: '1px solid rgba(var(--border-rgb),0.18)', color: 'var(--text-body)', cursor: 'pointer' }}>Cancel</div>
-          <div onClick={confirmRegister} style={{ ...BTN, flex: 1, background: 'var(--teal-grad)', color: 'var(--ink-on-accent)', cursor: 'pointer' }}>Confirm &amp; pay</div>
-        </div>
-      </div>
-    )
-  }
-
-  // ── Live field border + accent per input status (idle/checking/available/taken/invalid/registering) ──
-  const isInvalid = !!policyErr
-  const isAvail = status === 'available'
-  const isTaken = status === 'taken'
-  const border = isTaken ? 'rgba(var(--danger-rgb),0.5)'
-    : isInvalid ? 'rgba(var(--warn-rgb),0.5)'
-    : isAvail ? 'rgba(var(--teal-500-rgb),0.5)'
-    : status === 'checking' ? 'rgba(var(--border-rgb),0.24)'
-    : status === 'registering' ? 'rgba(var(--border-rgb),0.12)'
-    : 'rgba(var(--border-rgb),0.14)'
-  const atColor = isTaken ? 'var(--danger-300)' : isInvalid ? 'var(--warn-300)' : isAvail ? 'var(--teal-500)' : status === 'registering' ? 'var(--text-teal-dim)' : status === 'checking' ? 'var(--teal-300)' : 'var(--text-faint-dim)'
-  const nameColor = status === 'registering' ? 'var(--text-muted-dim)' : (isAvail ? 'var(--text-bright)' : clean ? 'var(--text-body)' : 'var(--text-faint-dim)')
-  const cardBorder = isTaken ? 'rgba(var(--danger-rgb),0.26)' : isInvalid ? 'rgba(var(--warn-rgb),0.28)' : (isAvail || status === 'registering') ? 'rgba(var(--teal-500-rgb),0.24)' : 'rgba(var(--border-rgb),0.14)'
-  const descColor = isTaken ? 'var(--danger-300)' : isInvalid ? 'var(--warn-300)' : isAvail ? 'var(--teal-300)' : 'var(--text-muted-dim)'
-  const descText = msg ?? (policyErr ? 'Lowercase letters, numbers and underscores. 3 to 20 characters.'
-    : status === 'checking' ? 'Checking availability on the Tari network.'
-    : status === 'registering' ? `Writing @${clean} to the Tari network.`
-    : 'On chain, yours. Resolves to your messaging key.')
+  // ── PRESENTATION ──
+  //
+  // The status machine maps onto v2's OnsPanel one state at a time. `canAct` additionally gates on
+  // having a wallet, an address and a Nostr key — a name with nothing to point at is not
+  // registerable — so a status that would otherwise offer an action falls back to idle when it is
+  // false.
+  const view: OnsStatus = busy || status === 'done' || status === 'error' || status === 'confirm'
+    ? status
+    : status === 'available' && !canAct ? 'idle'
+    : status
 
   return (
-    <div style={{ ...CARD, border: `1px solid ${cardBorder}` }}>
-      <div style={TITLE}>Register an @name</div>
-      <div style={{ ...DESC, color: descColor }}>{descText}</div>
-      <div style={{ ...FIELD, border: `1px solid ${border}`, ...(isAvail ? { boxShadow: '0 0 0 3px rgba(var(--teal-500-rgb),0.08)' } : {}) }}>
-        <span style={{ ...AT, color: atColor }}>@</span>
-        <input
-          value={name}
-          onChange={e => { setName(e.target.value); if (status !== 'idle') reset('idle') }}
-          placeholder="yourname"
-          spellCheck={false}
-          disabled={busy}
-          style={{ ...NAMEINPUT, color: nameColor }}
-        />
-        {isAvail && <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--teal-500)" strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>}
-        {isTaken && <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--danger-500)" strokeWidth="2.4" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>}
-        {status === 'checking' && spinner}
-      </div>
-
-      {status === 'registering' || status === 'estimating'
-        ? <div style={{ ...BTN, gap: 9, background: 'var(--surface-inset)', border: '1px solid rgba(var(--teal-500-rgb),0.2)', color: 'var(--teal-300)' }}>
-            <span style={{ width: 15, height: 15, borderRadius: '50%', border: '2px solid rgba(var(--teal-500-rgb),0.2)', borderTopColor: 'var(--teal-500)', animation: 'cv-spin 0.8s linear infinite' }} />{status === 'estimating' ? 'Estimating fee…' : 'Registering…'}
-          </div>
-        : isAvail
-          ? <div onClick={beginRegister} style={{ ...BTN, background: 'var(--teal-grad)', color: 'var(--ink-on-accent)', cursor: 'pointer' }}>Register @{clean}</div>
-          : canAct
-            ? <div style={{ display: 'flex', gap: 8 }}>
-                <div onClick={check} style={{ ...BTN, flex: 1, background: 'var(--surface-inset)', border: '1px solid rgba(var(--teal-500-rgb),0.26)', color: 'var(--text-bright)', cursor: 'pointer' }}>Check</div>
-                <div onClick={beginRegister} style={{ ...BTN, flex: 1, background: 'var(--teal-grad)', color: 'var(--ink-on-accent)', cursor: 'pointer' }}>Register</div>
-              </div>
-            : <div style={DISABLED_BTN}>Register</div>}
-
-      {!nostrNpub && <div style={{ marginTop: 10, fontSize: 11.5, color: 'var(--text-faint-dim)' }}>Unlock your wallet to register a name.</div>}
-    </div>
+    <OnsPanel
+      status={view}
+      name={clean}
+      policyError={policyErr ?? undefined}
+      message={msg ? plainError(msg) : undefined}
+      feeMicrotari={fee ?? undefined}
+      txId={txId ?? undefined}
+      onName={setName}
+      onCheck={check}
+      onRegister={beginRegister}
+      onConfirm={confirmRegister}
+      onReset={() => reset('idle')}
+      onCopyTx={t => { navigator.clipboard.writeText(t).catch(() => {}) }}
+    />
   )
 }

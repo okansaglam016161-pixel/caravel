@@ -3,8 +3,22 @@
  * Ported from tarijs-reference/examples/node/src/stealth/confidential-send.ts
  *
  * Proven architecture: tx 836369ed… committed on Esmeralda 2026-07-19.
- * One UTXO → recipient + change + fee, all inside fee_instructions (single StealthTransfer).
- * No revealed balance, no account component, no second UTXO.
+ * N UTXOs → recipient + change + fee, all inside fee_instructions (single StealthTransfer).
+ * No revealed balance, no account component.
+ *
+ * ── IT USED TO SPEND EXACTLY ONE OUTPUT, AND THAT WAS A MISTAKE ──────────────
+ *
+ * The reference example this was ported from spent a single UTXO, and the port inherited it as
+ * though it were a rule: "Each single UTXO must exceed the send amount plus the fee." It is not a
+ * rule. The engine allows 1000 inputs per transfer statement
+ * (tari-ootle engine_types/src/limits.rs, STEALTH_LIMITS.max_inputs), inputs cost ~143× less than
+ * outputs to verify, and dry runs spending 1, 2, 5, 8, 12 and 15 real outputs were all accepted
+ * with the cost moving only 24 642 → 25 539 µtTARI across the range.
+ *
+ * The cost of believing otherwise was concrete: a wallet holding 1107 TARI across 15 outputs could
+ * send at most 245 in one payment — the largest single output — and MAX offered a figure that was
+ * guaranteed to fail. Selection is now the same accumulate-largest-first routine reveal.ts has used
+ * since M3, shared from stealthUtxos.ts so the two cannot drift.
  */
 
 import {
@@ -16,7 +30,6 @@ import {
   TransactionBuilder,
   WasmStealthCrypto,
   createOutput,
-  decryptOwnedUtxo,
   generateSealKeypair,
   resolveTransaction,
   sealTransaction,
@@ -25,20 +38,18 @@ import {
   signTransaction,
   stealthTransferInstruction,
   stealthUtxoSubstateId,
-  type Signer,
-  type Mask,
 } from '@tari-project/ootle'
 import { IndexerProvider } from '@tari-project/ootle-indexer'
 import { nextMaxEpoch } from './epoch'
 import { dryRunFee, withFeeMargin } from './feeProbe'
+// The owned-UTXO scan lives in stealthUtxos.ts so the send and reveal paths share ONE input
+// discovery. It was moved out of this file unchanged; nothing about the behaviour here differs.
+import {
+  RESOURCE_HEX, StaticSigner, reachableTotal, scanOwnedUtxos, selectStealthInputs,
+} from './stealthUtxos'
 import type { SecretKeyWallet } from '@tari-project/ootle-secret-key-wallet'
 
 const INDEXER_URL = 'https://ootle-indexer-a.tari.com'
-const RESOURCE_HEX = TARI_RESOURCE_ADDRESS.replace(/^resource_/, '')
-// The indexer's /utxos endpoint IGNORES `offset` (every offset returns the same set) but HONORS
-// `limit`. So we fetch the whole set in one request with a limit safely above it — never paginate by
-// offset (that loops forever once the set exceeds one page). 1000 is honored; 5000 is rejected.
-const FETCH_LIMIT = 1000
 
 /**
  * CEILING, not the fee. The fee actually paid is discovered per transaction by dry run (see
@@ -79,79 +90,6 @@ export interface SendParams {
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
-
-function fromHex(h: string): Uint8Array {
-  const bytes = new Uint8Array(h.length / 2)
-  for (let i = 0; i < h.length; i += 2) bytes[i / 2] = parseInt(h.slice(i, i + 2), 16)
-  return bytes
-}
-
-type SignedTxArr = Awaited<ReturnType<Signer['signTransaction']>>
-
-class StaticSigner implements Signer {
-  private sigs: SignedTxArr
-  constructor(sigs: SignedTxArr) { this.sigs = sigs }
-  async getAddress() { return '' }
-  async getPublicKey() { return new Uint8Array(32) }
-  async signTransaction(_t: Parameters<Signer['signTransaction']>[0], _k: Uint8Array): Promise<SignedTxArr> {
-    return this.sigs
-  }
-}
-
-interface OwnedUtxo {
-  substateId: string
-  commitment: Uint8Array
-  nonce: Uint8Array
-  value: bigint
-  mask: Mask
-}
-
-async function scanUtxos(crypto: WasmStealthCrypto, viewSecret: Uint8Array): Promise<OwnedUtxo[]> {
-  const owned: OwnedUtxo[] = []
-
-  // ONE request — the indexer ignores `offset`, so paginating by it would re-fetch the same set
-  // forever. Fetch the whole set with a big `limit` instead.
-  const url = `${INDEXER_URL}/utxos?resource_address=${RESOURCE_HEX}&limit=${FETCH_LIMIT}`
-  const res = await fetch(url)
-  if (!res.ok) throw new Error(`UTXO scan HTTP ${res.status}`)
-  const body = await res.json() as { utxos?: [string, unknown][] } | [string, unknown][]
-  const rows = Array.isArray(body) ? body : (body as { utxos?: [string, unknown][] }).utxos ?? []
-  // Ceiling guard: a full FETCH_LIMIT means there may be inputs we couldn't see. Send has no balance
-  // display, so surface it in the log; an actually-unspendable set still fails with "no suitable UTXO".
-  if (rows.length >= FETCH_LIMIT) {
-    console.warn(`[Caravel] confidential-send UTXO fetch hit the indexer limit (${FETCH_LIMIT}) — input selection may be incomplete`)
-  }
-
-  // Dedup by commitment — the indexer can return the same UTXO more than once; input selection must
-  // not consider a duplicate. Decrypt/nonce/mask handling below is unchanged.
-  const seen = new Set<string>()
-  for (const [commitmentHex, utxoBody] of rows) {
-    if (seen.has(commitmentHex)) continue
-    seen.add(commitmentHex)
-
-    const substateId = `utxo_${RESOURCE_HEX}_${commitmentHex}`
-    const fakeResponse = { version: 0, verified: false, substate: { Utxo: utxoBody } }
-    const decrypted = await decryptOwnedUtxo(
-      crypto,
-      viewSecret,
-      fakeResponse as Parameters<typeof decryptOwnedUtxo>[2],
-      substateId,
-    )
-    if (decrypted !== null) {
-      const output = (utxoBody as { output?: { output?: { public_nonce?: string } } })?.output?.output
-      if (!output?.public_nonce) continue
-      owned.push({
-        substateId,
-        commitment: fromHex(commitmentHex),
-        nonce: fromHex(output.public_nonce),
-        value: decrypted.value,
-        mask: decrypted.mask,
-      })
-    }
-  }
-
-  return owned
-}
 
 async function pollOutcome(txId: string): Promise<{ outcome: SendOutcome; feeMicrotari?: bigint }> {
   for (let i = 0; i < 6; i++) {
@@ -201,22 +139,17 @@ export async function sendConfidential(
   const viewSecret = await wallet.getViewSecret()
 
   log('Scanning for your UTXOs…')
-  const utxos = await scanUtxos(crypto, viewSecret)
+  const utxos = await scanOwnedUtxos(crypto, viewSecret)
   if (utxos.length === 0) throw new Error('No owned UTXOs found. Your wallet may need a balance from the faucet.')
 
-  const needed = amountMicrotari + MAX_FEE
-  const candidates = utxos.filter(u => u.value > needed).sort((a, b) => Number(a.value - b.value))
-  if (candidates.length === 0) {
-    const total = utxos.reduce((s, u) => s + u.value, 0n)
-    throw new Error(
-      `Insufficient funds. Need ${needed} µtTARI (amount + fee), wallet has ${total} µtTARI ` +
-      `across ${utxos.length} UTXO(s). Each single UTXO must exceed the send amount plus the fee.`
-    )
-  }
-
-  const utxo = candidates[0]!
-  // Change is now derived per build from the fee actually being reserved — see buildEnvelope below.
-  log(`Using UTXO (value: ${(Number(utxo.value) / Number(MICROTARI_PER_TARI)).toFixed(6)} TARI)`)
+  // SELECTED ONCE, AGAINST THE CEILING, AND PINNED — the same discipline reveal.ts uses. The fee is
+  // not known until the dry run, so selection is made against MAX_FEE and the SAME inputs are used
+  // for the real build. Re-selecting at the measured fee would change the transaction's shape,
+  // which would change its fee, which would change the selection: a loop with no fixed point.
+  // Because the measured fee is below the ceiling, the pinned inputs still cover it and the surplus
+  // simply comes back as a slightly larger change output.
+  const selection = selectStealthInputs(utxos, amountMicrotari + MAX_FEE)
+  log(`Spending ${describeMicrotari(selection.total)} TARI from ${selection.inputs.length} payment${selection.inputs.length === 1 ? '' : 's'} you’ve received`)
 
   // Build outputs
   const recipientOutput = createOutput({
@@ -241,13 +174,15 @@ export async function sendConfidential(
   // the two builds use fresh output masks, so the probe's commitment names a UTXO that will never
   // exist and announcing it would point every payment message at nothing.
   async function buildEnvelope(feeMicrotari: bigint, dryRun: boolean) {
-    const changeAmount = utxo.value - amountMicrotari - feeMicrotari
+    const split = planStealthSend(amountMicrotari, feeMicrotari, selection.total)
+    assertStealthSendSplit(split)
 
+    // A zero-value change output would create a worthless UTXO, so exact cover emits none. The
+    // recipient's output is always present, so the statement never has zero outputs.
     const { statement: outsStmt, outputMask } = await crypto.generateOutputsStatement(
-      [
-        recipientOutput,
-        createOutput({ destination: senderAddress, amount: changeAmount, resourceAddress: TARI_RESOURCE_ADDRESS }),
-      ],
+      split.changeAmount > 0n
+        ? [recipientOutput, createOutput({ destination: senderAddress, amount: split.changeAmount, resourceAddress: TARI_RESOURCE_ADDRESS })]
+        : [recipientOutput],
       feeMicrotari,
     )
 
@@ -261,8 +196,11 @@ export async function sendConfidential(
       if (commitmentHex) recipientUtxoId = `utxo_${RESOURCE_HEX}_${commitmentHex}`
     } catch { /* leave undefined — caller treats a missing id as "cannot announce this payment" */ }
 
-    const insStmt = await crypto.buildInputsStatement([new StealthInput(utxo.commitment)], 0n)
-    const proof   = await signBalanceProof(crypto, utxo.mask, outputMask, insStmt, outsStmt)
+    // EVERY selected input, in one statement. Commitment order and mask order must match, which is
+    // why both map over the same `selection.inputs` array.
+    const insStmt = await crypto.buildInputsStatement(selection.inputs.map(u => new StealthInput(u.commitment)), 0n)
+    const inputMask = await crypto.aggregateInputMasks(selection.inputs.map(u => u.mask))
+    const proof   = await signBalanceProof(crypto, inputMask, outputMask, insStmt, outsStmt)
     const stmt    = new StealthTransferStatement(insStmt, outsStmt, proof)
 
     const builder = new TransactionBuilder(Network.Esmeralda, maxEpoch)
@@ -274,12 +212,21 @@ export async function sendConfidential(
     )
     builder.addFeeInstruction({ PutLastInstructionOutputOnWorkspace: { key: 0 } })
     builder.addFeeInstruction({ PayFeeFromBucket: { bucket: { id: 0, offset: null } } })
-    builder.addInput({ substate_id: stealthUtxoSubstateId(TARI_RESOURCE_ADDRESS, utxo.commitment), version: null })
+    // Each spent output is declared so it is resolved and LOCKED alongside the others.
+    for (const u of selection.inputs) {
+      builder.addInput({ substate_id: stealthUtxoSubstateId(TARI_RESOURCE_ADDRESS, u.commitment), version: null })
+    }
 
     const unsignedTx   = await resolveTransaction(provider, builder.buildUnsignedTransaction())
     const sealKP       = generateSealKeypair()
     const unsignedJson = serializeUnsignedTx(unsignedTx)
-    const oneTimeSig   = await wallet.addStealthSignature(unsignedJson, utxo.nonce, sealKP.public_key, { crypto })
+    // ONE SIGNATURE PER INPUT. Each stealth output is unlocked by a key derived from ITS sender's
+    // public nonce, so the set must be complete — a missing one is a rejected transaction, not a
+    // partial spend. signTransaction concatenates whatever each signer returns.
+    const oneTimeSigs = []
+    for (const u of selection.inputs) {
+      oneTimeSigs.push(await wallet.addStealthSignature(unsignedJson, u.nonce, sealKP.public_key, { crypto }))
+    }
 
     const ootleWallet = new OotleWallet()
       .registerKeyProvider(senderAddress, wallet)
@@ -287,17 +234,24 @@ export async function sendConfidential(
 
     // `dry_run` must ride INSIDE the sealed envelope — the dry-run endpoint refuses anything else.
     const toSign  = dryRun ? { ...unsignedTx, dry_run: true } : unsignedTx
-    const signed  = await signTransaction([ootleWallet, new StaticSigner([oneTimeSig])], toSign, sealKP)
+    const signed  = await signTransaction([ootleWallet, new StaticSigner(oneTimeSigs)], toSign, sealKP)
     return { envelope: sealTransaction(signed), recipientUtxoId }
   }
 
   log('Estimating network fee…')
-  // Priced with the ceiling reserved, which is also what the UTXO selection above set aside — so a
-  // probe can never fail for want of funds the real send would have had.
-  const probe = await buildEnvelope(MAX_FEE, true)
+  // Priced with (almost always) the ceiling reserved, which is also what the selection above set
+  // aside — so a probe can never fail for want of funds the real send would have had. The "almost"
+  // is what keeps the probe the same SHAPE as the real send; see probeFeeFor.
+  const probe = await buildEnvelope(probeFeeFor(selection.total, amountMicrotari), true)
   const cost  = await dryRunFee(INDEXER_URL, probe.envelope)
   const fee   = withFeeMargin(cost)
-  if (fee > MAX_FEE) {
+  // AGAINST WHAT THE PROBE RESERVED, not the raw ceiling. Two things follow from that, and the
+  // second is the one that matters: a fee above the reservation was never simulated, and — because
+  // the probe reserves the LARGEST fee this transaction may pay — a real fee at or below it always
+  // leaves at least as much change as the probe had. Since probeFeeFor guarantees the probe a
+  // change output, the real build provably has one too, and the priced shape is the submitted shape.
+  const reserved = probeFeeFor(selection.total, amountMicrotari)
+  if (fee > reserved) {
     throw new Error(
       `Network fee (${fee} µtTARI) exceeds this wallet's ${MAX_FEE} µtTARI ceiling. ` +
       `Fees have risen — the ceiling in confidentialSend.ts needs raising.`,
@@ -316,6 +270,140 @@ export async function sendConfidential(
   provider.stopWatcher?.()
 
   return { txId, outcome, recipientUtxoId, feeMicrotari }
+}
+
+// ── The fund-critical arithmetic, isolated so it can be tested ────────────────
+
+export interface StealthSendSplit {
+  /** What the recipient receives. Caller-chosen; never adjusted behind their back. */
+  recipientAmount: bigint
+  /** Paid to the network. */
+  feeMicrotari: bigint
+  /** Sum of the outputs being spent. */
+  inputTotal: bigint
+  /** Back to the sender: `inputTotal − amount − fee`. Zero means exact cover. */
+  changeAmount: bigint
+}
+
+/**
+ * Split a send across the selected inputs.
+ *
+ * THE ONLY THING THAT CHECKS THIS IS THE BALANCE PROOF. The engine cannot see the input values —
+ * they are hidden in commitments and carried by masks — so it verifies the proof instead. A change
+ * amount one microtari too small does not fail loudly; it produces a proof over a different
+ * equation and the transaction is rejected with no hint about where the value went. Too LARGE
+ * cannot be proved at all. Across many inputs there are more ways to get the sum wrong, which is
+ * exactly why the arithmetic is in one function with an assertion rather than inline.
+ */
+export function planStealthSend(amountMicrotari: bigint, feeMicrotari: bigint, inputTotal: bigint): StealthSendSplit {
+  if (amountMicrotari <= 0n) throw new Error('Amount must be greater than zero.')
+  if (feeMicrotari <= 0n) throw new Error('Fee must be greater than zero.')
+  const needed = amountMicrotari + feeMicrotari
+  if (inputTotal < needed) {
+    throw new Error(
+      `The selected private funds (${inputTotal} µtTARI) do not cover the amount plus the network fee ` +
+      `(${amountMicrotari} + ${feeMicrotari} = ${needed} µtTARI).`,
+    )
+  }
+  return { recipientAmount: amountMicrotari, feeMicrotari, inputTotal, changeAmount: inputTotal - needed }
+}
+
+/**
+ * Re-check the split immediately before it is used to build a transaction.
+ *
+ * Redundant by construction today — planStealthSend cannot produce a split that fails this. That is
+ * the point: it is a tripwire for a future edit that computes the change separately from the inputs
+ * and the amount.
+ */
+export function assertStealthSendSplit(split: StealthSendSplit): void {
+  const { recipientAmount, feeMicrotari, inputTotal, changeAmount } = split
+  if (recipientAmount <= 0n || feeMicrotari <= 0n) {
+    throw new Error(`stealthSend: non-positive component (amount ${recipientAmount}, fee ${feeMicrotari})`)
+  }
+  if (changeAmount < 0n) {
+    throw new Error(`stealthSend: negative change (${changeAmount}) — inputs ${inputTotal} do not cover the spend`)
+  }
+  // inputs − outputs − change − fee = 0, stated the way the balance proof needs it.
+  if (recipientAmount + feeMicrotari + changeAmount !== inputTotal) {
+    throw new Error(
+      `stealthSend: value would be lost — amount ${recipientAmount} + fee ${feeMicrotari} + change ${changeAmount} !== inputs ${inputTotal}`,
+    )
+  }
+}
+
+/**
+ * Smallest change the PROBE is allowed to leave, so it always carries a change output.
+ *
+ * One microtari is enough: the probe is discarded and only its COST is used, so the value is
+ * irrelevant — the output merely has to EXIST.
+ */
+const PROBE_MIN_CHANGE = 1n
+
+/**
+ * The fee the PRICING build reserves.
+ *
+ * ── WHY THIS IS NOT SIMPLY THE CEILING ───────────────────────────────────────
+ *
+ * The probe must be STRUCTURALLY IDENTICAL to the transaction that gets submitted — same inputs,
+ * and the same number of OUTPUTS. Outputs are what a transfer pays for: PER_OUTPUT is 6 000 000
+ * metering points against PER_INPUT's 42 000, about 143×. A probe with one output fewer than the
+ * real send understates the fee by roughly 6 300 µtTARI, which the 25% margin cannot absorb.
+ *
+ * That is not hypothetical. Reserving the full ceiling makes the probe's change exactly zero at
+ * MAX — because MAX is defined as `reachable − MAX_FEE`, so `inputTotal − amount − MAX_FEE = 0` —
+ * and a zero change emits no change output. The real send, whose measured fee is far below the
+ * ceiling, then has real change and two outputs. Measured on Esmeralda: a 14-input send priced
+ * 12 025 as one output and cost 18 332 as two, and the transaction was rejected with
+ * "Required fees 16546 but 14791 paid".
+ *
+ * ── WHY LOWERING THE PROBE FEE IS SOUND ──────────────────────────────────────
+ *
+ * The probe reserves the LARGEST fee the transaction can pay, so the probe's change is the
+ * SMALLEST change the real build can have. Guaranteeing the probe at least one microtari of change
+ * therefore guarantees the real build has change too, and the two shapes match. The probe's
+ * reserved fee only has to be generous enough for the simulation to complete, and one microtari
+ * below the ceiling is still ~2× every fee measured on this network.
+ */
+export function probeFeeFor(inputTotal: bigint, amountMicrotari: bigint, ceiling: bigint = MAX_FEE): bigint {
+  const headroom = inputTotal - amountMicrotari
+  return headroom - ceiling >= PROBE_MIN_CHANGE ? ceiling : headroom - PROBE_MIN_CHANGE
+}
+
+/**
+ * The largest amount a confidential send can carry, given the outputs the wallet holds.
+ *
+ * A STEALTH SEND SPENDS EXACTLY ONE OUTPUT. The selection above requires `u.value > amount + fee`
+ * from a SINGLE utxo — there is no multi-input path here — so the spendable ceiling is set by the
+ * LARGEST output, not by the balance. On a wallet whose value is spread across many outputs those
+ * two numbers diverge enormously: measured on the real seeded wallet, a balance-based MAX offered
+ * 1107.70 TARI when the largest output could carry 245.90, so every press of MAX was guaranteed to
+ * fail with "Insufficient funds".
+ *
+ * THE MINUS ONE IS NOT PADDING. The filter is STRICTLY greater (`u.value > needed`), so an amount
+ * of `largest - MAX_FEE` would need `largest > largest`, which is false. One microtari below that
+ * is the true maximum, and getting this off by one would reintroduce exactly the bug it fixes.
+ *
+ * Returns 0n when no output can carry a payment at all — treat that as "MAX unavailable".
+ */
+export function maxStealthSend(outputValues: readonly bigint[]): bigint {
+  const reachable = reachableTotal(outputValues)
+  return reachable > MAX_FEE ? reachable - MAX_FEE : 0n
+}
+
+/**
+ * µtTARI → a TARI decimal, for the progress log the user actually reads.
+ *
+ * BIGINT ONLY. The old line did `Number(total) / Number(MICROTARI_PER_TARI)`, which is the one
+ * thing this codebase does not do with an amount: past 2^53 µtTARI the division silently rounds,
+ * and the number it rounds is the size of the spend being reported. It was "only a log line", but
+ * the whole rail exists because that argument is how the first wrong amount always gets in.
+ *
+ * String arithmetic, no float anywhere: whole part, then six padded fractional digits.
+ */
+export function describeMicrotari(microtari: bigint): string {
+  const whole = microtari / MICROTARI_PER_TARI
+  const frac = (microtari % MICROTARI_PER_TARI).toString().padStart(6, '0')
+  return `${whole}.${frac}`
 }
 
 export function tariToMicrotari(tari: number): bigint {

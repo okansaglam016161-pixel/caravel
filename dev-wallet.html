@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="robots" content="noindex" />
+    <title>Wallet modal v2 — preview</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  </head>
+  <body>
+    <!--
+      M4 STAGE 1 — a standalone preview of the redesigned wallet modal.
+
+      A SEPARATE ENTRY POINT, NOT A ROUTE. A dev-guarded route inside App.tsx still emits its lazy
+      chunk into `dist/` — a runtime guard does not stop the bundler from following the import. Vite's
+      default build input is index.html alone, so a second root HTML file is served in `npm run dev`
+      and is never built, never bundled, never deployed. That is the only arrangement where
+      "dev-only" is actually true.
+
+      It also keeps the harness genuinely standalone: no router, no WalletProvider, no wallet, no
+      network. Mock data only.
+    -->
+    <div id="root"></div>
+    <script type="module" src="/src/dev/main.tsx"></script>
+  </body>
+</html>

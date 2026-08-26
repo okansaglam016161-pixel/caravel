@@ -1,9 +1,14 @@
-import { Fragment, useState, useEffect, useLayoutEffect, useMemo, useRef, type ReactNode } from 'react'
+import { Fragment, useState, useEffect, useCallback, useLayoutEffect, useMemo, useRef, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import * as nip19 from 'nostr-tools/nip19'
 import Logo from '../primitives/Logo'
 import { useWallet } from '../../context/WalletContext'
 import WalletModal from '../wallet/WalletModal'
+import { assertValidRecipient } from '../../crypto/publicSend'
+import { parseOotleAddress } from '@tari-project/ootle-wasm'
+import { computeTotal, unreadableReasonText } from '../wallet/v2/total'
+import { plainError } from '../wallet/v2/plainError'
+import { totalPillValue } from '../wallet/v2/TotalHero'
 import ProfilePanel from '../wallet/ProfilePanel'
 import { compareMessages, sortKey, type CaravelMessage, type Group } from '../../messaging/types'
 import GroupThread from './GroupThread'
@@ -224,7 +229,7 @@ function PaymentMessageCard({ message, lid, flashed }: { message: CaravelMessage
 // ── Component ────────────────────────────────────────────────────────────────────
 
 export default function ChatApp() {
-  const { wallet, address, scan, messages, nostrPubkeyHex, messagingStatus, contacts, acceptContact, contactAddresses, setManualTariAddress, createMessagingProvider, recordSentMessage, deleteConversation, editMessage, reactMessage, getRelayStates, reconnectAll, balanceHidden, setBalanceHidden, groups, createGroup, acceptGroup, declineGroup, leaveGroup, reinviteGroup } = useWallet()
+  const { wallet, address, scan, revealed, isSettling, settleLagged, messages, nostrPubkeyHex, messagingStatus, contacts, acceptContact, contactAddresses, setManualTariAddress, createMessagingProvider, recordSentMessage, deleteConversation, editMessage, reactMessage, getRelayStates, reconnectAll, balanceHidden, setBalanceHidden, groups, createGroup, acceptGroup, declineGroup, leaveGroup, reinviteGroup } = useWallet()
   const [walletOpen, setWalletOpen] = useState(false)
   const [profileOpen, setProfileOpen] = useState(false)
   // The user's own generated avatar (deterministic gradient from their pubkey hash) — used for the
@@ -308,7 +313,21 @@ export default function ChatApp() {
   const [confirming, setConfirming] = useState(false)  // inline confirm panel shown
   const [payBusy, setPayBusy] = useState(false)        // payment/message in flight
   const [payProgress, setPayProgress] = useState<string | null>(null)
-  const [payError, setPayError] = useState<string | null>(null)
+  const [payError, setPayErrorRaw] = useState<string | null>(null)
+  /**
+   * EVERY pay error goes through the translator (M9 C10).
+   *
+   * This screen spends the same money through the same builders as the wallet's Send tab, and those
+   * builders speak µtTARI and "output(s)" on purpose — their messages are quoted in tests and in
+   * on-chain reconciliation notes, so they are not softened at source. The wallet modal translates
+   * at its boundary; chat had no boundary and showed them raw, so the identical failure read as
+   * "amount is spread across too many small outputs" here and as plain English three tabs away.
+   *
+   * plainError passes anything it does not recognise through UNCHANGED, so routing the fixed
+   * strings and network rejections through it too costs nothing and means no future call site can
+   * forget. That is the point of wrapping the setter rather than the call sites.
+   */
+  const setPayError = useCallback((m: string | null) => setPayErrorRaw(m === null ? null : plainError(m)), [])
   // Persistent, must-acknowledge banner for the two dangerous outcomes: a payment that went
   // through but whose message failed (orphan), or a payment left unconfirmed (timeout).
   const [payAlert, setPayAlert] = useState<{ kind: 'orphan' | 'timeout'; txId: string; amountTari: string } | null>(null)
@@ -957,7 +976,16 @@ export default function ChatApp() {
   function validatePayment(): string | null {
     const amt = Number(payAmount)
     if (!payAmount.trim() || !isFinite(amt) || amt <= 0) return 'Enter an amount greater than 0.'
-    if (!effectivePayAddress.startsWith('otl_esm_')) return 'Enter a valid recipient Tari address (otl_esm_…).'
+    // THE SAME CHECK THE WALLET USES — parse, network byte, key length. A prefix test is not
+    // enough: a MAINNET address starts with otl_ too, is well-formed, and parses cleanly, so it
+    // passes `startsWith` and then commits the payment to keys nobody on this chain is watching.
+    // There is no bounce and no error at spend time, which makes it unrecoverable. This screen
+    // spends the same money as the wallet's Send tab and gets the same guard.
+    try {
+      assertValidRecipient(effectivePayAddress, parseOotleAddress)
+    } catch (e) {
+      return e instanceof Error ? e.message : String(e)
+    }
     if (payInsufficient) return 'Insufficient balance.'
     return null
   }
@@ -1215,29 +1243,45 @@ export default function ChatApp() {
 
             {/* Balance widget — click to open wallet panel */}
             {(() => {
-              // Derive display value from shared scan state — no second scan
+              // THE TOTAL, not just the private balance. Same rules as the modal's hero, from the
+              // same shared state — no second scan, no second set of degradation rules. A pill
+              // showing only the private half would disagree with the wallet it opens.
               const { status, balance } = scan
               const isScanning = status === 'scanning'
-              const isDone = status === 'done'
-              const tTARI = balance !== null
-                ? (Number(balance) / 1_000_000).toFixed(6)
-                : null
-              const balanceValue = balanceHidden
-                ? '••••'
-                : isScanning && tTARI === null
-                  ? '···'          // first scan in progress, no prior result
-                  : isDone || (isScanning && tTARI !== null)
-                    ? (tTARI ?? '0.000000')
-                    : status === 'error'
-                      ? '?'
-                      : '—'       // idle (locked)
-              const balanceColor = balanceHidden || isDone || (isScanning && tTARI !== null)
+              const total = computeTotal({
+                privateBalance:
+                  status === 'error' ? { status: 'unavailable' }
+                  : balance === null ? { status: 'loading' }
+                  : { status: 'ready', microtari: balance },
+                privateIncomplete: scan.incomplete,
+                // Same freshness rule as the modal's hero. The pill is smaller, not laxer — a
+                // wrong total is no more acceptable for being a pill.
+                privateGeneration: scan.generation,
+                publicGeneration: revealed.generation,
+                publicBalance:
+                  revealed.status === 'done' ? { status: 'ready', microtari: revealed.amount ?? 0n }
+                  : revealed.status === 'unavailable' ? { status: 'unavailable' }
+                  : { status: 'loading' },
+                // The pill has no move flow of its OWN, but the wallet does, and the settle it
+                // starts is wallet state — it outlives the modal that started it. Passing `false`
+                // here meant the pill kept drawing a confident figure over exactly the pair the
+                // hero three lines away was refusing to add.
+                settling: isSettling,
+                settleLagged,
+              })
+              const balanceValue = totalPillValue(total, balanceHidden)
+              // Bright only when the figure is a fact. A dash or an ellipsis stays muted so the
+              // pill never looks like it is reporting a balance it cannot vouch for.
+              const balanceColor = balanceHidden || total.status === 'ready'
                 ? 'var(--text-bright)'
                 : 'var(--text-muted-dim)'
+              const pillTitle = total.status === 'unreadable'
+                ? unreadableReasonText(total.reason)
+                : 'Open wallet'
               return (
                 <div
                   onClick={() => setWalletOpen(true)}
-                  title="Open wallet"
+                  title={pillTitle}
                   style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '13px 15px', borderRadius: 12, background: 'linear-gradient(140deg, rgba(var(--accRGB,45,224,198),0.1), rgba(18,165,148,0.04))', border: '1px solid rgba(var(--accRGB,45,224,198),0.22)', cursor: 'pointer', transition: 'border-color 0.15s' }}
                   onMouseEnter={e => (e.currentTarget.style.borderColor = 'rgba(var(--teal-500-rgb),0.45)')}
                   onMouseLeave={e => (e.currentTarget.style.borderColor = 'rgba(var(--accRGB,45,224,198),0.22)')}
@@ -2012,7 +2056,7 @@ export default function ChatApp() {
                   <button
                     onClick={toggleTari}
                     disabled={payBusy || !!editing}
-                    title={editing ? 'Finish editing first' : 'Attach confidential payment'}
+                    title={editing ? 'Finish editing first' : 'Attach a payment'}
                     style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 46, height: 46, flexShrink: 0, borderRadius: 12, border: 'none', background: 'var(--teal-grad)', cursor: payBusy ? 'default' : 'pointer', boxShadow: '0 0 18px rgba(var(--teal-500-rgb),0.28)', padding: 0 }}
                   >
                     <svg width={22} height={22} viewBox="0 0 24 24" fill="none" stroke="var(--ink-on-accent)" strokeWidth={2.3} strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>

@@ -4,9 +4,9 @@
 //
 // It is a RESKIN. Every handler below is the one that shipped: handlePrepareMove still calls
 // prepareConceal / prepareReveal and holds the built envelope, handleConfirmMove still submits that
-// exact envelope and hands off to useBalanceSettle with the direction-dependent balance,
+// exact envelope and hands the committed transaction to WalletContext's settle loop,
 // handleConfirmSend still calls sendConfidential and records the outcome. Nothing under src/crypto
-// changed, and neither did useBalanceSettle. What changed is that the states now render through the
+// changed, and neither did the settle rules. What changed is that the states now render through the
 // v2 components in ./v2, so the modal matches the approved design.
 //
 // The one genuinely new piece of logic is the DERIVATION at the bottom — turning the shipped state
@@ -29,7 +29,6 @@ import { useWallet } from '../../context/WalletContext'
 import { MIN_CONCEAL_MICROTARI, prepareConceal, type PreparedConceal } from '../../crypto/conceal'
 import { MIN_REVEAL_MICROTARI, maxRevealable, prepareReveal, type PreparedReveal } from '../../crypto/reveal'
 import { loadAccountAddress } from '../../crypto/accountStore'
-import { useBalanceSettle } from './useBalanceSettle'
 import OnsRegisterPanel from './OnsRegisterPanel'
 import FaucetClaimPanel from './FaucetClaimPanel'
 import { sendConfidential, tariToMicrotari, maxStealthSend, MAX_FEE, type SendOutcome } from '../../crypto/confidentialSend'
@@ -108,7 +107,11 @@ function ReceivedRowV2({ row, hidden }: { row: Extract<ActivityRow, { kind: 'rec
 // ══════════════════════════════════════════════════════════════════════════════
 
 export default function WalletModal({ onClose }: { onClose: () => void }) {
-  const { wallet, address, scan, revealed, rescan, txHistory, messages, recordSent, balanceHidden, setBalanceHidden } = useWallet()
+  const {
+    wallet, address, scan, revealed, rescan, txHistory, messages, recordSent,
+    balanceHidden, setBalanceHidden,
+    settles, isSettling, settleLagged, beginSettle, acknowledgeSettle,
+  } = useWallet()
 
   const [tab, setTab] = useState<WalletTab>('overview')
   const [addrCopied, setAddrCopied] = useState(false)
@@ -143,10 +146,6 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
    */
   const [sendExact, setSendExact] = useState<bigint | null>(null)
   const [sendLagging, setSendLagging] = useState(false)
-  /** The spent-from balance captured BEFORE submitting, so the settle loop can see it fall.
-   *  `null` when the read was not settled at that moment — never zero. */
-  const sendPreBalance = useRef<bigint | null>(null)
-  const sendDeadline = useRef<number>(0)
 
   const [moveStep, setMoveStep] = useState<MoveStep>('idle')
   const [moveDir, setMoveDir] = useState<Dir>('conceal')
@@ -166,9 +165,6 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
    */
   const [moveExact, setMoveExact] = useState<bigint | null>(null)
   const [moveLagging, setMoveLagging] = useState(false)
-  /** The balance being watched, captured BEFORE submitting so the settle loop can see it rise. */
-  const movePreBalance = useRef<bigint | null>(null)
-  const moveDeadline = useRef<number>(0)
   /**
    * Discards a pricing result the user has already walked away from.
    *
@@ -186,55 +182,49 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
   }, [onClose])
 
   const { status, balance } = scan
+  /**
+   * The public balance as a settle baseline: the reading, or `null` when there isn't one.
+   *
+   * NOT `revealedAmount`, which is a gating number that collapses unavailable to zero. A zero
+   * baseline on a RISE watch settles on the first poll; on a FALL watch it can never settle at all.
+   */
+  const publicNow = revealed.status === 'done' ? revealed.amount : null
 
   // A committed move is not a visible move: the balances are read from an indexer that trails
   // consensus by 60–90s. Firing one rescan() on commit reads state without the new output, reports
   // the old balance, and stops — so a successful conversion looks like nothing happened.
   //
-  // WHICH BALANCE RISES DEPENDS ON THE DIRECTION, and watching the wrong one would report a lag
-  // that is not there: a conceal raises the PRIVATE balance, a reveal raises the PUBLIC one. Both
-  // also make the other side fall, but a fall is the weaker signal — the private side falls by the
-  // whole input, not by the amount — so the rise is what is polled for, in both cases.
+  // BOTH SIDES ARE WATCHED, in both directions. A conceal raises the private balance and lowers the
+  // public one; a reveal does the reverse. The fall used to be dismissed as "the weaker signal"
+  // because the private side falls by the whole input rather than by the amount — true of its
+  // MAGNITUDE, and irrelevant to its DIRECTION, which is all a watch tests. Treating it as weak is
+  // what let a reveal settle on the fast public side alone while the private side was still
+  // counting spent funds. See handleConfirmMove for the failure that came out of that.
   //
   // `null` while the read is loading or unavailable is deliberate: "not known yet" never counts as
   // movement, so a failed read cannot be mistaken for a balance that stayed put.
-  const settleBalance = moveDir === 'reveal'
-    ? (revealed.status === 'done' ? revealed.amount : null)
-    : balance
+  // ── Reacting to the settles the CONTEXT is running ──────────────────────────
+  //
+  // The loops themselves moved to WalletContext; see src/context/settle.ts. What is left here is
+  // the screen's reaction to an outcome it did not compute — which is the whole improvement. The
+  // poll no longer depends on this component being mounted, on which tab is showing, or on the
+  // step machine below still being in 'settling'. Pressing Done, switching tabs and closing the
+  // modal are now all things that happen AROUND a settle rather than to it.
+  const moveSettle = settles.find(e => e.txId === moveTxId && e.kind === 'move')
+  const sendSettle = settles.find(e => e.txId === sendTxId && e.kind === 'send')
 
-  useBalanceSettle({
-    active: moveStep === 'settling',
-    balance: settleBalance,
-    before: movePreBalance.current,
-    deadlineAt: moveDeadline.current,
-    rescan,
-    onSettled: () => { setMoveStep('success') },
-    onDeadline: () => {
-      // NOT an error. The transaction committed; only the index is behind. Saying otherwise would
-      // tell someone their funds did not move when they demonstrably did.
-      setMoveLagging(true)
-      setMoveStep('success')
-    },
-  })
+  useEffect(() => {
+    if (!moveSettle || moveSettle.status === 'settling') return
+    // A passed deadline is STILL A SUCCESS — the transaction committed, only the index is behind.
+    setMoveLagging(moveSettle.status === 'lagged')
+    setMoveStep(step => (step === 'settling' ? 'success' : step))
+  }, [moveSettle])
 
-  // A committed send is not a visible send either. It has no rise to watch — the money leaves — so
-  // this watches the spent-from balance FALL. Which balance that is depends on the source.
-  useBalanceSettle({
-    active: sendStep === 'settling',
-    balance: sendSource === 'public'
-      ? (revealed.status === 'done' ? revealed.amount : null)
-      : balance,
-    before: sendPreBalance.current,
-    deadlineAt: sendDeadline.current,
-    direction: 'fall',
-    rescan,
-    onSettled: () => { setSendStep('success') },
-    onDeadline: () => {
-      // NOT an error. The payment committed; only the index is behind.
-      setSendLagging(true)
-      setSendStep('success')
-    },
-  })
+  useEffect(() => {
+    if (!sendSettle || sendSettle.status === 'settling') return
+    setSendLagging(sendSettle.status === 'lagged')
+    setSendStep(step => (step === 'settling' ? 'success' : step))
+  }, [sendSettle])
 
   // ── Refresh feedback ────────────────────────────────────────────────────────
   //
@@ -245,9 +235,20 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
   // them would be a flash of "you have nothing" that is not true, so the last known figure is held
   // while it re-reads and the press is acknowledged by the header and footer instead.
   const [refreshing, setRefreshing] = useState(false)
-  const lastRevealed = useRef<bigint | null>(null)
+  /**
+   * The last public figure we actually read, WITH the refresh that produced it.
+   *
+   * The generation travels with the number because this ref exists precisely to show a figure that
+   * is no longer current — holding a known balance on screen while it re-reads, rather than
+   * flashing "you have nothing". That is a deliberate, honest staleness for the BREAKDOWN row, and
+   * it is exactly the staleness the total must refuse to add. A bare amount here would be stamped
+   * with whatever generation the live read had reached and would make the guard lie.
+   */
+  const lastRevealed = useRef<{ amount: bigint; generation: number } | null>(null)
   useEffect(() => {
-    if (revealed.status === 'done' && revealed.amount !== null) lastRevealed.current = revealed.amount
+    if (revealed.status === 'done' && revealed.amount !== null) {
+      lastRevealed.current = { amount: revealed.amount, generation: revealed.generation }
+    }
   }, [revealed])
   useEffect(() => {
     if (!refreshing) return
@@ -362,6 +363,7 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
     setSendRecipient(''); setSendAmount(''); setSendNote('')
     setSendStep('form'); setSendValidationError(''); setSendProgress('')
     setSendTxId(''); setSendError(''); setSendFee(null); setSendOutcome(null)
+    if (sendTxId) acknowledgeSettle(sendTxId)
     setSendPrepared(null); setSendExact(null); setSendLagging(false)
     // `sendSource` is deliberately NOT reset — it is the user's standing preference for this
     // session, and silently flipping it back after every payment would be its own surprise.
@@ -369,6 +371,10 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
 
   function resetMove() {
     moveGen.current.cancel()
+    // Tells the context the user has SEEN this outcome. A still-settling entry is deliberately not
+    // dropped by this — Done finishes the screen, not the transaction, and the overview behind it
+    // needs the poll to carry on so it can correct itself without a manual Refresh.
+    if (moveTxId) acknowledgeSettle(moveTxId)
     setMoveStep('idle')
     // `moveDir` is deliberately NOT reset — it is set fresh by whichever entry is pressed.
     setMoveAmount(''); setMoveError(''); setMoveProgress('')
@@ -421,15 +427,47 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
       setMoveTxId(result.txId)
       if (result.outcome === 'Commit') {
         setMoveLanded('revealedAmount' in result ? result.revealedAmount : result.concealedAmount)
-        // Committed, but not yet VISIBLE — hand off to the settle loop rather than declaring success
-        // against a balance the indexer has not caught up to. The "before" reading has to be the
-        // balance the loop will WATCH, which is direction-dependent.
-        // No `?? 0n`. An unknown baseline stays unknown, so the loop cannot manufacture a verdict
-        // from a number nobody measured — see useBalanceSettle's `before`.
-        movePreBalance.current = movePrepared.dir === 'reveal'
-          ? (revealed.status === 'done' ? revealed.amount : null)
-          : balance
-        moveDeadline.current = Date.now() + MOVE_SETTLE_MS
+        // Committed, but not yet VISIBLE — hand the transaction to the context's settle loop rather
+        // than declaring success against a balance the indexer has not caught up to. The baselines
+        // are the readings taken RIGHT NOW, before the change can appear.
+        //
+        // ── BOTH SIDES, BECAUSE A MOVE CHANGES BOTH ──────────────────────────────────
+        //
+        // A move is one transaction with two visible effects, and they do not arrive together. The
+        // public balance is two keyed substate lookups and is consensus-fresh; the private balance
+        // is a global /utxos listing that trails by 60–90 seconds. So there is a window where one
+        // side has updated and the other has not, and the pair is genuinely inconsistent.
+        //
+        // Watching only ONE side declared the move settled in the middle of that window. On a
+        // reveal — which watched the FAST side — the public balance rose, the settle ended, the
+        // total dropped out of "updating…", and the private side was still counting the amount it
+        // had already spent. The hero then showed a confident figure that double-counted the move:
+        // reveal 74 out of 974 private, and the total read 974 + 149 = 1123 instead of 1050. It did
+        // not correct itself either, because ending the settle also stopped the poll.
+        //
+        // Conceal never showed this, and the reason is the whole diagnosis: it happened to watch
+        // the SLOW side, so it was still waiting through the same inconsistency. It was protected
+        // by luck, not by design. Waiting for both sides protects both directions on purpose.
+        //
+        // No `?? 0n` on either baseline. An unknown baseline stays unknown, so the loop cannot
+        // manufacture a verdict from a number nobody measured — see settle.ts's `before`.
+        //
+        // The RISING side is listed first: `delta` is measured from watches[0], and the amount that
+        // arrived is the meaningful one to report.
+        beginSettle({
+          txId: result.txId,
+          kind: 'move',
+          deadlineAt: Date.now() + MOVE_SETTLE_MS,
+          watches: movePrepared.dir === 'reveal'
+            ? [
+                { side: 'public', direction: 'rise', before: publicNow },
+                { side: 'private', direction: 'fall', before: balance },
+              ]
+            : [
+                { side: 'private', direction: 'rise', before: balance },
+                { side: 'public', direction: 'fall', before: publicNow },
+              ],
+        })
         setMoveLagging(false)
         setMoveStep('settling')
         // Kick both reads now — each side lags differently and neither is worth waiting a poll for.
@@ -484,12 +522,17 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
       })
       if (result.outcome === 'Commit') {
         // Committed, but the spend is not VISIBLE until the index catches up — the same 60–90s lag
-        // the move flow has. A send has no rise to watch, so the settle loop watches the
-        // spent-from balance FALL instead.
-        sendPreBalance.current = sendSource === 'public'
-          ? (revealed.status === 'done' ? revealed.amount : null)
-          : balance
-        sendDeadline.current = Date.now() + MOVE_SETTLE_MS
+        // the move flow has. A send has no rise to watch, so the watch is on the spent-from balance
+        // FALLING instead. It stays SINGLE-SIDED because a send genuinely moves one balance: the
+        // recipient's output is theirs, not ours, so there is no second side to wait for.
+        beginSettle({
+          txId: result.txId,
+          kind: 'send',
+          deadlineAt: Date.now() + MOVE_SETTLE_MS,
+          watches: [sendSource === 'public'
+            ? { side: 'public', direction: 'fall', before: publicNow }
+            : { side: 'private', direction: 'fall', before: balance }],
+        })
         setSendLagging(false)
         setSendStep('settling')
         rescan()
@@ -528,8 +571,16 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
   const publicBalance: BalanceView =
     revealed.status === 'done' ? { status: 'ready', microtari: revealed.amount ?? 0n }
     : revealed.status === 'unavailable' ? { status: 'unavailable' }
-    : lastRevealed.current !== null ? { status: 'ready', microtari: lastRevealed.current }
+    : lastRevealed.current !== null ? { status: 'ready', microtari: lastRevealed.current.amount }
     : { status: 'loading' }
+
+  /**
+   * The generation of the figure `publicBalance` is ACTUALLY SHOWING — which is not always the
+   * live read's generation, because of the held-value fallback above.
+   */
+  const publicShownGeneration =
+    revealed.status === 'done' ? revealed.generation
+    : lastRevealed.current?.generation ?? revealed.generation
 
   /**
    * The combined balance.
@@ -547,12 +598,23 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
    * specifically wrong by the amount just sent, which is the number the user is looking at the hero
    * to check. M7's rule does not distinguish between the two: what matters is that something
    * committed and the index is behind.
+   *
+   * It now reads the CONTEXT's flag rather than this screen's step, so it stays true after Done and
+   * after the modal is closed and reopened. The step machines below are how a transaction is
+   * presented; `isSettling` is whether one is actually outstanding.
    */
   const total = computeTotal({
     privateBalance,
     privateIncomplete: scan.incomplete,
     publicBalance,
-    settling: moveStep === 'settling' || sendStep === 'settling',
+    settling: isSettling,
+    settleLagged,
+    // The freshness pair. Two `ready` figures from different refreshes describe different moments
+    // and must not be added — see computeTotal. This is what makes the residual flash after a
+    // reveal (new public, still-stale private) structurally unreachable rather than merely
+    // covered by the settle watches.
+    privateGeneration: scan.generation,
+    publicGeneration: publicShownGeneration,
   })
 
 

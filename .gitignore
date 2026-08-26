@@ -21,6 +21,9 @@ tarijs-reference/
 # Private working notes — kept locally, not committed
 PROJECT_STATE.md
 
+# Live-seeding output. HOLDS A MNEMONIC — conceal-seed.live.ts writes here by default.
+scratchpad/
+
 # macOS
 .DS_Store
 

@@ -229,7 +229,7 @@ function PaymentMessageCard({ message, lid, flashed }: { message: CaravelMessage
 // ── Component ────────────────────────────────────────────────────────────────────
 
 export default function ChatApp() {
-  const { wallet, address, scan, revealed, messages, nostrPubkeyHex, messagingStatus, contacts, acceptContact, contactAddresses, setManualTariAddress, createMessagingProvider, recordSentMessage, deleteConversation, editMessage, reactMessage, getRelayStates, reconnectAll, balanceHidden, setBalanceHidden, groups, createGroup, acceptGroup, declineGroup, leaveGroup, reinviteGroup } = useWallet()
+  const { wallet, address, scan, revealed, isSettling, settleLagged, messages, nostrPubkeyHex, messagingStatus, contacts, acceptContact, contactAddresses, setManualTariAddress, createMessagingProvider, recordSentMessage, deleteConversation, editMessage, reactMessage, getRelayStates, reconnectAll, balanceHidden, setBalanceHidden, groups, createGroup, acceptGroup, declineGroup, leaveGroup, reinviteGroup } = useWallet()
   const [walletOpen, setWalletOpen] = useState(false)
   const [profileOpen, setProfileOpen] = useState(false)
   // The user's own generated avatar (deterministic gradient from their pubkey hash) — used for the
@@ -1254,12 +1254,20 @@ export default function ChatApp() {
                   : balance === null ? { status: 'loading' }
                   : { status: 'ready', microtari: balance },
                 privateIncomplete: scan.incomplete,
+                // Same freshness rule as the modal's hero. The pill is smaller, not laxer — a
+                // wrong total is no more acceptable for being a pill.
+                privateGeneration: scan.generation,
+                publicGeneration: revealed.generation,
                 publicBalance:
                   revealed.status === 'done' ? { status: 'ready', microtari: revealed.amount ?? 0n }
                   : revealed.status === 'unavailable' ? { status: 'unavailable' }
                   : { status: 'loading' },
-                // The pill has no move flow of its own; a settle shows here as an ordinary re-read.
-                settling: false,
+                // The pill has no move flow of its OWN, but the wallet does, and the settle it
+                // starts is wallet state — it outlives the modal that started it. Passing `false`
+                // here meant the pill kept drawing a confident figure over exactly the pair the
+                // hero three lines away was refusing to add.
+                settling: isSettling,
+                settleLagged,
               })
               const balanceValue = totalPillValue(total, balanceHidden)
               // Bright only when the figure is a fact. A dash or an ellipsis stays muted so the

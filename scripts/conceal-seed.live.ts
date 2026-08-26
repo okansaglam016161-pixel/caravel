@@ -29,7 +29,8 @@
 // IT SPENDS REAL TESTNET FAUCET FUNDS on every run, which is why it is opt-in rather than part of
 // `npm test`.
 
-import { writeFileSync } from 'node:fs'
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { dirname } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   Network,
@@ -57,9 +58,14 @@ const INDEXER_URL = 'https://ootle-indexer-a.tari.com'
  * Learned the hard way on the first run: vitest buffers test stdout, the console output never
  * surfaced, and a wallet holding 1000 revealed tTARI was stranded because its mnemonic existed
  * nowhere else. A seeding script whose only output can be lost to a scrollback is a broken seeding
- * script. Gitignored (.gitignore:31 covers .claude/, and this path is outside the repo entirely).
+ * script.
+ *
+ * RELATIVE, and gitignored. It used to be an absolute path into one machine's temp directory,
+ * which meant the script only worked on the machine that wrote it. It holds a MNEMONIC, so moving
+ * it inside the repo is only safe because `scratchpad/` is in .gitignore — check that before
+ * changing this. Override with CARAVEL_SEED_OUT to put it somewhere else.
  */
-const OUT_FILE = '/private/tmp/claude-501/-Users-okz61-Desktop-caravel/5d7a5736-af17-420f-b568-4461506f1113/scratchpad/seeded-wallet.txt'
+const OUT_FILE = process.env.CARAVEL_SEED_OUT ?? 'scratchpad/seeded-wallet.txt'
 
 /** Reserved for the DRY RUN only. Generous so the simulation runs to completion; refunded. */
 const FEE_PROBE_MICROTARI = 200_000n
@@ -154,6 +160,10 @@ describe('seed a wallet with a REVEALED balance', () => {
       mnemonic,
       '',
     ].join('\n')
+    // The default lives in the repo now, and `scratchpad/` may not exist on a fresh clone. Create
+    // it rather than lose a funded wallet's mnemonic to an ENOENT, which is the exact failure the
+    // comment above this constant records.
+    mkdirSync(dirname(OUT_FILE), { recursive: true })
     writeFileSync(OUT_FILE, record)
     console.log('\n' + record)
     console.log(`  (also written to ${OUT_FILE})\n`)

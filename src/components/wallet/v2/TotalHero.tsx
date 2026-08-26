@@ -70,7 +70,11 @@ export function TotalHero({ total, privateBalance, publicBalance, hidden }: {
     if (hidden) return <span style={{ letterSpacing: '0.08em' }}>{MASK}</span>
     switch (total.status) {
       case 'ready': return fmt6(total.microtari)
-      case 'settling': return total.microtari !== null ? fmt6(total.microtari) : '···'
+      // NO NUMBER while settling. The balances are mid-transition, so any figure here is
+      // arithmetic across two different moments — which is how a confident 1100.207422 once
+      // appeared directly above the words "updating after your last move…". The caption below
+      // carries the whole message on its own.
+      case 'settling': return '···'
       case 'loading': return '···'
       case 'unreadable': return '—'
     }
@@ -135,7 +139,7 @@ export function totalPillValue(total: TotalView, hidden: boolean): string {
   if (hidden) return '••••'
   switch (total.status) {
     case 'ready': return fmt6(total.microtari)
-    case 'settling': return total.microtari !== null ? fmt6(total.microtari) : '···'
+    case 'settling': return '···'   // No number mid-transition — same rule as the hero.
     case 'loading': return '···'
     case 'unreadable': return '—'
   }

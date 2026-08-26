@@ -191,7 +191,7 @@ function Drive() {
   const props: WalletModalV2Props = {
     privateBalance: priv, publicBalance: pub, hidden, networkChip: 'Esmeralda testnet',
     total: computeTotal({
-      privateBalance: priv, publicBalance: pub, privateIncomplete: incomplete,
+      privateBalance: priv, publicBalance: pub, privateGeneration: 1, publicGeneration: 1, settleLagged: false, privateIncomplete: incomplete,
       settling: move.step === 'settling',
     }),
     scanSummary: {
@@ -383,7 +383,7 @@ function still(over: Partial<WalletModalV2Props>): WalletModalV2Props {
     receive: { address: ADDRESS, copied: false, onCopy: noop },
     activity: ACTIVITY.map(r => <ActivityRowShell key={r.id} row={r} hidden={false} />),
     scanSummary: { status: 'done', scanned: 1247, owned: 6, progressScanned: 1247 },
-    total: computeTotal({ privateBalance: ready(PRIVATE), publicBalance: ready(PUBLIC), privateIncomplete: false, settling: false }),
+    total: computeTotal({ privateBalance: ready(PRIVATE), publicBalance: ready(PUBLIC), privateGeneration: 1, publicGeneration: 1, settleLagged: false, privateIncomplete: false, settling: false }),
     send: {
       view: { step: 'form', recipient: '', amount: '', note: '', available: PRIVATE, canReview: false, source: 'private', canChooseSource: true },
       hidden: false, onSource: noop, onRecipient: noop, onAmount: noop, onNote: noop, onMax: noop,
@@ -474,19 +474,22 @@ function Gallery() {
 
     // ── The total ──
     { label: 'TOTAL · BOTH CONFIDENT', props: still({}) },
-    { label: 'TOTAL · SETTLING (a move is in flight)', props: still({ total: computeTotal({ privateBalance: ready(PRIVATE), publicBalance: ready(PUBLIC), privateIncomplete: false, settling: true }) }) },
-    { label: 'TOTAL · SETTLING, MID-RESCAN', props: still({ privateBalance: LOADING, publicBalance: LOADING, total: computeTotal({ privateBalance: LOADING, publicBalance: LOADING, privateIncomplete: false, settling: true }) }) },
-    { label: 'TOTAL · “—” PUBLIC UNAVAILABLE', props: still({ publicBalance: UNAVAIL, total: computeTotal({ privateBalance: ready(PRIVATE), publicBalance: UNAVAIL, privateIncomplete: false, settling: false }) }) },
-    { label: 'TOTAL · “—” PRIVATE UNAVAILABLE', props: still({ privateBalance: UNAVAIL, total: computeTotal({ privateBalance: UNAVAIL, publicBalance: ready(PUBLIC), privateIncomplete: false, settling: false }) }) },
-    { label: 'TOTAL · “—” SCAN INCOMPLETE', props: still({ total: computeTotal({ privateBalance: ready(PRIVATE), publicBalance: ready(PUBLIC), privateIncomplete: true, settling: false }) }) },
-    { label: 'TOTAL · “—” BOTH UNAVAILABLE', props: still({ privateBalance: UNAVAIL, publicBalance: UNAVAIL, total: computeTotal({ privateBalance: UNAVAIL, publicBalance: UNAVAIL, privateIncomplete: false, settling: false }) }) },
-    { label: 'TOTAL · LOADING', props: still({ privateBalance: LOADING, publicBalance: LOADING, total: computeTotal({ privateBalance: LOADING, publicBalance: LOADING, privateIncomplete: false, settling: false }) }) },
+    { label: 'TOTAL · SETTLING (a move is in flight)', props: still({ total: computeTotal({ privateBalance: ready(PRIVATE), publicBalance: ready(PUBLIC), privateGeneration: 1, publicGeneration: 1, settleLagged: false, privateIncomplete: false, settling: true }) }) },
+    { label: 'TOTAL · SETTLING, MID-RESCAN', props: still({ privateBalance: LOADING, publicBalance: LOADING, total: computeTotal({ privateBalance: LOADING, publicBalance: LOADING, privateGeneration: 1, publicGeneration: 1, settleLagged: false, privateIncomplete: false, settling: true }) }) },
+    { label: 'TOTAL · “—” PUBLIC UNAVAILABLE', props: still({ publicBalance: UNAVAIL, total: computeTotal({ privateBalance: ready(PRIVATE), publicBalance: UNAVAIL, privateGeneration: 1, publicGeneration: 1, settleLagged: false, privateIncomplete: false, settling: false }) }) },
+    { label: 'TOTAL · “—” PRIVATE UNAVAILABLE', props: still({ privateBalance: UNAVAIL, total: computeTotal({ privateBalance: UNAVAIL, publicBalance: ready(PUBLIC), privateGeneration: 1, publicGeneration: 1, settleLagged: false, privateIncomplete: false, settling: false }) }) },
+    { label: 'TOTAL · “—” SCAN INCOMPLETE', props: still({ total: computeTotal({ privateBalance: ready(PRIVATE), publicBalance: ready(PUBLIC), privateGeneration: 1, publicGeneration: 1, settleLagged: false, privateIncomplete: true, settling: false }) }) },
+    { label: 'TOTAL · “—” BOTH UNAVAILABLE', props: still({ privateBalance: UNAVAIL, publicBalance: UNAVAIL, total: computeTotal({ privateBalance: UNAVAIL, publicBalance: UNAVAIL, privateGeneration: 1, publicGeneration: 1, settleLagged: false, privateIncomplete: false, settling: false }) }) },
+    { label: 'TOTAL · SETTLING (no number, ever)', props: still({ total: computeTotal({ privateGeneration: 1, publicGeneration: 1, settleLagged: false, privateIncomplete: false, privateBalance: ready(850_250_000n), publicBalance: ready(249_957_422n), settling: true }) }) },
+    { label: 'TOTAL · “—” LAGGED PAST THE DEADLINE', props: still({ total: computeTotal({ privateGeneration: 1, publicGeneration: 1, settleLagged: true, privateIncomplete: false, privateBalance: ready(850_250_000n), publicBalance: ready(249_957_422n), settling: false }) }) },
+    { label: 'TOTAL · MISMATCHED FRESHNESS (never a number)', props: still({ total: computeTotal({ privateGeneration: 1, publicGeneration: 2, settleLagged: false, privateIncomplete: false, privateBalance: ready(900_000_000n), publicBalance: ready(199_000_000n), settling: false }) }) },
+    { label: 'TOTAL · LOADING', props: still({ privateBalance: LOADING, publicBalance: LOADING, total: computeTotal({ privateBalance: LOADING, publicBalance: LOADING, privateGeneration: 1, publicGeneration: 1, settleLagged: false, privateIncomplete: false, settling: false }) }) },
     { label: 'TOTAL · HIDDEN', props: still({ hidden: true }) },
 
     // ── The scan diagnostic ──
     { label: 'SCAN STRIP · SCANNED · OWNED', props: still({}) },
     { label: 'SCAN STRIP · SCANNING', props: still({ scanSummary: { status: 'scanning', scanned: 0, owned: 0, progressScanned: 812 } }) },
-    { label: 'SCAN STRIP · SCAN FAILED', props: still({ scanSummary: { status: 'error', scanned: 0, owned: 0, progressScanned: 0 }, privateBalance: UNAVAIL, total: computeTotal({ privateBalance: UNAVAIL, publicBalance: ready(PUBLIC), privateIncomplete: false, settling: false }) }) },
+    { label: 'SCAN STRIP · SCAN FAILED', props: still({ scanSummary: { status: 'error', scanned: 0, owned: 0, progressScanned: 0 }, privateBalance: UNAVAIL, total: computeTotal({ privateBalance: UNAVAIL, publicBalance: ready(PUBLIC), privateGeneration: 1, publicGeneration: 1, settleLagged: false, privateIncomplete: false, settling: false }) }) },
     { label: 'SCAN STRIP · NEVER SCANNED', props: still({ scanSummary: { status: 'idle', scanned: 0, owned: 0, progressScanned: 0 } }) },
 
     // ── Refresh ──

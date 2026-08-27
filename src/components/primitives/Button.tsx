@@ -1,5 +1,6 @@
 //   Button — primary / secondary / quiet / danger, plus a busy state.
-//   Token-driven (design "Primitives → BUTTONS"). All variants: padding 13px, r-* 12px, 14px.
+//   Token-driven (foundation "05 PRIMITIVES → Buttons"). Radius is the control step (md, 10px);
+//   weight is 600 across every variant — v0.3 draws buttons at 600, not 700.
 
 import type { ButtonHTMLAttributes, CSSProperties, ReactNode } from 'react'
 import Spinner from './Spinner'
@@ -19,7 +20,7 @@ const BASE: CSSProperties = {
   justifyContent: 'center',
   gap: 9,
   padding: 13,
-  borderRadius: 12,
+  borderRadius: 'var(--r-md)',
   fontSize: 14,
   fontFamily: 'inherit',
   cursor: 'pointer',
@@ -29,32 +30,34 @@ const BASE: CSSProperties = {
 }
 
 const VARIANTS: Record<ButtonVariant, CSSProperties> = {
-  primary: { background: 'var(--teal-grad)', color: 'var(--ink-on-accent)', fontWeight: 700 },
+  // Flat accent, not a gradient — the foundation forbids brand gradients.
+  primary: { background: 'var(--accent-400)', color: 'var(--ink-on-accent)', fontWeight: 600 },
   secondary: {
     background: 'var(--surface-raised)',
-    border: '1px solid rgba(var(--teal-500-rgb), 0.26)',
-    color: 'var(--text-bright)',
-    fontWeight: 700,
+    border: '1px solid var(--border-strong)',
+    color: 'var(--text-primary)',
+    fontWeight: 600,
   },
+  // The foundation's GHOST: no border, accent ink, a tint only on interaction.
   quiet: {
     background: 'transparent',
-    border: '1px solid rgba(var(--border-rgb), 0.2)',
-    color: 'var(--text-muted)',
+    border: '1px solid transparent',
+    color: 'var(--accent-300)',
     fontWeight: 600,
   },
   danger: {
-    background: 'rgba(var(--danger-rgb), 0.08)',
-    border: '1px solid rgba(var(--danger-rgb), 0.3)',
+    background: 'rgba(var(--danger-rgb), 0.10)',
+    border: '1px solid rgba(var(--danger-rgb), 0.28)',
     color: 'var(--danger-300)',
-    fontWeight: 700,
+    fontWeight: 600,
   },
 }
 
 const BUSY: CSSProperties = {
   background: 'var(--surface-raised)',
-  border: '1px solid rgba(var(--border-rgb), 0.14)',
-  color: 'var(--text-faint-dim)',
-  fontWeight: 700,
+  border: '1px solid var(--border)',
+  color: 'var(--text-disabled)',
+  fontWeight: 600,
   cursor: 'default',
 }
 

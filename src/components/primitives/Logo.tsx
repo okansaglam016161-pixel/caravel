@@ -1,46 +1,56 @@
-//   Logo — canonical Caravel sail mark (token-driven): the "Full Sail" geometry from the
-//   Logo Refinement design — one dominant mainsail plus a small jib. This is the ONLY copy
-//   of the mark in the app; every surface (chat header, landing nav/footer/watermarks,
-//   entry flows, wallet modal) renders through it, so the shape can never drift again.
-//   The "Logo Refresh" fingerprint exploration remains a separate direction — NOT adopted.
+//   Logo — the Caravel mark, v0.3 "Foundation".
+//
+//   ── WHY THIS IS AN <img> AND NO LONGER AN INLINE SVG ────────────────────────
+//
+//   The old mark was drawn here as three hand-authored paths ("Full Sail") in three teal
+//   treatments. v0.3 replaces the mark itself, and the design project ships it as artwork rather
+//   than as geometry — assets/logo-blue.png and assets/logo-light.png. There is no SVG source to
+//   transcribe, and redrawing artwork by eye is how a mark drifts, which is exactly what the old
+//   header of this file warned against. So the artwork IS the source, vendored into public/.
+//
+//   ── ONE TOKEN COLOUR PER SURFACE ────────────────────────────────────────────
+//
+//   The foundation allows exactly two renderings: "accent blue on light, light on the vault.
+//   Never teal, never gradients." So there are two assets and no tinting — the colour is baked in,
+//   which is the point. Caravel's shipped surfaces are all dark, so the LIGHT mark is the default.
+//
+//   ── THE PROPS SURVIVE, THE VARIANTS COLLAPSE ────────────────────────────────
+//
+//   `flat` and `mono` existed to pick between three teal treatments of one shape. v0.3 has two
+//   renderings chosen by SURFACE, not by emphasis, so both props now resolve to the same light
+//   mark. They are kept rather than removed so this pass stays a reskin: eleven call sites across
+//   the landing page, chat and the entry flows pass them, and rewriting those is composition work.
+//   Deprecated — new code should pass `onLight` instead.
 
 import type { CSSProperties } from 'react'
-import { useId } from 'react'
+
+/** The mark's intrinsic aspect ratio (358 x 401 artwork), so width follows from height. */
+const ASPECT = 358 / 401
 
 interface LogoProps {
+  /** Rendered height in px. Width follows the artwork's aspect ratio. */
   size?: number
-  /** Flat variant — solid teal main sail (--teal-grad-top) instead of the gradient. Matches the
-   *  entry-flows design canvas, which draws the mark flat. Default keeps the gradient brand mark. */
+  /** @deprecated v0.3 has one mark per surface, not three treatments. Resolves to the light mark. */
   flat?: boolean
-  /** Mono variant — the whole mark in teal-500 with a 0.4 jib. Matches the landing-page
-   *  design canvas (nav + footer marks). Takes precedence over `flat`. */
+  /** @deprecated As `flat`. Resolves to the light mark. */
   mono?: boolean
-  /** Passed through to the <svg>. For the watermark call sites, which position the mark or
-   *  render it at low opacity (landing donation card, empty chat pane, empty Activity list). */
+  /** Use the accent-blue mark, for placement on a LIGHT surface. Default is the light mark, for
+   *  the vault and for the accent tile in the nav rail. */
+  onLight?: boolean
+  /** Passed through to the <img>. For the watermark call sites, which position the mark or render
+   *  it at low opacity (landing donation card, empty chat pane, empty Activity list). */
   style?: CSSProperties
 }
 
-export default function Logo({ size = 30, flat = false, mono = false, style }: LogoProps) {
-  const gradId = useId()
-  const mainFill = mono ? 'var(--teal-500, #2DE0C6)' : flat ? 'var(--teal-grad-top, #34E5D0)' : `url(#${gradId})`
-  const midOpacity = mono ? 0.4 : 0.45
+export default function Logo({ size = 30, onLight = false, style }: LogoProps) {
   return (
-    <svg viewBox="0 0 44 44" width={size} height={size} style={style} aria-hidden="true">
-      {!flat && !mono && (
-        <defs>
-          <linearGradient id={gradId} x1="0" y1="0" x2="1" y2="1">
-            {/* light sail stop is the legacy accent light (no design-scale token — kept literal) */}
-            <stop offset="0" stopColor="var(--accL, #5CEAD6)" />
-            <stop offset="1" stopColor="var(--teal-grad-bottom, #12A594)" />
-          </linearGradient>
-        </defs>
-      )}
-      {/* mainsail */}
-      <path d="M20 3 C 33 8 37 22 36 31 L 20 31 Z" fill={mainFill} />
-      {/* jib — small headsail forward of the mast */}
-      <path d="M15.5 12 C 11 17 8.5 25 8.5 31 L 15.5 31 Z" fill="var(--teal-500, #2DE0C6)" opacity={midOpacity} />
-      {/* hull */}
-      <path d="M5 35 L 39 35 L 33.5 41 L 10.5 41 Z" fill="var(--teal-500, #2DE0C6)" />
-    </svg>
+    <img
+      src={onLight ? '/logo-blue.png' : '/logo-light.png'}
+      alt=""
+      aria-hidden="true"
+      width={Math.round(size * ASPECT)}
+      height={size}
+      style={{ display: 'block', height: size, width: 'auto', flexShrink: 0, ...style }}
+    />
   )
 }

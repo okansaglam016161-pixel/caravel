@@ -11,7 +11,7 @@
 // balance and account state the builders already read.
 
 import type { ReactNode } from 'react'
-import { C, border, tealBorder, tealFill, warnFill } from './tokens'
+import { C, border, tealBorder, tealFill, warnBorder, warnFill } from './tokens'
 import { Arrow, Eye, Lock, Shield, Spinner } from './icons'
 import { MASK_SHORT, fmt6 } from './format'
 import { AmountField, SectionLabel } from './primitives'
@@ -188,7 +188,7 @@ export function PermanenceNote() {
   return (
     <div style={{
       display: 'flex', gap: 10, padding: '11px 13px', borderRadius: 11,
-      background: warnFill(0.05), border: `1px solid rgba(255,180,60,0.26)`,
+      background: warnFill(0.10), border: warnBorder(0.28),
     }}>
       <Eye size={14} color={C.warn} />
       <div style={{ fontSize: 12, color: C.mutedDim, lineHeight: 1.55 }}>

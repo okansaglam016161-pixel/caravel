@@ -106,7 +106,7 @@ export default function RestoreFlow({ onBack }: { onBack: () => void }) {
     const choose = (s: DerivationScheme) => { setScheme(s); setStep('password') }
     return (
       <div style={entryCard({ padding: 22, border: '1px solid rgba(var(--warn-rgb),0.3)' })}>
-        <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--text-primary)', marginBottom: 6 }}>Which wallet is this?</div>
+        <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 6 }}>Which wallet is this?</div>
         <div style={{ fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.55, marginBottom: 18 }}>
           This phrase is valid in both recovery-phrase formats, which is extraordinarily rare. Pick
           the one it came from — choosing wrong opens a different, empty wallet, so if you aren’t
@@ -167,7 +167,7 @@ export default function RestoreFlow({ onBack }: { onBack: () => void }) {
   if (step === 'password') {
     return (
       <div style={entryCard({ padding: 22, border: '1px solid rgba(var(--border-rgb),0.16)' })}>
-        <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--text-primary)', marginBottom: 6 }}>Set a new password</div>
+        <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 6 }}>Set a new password</div>
         <div style={{ fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.55, marginBottom: 18 }}>For unlocking the restored wallet on this device.</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 14 }}>
           <PasswordField value={pass} onChange={v => { setPass(v); setError('') }} />
@@ -189,7 +189,7 @@ export default function RestoreFlow({ onBack }: { onBack: () => void }) {
   // ── Phrase entry ──────────────────────────────────────────────────────────────
   return (
     <div style={entryCard({ padding: 22, border: '1px solid rgba(var(--border-rgb),0.16)' })}>
-      <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--text-primary)', marginBottom: 6 }}>Enter your recovery phrase</div>
+      <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 6 }}>Enter your recovery phrase</div>
       <div style={{ fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.55, marginBottom: 16 }}>All 24 words, in order. Paste works too.</div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 7, marginBottom: 16 }}>
         {phraseInputs.map((word, i) => {

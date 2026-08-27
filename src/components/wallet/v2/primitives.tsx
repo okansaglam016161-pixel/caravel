@@ -13,8 +13,8 @@ import { Copy, Spinner } from './icons'
 export function ModalShell({ children }: { children: ReactNode }) {
   return (
     <div style={{
-      width: `min(${MODAL_WIDTH}px, 94vw)`, maxHeight: '88vh', borderRadius: 20, background: C.modal,
-      border: border(0.14), boxShadow: '0 30px 80px rgba(0,0,0,0.55)', overflow: 'hidden',
+      width: `min(${MODAL_WIDTH}px, 94vw)`, maxHeight: '88vh', borderRadius: 'var(--r-xl)', background: C.modal,
+      border: '1px solid var(--border)', boxShadow: 'var(--e3)', overflow: 'hidden',
       display: 'flex', flexDirection: 'column',
     }}>{children}</div>
   )
@@ -22,12 +22,12 @@ export function ModalShell({ children }: { children: ReactNode }) {
 
 const headerBase: CSSProperties = {
   display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-  padding: '18px 22px', borderBottom: '1px solid rgba(120,150,210,0.1)', flexShrink: 0,
+  padding: '18px 22px', borderBottom: '1px solid var(--border)', flexShrink: 0,
 }
 
 export const iconBtn: CSSProperties = {
   display: 'flex', alignItems: 'center', justifyContent: 'center', width: 30, height: 30,
-  borderRadius: 9, background: C.raised, border: border(0.16), color: C.mutedDim,
+  borderRadius: 'var(--r-md)', background: C.raised, border: '1px solid var(--border)', color: C.mutedDim,
   fontSize: 14, cursor: 'pointer', flexShrink: 0, userSelect: 'none',
 }
 
@@ -39,7 +39,7 @@ export function RootHeader({ chip, right }: { chip?: string; right: ReactNode })
         <span style={{ fontSize: 17, fontWeight: 700, color: C.primary }}>Wallet</span>
         {chip && (
           <span style={{
-            padding: '3px 10px', borderRadius: 999, fontSize: 11, fontWeight: 600,
+            padding: '3px 10px', borderRadius: 'var(--r-pill)', fontSize: 11, fontWeight: 600,
             color: C.tealLabel, background: tealFill(0.07), border: tealBorder(0.22),
           }}>{chip}</span>
         )}
@@ -78,12 +78,12 @@ export function Body({ children, gap = 12 }: { children: ReactNode; gap?: number
 export type ButtonTone = 'primary' | 'neutral' | 'amber' | 'disabled'
 
 const toneStyle: Record<ButtonTone, CSSProperties> = {
-  // The routine action. Teal gradient, dark ink — the most confident control in the product.
-  primary: { background: `linear-gradient(180deg, ${C.tealGradTop}, ${C.tealGradBottom})`, color: C.inkOnTeal, border: 'none' },
-  neutral: { background: C.inset, color: C.body, border: border(0.28) },
+  // The routine action. FLAT accent — the foundation forbids brand gradients.
+  primary: { background: C.teal, color: C.inkOnTeal, border: 'none' },
+  neutral: { background: C.inset, color: C.body, border: '1px solid var(--border-strong)' },
   // The permanent action. Amber ground and text, NOT red: it will work exactly as described.
-  amber: { background: C.amberGround, color: C.warn300, border: warnBorder(0.45) },
-  disabled: { background: C.raised, color: C.ghost, border: border(0.12), cursor: 'not-allowed' },
+  amber: { background: C.amberGround, color: C.warn300, border: warnBorder(0.40) },
+  disabled: { background: C.raised, color: C.ghost, border: '1px solid var(--border)', cursor: 'not-allowed' },
 }
 
 export function Button({ tone = 'primary', children, onClick, flex }: {
@@ -97,7 +97,7 @@ export function Button({ tone = 'primary', children, onClick, flex }: {
       onKeyDown={e => { if (!dead && e.key === 'Enter') onClick?.() }}
       style={{
         display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '13px 0',
-        borderRadius: 11, fontSize: 14.5, fontWeight: 700, cursor: dead ? 'not-allowed' : 'pointer',
+        borderRadius: 'var(--r-md)', fontSize: 14, fontWeight: 600, cursor: dead ? 'not-allowed' : 'pointer',
         userSelect: 'none', ...(flex ? { flex } : {}), ...toneStyle[tone],
       }}
     >{children}</span>
@@ -109,7 +109,7 @@ export function Button({ tone = 'primary', children, onClick, flex }: {
 /** The recessed panel the fee and resulting-balance rows sit in. */
 export function DetailCard({ children }: { children: ReactNode }) {
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', borderRadius: 14, background: C.trough, border: border(0.14), overflow: 'hidden' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', borderRadius: 'var(--r-lg)', background: C.trough, border: '1px solid var(--border)', overflow: 'hidden' }}>
       {children}
     </div>
   )
@@ -122,7 +122,7 @@ export function DetailRow({ label, value, valueColor = C.muted, last = false }: 
     <div style={{
       display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12,
       padding: '13px 18px', fontSize: 13,
-      ...(last ? {} : { borderBottom: '1px solid rgba(120,150,210,0.08)' }),
+      ...(last ? {} : { borderBottom: '1px solid var(--border)' }),
     }}>
       <span style={{ color: C.mutedDim }}>{label}</span>
       <span style={{ fontFamily: MONO, color: valueColor, textAlign: 'right' }}>{value}</span>
@@ -146,7 +146,7 @@ export function TxRow({ txId, onCopy }: { txId: string; onCopy?: () => void }) {
   return (
     <div style={{
       display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-      padding: '11px 14px', borderRadius: 10, background: C.trough, border: border(0.1),
+      padding: '11px 14px', borderRadius: 'var(--r-md)', background: C.trough, border: '1px solid var(--border)',
     }}>
       <span style={{ fontFamily: MONO, fontSize: 11.5, color: C.faint }}>tx · {short}</span>
       <span role="button" tabIndex={0} onClick={onCopy} onKeyDown={e => e.key === 'Enter' && onCopy?.()} style={{ cursor: 'pointer', display: 'flex' }} aria-label="Copy transaction id">
@@ -207,10 +207,10 @@ export const SectionLabel = ({ children }: { children: ReactNode }) => (
 export type PanelTone = 'neutral' | 'teal' | 'amber' | 'danger'
 
 const panelTone: Record<PanelTone, { bg: string; bd: string }> = {
-  neutral: { bg: C.raised, bd: border(0.14) },
-  teal: { bg: tealFill(0.05), bd: tealBorder(0.3) },
-  amber: { bg: C.raised, bd: '1px solid rgba(255,180,60,0.28)' },
-  danger: { bg: 'rgba(255,122,122,0.04)', bd: '1px solid rgba(255,122,122,0.28)' },
+  neutral: { bg: C.raised, bd: '1px solid var(--border)' },
+  teal: { bg: tealFill(0.08), bd: tealBorder(0.22) },
+  amber: { bg: 'var(--card-warn)', bd: '1px solid var(--card-warn-border)' },
+  danger: { bg: 'var(--card-danger)', bd: '1px solid var(--card-danger-border)' },
 }
 
 /**
@@ -224,7 +224,7 @@ export function Panel({ tone = 'neutral', title, titleColor, meta, metaColor, ch
 }) {
   const t = panelTone[tone]
   return (
-    <div style={{ padding: 18, borderRadius: 14, background: t.bg, border: t.bd }}>
+    <div style={{ padding: 20, borderRadius: 'var(--r-lg)', background: t.bg, border: t.bd }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 6 }}>
         <span style={{ display: 'flex', alignItems: 'center', gap: 9, fontSize: 14, fontWeight: 700, color: titleColor ?? C.primary }}>{title}</span>
         {meta && <span style={{ fontFamily: MONO, fontSize: 12, color: metaColor ?? C.faintDim, flexShrink: 0 }}>{meta}</span>}
@@ -249,8 +249,8 @@ export function TextField({ value, onChange, placeholder, mono = true, invalid, 
 }) {
   const shell: CSSProperties = {
     display: 'flex', alignItems: multiline ? 'flex-start' : 'center', gap: 9,
-    padding: '13px 15px', borderRadius: 11, background: C.trough,
-    border: invalid ? '1px solid rgba(255,122,122,0.45)' : border(0.14),
+    padding: '13px 15px', borderRadius: 'var(--r-md)', background: C.trough,
+    border: invalid ? '1px solid var(--danger-500)' : '1px solid var(--border-strong)',
   }
   const inner: CSSProperties = {
     flex: 1, minWidth: 0, background: 'transparent', border: 'none', outline: 'none', padding: 0,
@@ -280,8 +280,8 @@ export function AmountField({ value, onChange, onMax, maxUsed, accent = 'teal', 
   const teal = accent === 'teal'
   return (
     <div style={{
-      padding: '16px 18px', borderRadius: 14, background: C.trough,
-      border: error ? '1px solid rgba(255,122,122,0.4)' : teal ? tealBorder(0.28) : border(0.22),
+      padding: '16px 18px', borderRadius: 'var(--r-lg)', background: C.trough,
+      border: error ? '1px solid var(--danger-500)' : teal ? tealBorder(0.28) : '1px solid var(--border-strong)',
     }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 8 }}>
         <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.14em', color: C.faintDim }}>AMOUNT</span>
@@ -300,7 +300,7 @@ export function AmountField({ value, onChange, onMax, maxUsed, accent = 'teal', 
         <span style={{ fontFamily: MONO, fontSize: 14, color: C.tealDim, flexShrink: 0 }}>TARI</span>
         {onMax && (
           <span role="button" tabIndex={0} onClick={onMax} onKeyDown={e => e.key === 'Enter' && onMax()} style={{
-            padding: '5px 12px', borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: 'pointer', flexShrink: 0, userSelect: 'none',
+            padding: '5px 12px', borderRadius: 'var(--r-sm)', fontSize: 12, fontWeight: 600, cursor: 'pointer', flexShrink: 0, userSelect: 'none',
             background: maxUsed ? C.maxActive : teal ? tealFill(0.1) : C.inset,
             border: maxUsed ? border(0.4) : teal ? tealBorder(0.3) : border(0.22),
             color: maxUsed ? C.body : teal ? C.teal300 : C.muted,
@@ -327,7 +327,7 @@ export function TabBar<T extends string>({ tabs, active, onSelect }: {
   tabs: readonly T[]; active: T; onSelect: (t: T) => void
 }) {
   return (
-    <div style={{ display: 'flex', gap: 4, padding: 4, borderRadius: 12, background: C.trough, border: border(0.1) }}>
+    <div style={{ display: 'flex', gap: 4, padding: 4, borderRadius: 'var(--r-md)', background: C.trough, border: '1px solid var(--border)' }}>
       {tabs.map(t => {
         const on = t === active
         return (
@@ -335,11 +335,11 @@ export function TabBar<T extends string>({ tabs, active, onSelect }: {
             key={t} role="tab" tabIndex={0} aria-selected={on}
             onClick={() => onSelect(t)} onKeyDown={e => e.key === 'Enter' && onSelect(t)}
             style={{
-              flex: 1, textAlign: 'center', padding: '8px 0', borderRadius: 9, cursor: 'pointer',
-              fontSize: 13, fontWeight: on ? 700 : 600, userSelect: 'none',
-              background: on ? C.inset : 'transparent',
-              color: on ? C.bright : C.mutedDim,
-              boxShadow: on ? `inset 0 0 0 1px rgba(45,224,198,0.22)` : 'none',
+              flex: 1, textAlign: 'center', padding: '8px 0', borderRadius: 'var(--r-md)', cursor: 'pointer',
+              fontSize: 13, fontWeight: on ? 600 : 500, userSelect: 'none',
+              background: on ? 'var(--nav-selected)' : 'transparent',
+              color: on ? C.bright : C.muted,
+              boxShadow: 'none',
             }}
           >{t.charAt(0).toUpperCase() + t.slice(1)}</span>
         )
@@ -389,7 +389,7 @@ export function ScanStrip({ scan, refreshing, onRefresh }: {
   return (
     <div style={{
       display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
-      padding: '8px 22px', borderBottom: '1px solid rgba(120,150,210,0.08)',
+      padding: '8px 22px', borderBottom: '1px solid var(--border)',
       background: C.trough, flexShrink: 0,
     }}>
       <span style={{

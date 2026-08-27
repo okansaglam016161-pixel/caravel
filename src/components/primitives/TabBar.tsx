@@ -1,5 +1,6 @@
 //   TabBar — segmented tab control. Token-driven (design "Primitives → TAB BAR").
-//   Container: --surface-trough + border, r-* 12. Active: --surface-inset + inset teal ring.
+//   Container: --surface-trough + border, radius md. Active: --nav-selected, the foundation's
+//   selected-nav treatment — a filled row, no ring.
 
 import type { CSSProperties } from 'react'
 
@@ -23,9 +24,9 @@ export default function TabBar({ tabs, active, onChange, style }: TabBarProps) {
         display: 'flex',
         gap: 4,
         padding: 5,
-        borderRadius: 12,
+        borderRadius: 'var(--r-md)',
         background: 'var(--surface-trough)',
-        border: '1px solid rgba(var(--border-rgb), 0.1)',
+        border: '1px solid var(--border)',
         ...style,
       }}
     >
@@ -41,15 +42,15 @@ export default function TabBar({ tabs, active, onChange, style }: TabBarProps) {
               flex: 1,
               textAlign: 'center',
               padding: '9px 0',
-              borderRadius: 9,
+              borderRadius: 'var(--r-md)',
               border: 'none',
               cursor: 'pointer',
               fontFamily: 'inherit',
               fontSize: 13,
-              fontWeight: on ? 700 : 600,
-              background: on ? 'var(--surface-inset)' : 'transparent',
-              color: on ? 'var(--text-bright)' : 'var(--text-muted-dim)',
-              boxShadow: on ? 'inset 0 0 0 1px rgba(var(--teal-500-rgb), 0.22)' : 'none',
+              fontWeight: on ? 600 : 500,
+              background: on ? 'var(--nav-selected)' : 'transparent',
+              color: on ? 'var(--text-bright)' : 'var(--text-muted)',
+              boxShadow: 'none',
             }}
           >
             {t.label}

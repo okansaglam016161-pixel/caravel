@@ -17,7 +17,7 @@
 //     amount on a transient network failure.
 
 import type { ReactNode } from 'react'
-import { C, tealBorder, tealFill } from './tokens'
+import { C, MONO, tealBorder, tealFill } from './tokens'
 import { Alert, Check, Eye, EyeOff, Shield, Spinner } from './icons'
 import {
   Body, Button, DetailCard, DetailRow, FeeRow, ModalShell, RootHeader, ScanStrip, SettleBar,
@@ -314,14 +314,14 @@ export default function WalletModalV2(p: WalletModalV2Props) {
       <SubHeader title={DIR[m.dir].title} onClose={p.onClose} />
       <Body gap={16}>
         <StatusBlock
-          ring={{ fill: 'rgba(255,122,122,0.08)', border: '1px solid rgba(255,122,122,0.3)' }}
+          ring={{ fill: 'rgba(var(--danger-rgb),0.10)', border: '1px solid rgba(var(--danger-rgb),0.28)' }}
           icon={<Alert color={C.danger} />}
           title="The move didn’t go through"
           sub="Your funds haven’t moved. You can try again."
         />
         <div style={{
           padding: '13px 15px', borderRadius: 11, background: C.errorGround,
-          border: '1px solid rgba(255,122,122,0.22)', fontFamily: "'IBM Plex Mono', monospace",
+          border: `1px solid rgba(var(--danger-rgb),0.28)`, fontFamily: MONO,
           fontSize: 11.5, lineHeight: 1.65, color: C.dangerText,
           overflowWrap: 'anywhere', userSelect: 'text', cursor: 'text',
           maxHeight: 180, overflowY: 'auto',
@@ -342,8 +342,8 @@ function Headline({ amount, dir }: { amount: bigint; dir: Dir }): ReactNode {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '14px 0 4px' }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 9, flexWrap: 'wrap', justifyContent: 'center' }}>
-        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 30, fontWeight: 600, color: C.bright }}>{fmt6(amount)}</span>
-        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 14, color: C.tealDim }}>TARI</span>
+        <span style={{ fontSize: 30, fontWeight: 600, letterSpacing: '-0.02em', fontFeatureSettings: "'tnum'", color: C.bright }}>{fmt6(amount)}</span>
+        <span style={{ fontSize: 14, fontWeight: 600, color: C.teal300 }}>TARI</span>
       </div>
       <span style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, fontWeight: 600, color: isReveal ? C.warn300 : C.tealLabel }}>
         {DIR[dir].verb}

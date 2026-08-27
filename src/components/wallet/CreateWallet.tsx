@@ -21,7 +21,7 @@ function Welcome({ onCreate, onRestore, genError }: { onCreate: () => void; onRe
   return (
     <div style={entryCard({ padding: '34px 26px 26px', border: '1px solid rgba(var(--border-rgb),0.16)', textAlign: 'center' })}>
       <div style={{ marginBottom: 18 }}><Logo size={46} flat /></div>
-      <div style={{ fontSize: 24, fontWeight: 800, color: 'var(--text-primary)', letterSpacing: '-0.02em', marginBottom: 10 }}>Create your Caravel wallet</div>
+      <div style={{ fontSize: 24, fontWeight: 700, color: 'var(--text-primary)', letterSpacing: '-0.02em', marginBottom: 10 }}>Create your Caravel wallet</div>
       <div style={{ fontSize: 14, color: 'var(--text-muted)', lineHeight: 1.6, marginBottom: 24 }}>Your keys are generated here in your browser and never leave this device. We hold nothing.</div>
       {genError && <div style={{ fontSize: 12, color: 'var(--danger-300)', marginBottom: 12 }}>{genError}</div>}
       <button onClick={onCreate} style={{ ...primaryBtn, padding: 14, fontSize: 15, marginBottom: 16 }}>Create wallet</button>
@@ -40,7 +40,7 @@ function SeedReveal({ words, onNext }: { words: string[]; onNext: () => void }) 
 
   return (
     <div style={entryCard({ padding: 22, border: '1px solid rgba(var(--warn-rgb),0.28)' })}>
-      <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--text-primary)', marginBottom: 6 }}>Your recovery phrase</div>
+      <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 6 }}>Your recovery phrase</div>
       <div style={{ fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.55, marginBottom: 14 }}>Write these 24 words down in order, offline.</div>
       <div style={{ display: 'flex', gap: 10, padding: '12px 14px', borderRadius: 11, background: 'rgba(var(--warn-rgb),0.05)', border: '1px solid rgba(var(--warn-rgb),0.28)', marginBottom: 14 }}>
         <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="var(--warn)" strokeWidth={2} strokeLinecap="round" style={{ flexShrink: 0, marginTop: 1 }}><path d="M12 8v5M12 17h.01" /><circle cx="12" cy="12" r="9" /></svg>
@@ -77,7 +77,7 @@ function SeedConfirm({ words, onBack, onNext }: { words: string[]; onBack: () =>
 
   return (
     <div style={entryCard({ padding: 22, border: '1px solid rgba(var(--border-rgb),0.16)' })}>
-      <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--text-primary)', marginBottom: 6 }}>Confirm your phrase</div>
+      <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 6 }}>Confirm your phrase</div>
       <div style={{ fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.55, marginBottom: 18 }}>Type these three words to prove you saved it.</div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 14 }}>
         {QUIZ_POSITIONS.map(pos => {
@@ -140,7 +140,7 @@ function SetPassword({ mnemonic }: { mnemonic: string }) {
 
   return (
     <div style={entryCard({ padding: 22, border: '1px solid rgba(var(--border-rgb),0.16)' })}>
-      <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--text-primary)', marginBottom: 6 }}>Set a password</div>
+      <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 6 }}>Set a password</div>
       <div style={{ fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.55, marginBottom: 18 }}>This unlocks your wallet on this device.</div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 14 }}>
         <PasswordField value={pass} onChange={v => { setPass(v); setError('') }} />

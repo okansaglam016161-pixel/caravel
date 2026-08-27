@@ -14,7 +14,7 @@
 
 import type { ReactNode } from 'react'
 import { QRCodeSVG } from 'qrcode.react'
-import { C, MONO, border, tealBorder, tealFill, warnFill } from './tokens'
+import { C, MONO, tealBorder, tealFill, warnBorder, warnFill } from './tokens'
 import { Alert, Check, Copy, Eye, EyeOff, Shield, Spinner } from './icons'
 import {
   AmountField, Body, Button, DetailCard, DetailRow, FieldLabel, Panel, PanelText,
@@ -78,7 +78,7 @@ export function FaucetPanel({ phase, received, balance, message, onClaim, onRefr
     return (
       <Panel title="Testnet faucet" meta={GRANT} metaColor={C.teal300}>
         <PanelText>{phase === 'claiming' ? 'Asking the faucet for funds.' : 'Waiting for the funds to show up in your balance.'}</PanelText>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, padding: 12, borderRadius: 11, background: C.inset, border: tealBorder(0.2), color: C.teal300, fontSize: 14, fontWeight: 700 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, padding: 12, borderRadius: 'var(--r-md)', background: C.inset, border: tealBorder(0.22), color: C.teal300, fontSize: 14, fontWeight: 600 }}>
           <Spinner size={15} />{phase === 'claiming' ? 'Claiming…' : 'Checking…'}
         </div>
       </Panel>
@@ -211,11 +211,11 @@ function SourceToggle({ source, onSource }: { source: SendSource; onSource: (s: 
         onClick={() => onSource(kind)} onKeyDown={e => e.key === 'Enter' && onSource(kind)}
         style={{
           flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
-          padding: '9px 0', borderRadius: 9, cursor: 'pointer', userSelect: 'none',
+          padding: '9px 0', borderRadius: 'var(--r-md)', cursor: 'pointer', userSelect: 'none',
           fontSize: 13, fontWeight: on ? 700 : 600,
           background: on ? C.inset : 'transparent',
           color: on ? (kind === 'private' ? C.teal300 : C.body) : C.mutedDim,
-          boxShadow: on ? `inset 0 0 0 1px ${kind === 'private' ? 'rgba(45,224,198,0.3)' : 'rgba(120,150,210,0.28)'}` : 'none',
+          boxShadow: 'none',
         }}>
         <Icon size={13} color={on ? (kind === 'private' ? C.teal : C.body) : C.mutedDim} />{label}
       </span>
@@ -224,7 +224,7 @@ function SourceToggle({ source, onSource }: { source: SendSource; onSource: (s: 
   return (
     <div>
       <FieldLabel>SPEND FROM</FieldLabel>
-      <div style={{ display: 'flex', gap: 4, padding: 4, borderRadius: 12, background: C.trough, border: border(0.1) }}>
+      <div style={{ display: 'flex', gap: 4, padding: 4, borderRadius: 'var(--r-md)', background: C.trough, border: '1px solid var(--border)' }}>
         {opt('private', 'Private', Shield)}
         {opt('public', 'Public', Eye)}
       </div>
@@ -246,9 +246,9 @@ function PrivacyNote({ source }: { source: SendSource }) {
   const isPrivate = source === 'private'
   return (
     <div style={{
-      display: 'flex', gap: 9, padding: '11px 13px', borderRadius: 11, fontSize: 12, lineHeight: 1.5,
+      display: 'flex', gap: 9, padding: '11px 13px', borderRadius: 'var(--r-md)', fontSize: 12, lineHeight: 1.5,
       background: isPrivate ? tealFill(0.05) : warnFill(0.05),
-      border: isPrivate ? tealBorder(0.22) : '1px solid rgba(255,180,60,0.26)',
+      border: isPrivate ? '1px solid var(--border-strong)' : warnBorder(0.28),
       color: isPrivate ? C.teal300 : C.mutedDim,
     }}>
       {isPrivate ? <Shield size={14} color={C.teal} /> : <Eye size={14} color={C.warn} />}
@@ -302,9 +302,9 @@ export function SendPanel({ view, hidden, onSource, onRecipient, onAmount, onNot
         </DetailCard>
         <PrivacyNote source={view.source} />
         {view.note && (
-          <div style={{ padding: '12px 14px', borderRadius: 11, background: C.trough, border: `1px dashed rgba(45,224,198,0.26)` }}>
+          <div style={{ padding: '12px 14px', borderRadius: 'var(--r-md)', background: C.trough, border: '1px dashed var(--border-strong)' }}>
             <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.12em', color: C.tealDim, marginBottom: 6 }}>PRIVATE NOTE</div>
-            <div style={{ fontSize: 13, color: '#C7E4DD', fontStyle: 'italic' }}>“{view.note}”</div>
+            <div style={{ fontSize: 13, color: 'var(--text-note)', fontStyle: 'italic' }}>“{view.note}”</div>
           </div>
         )}
         <div style={{ display: 'flex', gap: 10 }}>
@@ -368,7 +368,7 @@ export function SendPanel({ view, hidden, onSource, onRecipient, onAmount, onNot
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
         <StatusBlock
-          ring={{ fill: 'rgba(255,180,60,0.08)', border: '1px solid rgba(255,180,60,0.35)' }}
+          ring={{ fill: warnFill(0.10), border: warnBorder(0.35) }}
           icon={<Alert color={C.warn} />}
           title="Not confirmed yet"
           sub={view.message}
@@ -382,7 +382,7 @@ export function SendPanel({ view, hidden, onSource, onRecipient, onAmount, onNot
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       <StatusBlock
-        ring={{ fill: 'rgba(255,122,122,0.08)', border: '1px solid rgba(255,122,122,0.3)' }}
+        ring={{ fill: 'rgba(var(--danger-rgb),0.10)', border: '1px solid rgba(var(--danger-rgb),0.28)' }}
         icon={<Alert color={C.danger} />}
         title="The payment didn’t go through"
         sub="Nothing left your wallet and no fee was taken."
@@ -400,8 +400,8 @@ export function SendPanel({ view, hidden, onSource, onRecipient, onAmount, onNot
 export function VerbatimBox({ children }: { children: ReactNode }) {
   return (
     <div style={{
-      padding: '13px 15px', borderRadius: 11, background: C.errorGround,
-      border: '1px solid rgba(255,122,122,0.22)', fontFamily: MONO, fontSize: 11.5,
+      padding: '13px 15px', borderRadius: 'var(--r-md)', background: C.errorGround,
+      border: '1px solid rgba(var(--danger-rgb),0.28)', fontFamily: MONO, fontSize: 11.5,
       lineHeight: 1.65, color: C.dangerText, overflowWrap: 'anywhere',
       userSelect: 'text', cursor: 'text', maxHeight: 180, overflowY: 'auto',
     }}>{children}</div>
@@ -416,7 +416,7 @@ export function ReceivePanel({ address, copied, onCopy }: { address: string | nu
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16 }}>
         <div style={{
           display: 'flex', alignItems: 'center', justifyContent: 'center', width: 178, height: 178,
-          borderRadius: 14, background: C.raised, border: '1px dashed rgba(120,150,210,0.2)',
+          borderRadius: 'var(--r-lg)', background: C.raised, border: '1px dashed var(--border-strong)',
         }}><Spinner size={30} ring={3} color={C.mutedDim} /></div>
         <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5 }}>
           <span style={{ fontSize: 14, fontWeight: 700, color: C.muted }}>Preparing your address</span>
@@ -428,14 +428,17 @@ export function ReceivePanel({ address, copied, onCopy }: { address: string | nu
   }
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16 }}>
-      <div style={{ display: 'inline-flex', padding: 14, borderRadius: 14, background: C.bright }}>
-        <QRCodeSVG value={address} size={150} bgColor="#EAFBF7" fgColor="#04120F" level="M" />
+      {/* The QR keeps LITERAL colours, not tokens. qrcode.react writes them into fill attributes
+          and a scanner needs a guaranteed light-on-dark contrast ratio; a var() that failed to
+          resolve would produce an unreadable code rather than an ugly one. */}
+      <div style={{ display: 'inline-flex', padding: 14, borderRadius: 'var(--r-lg)', background: '#FFFFFF' }}>
+        <QRCodeSVG value={address} size={150} bgColor="#FFFFFF" fgColor="#0A1322" level="M" />
       </div>
       <span style={{ fontSize: 13, color: C.mutedDim, textAlign: 'center', lineHeight: 1.5 }}>
         Share this to receive private payments. Nobody can see the amounts.
       </span>
       <div style={{
-        width: '100%', padding: '13px 15px', borderRadius: 11, background: C.trough, border: border(0.12),
+        width: '100%', padding: '13px 15px', borderRadius: 'var(--r-md)', background: C.trough, border: '1px solid var(--border)',
         fontFamily: MONO, fontSize: 12, color: C.bodyDim, lineHeight: 1.6, wordBreak: 'break-all',
       }}>{address}</div>
       <div style={{ width: '100%' }}>
@@ -525,7 +528,7 @@ export function OnsPanel({ status, name, policyError, message, feeMicrotari, txI
       </div>
       {policyError && <div style={{ fontSize: 12, color: C.dangerText, marginBottom: 12, lineHeight: 1.5 }}>{policyError}</div>}
       {busy ? (
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, padding: 12, borderRadius: 11, background: C.inset, border: tealBorder(0.2), color: C.teal300, fontSize: 14, fontWeight: 700 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, padding: 12, borderRadius: 'var(--r-md)', background: C.inset, border: tealBorder(0.22), color: C.teal300, fontSize: 14, fontWeight: 600 }}>
           <Spinner size={15} />{busyLabel}
         </div>
       ) : status === 'available' ? (
@@ -588,9 +591,9 @@ function lookFor(r: ActivityRowView): RowLook {
 
 const LOOK: Record<RowLook, { bg: string; bd: string; stroke: string; dashed?: boolean }> = {
   'out-ok': { bg: tealFill(0.1), bd: tealBorder(0.22), stroke: C.teal },
-  'in-ok': { bg: 'rgba(120,150,210,0.07)', bd: border(0.16), stroke: C.mutedDim },
-  pending: { bg: 'rgba(255,180,60,0.05)', bd: '1px dashed rgba(255,180,60,0.34)', stroke: C.warn },
-  failed: { bg: 'rgba(255,122,122,0.07)', bd: '1px solid rgba(255,122,122,0.24)', stroke: C.danger },
+  'in-ok': { bg: tealFill(0.12), bd: '1px solid transparent', stroke: C.teal300 },
+  pending: { bg: warnFill(0.12), bd: '1px dashed rgba(var(--warn-rgb),0.34)', stroke: C.warn },
+  failed: { bg: 'rgba(var(--danger-rgb),0.12)', bd: '1px solid transparent', stroke: C.danger },
 }
 
 function RowIcon({ look }: { look: RowLook }) {
@@ -598,7 +601,7 @@ function RowIcon({ look }: { look: RowLook }) {
   return (
     <span style={{
       display: 'flex', alignItems: 'center', justifyContent: 'center', width: 34, height: 34,
-      borderRadius: 10, flexShrink: 0, background: l.bg, border: l.bd,
+      borderRadius: 'var(--r-md)', flexShrink: 0, background: l.bg, border: l.bd,
     }}>
       {look === 'failed' ? (
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={l.stroke} strokeWidth="2.4" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
@@ -627,7 +630,7 @@ export function ActivityPanel({ empty, hidden, onToggleHidden, children }: {
   if (empty) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14, padding: '44px 0 40px' }}>
-        <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 46, height: 46, borderRadius: 13, background: C.raised, border: border(0.14) }}>
+        <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 46, height: 46, borderRadius: 'var(--r-lg)', background: C.raised, border: '1px solid var(--border)' }}>
           <Shield size={20} color={C.faintDim} />
         </span>
         <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
@@ -642,7 +645,7 @@ export function ActivityPanel({ empty, hidden, onToggleHidden, children }: {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column' }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 2px 11px', borderBottom: '1px solid rgba(120,150,210,0.07)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 2px 11px', borderBottom: '1px solid var(--border)' }}>
         <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.14em', color: C.faintDim }}>PRIVATE PAYMENTS</span>
         <span role="button" tabIndex={0} onClick={onToggleHidden} onKeyDown={e => e.key === 'Enter' && onToggleHidden()}
           style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 12, fontWeight: 600, color: hidden ? C.teal : C.tealDim, cursor: 'pointer', userSelect: 'none' }}>
@@ -668,7 +671,7 @@ export function ActivityRowShell({ row, hidden }: { row: ActivityRowView; hidden
     : 'No note'
 
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 13, padding: '13px 2px', borderBottom: '1px solid rgba(120,150,210,0.07)' }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 13, padding: '13px 2px', borderBottom: '1px solid var(--border)' }}>
       <RowIcon look={look} />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8 }}>
@@ -682,7 +685,7 @@ export function ActivityRowShell({ row, hidden }: { row: ActivityRowView; hidden
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, marginTop: 3 }}>
           <span style={{
             fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-            color: row.note ? '#C7E4DD' : C.faint, fontStyle: row.note ? 'italic' : 'normal',
+            color: row.note ? 'var(--text-note)' : C.faint, fontStyle: row.note ? 'italic' : 'normal',
           }}>{sub}</span>
           <span style={{ fontSize: 11, fontWeight: 700, color: st.color, flexShrink: 0 }}>{st.label}</span>
         </div>

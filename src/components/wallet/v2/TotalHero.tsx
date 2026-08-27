@@ -10,7 +10,7 @@
 // end; a dash above "private 348.86 / public unavailable" is diagnosable at a glance. So the
 // breakdown renders in every state, including the ones where the total cannot.
 
-import { C, MONO, tealBorder, warnBorder, warnFill } from './tokens'
+import { C, MONO, warnBorder, warnFill } from './tokens'
 import { Eye, Shield, Spinner } from './icons'
 import { MASK, fmt6 } from './format'
 import { unreadableReasonText, type TotalView } from './total'
@@ -18,16 +18,27 @@ import type { BalanceView } from './balances'
 
 const label = { fontSize: 11, fontWeight: 700, letterSpacing: '0.16em' } as const
 
-/** One side of the breakdown. Keeps its own state — see the note above. */
+/**
+ * One side of the breakdown. Keeps its own state — see the note above.
+ *
+ * ── v0.3: THE TWO SIDES ARE NOT COLOUR-CODED ────────────────────────────────
+ *
+ * Private used to be teal and public neutral, so colour alone carried the distinction. The
+ * foundation is explicit that it must not: "Private vs public is icon + label, never color." So
+ * both rows now share one ground, one label colour and one value colour, and the lock-vs-eye icon
+ * plus the word PRIVATE/PUBLIC is what tells them apart. That is a deliberate trade — colour is
+ * the faster read — and it is the right one for a wallet: a colour-only signal is invisible to a
+ * colour-blind user and unreadable in a screenshot, on the one distinction the product is about.
+ */
 function BreakdownRow({ kind, balance, hidden }: {
   kind: 'private' | 'public'; balance: BalanceView; hidden: boolean
 }) {
   const isPrivate = kind === 'private'
   const Icon = isPrivate ? Shield : Eye
-  const tint = isPrivate ? C.teal : C.mutedDim
+  const tint = C.mutedDim
 
   const value = () => {
-    if (hidden) return <span style={{ letterSpacing: '0.1em', color: isPrivate ? C.teal300 : C.bodyDim }}>••••••</span>
+    if (hidden) return <span style={{ letterSpacing: '0.1em', color: C.bodyDim }}>••••••</span>
     if (balance.status === 'loading') return <span style={{ fontSize: 12.5, color: C.faint, fontFamily: 'inherit' }}>checking…</span>
     if (balance.status === 'unavailable') {
       return (
@@ -40,7 +51,7 @@ function BreakdownRow({ kind, balance, hidden }: {
         </span>
       )
     }
-    return <span style={{ color: isPrivate ? C.teal300 : C.bodyDim }}>{fmt6(balance.microtari)}</span>
+    return <span style={{ color: C.bright }}>{fmt6(balance.microtari)}</span>
   }
 
   return (
@@ -50,7 +61,7 @@ function BreakdownRow({ kind, balance, hidden }: {
     }}>
       <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <Icon size={12} color={tint} />
-        <span style={{ ...label, fontSize: 10.5, color: isPrivate ? C.tealLabel : C.mutedDim }}>
+        <span style={{ ...label, fontSize: 10.5, color: C.mutedDim }}>
           {isPrivate ? 'PRIVATE' : 'PUBLIC'}
         </span>
       </span>
@@ -104,12 +115,12 @@ export function TotalHero({ total, privateBalance, publicBalance, hidden }: {
 
   return (
     <div style={{
-      padding: '24px 22px 18px', borderRadius: 14,
+      padding: '24px 22px 18px', borderRadius: 'var(--r-xl)',
       background: degraded ? C.disabled : C.heroGrad,
-      border: degraded ? `1px dashed rgba(255,180,60,0.3)` : tealBorder(0.3),
+      border: degraded ? `1px dashed rgba(var(--warn-rgb),0.30)` : '1px solid var(--border)',
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 12 }}>
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={degraded ? C.mutedDim : C.teal} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={degraded ? C.mutedDim : C.tealLabel} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <rect x="2" y="6" width="20" height="13" rx="2.5" /><path d="M2 10h20" />
         </svg>
         <span style={{ ...label, color: degraded ? C.mutedDim : C.tealLabel }}>TOTAL BALANCE</span>
@@ -117,10 +128,11 @@ export function TotalHero({ total, privateBalance, publicBalance, hidden }: {
 
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 9, flexWrap: 'wrap' }}>
         <span style={{
-          fontFamily: MONO, fontSize: 34, fontWeight: 600, letterSpacing: '-0.01em',
+          fontSize: 40, fontWeight: 700, letterSpacing: '-0.03em',
+          fontFeatureSettings: "'tnum'", lineHeight: 1.05,
           color: degraded ? C.faintDim : C.bright,
         }}>{headline()}</span>
-        <span style={{ fontFamily: MONO, fontSize: 15, color: C.tealDim }}>TARI</span>
+        <span style={{ fontSize: 17, fontWeight: 600, color: C.teal300 }}>TARI</span>
       </div>
 
       <div style={{ fontSize: 12.5, marginTop: 8, minHeight: 18 }}>{caption()}</div>

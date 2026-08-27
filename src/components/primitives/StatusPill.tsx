@@ -1,5 +1,5 @@
 //   StatusPill — transaction/state badge built on Chip.
-//   confirmed (teal) · pending (warn) · not-confirmed (warn, distinct label) · failed (danger).
+//   confirmed (positive) · pending (warn) · not-confirmed (warn, distinct label) · failed (danger).
 //   'not-confirmed' is used by the Activity list and the timeout banner — warn-toned, distinct
 //   from the danger-toned 'failed'.
 
@@ -8,8 +8,8 @@ import type { CSSProperties } from 'react'
 
 export type TxStatus = 'confirmed' | 'pending' | 'not-confirmed' | 'failed'
 
-const MAP: Record<TxStatus, { tone: 'teal' | 'warn' | 'danger'; label: string }> = {
-  confirmed: { tone: 'teal', label: 'Confirmed' },
+const MAP: Record<TxStatus, { tone: 'positive' | 'warn' | 'danger'; label: string }> = {
+  confirmed: { tone: 'positive', label: 'Confirmed' },
   pending: { tone: 'warn', label: 'Pending' },
   'not-confirmed': { tone: 'warn', label: 'Not confirmed' },
   failed: { tone: 'danger', label: 'Failed' },

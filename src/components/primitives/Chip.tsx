@@ -1,10 +1,10 @@
-//   Chip — pill container. Tones: neutral / teal / warn / danger.
+//   Chip — pill container. Tones: neutral / positive / warn / danger.
 //   Base for address chips, copied-state, network + status badges.
 //   Token-driven (design "Primitives → CHIPS & BADGES"). Pill radius, 7/13 padding, 12px.
 
 import type { CSSProperties, ReactNode } from 'react'
 
-export type ChipTone = 'neutral' | 'teal' | 'warn' | 'danger'
+export type ChipTone = 'neutral' | 'positive' | 'warn' | 'danger'
 
 interface ChipProps {
   tone?: ChipTone
@@ -20,23 +20,23 @@ interface ChipProps {
 
 const TONES: Record<ChipTone, CSSProperties> = {
   neutral: {
-    background: 'var(--surface-raised)',
-    border: '1px solid rgba(var(--border-rgb), 0.14)',
+    background: 'rgba(255,255,255,0.06)',
+    border: '1px solid var(--border-strong)',
     color: 'var(--text-body-dim)',
   },
-  teal: {
-    background: 'rgba(var(--teal-500-rgb), 0.07)',
-    border: '1px solid rgba(var(--teal-500-rgb), 0.3)',
-    color: 'var(--teal-300)',
+  positive: {
+    background: 'rgba(var(--positive-rgb), 0.12)',
+    border: '1px solid transparent',
+    color: 'var(--positive)',
   },
   warn: {
-    background: 'rgba(var(--warn-rgb), 0.06)',
-    border: '1px solid rgba(var(--warn-rgb), 0.3)',
+    background: 'rgba(var(--warn-rgb), 0.12)',
+    border: '1px solid transparent',
     color: 'var(--warn-300)',
   },
   danger: {
-    background: 'rgba(var(--danger-rgb), 0.07)',
-    border: '1px solid rgba(var(--danger-rgb), 0.3)',
+    background: 'rgba(var(--danger-rgb), 0.12)',
+    border: '1px solid transparent',
     color: 'var(--danger-300)',
   },
 }
@@ -51,7 +51,7 @@ export default function Chip({ tone = 'neutral', leading, mono = false, children
         alignItems: 'center',
         gap: 7,
         padding: '7px 13px',
-        borderRadius: 100,
+        borderRadius: 'var(--r-pill)',
         fontSize: 12,
         fontWeight: 600,
         fontFamily: mono ? 'var(--font-mono)' : 'inherit',

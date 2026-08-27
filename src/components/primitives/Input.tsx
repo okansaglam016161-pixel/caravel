@@ -17,11 +17,11 @@ const FIELD: CSSProperties = {
   width: '100%',
   boxSizing: 'border-box',
   padding: '13px 15px',
-  borderRadius: 11,
+  borderRadius: 'var(--r-md)',
   fontSize: 14,
   fontFamily: 'inherit',
-  background: 'var(--surface-raised)',
-  border: '1px solid rgba(var(--border-rgb), 0.14)',
+  background: 'var(--surface)',
+  border: '1px solid var(--border-strong)',
   color: 'var(--text-body)',
   outline: 'none',
 }
@@ -34,14 +34,14 @@ const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
 
   // Border + shadow precedence: invalid > focused > default.
   const border = invalid
-    ? '1px solid rgba(var(--danger-rgb), 0.45)'
+    ? '1px solid var(--danger-500)'
     : focused
-      ? '1px solid rgba(var(--teal-500-rgb), 0.45)'
+      ? '1px solid var(--accent-400)'
       : disabled
-        ? '1px solid rgba(var(--border-rgb), 0.1)'
-        : '1px solid rgba(var(--border-rgb), 0.14)'
-  const boxShadow = focused && !invalid ? '0 0 0 3px rgba(var(--teal-500-rgb), 0.09)' : 'none'
-  const bg = disabled ? 'rgba(16, 21, 31, 0.5)' : 'var(--surface-raised)'
+        ? '1px solid var(--border)'
+        : '1px solid var(--border-strong)'
+  const boxShadow = focused && !invalid ? '0 0 0 3px rgba(var(--accent-400-rgb), 0.18)' : 'none'
+  const bg = disabled ? 'var(--surface-raised)' : 'var(--surface)'
   const color = disabled ? 'var(--text-disabled)' : 'var(--text-body)'
 
   const field = (
@@ -67,7 +67,7 @@ const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
 
   if (!unit) return field
 
-  // Amount-with-unit row: field + right-aligned teal unit label.
+  // Amount-with-unit row: field + right-aligned accent unit label.
   return (
     <div
       style={{
@@ -75,7 +75,7 @@ const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
         alignItems: 'center',
         gap: 10,
         padding: '13px 15px',
-        borderRadius: 11,
+        borderRadius: 'var(--r-md)',
         background: bg,
         border,
         boxShadow,
@@ -84,7 +84,7 @@ const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
       }}
     >
       {field}
-      <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--teal-500)' }}>{unit}</span>
+      <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--accent-300)' }}>{unit}</span>
     </div>
   )
 })

@@ -16,19 +16,19 @@ interface CalloutProps {
 
 const TONES: Record<CalloutTone, CSSProperties> = {
   warn: {
-    background: 'rgba(var(--warn-rgb), 0.05)',
-    border: '1px solid rgba(var(--warn-rgb), 0.25)',
+    background: 'rgba(var(--warn-rgb), 0.10)',
+    border: '1px solid rgba(var(--warn-rgb), 0.28)',
     color: 'var(--warn-300)',
   },
   error: {
-    background: 'rgba(var(--danger-rgb), 0.05)',
-    border: '1px solid rgba(var(--danger-rgb), 0.25)',
+    background: 'rgba(var(--danger-rgb), 0.10)',
+    border: '1px solid rgba(var(--danger-rgb), 0.28)',
     color: 'var(--danger-300)',
   },
   note: {
-    background: 'rgba(var(--teal-500-rgb), 0.05)',
-    border: '1px solid rgba(var(--teal-500-rgb), 0.22)',
-    color: 'var(--teal-300)',
+    background: 'rgba(var(--accent-400-rgb), 0.08)',
+    border: '1px solid rgba(var(--accent-400-rgb), 0.22)',
+    color: 'var(--accent-300)',
   },
 }
 
@@ -39,7 +39,7 @@ export default function Callout({ tone = 'warn', icon, children, style }: Callou
         display: 'flex',
         gap: 10,
         padding: '12px 14px',
-        borderRadius: 11,
+        borderRadius: 'var(--r-md)',
         fontSize: 13,
         lineHeight: 1.5,
         ...TONES[tone],

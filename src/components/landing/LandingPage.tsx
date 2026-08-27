@@ -365,7 +365,7 @@ export default function LandingPage() {
                           </div>
                           <div style={{ padding: '18px 15px 6px', textAlign: 'center' }}>
                             <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'center', gap: 7 }}>
-                              <span style={{ fontSize: 30, fontWeight: 800, color: 'var(--text-bright)' }}>42.50</span>
+                              <span style={{ fontSize: 30, fontWeight: 700, color: 'var(--text-bright)' }}>42.50</span>
                               <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--teal-500)' }}>TARI</span>
                             </div>
                             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 6, padding: '4px 11px', borderRadius: 100, background: 'rgba(var(--border-rgb),0.08)', fontFamily: MONO, fontSize: 11, color: 'var(--text-teal-label)' }}>amount hidden</span>
@@ -412,7 +412,7 @@ export default function LandingPage() {
         <div className="cv-section cv-two-col">
           <div className="cv-two-col-copy">
             <Eyebrow style={{ marginBottom: 22 }} label="SELF CUSTODY" icon={<svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="var(--teal-500)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><circle cx="8" cy="15" r="4" /><path d="M10.8 12.2L20 3M17 3h3v3" /></svg>} />
-            <h2 className="cv-section-h2" style={{ margin: '0 0 20px', fontWeight: 800, letterSpacing: '-0.03em', lineHeight: 1.08 }}>Your keys,<br />your device.</h2>
+            <h2 className="cv-section-h2" style={{ margin: '0 0 20px', fontWeight: 700, letterSpacing: '-0.03em', lineHeight: 1.08 }}>Your keys,<br />your device.</h2>
             <p style={{ margin: 0, fontSize: 17, lineHeight: 1.6, color: 'var(--text-muted)' }}>Caravel generates your wallet in the browser. The keys stay there. We hold nothing, and can&rsquo;t recover it for you. That&rsquo;s why your recovery phrase matters.</p>
           </div>
           <div className="cv-two-col-demo" style={{ borderRadius: 16, border: '1px solid rgba(var(--border-rgb),0.14)', background: 'var(--surface)', overflow: 'hidden' }}>
@@ -457,7 +457,7 @@ export default function LandingPage() {
         <div className="cv-section cv-two-col">
           <div className="cv-two-col-copy">
             <Eyebrow style={{ marginBottom: 22 }} label="ONS IDENTITY" icon={<svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="var(--teal-500)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="4" /><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8" /></svg>} />
-            <h2 className="cv-section-h2" style={{ margin: '0 0 20px', fontWeight: 800, letterSpacing: '-0.03em', lineHeight: 1.08 }}>Find anyone by name.</h2>
+            <h2 className="cv-section-h2" style={{ margin: '0 0 20px', fontWeight: 700, letterSpacing: '-0.03em', lineHeight: 1.08 }}>Find anyone by name.</h2>
             <p style={{ margin: 0, fontSize: 17, lineHeight: 1.6, color: 'var(--text-muted)' }}>Register an @name on chain. No central directory, no company holding the list. Someone types @okz61, and Caravel resolves it to their messaging key. Never to a payment address.</p>
           </div>
           <div className="cv-two-col-demo" style={{ borderRadius: 16, border: '1px solid rgba(var(--border-rgb),0.14)', background: 'var(--surface)', overflow: 'hidden' }}>
@@ -496,7 +496,7 @@ export default function LandingPage() {
         <div id="private" className="cv-section" style={{ scrollMarginTop: 90 }}>
           <div className="cv-private-panel" style={{ position: 'relative', borderRadius: 22, background: 'radial-gradient(780px 340px at 50% 0%, rgba(45,224,198,0.13), #05080E 72%)', border: '1px solid rgba(var(--teal-500-rgb),0.16)', textAlign: 'center', overflow: 'hidden' }}>
             <Eyebrow style={{ marginBottom: 26, background: 'transparent' }} label="WHAT CARAVEL PROTECTS" icon={<svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="var(--teal-500)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /></svg>} />
-            <h2 className="cv-private-h2" style={{ margin: '0 0 48px', fontWeight: 800, letterSpacing: '-0.035em', lineHeight: 1.04 }}>Private by default.</h2>
+            <h2 className="cv-private-h2" style={{ margin: '0 0 48px', fontWeight: 700, letterSpacing: '-0.035em', lineHeight: 1.04 }}>Private by default.</h2>
             <div className="cv-private-grid" style={{ gap: 0, borderTop: '1px solid rgba(var(--border-rgb),0.14)', paddingTop: 36 }}>
               {[
                 { icon: <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />, text: 'Message contents, encrypted end to end', border: false },
@@ -520,7 +520,7 @@ export default function LandingPage() {
             <Logo size={420} mono style={{ position: 'absolute', right: -40, bottom: -120, opacity: 0.05, pointerEvents: 'none' }} />
             <div className="cv-donate-copy" style={{ position: 'relative' }}>
               <Eyebrow style={{ marginBottom: 22 }} label="FUND THE VOYAGE" icon={<Logo size={13} mono />} />
-              <h2 className="cv-donate-h2" style={{ margin: '0 0 18px', fontWeight: 800, letterSpacing: '-0.035em', lineHeight: 1.05 }}>Keep it sailing.</h2>
+              <h2 className="cv-donate-h2" style={{ margin: '0 0 18px', fontWeight: 700, letterSpacing: '-0.035em', lineHeight: 1.05 }}>Keep it sailing.</h2>
               <p style={{ margin: 0, maxWidth: 420, fontSize: 17, lineHeight: 1.6, color: 'var(--text-muted)' }}>Caravel is free. It runs on donations, not ads or your data. If it&rsquo;s useful to you, help keep it sailing.</p>
             </div>
             <div className="cv-donate-card" style={{ position: 'relative', padding: 24, borderRadius: 18, background: 'rgba(6,10,16,0.72)', border: '1px solid rgba(var(--teal-500-rgb),0.26)' }}>

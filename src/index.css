@@ -1,111 +1,253 @@
+/* ============================================================================
+   Caravel design tokens — v0.3 "Foundation".
+   Imported from the Claude Design project "Caravel design system foundation"
+   (Caravel Foundation.dc.html → 02 COLOR / 03 TYPOGRAPHY / 04 RHYTHM).
+
+   THE SINGLE SOURCE OF TRUTH. Nothing else in the app writes a brand colour
+   down. src/components/wallet/v2/tokens.ts used to hold a parallel copy of the
+   scale in TypeScript; it is now a thin var() re-export over this file, so
+   there is exactly one place a value changes.
+
+   ── HOW THE TWO THEMES ARE ARRANGED ───────────────────────────────────────
+   The foundation is light-first, but the shipped app is dark and every
+   composition in it (landing, chat, the wallet modal) is written for a dark
+   ground. So :root carries the DARK role tokens — what actually renders — and
+   the light theme is defined below under [data-theme="light"], complete and
+   ready, but deliberately NOT exposed by a switcher yet. Turning it on needs a
+   composition pass over the surfaces that still hold dark-only literals; until
+   then a switch would half-work, which is worse than not having one.
+
+   The raw SCALES (navy, cobalt) are theme-independent and live on :root. Only
+   the ROLE tokens (surface/text/border/semantic) are re-stated per theme.
+   ============================================================================ */
+
 :root {
-  /* ============================================================================
-     Caravel design tokens — the single source of truth.
-     Imported verbatim from the Claude Design project
-     ("Caravel Wallet Modal (Build)" → Token scale). Values here are the scale;
-     components will migrate onto them one surface at a time. No one-off literals.
-     ============================================================================ */
+  /* ── Ink navy — the vault. Shared brand scale, both themes. ─────────────── */
+  --navy-50:  #EEF2F7;
+  --navy-100: #D2DBE6;
+  --navy-200: #A3B4C8;
+  --navy-300: #7189A8;
+  --navy-400: #46648A;
+  --navy-500: #2A486C;
+  --navy-600: #1E3654;
+  --navy-700: #152840;
+  --navy-800: #0F1D30;
+  --navy-900: #0A1322;
+  --navy-950: #060C15;
 
-  /* ── Surface ──────────────────────────────────────────────────────────── */
-  --surface-void: #05080E;
-  --surface-base: #0A0E17;
-  --surface: #0C111B;
-  --surface-raised: #10151F;
-  --surface-inset: #161C28;
-  --surface-trough: #080C14;
-  --surface-sidebar: #080B12;
-  --surface-row-selected: #10161F;
+  /* ── Cobalt — the accent. The single accent colour. ─────────────────────── */
+  --accent-50:  #EBF4FC;
+  --accent-100: #D3E6F8;
+  --accent-200: #A9CDF2;
+  --accent-300: #74AEE8;
+  --accent-400: #378ADD; /* the brand blue */
+  --accent-500: #2372C4;
+  --accent-600: #1B5CA3;
+  --accent-700: #164A84;
+  --accent-800: #123A67;
+  --accent-900: #0D2A4B;
 
-  /* ── Accent & status ──────────────────────────────────────────────────── */
-  --teal-500: #2DE0C6;
-  --teal-300: #7DE9D8;
-  --teal-grad-top: #34E5D0;
-  --teal-grad-bottom: #12A594;
-  --teal-grad: linear-gradient(180deg, var(--teal-grad-top), var(--teal-grad-bottom));
-  --teal-500-rgb: 45, 224, 198; /* rgb triplet of teal/500, for rgba() glows */
-  --warn: #FFB43C;
-  --warn-300: #FFC978;
-  --danger-500: #FF6B6B;
-  --danger-300: #FF9E9E;
-  --ink-on-accent: #04120F;
+  /* rgb triplet for rgba() tints. Every low-alpha accent wash goes through
+     this rather than a literal, so a future accent change is one line. */
+  --accent-400-rgb: 55, 138, 221;
 
-  /* rgb triplets for low-alpha tint borders/fills (used by primitives via rgba()) */
-  --border-rgb: 120, 150, 210; /* pervasive neutral border tint */
-  --warn-rgb: 255, 180, 60; /* rgb of --warn */
-  --danger-rgb: 255, 107, 107; /* rgb of --danger-500 */
+  /* Interaction steps for the accent. These are NOT scale entries — the
+     foundation draws them directly on the button states (05 PRIMITIVES). */
+  --accent-hover:  #5499E3;
+  --accent-active: #2372C4;
 
-  /* ── Text ramp ────────────────────────────────────────────────────────── */
-  --text-bright: #EAFBF7;
-  --text-primary: #F2F5FB;
-  --text-body: #E4EAF4;
-  --text-body-dim: #C7D0E4;
-  --text-muted: #99A6C2;
-  --text-muted-dim: #8A97B4;
-  --text-faint: #6B7793;
-  --text-faint-dim: #55617D;
-  --text-disabled: #3D4657;
-  --text-teal-dim: #5E8A82;
-  --text-name: #E8EEF9;
-  --text-teal-label: #8FB7B0;
-  --text-note: #C7E4DD; /* rendered italic at the usage site */
+  /* ── Vault chrome ───────────────────────────────────────────────────────
+     The nav rail and the balance hero sit on navy in BOTH themes ("the
+     balance hero and nav live on 900–950"). These four are the foundation's
+     own off-scale literals for that furniture, named rather than inlined. */
+  --nav-ground:       #0C1A2E;
+  --nav-selected:     #1B2B45;
+  --vault-card:       #14243C;
+  --vault-card-hover: #1B2F4D;
+  --vault-label:      #8FA9C9;
 
-  /* ── Message surfaces ─────────────────────────────────────────────────── */
-  --msg-sent: linear-gradient(160deg, #1C7A6E, #12655A);
-  --msg-received: #161C28;
-  --card-payment: linear-gradient(165deg, #0E2A28, #0A1A1C);
-  --card-payment-border: rgba(45, 224, 198, 0.3);
+  /* ── Radius. Controls md · cards lg–xl · badges pill. ───────────────────── */
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --r-xl: 20px;
+  --r-pill: 999px;
 
-  /* ── Status card surfaces ─────────────────────────────────────────────── */
-  --card-neutral: #101722;
-  --card-neutral-border: rgba(120, 150, 210, 0.18);
-  --card-warn: #1F1A0E;
-  --card-warn-border: rgba(255, 180, 60, 0.28);
-  --card-danger: #180F14;
-  --card-danger-border: rgba(255, 107, 107, 0.28);
+  /* ── Spacing — 4px base grid. ───────────────────────────────────────────
+     Defined now; the app's existing off-grid gaps (6/10/14/18/22) are NOT
+     snapped in this pass — that moves every gap in the modal and belongs with
+     the composition work. The legacy --space-* aliases below keep them. */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-12: 48px;
+  --space-16: 64px;
 
-  /* ── Avatar palette (gradient + fixed ink per pair) ───────────────────── */
-  --avatar-teal: linear-gradient(135deg, #1E6E63, #12A594);
-  --avatar-teal-ink: #EAFBF7;
-  --avatar-slate: linear-gradient(135deg, #2A3550, #3C4E78);
-  --avatar-slate-ink: #C7D0E4;
-  --avatar-plum: linear-gradient(135deg, #4A2F55, #6E3C78);
-  --avatar-plum-ink: #E4C7EC;
-  --avatar-moss: linear-gradient(135deg, #244A44, #2E6B5C);
+  /* ── Elevation — quiet: a border first, shadow second. ──────────────────── */
+  --e1: 0 1px 2px rgba(10, 19, 34, 0.06);
+  --e2: 0 4px 12px -2px rgba(10, 19, 34, 0.10);
+  --e3: 0 12px 32px -8px rgba(10, 19, 34, 0.18);
+
+  /* ── Fonts ──────────────────────────────────────────────────────────────
+     Instrument Sans is a variable face over 400..700 — there is NO 800. Sites
+     that asked for 800 now ask for 700; a browser-synthesised faux-bold above
+     the face's top weight is not a design decision anyone made. */
+  --font-mono: "IBM Plex Mono", monospace;
+  --font-ui: "Instrument Sans", -apple-system, sans-serif;
+
+  /* ══ DARK ROLE TOKENS — what ships ═════════════════════════════════════ */
+
+  /* Surfaces. Dark elevation = one surface step up (900 → 800) + the shadow. */
+  --surface-void: var(--navy-950);
+  --surface-base: var(--navy-950);
+  --surface: var(--navy-900);
+  --surface-raised: var(--navy-800);
+  --surface-inset: var(--navy-700);
+  --surface-trough: var(--navy-950);
+  --surface-sidebar: var(--nav-ground);
+  --surface-row-selected: var(--navy-700);
+
+  /* Text ramp */
+  --text-bright: #FFFFFF;
+  --text-primary: #F2F6FA;
+  --text-body: #F2F6FA;
+  --text-body-dim: #A3B4C8;
+  --text-muted: #A3B4C8;
+  --text-muted-dim: #67788E;
+  --text-faint: #67788E;
+  --text-faint-dim: #46648A;
+  --text-disabled: #46648A;
+  --text-name: #F2F6FA;
+  --text-note: #A3B4C8;
+  --text-accent-dim: #46648A;
+  --text-vault-label: var(--vault-label);
+
+  /* Borders. `--border-rgb` is the tint triplet the app uses at 10–45% alpha
+     throughout; `--border` / `--border-strong` are the foundation's solids. */
+  --border: #1C2C42;
+  --border-strong: #24354E;
+  --border-rgb: 28, 44, 66;
+
+  /* Semantic */
+  --positive: #3BD695;
+  --positive-rgb: 59, 214, 149;
+  --warn: #E8B04B;
+  --warn-300: #E8B04B;
+  --warn-rgb: 232, 176, 75;
+  --danger-500: #FF8A73;
+  --danger-300: #FF8A73;
+  --danger-rgb: 255, 138, 115;
+
+  --ink-on-accent: #FFFFFF;
+
+  /* ── Composite surfaces ─────────────────────────────────────────────────
+     Not scale entries — specific compositions built out of the scale. Every
+     one of these used to be a teal gradient; the foundation forbids gradients
+     on the brand ("never teal, never gradients"), so they are flat now. */
+  --msg-sent: var(--accent-600);
+  --msg-received: var(--navy-700);
+  --card-payment: var(--vault-card);
+  --card-payment-border: var(--border);
+
+  --card-neutral: var(--navy-900);
+  --card-neutral-border: var(--border);
+  --card-warn: rgba(232, 176, 75, 0.10);
+  --card-warn-border: rgba(232, 176, 75, 0.28);
+  --card-danger: rgba(255, 138, 115, 0.10);
+  --card-danger-border: rgba(255, 138, 115, 0.28);
+
+  /* Avatar palette — rebased off the navy/cobalt scales and the two semantic
+     hues. Gradients are kept HERE deliberately: these are generated identity
+     colours, not the brand mark, and the no-gradient rule is about the logo
+     and the accent. */
+  --avatar-teal: linear-gradient(135deg, #1B5CA3, #123A67);
+  --avatar-teal-ink: #EBF4FC;
+  --avatar-slate: linear-gradient(135deg, #1E3654, #2A486C);
+  --avatar-slate-ink: #D2DBE6;
+  --avatar-plum: linear-gradient(135deg, #123A67, #0D2A4B);
+  --avatar-plum-ink: #A9CDF2;
+  --avatar-moss: linear-gradient(135deg, #0F4A38, #12704F);
   --avatar-moss-ink: #C7ECE2;
-  --avatar-amber: linear-gradient(135deg, #4A3A24, #6E5A2E);
+  --avatar-amber: linear-gradient(135deg, #4A3A14, #6E5A24);
   --avatar-amber-ink: #ECDFC7;
 
-  /* ── Radius & space ───────────────────────────────────────────────────── */
-  --r-8: 8px;
-  --r-11: 11px;
-  --r-14: 14px;
-  --r-20: 20px;
-  --r-pill: 100px;
-  --space-6: 6px;
-  --space-8: 8px;
-  --space-10: 10px;
-  --space-12: 12px;
-  --space-14: 14px;
-  --space-18: 18px;
-  --space-22: 22px;
-  --space-28: 28px;
-
-  /* ── Fonts ────────────────────────────────────────────────────────────── */
-  --font-mono: "IBM Plex Mono", monospace;
-  --font-ui: "Inter Tight", -apple-system, sans-serif;
-
-  /* ── Legacy accent aliases ────────────────────────────────────────────────
-     The existing 7 --acc* names remain, re-pointed at the new scale so current
-     components keep working with zero visual change. 6 map exactly; --accL has
-     no design-scale equivalent (a logo/hero light teal) and is kept as a literal
-     until/unless a future step folds it onto teal/300. */
-  --acc: var(--teal-500);
-  --accB: var(--teal-grad-top);
-  --accD: var(--teal-grad-bottom);
-  --accT: var(--teal-300);
+  /* ── Legacy aliases — DEPRECATED, do not use in new code ────────────────
+     296 call sites still name the teal-era tokens. Repointing them here keeps
+     this pass a reviewable colour change rather than a 296-site rename; the
+     rename is a separate mechanical commit. Every one of these resolves to
+     its v0.3 equivalent, so nothing reads teal any more. */
+  --teal-500: var(--accent-400);
+  --teal-300: var(--accent-300);
+  --teal-grad-top: var(--accent-300);
+  --teal-grad-bottom: var(--accent-500);
+  --teal-grad: var(--accent-400); /* was a gradient — the brand is flat now */
+  --teal-500-rgb: var(--accent-400-rgb);
+  --text-teal-dim: var(--text-accent-dim);
+  --text-teal-label: var(--text-vault-label);
+  --acc: var(--accent-400);
+  --accB: var(--accent-300);
+  --accD: var(--accent-500);
+  --accT: var(--accent-300);
   --accOn: var(--ink-on-accent);
-  --accRGB: var(--teal-500-rgb);
-  --accL: #5CEAD6; /* legacy literal — no design token equivalent */
+  --accRGB: var(--accent-400-rgb);
+  --accL: var(--accent-300);
+
+  /* The teal-era --r-* and --space-* names are GONE rather than aliased: a
+     grep across src found zero consumers of either, and keeping --space-6
+     alive would have been actively harmful — it meant 6px here and means
+     6 × 4px = 24px in the foundation. A dead token with a changed meaning is
+     the one kind worth deleting outright. */
+}
+
+/* ══ LIGHT ROLE TOKENS ════════════════════════════════════════════════════
+   Complete and correct, but NOT reachable yet: nothing sets data-theme. See
+   the note at the top of this file. When the composition pass lands, this
+   becomes the default and :root above becomes [data-theme="dark"]. */
+:root[data-theme="light"] {
+  --surface-void: #F6F8FA;
+  --surface-base: #F6F8FA;
+  --surface: #FFFFFF;
+  --surface-raised: #FFFFFF;
+  --surface-inset: var(--navy-50);
+  --surface-trough: #F6F8FA;
+  --surface-sidebar: var(--nav-ground); /* the rail stays navy in both themes */
+  --surface-row-selected: #F3F6F9;
+
+  --text-bright: #0A1322;
+  --text-primary: #0A1322;
+  --text-body: #0A1322;
+  --text-body-dim: #44566E;
+  --text-muted: #44566E;
+  --text-muted-dim: #7C8CA0;
+  --text-faint: #7C8CA0;
+  --text-faint-dim: #A3B4C8;
+  --text-disabled: #A3B4C8;
+  --text-name: #0A1322;
+  --text-note: #44566E;
+  --text-accent-dim: #7C8CA0;
+
+  --border: #E3E9EF;
+  --border-strong: #D6DEE6;
+  --border-rgb: 227, 233, 239;
+
+  --positive: #128A5F;
+  --positive-rgb: 18, 138, 95;
+  --warn: #A96B14;
+  --warn-300: #A96B14;
+  --warn-rgb: 169, 107, 20;
+  --danger-500: #C24632;
+  --danger-300: #C24632;
+  --danger-rgb: 194, 70, 50;
+
+  --msg-received: var(--navy-50);
+  --card-neutral: #FFFFFF;
+  --card-warn: rgba(169, 107, 20, 0.10);
+  --card-warn-border: rgba(169, 107, 20, 0.28);
+  --card-danger: rgba(194, 70, 50, 0.10);
+  --card-danger-border: rgba(194, 70, 50, 0.28);
 }
 
 html, body, #root {
@@ -118,17 +260,21 @@ html, body, #root {
 *, *::before, *::after { box-sizing: border-box; }
 
 body {
-  background: #05080E;
-  font-family: "Inter Tight", -apple-system, sans-serif;
+  background: var(--surface-void);
+  font-family: var(--font-ui);
   -webkit-font-smoothing: antialiased;
 }
 
-a { color: var(--acc); text-decoration: none; }
-a:hover { color: var(--accL); }
+a { color: var(--accent-300); text-decoration: none; }
+a:hover { color: var(--accent-200); }
 
-.cv-btn-primary:hover { filter: brightness(1.08); }
-.cv-step:hover { border-color: rgba(var(--accRGB), 0.4) !important; }
-.cv-conv:hover { background: #10161F; }
+/* Primary CTA hover. The foundation gives an exact hover colour rather than a
+   filter, and these buttons set their background inline, so the rule has to
+   win on specificity — hence !important, which is the narrower change of the
+   two (the alternative is threading hover state through every call site). */
+.cv-btn-primary:hover { background: var(--accent-hover) !important; }
+.cv-step:hover { border-color: rgba(var(--accent-400-rgb), 0.4) !important; }
+.cv-conv:hover { background: var(--surface-row-selected); }
 
 /* Chat composer + the per-message hover affordances (M3/M4, replies v1, reactions C). Shared by
    BOTH chat views — the DM thread in ChatApp and the group thread in GroupThread — which is exactly
@@ -156,16 +302,16 @@ a:hover { color: var(--accL); }
 .cv-msg-actionrow:hover .cv-msg-reply,
 .cv-msg-actionrow:hover .cv-msg-more { opacity: 1; }
 .cv-msg-react:focus-visible, .cv-msg-reply:focus-visible, .cv-msg-more:focus-visible { opacity: 1; }
-.cv-msg-react:hover, .cv-msg-reply:hover, .cv-msg-more:hover { color: var(--text-primary); border-color: rgba(var(--teal-500-rgb), 0.4); }
+.cv-msg-react:hover, .cv-msg-reply:hover, .cv-msg-more:hover { color: var(--text-primary); border-color: rgba(var(--accent-400-rgb), 0.4); }
 
 /* Emoji picker cells (B). Lives here rather than inline for the same reason the rules above do:
    :hover and :focus-visible have no inline-style equivalent, and both chat views mount the picker
    while never being mounted at the same time, so neither can own the rule. */
 .cv-emoji-cell:hover { background: rgba(var(--border-rgb), 0.14); }
-.cv-emoji-cell:focus-visible { outline: 2px solid rgba(var(--teal-500-rgb), 0.5); outline-offset: -2px; }
+.cv-emoji-cell:focus-visible { outline: 2px solid rgba(var(--accent-400-rgb), 0.5); outline-offset: -2px; }
 
 ::-webkit-scrollbar { width: 8px; height: 8px; }
-::-webkit-scrollbar-thumb { background: rgba(120,150,210,0.2); border-radius: 4px; }
+::-webkit-scrollbar-thumb { background: rgba(var(--border-rgb), 0.55); border-radius: 4px; }
 
 /* Shared animations for the primitive kit + wallet modal (components/primitives/*, WalletModal). */
 @keyframes cv-spin { to { transform: rotate(360deg); } }
@@ -177,21 +323,21 @@ a:hover { color: var(--accL); }
    and hands the property straight back when it ends, so a bubble that is BOTH being edited and
    jumped to flashes and then returns to its ring with no state to reconcile. */
 @keyframes cv-flash {
-  0%   { box-shadow: 0 0 0 3px rgba(var(--teal-500-rgb), 0.6); }
-  70%  { box-shadow: 0 0 0 3px rgba(var(--teal-500-rgb), 0.45); }
-  100% { box-shadow: 0 0 0 3px rgba(var(--teal-500-rgb), 0); }
+  0%   { box-shadow: 0 0 0 3px rgba(var(--accent-400-rgb), 0.6); }
+  70%  { box-shadow: 0 0 0 3px rgba(var(--accent-400-rgb), 0.45); }
+  100% { box-shadow: 0 0 0 3px rgba(var(--accent-400-rgb), 0); }
 }
 .cv-msg-flash { animation: cv-flash 1.6s ease-out; }
 
 /* The same pulse in LIGHT, for a flash landing on the sent bubble — the one message surface that is
-   itself teal (--msg-sent). The ring is drawn immediately outside the bubble's box, so a teal ring
-   there abuts a teal fill: it contrasts with the thread background but not with the thing it is
-   pointing at, which is what makes it hard to see. Inverting it restores the edge contrast.
-   The cards do NOT need this — --card-payment and --surface-inset are both near-black. */
+   itself accent-coloured (--msg-sent). The ring is drawn immediately outside the bubble's box, so an
+   accent ring there abuts an accent fill: it contrasts with the thread background but not with the
+   thing it is pointing at, which is what makes it hard to see. Inverting it restores the edge
+   contrast. The cards do NOT need this — --card-payment and --surface-inset are both near-black. */
 @keyframes cv-flash-light {
-  0%   { box-shadow: 0 0 0 3px rgba(234, 251, 247, 0.75); }
-  70%  { box-shadow: 0 0 0 3px rgba(234, 251, 247, 0.55); }
-  100% { box-shadow: 0 0 0 3px rgba(234, 251, 247, 0); }
+  0%   { box-shadow: 0 0 0 3px rgba(242, 246, 250, 0.75); }
+  70%  { box-shadow: 0 0 0 3px rgba(242, 246, 250, 0.55); }
+  100% { box-shadow: 0 0 0 3px rgba(242, 246, 250, 0); }
 }
 .cv-msg-flash-light { animation: cv-flash-light 1.6s ease-out; }
 
@@ -199,4 +345,4 @@ a:hover { color: var(--accL); }
 /* Indeterminate sweep for the M4 settling bar. Deliberately has no percentage: the move is already
    finished at that point and we are waiting on an index, so a determinate bar would be a lie. */
 @keyframes cv-slide { 0% { transform: translateX(-60%); } 100% { transform: translateX(260%); } }
-@keyframes cv-breathe { 0%, 100% { box-shadow: 0 0 0 0 rgba(var(--teal-500-rgb), 0.35); } 50% { box-shadow: 0 0 0 4px rgba(var(--teal-500-rgb), 0); } }
+@keyframes cv-breathe { 0%, 100% { box-shadow: 0 0 0 0 rgba(var(--accent-400-rgb), 0.35); } 50% { box-shadow: 0 0 0 4px rgba(var(--accent-400-rgb), 0); } }

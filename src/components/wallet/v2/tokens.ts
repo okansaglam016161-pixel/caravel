@@ -1,65 +1,101 @@
-// Design tokens for the M4 wallet modal, transcribed from the Claude Design canvas
-// "Caravel Balance Modal v2.dc.html".
+// Design tokens for the wallet modal — v0.3 "Foundation".
 //
-// WHY THESE LIVE IN TS RATHER THAN index.css, FOR NOW. Stage 1 is a preview harness: it must be
-// possible to look at the new design beside the shipped modal without editing a stylesheet the
-// shipped modal also reads. Every value below that already exists in index.css has the SAME value
-// there — they were both exported from the same Claude Design token scale — so promoting these to
-// CSS variables in Stage 2 is a rename, not a re-pick.
+// ── THIS FILE NO LONGER HOLDS VALUES ─────────────────────────────────────────
 //
-// The handful that are genuinely new are marked. They are all surfaces the old modal had no state
-// for: a disabled row, a pressed MAX, an amber confirm, and the error console.
+// It used to be a literal table: 31 hex codes transcribed from the design canvas, deliberately
+// duplicating src/index.css. The reason was real at the time — Stage 1 was a preview harness that
+// had to be viewable beside the shipped modal without editing the stylesheet the shipped modal also
+// read. That reason has expired, and what it left behind is two sources of truth for one scale.
+//
+// So every value below is now a var() onto src/index.css, which is the only place a brand colour is
+// written down. The EXPORT SHAPE IS UNCHANGED — `C`, the five border/fill helpers, MONO and
+// MODAL_WIDTH all keep their names and types — so the 207 call sites across panels.tsx,
+// primitives.tsx, WalletModalV2, TotalHero, move.tsx and the preview harness are untouched.
+//
+// THE PREVIEW HARNESS STILL WORKS. dev-wallet.html reaches this through src/dev/main.tsx, which
+// imports '../index.css' — so the custom properties resolve there exactly as they do in the app.
+// That is the fact that made this collapse safe; without it, a var()-based table would render the
+// standalone harness colourless.
+//
+// ── WHAT CHANGED IN THE VALUES ───────────────────────────────────────────────
+//
+// The accent moved from teal #2DE0C6 to cobalt #378ADD, surfaces from blue-black to ink navy, and
+// the brand gradient is gone ("never teal, never gradients"). The `teal*` KEY NAMES survive this
+// pass as deprecated aliases for the same reason the CSS variables do: renaming them is a 207-site
+// mechanical commit, and mixing it into a colour change would make both unreviewable.
 
+/**
+ * The token table.
+ *
+ * Every entry is a CSS custom property reference, so these strings are only valid inside a style
+ * that the browser resolves — which is every use they have (inline `style`, SVG `stroke`/`fill`,
+ * template literals inside `background`). None of them can be read as a colour in JS, and nothing
+ * ever did.
+ */
 export const C = {
   // ── Surfaces ──
-  void: '#05080E',
-  modal: '#0C111B',
-  raised: '#10151F',
-  inset: '#161C28',
-  trough: '#080C14',
-  disabled: '#0E131D',        // NEW — disabled/unavailable card ground
-  maxActive: '#1F2536',       // NEW — MAX pill once pressed
-  amberGround: '#241C0C',     // NEW — the make-public confirm button
-  errorGround: '#170D0D',     // NEW — the verbatim-error console
+  void: 'var(--surface-void)',
+  modal: 'var(--surface)',
+  raised: 'var(--surface-raised)',
+  inset: 'var(--surface-inset)',
+  trough: 'var(--surface-trough)',
+  disabled: 'var(--surface-raised)',      // disabled/unavailable card ground
+  maxActive: 'var(--navy-600)',           // MAX pill once pressed
+  amberGround: 'rgba(232,180,75,0.10)',   // the make-public confirm button
+  errorGround: 'rgba(255,138,115,0.10)',  // the verbatim-error console
 
-  // ── Private (teal) ──
-  teal: '#2DE0C6',
-  teal300: '#7DE9D8',
-  tealGradTop: '#34E5D0',
-  tealGradBottom: '#12A594',
-  inkOnTeal: '#04120F',
-  tealLabel: '#8FB7B0',
-  tealDim: '#5E8A82',
-  heroGrad: 'linear-gradient(165deg, #0E2A28, #0A1A1C)',
+  // ── Accent (cobalt) ──
+  // `teal*` names kept as deprecated aliases — see the header. Nothing here is teal any more.
+  teal: 'var(--accent-400)',
+  teal300: 'var(--accent-300)',
+  tealGradTop: 'var(--accent-300)',
+  tealGradBottom: 'var(--accent-500)',
+  inkOnTeal: 'var(--ink-on-accent)',
+  tealLabel: 'var(--text-vault-label)',
+  tealDim: 'var(--text-accent-dim)',
+  /** The balance hero's ground. FLAT now — the foundation forbids brand gradients. */
+  heroGrad: 'var(--nav-ground)',
+  /** The hero's two breakdown cards. Private and public share one ground on purpose: the
+   *  foundation distinguishes them by icon and label, never by colour. */
+  vaultCard: 'var(--vault-card)',
 
   // ── Caution (amber) — the reveal direction ──
-  warn: '#FFB43C',
-  warn300: '#FFC978',
+  warn: 'var(--warn)',
+  warn300: 'var(--warn-300)',
 
   // ── Fault (coral) ──
-  danger: '#FF8E8E',
-  dangerText: '#E2A9A9',
+  danger: 'var(--danger-500)',
+  dangerText: 'var(--danger-300)',
+
+  // ── Positive — inflows in the activity list ──
+  positive: 'var(--positive)',
 
   // ── Text ramp ──
-  bright: '#EAFBF7',
-  primary: '#F2F5FB',
-  body: '#E4EAF4',
-  bodyDim: '#C7D0E4',
-  muted: '#99A6C2',
-  mutedDim: '#8A97B4',
-  faint: '#6B7793',
-  faintDim: '#55617D',
-  ghost: '#3D4657',
+  bright: 'var(--text-bright)',
+  primary: 'var(--text-primary)',
+  body: 'var(--text-body)',
+  bodyDim: 'var(--text-body-dim)',
+  muted: 'var(--text-muted)',
+  mutedDim: 'var(--text-muted-dim)',
+  faint: 'var(--text-faint)',
+  faintDim: 'var(--text-faint-dim)',
+  ghost: 'var(--text-disabled)',
 } as const
 
-/** Border tints. The design writes these as rgba(120,150,210,α) throughout. */
-export const border = (a: number) => `1px solid rgba(120,150,210,${a})`
-export const tealBorder = (a: number) => `1px solid rgba(45,224,198,${a})`
-export const warnBorder = (a: number) => `1px solid rgba(255,180,60,${a})`
-export const tealFill = (a: number) => `rgba(45,224,198,${a})`
-export const warnFill = (a: number) => `rgba(255,180,60,${a})`
+/**
+ * Border and fill tints.
+ *
+ * These build `rgba(<triplet>, α)` strings, so they need the rgb TRIPLET variables rather than the
+ * hex ones — `rgba(var(--accent-400), α)` is not valid CSS. src/index.css publishes
+ * `--border-rgb`, `--accent-400-rgb` and `--warn-rgb` for exactly this.
+ */
+export const border = (a: number) => `1px solid rgba(var(--border-rgb),${a})`
+export const tealBorder = (a: number) => `1px solid rgba(var(--accent-400-rgb),${a})`
+export const warnBorder = (a: number) => `1px solid rgba(var(--warn-rgb),${a})`
+export const tealFill = (a: number) => `rgba(var(--accent-400-rgb),${a})`
+export const warnFill = (a: number) => `rgba(var(--warn-rgb),${a})`
 
-export const MONO = "'IBM Plex Mono', monospace"
+export const MONO = 'var(--font-mono)'
 
 /** The modal shell. 480px is the design's fixed width; it shrinks on narrow viewports. */
 export const MODAL_WIDTH = 480

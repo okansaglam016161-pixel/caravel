@@ -539,7 +539,7 @@ export default function WalletPreview() {
   return (
     <div style={{ minHeight: '100vh', background: C.void, padding: '32px 36px 120px' }}>
       <header style={{ display: 'flex', alignItems: 'baseline', gap: 18, flexWrap: 'wrap', marginBottom: 8 }}>
-        <h1 style={{ margin: 0, fontSize: 26, fontWeight: 800, letterSpacing: '-0.03em', color: C.primary }}>Wallet modal v2 — preview</h1>
+        <h1 style={{ margin: 0, fontSize: 26, fontWeight: 700, letterSpacing: '-0.03em', color: C.primary }}>Wallet modal v2 — preview</h1>
         <span style={{ fontSize: 13.5, color: C.faint }}>Mock data only. No wallet, no network, no fund logic.</span>
       </header>
       <div style={{ display: 'flex', gap: 8, margin: '18px 0 28px' }}>

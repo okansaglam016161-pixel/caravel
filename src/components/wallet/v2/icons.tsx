@@ -65,10 +65,10 @@ export const Lock = ({ size = 14, color }: I) => (
 )
 
 /** Indeterminate spinner. Uses the app's existing cv-spin keyframes (index.css). */
-export const Spinner = ({ size = 13, ring = 2, color = '#2DE0C6' }: { size?: number; ring?: number; color?: string }) => (
+export const Spinner = ({ size = 13, ring = 2, color = 'var(--accent-400)' }: { size?: number; ring?: number; color?: string }) => (
   <span style={{
     width: size, height: size, borderRadius: '50%', flexShrink: 0,
-    border: `${ring}px solid rgba(45,224,198,0.2)`, borderTopColor: color,
+    border: `${ring}px solid rgba(var(--accent-400-rgb),0.20)`, borderTopColor: color,
     animation: 'cv-spin 0.9s linear infinite', display: 'inline-block',
   }} />
 )

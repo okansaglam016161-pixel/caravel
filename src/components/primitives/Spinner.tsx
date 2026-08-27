@@ -1,5 +1,5 @@
-//   Spinner — teal ring, token-driven. Sizes: xs (in-button), sm, md.
-//   Consumes: --teal-500, --teal-500-rgb. Animation: cv-spin (index.css).
+//   Spinner — accent ring, token-driven. Sizes: xs (in-button), sm, md.
+//   Consumes: --accent-400, --accent-400-rgb. Animation: cv-spin (index.css).
 
 import type { CSSProperties } from 'react'
 
@@ -13,15 +13,15 @@ const DIMENS: Record<SpinnerSize, { px: number; dur: string }> = {
 
 interface SpinnerProps {
   size?: SpinnerSize
-  /** Override the ring/top colour (e.g. muted inside a busy button). Defaults to teal. */
-  tone?: 'teal' | 'muted'
+  /** Override the ring/top colour (e.g. muted inside a busy button). Defaults to the accent. */
+  tone?: 'accent' | 'muted'
   style?: CSSProperties
 }
 
-export default function Spinner({ size = 'sm', tone = 'teal', style }: SpinnerProps) {
+export default function Spinner({ size = 'sm', tone = 'accent', style }: SpinnerProps) {
   const { px, dur } = DIMENS[size]
-  const ring = tone === 'muted' ? 'rgba(var(--border-rgb), 0.25)' : 'rgba(var(--teal-500-rgb), 0.2)'
-  const top = tone === 'muted' ? 'var(--text-faint-dim)' : 'var(--teal-500)'
+  const ring = tone === 'muted' ? 'rgba(var(--border-rgb), 0.25)' : 'rgba(var(--accent-400-rgb), 0.20)'
+  const top = tone === 'muted' ? 'var(--text-faint-dim)' : 'var(--accent-400)'
   return (
     <span
       aria-hidden="true"

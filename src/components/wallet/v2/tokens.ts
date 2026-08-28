@@ -99,3 +99,13 @@ export const MONO = 'var(--font-mono)'
 
 /** The modal shell. 480px is the design's fixed width; it shrinks on narrow viewports. */
 export const MODAL_WIDTH = 480
+
+/**
+ * The widest the wallet PAGE lets its content grow.
+ *
+ * The design lays the app out in a 1280 shell with a 224 nav beside it, leaving roughly 1050 for
+ * the wallet and about 990 inside its padding. Past that the vault hero stops reading as a card and
+ * the assets rows put half a screen between a name and its amount, so the content centres rather
+ * than stretching further.
+ */
+export const PAGE_MAX_WIDTH = 1040

@@ -848,6 +848,7 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
 
   const body = (
     <WalletModalV2
+      chrome={chrome}
       privateBalance={privateBalance}
       publicBalance={publicBalance}
       total={total}

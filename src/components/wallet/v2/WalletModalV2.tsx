@@ -21,7 +21,7 @@ import { C, tealBorder, tealFill } from './tokens'
 import { Alert, Check, Eye, EyeOff, Spinner } from './icons'
 import {
   Body, Button, DetailCard, DetailRow, FeeRow, ModalShell, RootHeader, ScanStrip, SettleBar,
-  Sheet, TabBar, TxRow, iconBtn, type ScanSummary,
+  Sheet, TabBar, TxRow, iconBtn, type Chrome, type ScanSummary,
 } from './primitives'
 import {
   ActivityPanel, FaucetPanel, OnsPanel, ReceivePanel, SendPanel, VerbatimBox,
@@ -167,6 +167,11 @@ export interface WalletModalV2Props {
   refreshing?: boolean
   /** Last private-scan diagnostics, shown beside Refresh. Omit to hide the strip entirely. */
   scanSummary?: ScanSummary
+  /**
+   * Which surface this is drawn on. `page` fills the content pane in the service shell; `modal`
+   * keeps the 480 column the in-chat wallet has always had. The flows are sheets in both.
+   */
+  chrome?: Chrome
 }
 
 const XTR = (n: bigint) => `${fmt6(n)} XTR`
@@ -181,8 +186,8 @@ export default function WalletModalV2(p: WalletModalV2Props) {
   // thing they are doing to it. Before stage 5 the move flow REPLACED this view outright, which
   // meant shielding funds hid the balances the move was about.
   const root = (
-      <ModalShell>
-        <RootHeader chip={p.networkChip} right={<>
+      <ModalShell chrome={p.chrome}>
+        <RootHeader chip={p.networkChip} chrome={p.chrome} right={<>
           <span role="button" tabIndex={0} onClick={p.onToggleHidden} onKeyDown={e => e.key === 'Enter' && p.onToggleHidden()}
             aria-label={p.hidden ? 'Show balances' : 'Hide balances'}
             style={p.hidden
@@ -192,7 +197,7 @@ export default function WalletModalV2(p: WalletModalV2Props) {
           </span>
           {p.onClose && <span role="button" tabIndex={0} onClick={p.onClose} onKeyDown={e => e.key === 'Enter' && p.onClose!()} style={iconBtn} aria-label="Close">✕</span>}
         </>} />
-        <Body gap={14}>
+        <Body gap={14} chrome={p.chrome}>
           {p.onTab && <TabBar tabs={VISIBLE_TABS} active={tab === 'overview' || tab === 'activity' ? tab : 'overview'} onSelect={p.onTab} />}
 
           {(tab === 'overview' || SHEET_TABS.includes(tab)) && <>
@@ -217,7 +222,14 @@ export default function WalletModalV2(p: WalletModalV2Props) {
             <MoveList entries={p.entries} lockedText={p.lockedText} lockedIsFlight={p.lockedIsFlight} />
             {p.faucet && <FaucetPanel {...p.faucet} />}
             {p.ons && <OnsPanel {...p.ons} />}
-            {p.overviewExtras}
+            {/* Faucet and name, side by side where there is room. `auto-fit` + a 280 floor does
+                that without a media query, and collapses to one column in the 480 modal and on a
+                narrow window — the same rule serves both surfaces. */}
+            {p.overviewExtras && (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 12, alignItems: 'start' }}>
+                {p.overviewExtras}
+              </div>
+            )}
           </>}
 
           {tab === 'activity' && (

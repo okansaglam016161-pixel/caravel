@@ -124,7 +124,13 @@ export function MoveList({ entries, lockedText, lockedIsFlight }: {
       <SectionLabel>MOVE BETWEEN BALANCES</SectionLabel>
       {lockedText
         ? <EntryLocked text={lockedText} icon={lockedIsFlight ? <Lock color={C.ghost} /> : undefined} />
-        : entries?.map(e => <Entry key={e.dir} {...e} />)}
+        : (
+          // Two across where there is room, stacked where there is not. Same auto-fit rule as the
+          // extras row, so the page and the 480 modal need no separate layout.
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 8 }}>
+            {entries?.map(e => <Entry key={e.dir} {...e} />)}
+          </div>
+        )}
     </div>
   )
 }

@@ -6,11 +6,28 @@
 
 import { useEffect, type CSSProperties, type ReactNode } from 'react'
 import { C, MODAL_WIDTH, MONO, border, tealBorder, tealFill, warnBorder } from './tokens'
+
+/**
+ * Which surface the wallet is drawn on.
+ *
+ * `modal` is the in-chat wallet: a fixed 480 column that floats over the conversation and scrolls
+ * inside itself. `page` is the standalone wallet in the service shell: it fills the content pane,
+ * has no chrome of its own, and lets the PAGE scroll rather than nesting a second scroller.
+ */
+export type Chrome = 'modal' | 'page'
 import { Copy, Spinner } from './icons'
 
 // ── Shell ─────────────────────────────────────────────────────────────────────
 
-export function ModalShell({ children }: { children: ReactNode }) {
+export function ModalShell({ chrome = 'modal', children }: { chrome?: Chrome; children: ReactNode }) {
+  if (chrome === 'page') {
+    // No card, no border, no shadow and NO HEIGHT CAP. The page is the surface; boxing the wallet
+    // inside a second card would draw a modal that merely happens not to float, and capping its
+    // height here is what produced the nested scroller the page has had since stage 1.
+    return (
+      <div style={{ width: '100%', display: 'flex', flexDirection: 'column' }}>{children}</div>
+    )
+  }
   return (
     <div style={{
       width: `min(${MODAL_WIDTH}px, 94vw)`, maxHeight: '88vh', borderRadius: 'var(--r-xl)', background: C.modal,
@@ -97,12 +114,21 @@ export function Sheet({ title, onClose, dismissable = true, children }: {
   )
 }
 
-/** Header for the modal's root view: name, network chip, and the global controls. */
-export function RootHeader({ chip, right }: { chip?: string; right: ReactNode }) {
+/**
+ * Header for the root view: name, network chip, and the global controls.
+ *
+ * On a PAGE it is a page heading — no rule beneath it, no inset padding, and a larger title, since
+ * the container already supplies the margin and there is no card edge for a border to describe. In
+ * the MODAL it stays the bordered bar that separates it from the scrolling body.
+ */
+export function RootHeader({ chip, right, chrome = 'modal' }: { chip?: string; right: ReactNode; chrome?: Chrome }) {
+  const page = chrome === 'page'
   return (
-    <div style={headerBase}>
+    <div style={page
+      ? { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '0 0 4px', flexShrink: 0 }
+      : headerBase}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-        <span style={{ fontSize: 20, fontWeight: 600, letterSpacing: '-0.015em', color: C.primary }}>Wallet</span>
+        <span style={{ fontSize: page ? 22 : 20, fontWeight: 600, letterSpacing: '-0.015em', color: C.primary }}>Wallet</span>
         {/* The network is a STATEMENT OF FACT, not an accent: mono, quiet, with an amber dot. It
             used to wear the brand colour, which read as a badge of approval for a testnet. */}
         {chip && (
@@ -143,11 +169,17 @@ export function SubHeader({ title, onBack, onClose }: { title: string; onBack?: 
 
 // Scrolls rather than growing: with tabs and panels the overview can outrun the viewport, and a
 // modal that pushes its own confirm button off-screen is worse than one that scrolls.
-export function Body({ children, gap = 12 }: { children: ReactNode; gap?: number }) {
+export function Body({ children, gap = 12, chrome = 'modal' }: {
+  children: ReactNode; gap?: number; chrome?: Chrome
+}) {
+  const page = chrome === 'page'
   return (
     <div style={{
-      display: 'flex', flexDirection: 'column', gap, padding: '20px 22px 22px',
-      overflowY: 'auto', minHeight: 0,
+      display: 'flex', flexDirection: 'column', gap: page ? gap + 2 : gap,
+      padding: page ? '4px 0 0' : '20px 22px 22px',
+      // The page's own container scrolls. A second scroller here is what made the wallet page
+      // scroll inside a box inside a scrolling pane.
+      ...(page ? {} : { overflowY: 'auto' as const, minHeight: 0 }),
     }}>{children}</div>
   )
 }

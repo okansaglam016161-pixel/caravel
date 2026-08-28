@@ -12,20 +12,30 @@
 //   lifting ~700 lines into a shared hook, which is the right move eventually and exactly the wrong
 //   move while the reskin has not started.
 //
-//   STAGE 1 SCOPE: this is the existing modal body, unstyled to the new page design, sitting in the
-//   shell instead of over it. The portfolio layout — vault hero, assets list, extras — is stage 2
-//   onward. Nothing here presumes the current 480px column survives that.
+//   ── THE PAGE IS THE SCROLLER ─────────────────────────────────────────────────
+//
+//   This container scrolls and the wallet inside it does not. Until the layout pass the page
+//   rendered a 480 modal column — height-capped and internally scrolling — inside this already
+//   scrolling pane, which is two scrollbars for one list. `chrome="page"` drops the card, the
+//   height cap and the inner scroller; what is left is content in a column.
+//
+//   WIDTH IS CAPPED, NOT UNLIMITED. It fills the pane up to PAGE_MAX_WIDTH and centres beyond it.
+//   The design's proportions come from a 1280 shell with a 224 nav beside it; past roughly that the
+//   vault stops reading as a card and an assets row puts half a screen between a name and its
+//   amount. Below the cap it is fully fluid, so narrowing the window reflows rather than clipping.
 
 import WalletModal from './WalletModal'
+import { PAGE_MAX_WIDTH } from './v2/tokens'
 
 export default function WalletPage() {
   return (
-    <div style={{
-      flex: 1, minWidth: 0, overflowY: 'auto',
-      display: 'flex', justifyContent: 'center', alignItems: 'flex-start',
-      padding: '28px 24px 40px',
-    }}>
-      <WalletModal chrome="page" />
+    <div style={{ flex: 1, minWidth: 0, overflowY: 'auto' }}>
+      <div style={{
+        maxWidth: PAGE_MAX_WIDTH, margin: '0 auto',
+        padding: 'clamp(16px, 3vw, 32px) clamp(16px, 3vw, 32px) 48px',
+      }}>
+        <WalletModal chrome="page" />
+      </div>
     </div>
   )
 }

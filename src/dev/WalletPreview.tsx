@@ -19,7 +19,7 @@ import { ActivityRowShell, type ActivityRowView, type FaucetPhase, type OnsStatu
 import type { BalanceView } from '../components/wallet/v2/balances'
 import { computeTotal } from '../components/wallet/v2/total'
 import type { Dir, EntryProps } from '../components/wallet/v2/move'
-import { C, MONO, border, tealBorder, tealFill } from '../components/wallet/v2/tokens'
+import { C, MONO, PAGE_MAX_WIDTH, border, tealBorder, tealFill } from '../components/wallet/v2/tokens'
 import { fmt6, toInput } from '../components/wallet/v2/format'
 
 // ── Mock figures, taken from the real seeded wallet so nothing is unrealistically round ──
@@ -121,6 +121,8 @@ function entriesFor(s: Scenario, onOpen: (d: Dir) => void): { entries: EntryProp
 // ── Drive mode ────────────────────────────────────────────────────────────────
 
 function Drive() {
+  /** Which surface to draw. The page layout is wide, so it is worth checking here too. */
+  const [chrome, setChrome] = useState<'modal' | 'page'>('modal')
   const [scenario, setScenario] = useState<Scenario>('both')
   const [hidden, setHidden] = useState(false)
   const [showFacts, setShowFacts] = useState(true)
@@ -201,6 +203,7 @@ function Drive() {
   const { entries, locked, lockedFlight } = entriesFor(scenario, openMove)
 
   const props: WalletModalV2Props = {
+    chrome,
     privateBalance: priv, publicBalance: pub, hidden, networkChip: 'Esmeralda testnet',
     total: computeTotal({
       privateBalance: priv, publicBalance: pub, privateGeneration: 1, publicGeneration: 1, settleLagged: false, privateIncomplete: incomplete,
@@ -368,9 +371,18 @@ function Drive() {
         </Group>
       </aside>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12, minWidth: 0 }}>
         <Caption>{SCENARIOS.find(s => s.id === scenario)?.note}</Caption>
-        <WalletModalV2 {...props} />
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button onClick={() => setChrome('modal')} style={{ ...btn(chrome === 'modal'), width: 'auto', padding: '6px 14px' }}>Modal chrome</button>
+          <button onClick={() => setChrome('page')} style={{ ...btn(chrome === 'page'), width: 'auto', padding: '6px 14px' }}>Page chrome</button>
+        </div>
+        {/* The page fills its container, so the harness gives it one the width of the real pane. */}
+        <div style={chrome === 'page'
+          ? { width: '100%', maxWidth: PAGE_MAX_WIDTH, background: C.void, borderRadius: 'var(--r-lg)', padding: 20, border: '1px solid var(--border)' }
+          : undefined}>
+          <WalletModalV2 {...props} />
+        </div>
         <div style={{ fontFamily: MONO, fontSize: 11, color: C.ghost }}>
           step: {move.step}{'dir' in move ? ` · ${move.dir}` : ''} · scenario: {scenario} · hidden: {String(hidden)}
         </div>

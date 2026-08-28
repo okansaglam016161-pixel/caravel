@@ -9,13 +9,15 @@
    there is exactly one place a value changes.
 
    ── HOW THE TWO THEMES ARE ARRANGED ───────────────────────────────────────
-   The foundation is light-first, but the shipped app is dark and every
-   composition in it (landing, chat, the wallet modal) is written for a dark
-   ground. So :root carries the DARK role tokens — what actually renders — and
-   the light theme is defined below under [data-theme="light"], complete and
-   ready, but deliberately NOT exposed by a switcher yet. Turning it on needs a
-   composition pass over the surfaces that still hold dark-only literals; until
-   then a switch would half-work, which is worse than not having one.
+   The foundation is light-first, but most of the shipped app is dark and its
+   compositions (chat, the wallet containers) still hold dark-only literals. So
+   :root carries the DARK role tokens — the app-wide default — and the light
+   theme is defined below under [data-theme="light"].
+
+   That light block is live, not dormant: it matches on ANY element, not just
+   :root, so a subtree can opt in on its own. The landing page does exactly
+   that and ships a working light/dark toggle today, while /app stays dark
+   until the composition pass reaches it. See the block's own note.
 
    The raw SCALES (navy, cobalt) are theme-independent and live on :root. Only
    the ROLE tokens (surface/text/border/semantic) are re-stated per theme.
@@ -47,9 +49,12 @@
   --accent-800: #123A67;
   --accent-900: #0D2A4B;
 
-  /* rgb triplet for rgba() tints. Every low-alpha accent wash goes through
-     this rather than a literal, so a future accent change is one line. */
+  /* rgb triplets for rgba() tints. Every low-alpha accent wash goes through
+     these rather than a literal, so a future accent change is one line.
+     300 exists because the dark theme tints the LIGHTER accent — a .12 wash of
+     400 on a navy ground is too dim to read as a tint at all. */
   --accent-400-rgb: 55, 138, 221;
+  --accent-300-rgb: 116, 174, 232;
 
   /* Interaction steps for the accent. These are NOT scale entries — the
      foundation draws them directly on the button states (05 PRIMITIVES). */
@@ -203,10 +208,19 @@
 }
 
 /* ══ LIGHT ROLE TOKENS ════════════════════════════════════════════════════
-   Complete and correct, but NOT reachable yet: nothing sets data-theme. See
-   the note at the top of this file. When the composition pass lands, this
-   becomes the default and :root above becomes [data-theme="dark"]. */
-:root[data-theme="light"] {
+   Reachable two ways, and the second one is the point:
+
+     :root[data-theme="light"]   the whole app, once the composition pass lands
+     [data-theme="light"]        ANY SUBTREE, right now
+
+   Custom properties inherit, so putting data-theme="light" on one element
+   re-declares the role tokens for that subtree and nothing else. That is what
+   lets the landing page ship a working light theme today while /app — which
+   still holds dark-only literals in chat and the wallet containers — stays
+   dark regardless of what the landing's toggle is set to. A global attribute
+   would flip both, and the half of it that is not ready would break. */
+:root[data-theme="light"],
+[data-theme="light"] {
   --surface-void: #F6F8FA;
   --surface-base: #F6F8FA;
   --surface: #FFFFFF;

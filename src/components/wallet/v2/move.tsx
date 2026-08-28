@@ -11,23 +11,35 @@
 // balance and account state the builders already read.
 
 import type { ReactNode } from 'react'
-import { C, border, tealBorder, tealFill, warnBorder, warnFill } from './tokens'
-import { Arrow, Eye, Lock, Shield, Spinner } from './icons'
+import { C, tealBorder, tealFill } from './tokens'
+import { Eye, Lock, Shield, Spinner } from './icons'
 import { MASK_SHORT, fmt6 } from './format'
 import { AmountField, SectionLabel } from './primitives'
 
 export type Dir = 'conceal' | 'reveal'
 
 /** Copy that differs by direction, in one place so the two can never disagree. */
+/**
+ * Copy that differs by direction, in ONE place so the two can never disagree.
+ *
+ * `done` and `pastTense` in particular: a success screen that says "Now shielded" after an unshield
+ * is not a cosmetic slip, it is the wallet telling someone the opposite of what happened to their
+ * privacy. Deriving both from this table means the two directions cannot be swapped or duplicated
+ * by an edit to one branch.
+ */
 export const DIR = {
-  conceal: { title: 'Shield', from: 'Unshielded', to: 'Shielded', verb: 'becomes shielded', avail: 'Unshielded available' },
-  reveal: { title: 'Unshield', from: 'Shielded', to: 'Unshielded', verb: 'becomes unshielded', avail: 'Shielded available' },
-} as const
-
-/** The one-line explanation under each entry title. */
-const BLURB = {
-  conceal: 'Move unshielded funds into your shielded balance.',
-  reveal: 'Make shielded funds visible on chain. This cannot be undone.',
+  conceal: {
+    title: 'Shield', from: 'Unshielded', to: 'Shielded',
+    verb: 'becomes shielded', avail: 'Unshielded available',
+    blurb: 'Move unshielded funds into your shielded balance.',
+    done: 'Now shielded', pastTense: 'shielded',
+  },
+  reveal: {
+    title: 'Unshield', from: 'Shielded', to: 'Unshielded',
+    verb: 'becomes unshielded', avail: 'Shielded available',
+    blurb: 'Make shielded funds visible on chain. This cannot be undone.',
+    done: 'Now unshielded', pastTense: 'unshielded',
+  },
 } as const
 
 // ── Entry list ────────────────────────────────────────────────────────────────
@@ -74,7 +86,7 @@ function Entry({ dir, disabledReason, onClick }: EntryProps) {
         {/* An absent control cannot explain itself, so a dead entry is SHOWN and states its reason
             rather than being hidden — the design's "disabled action with a stated reason". */}
         <span style={{ fontSize: 12.5, color: 'var(--text-muted-dim)', lineHeight: 1.45 }}>
-          {disabledReason ?? BLURB[dir]}
+          {disabledReason ?? DIR[dir].blurb}
         </span>
       </span>
       {!dead && (
@@ -132,35 +144,6 @@ export function InFlightBanner({ text }: { text: string }) {
 
 // ── Direction chips ───────────────────────────────────────────────────────────
 
-/**
- * THE DIRECTION, UNMISTAKABLE. Rendered from `dir` rather than written out twice, so the chips can
- * never disagree with the transaction being built.
- *
- * The ARROW carries the tone: teal for the routine move, amber for the permanent one. That is the
- * earliest point the caution appears — the design deliberately signals irreversibility from the
- * moment the direction is chosen, rather than saving it all for review.
- */
-export function DirectionChips({ dir }: { dir: Dir }) {
-  const chip = (kind: 'private' | 'public', active: boolean) => (
-    <span style={{
-      display: 'flex', alignItems: 'center', gap: 7, padding: '7px 14px', borderRadius: 999,
-      fontSize: 12.5, fontWeight: active ? 700 : 600,
-      background: active && kind === 'private' ? tealFill(0.08) : C.raised,
-      border: active && kind === 'private' ? tealBorder(0.32) : border(0.18),
-      color: active && kind === 'private' ? C.teal300 : C.muted,
-    }}>
-      {kind === 'private' ? <Shield color={active ? C.teal : C.mutedDim} /> : <Eye color={C.mutedDim} />}
-      {kind === 'private' ? 'Shielded' : 'Unshielded'}
-    </span>
-  )
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12 }}>
-      {dir === 'conceal' ? chip('public', false) : chip('private', true)}
-      <Arrow color={dir === 'conceal' ? C.teal : C.warn} />
-      {dir === 'conceal' ? chip('private', true) : chip('public', false)}
-    </div>
-  )
-}
 
 // ── Amount card ───────────────────────────────────────────────────────────────
 
@@ -189,7 +172,8 @@ export function AmountCard({ dir, value, onChange, onMax, maxUsed, available, hi
       onMax={onMax}
       maxUsed={maxUsed}
       readOnly={hidden}
-      accent={dir === 'conceal' ? 'teal' : 'neutral'}
+      // Amber all the way through the irreversible direction, not only on the confirm button.
+      accent={dir === 'conceal' ? 'teal' : 'amber'}
       availableLabel={hidden ? 'Available' : DIR[dir].avail}
       availableValue={hidden ? MASK_SHORT : available !== null ? fmt6(available) : '—'}
       note={leftoverNote}
@@ -198,26 +182,3 @@ export function AmountCard({ dir, value, onChange, onMax, maxUsed, available, hi
   )
 }
 
-/**
- * The three facts, for the make-public review.
- *
- * NOT IN THE DESIGN CANVAS — its review screen carries the amber signal through the arrow, the
- * "becomes public" label and the confirm button, but never states WHY. The M4 report's position is
- * that the minimal honest signal is three facts, and the third (concealing again adds a record
- * rather than removing one) is the one users get wrong. Rendered compactly so it informs without
- * becoming friction; the preview can switch it off to compare.
- */
-export function PermanenceNote() {
-  return (
-    <div style={{
-      display: 'flex', gap: 10, padding: '11px 13px', borderRadius: 11,
-      background: warnFill(0.10), border: warnBorder(0.28),
-    }}>
-      <Eye size={14} color={C.warn} />
-      <div style={{ fontSize: 12, color: C.mutedDim, lineHeight: 1.55 }}>
-        Anyone will be able to see this amount, and it stays visible permanently.
-        Making it private again later adds a new record — it doesn’t remove this one.
-      </div>
-    </div>
-  )
-}

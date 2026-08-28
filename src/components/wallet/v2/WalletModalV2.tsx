@@ -17,14 +17,14 @@
 //     amount on a transient network failure.
 
 import type { ReactNode } from 'react'
-import { C, MONO, tealBorder, tealFill } from './tokens'
-import { Alert, Check, Eye, EyeOff, Shield, Spinner } from './icons'
+import { C, tealBorder, tealFill } from './tokens'
+import { Alert, Check, Eye, EyeOff, Spinner } from './icons'
 import {
   Body, Button, DetailCard, DetailRow, FeeRow, ModalShell, RootHeader, ScanStrip, SettleBar,
-  Sheet, StatusBlock, SubHeader, TabBar, TxRow, iconBtn, type ScanSummary,
+  Sheet, TabBar, TxRow, iconBtn, type ScanSummary,
 } from './primitives'
 import {
-  ActivityPanel, FaucetPanel, OnsPanel, ReceivePanel, SendPanel,
+  ActivityPanel, FaucetPanel, OnsPanel, ReceivePanel, SendPanel, VerbatimBox,
   type FaucetPanelProps, type OnsPanelProps, type SendPanelProps,
 } from './panels'
 import { AssetsPanel } from './assets'
@@ -32,7 +32,7 @@ import type { BalanceView } from './balances'
 import { TotalHero } from './TotalHero'
 import type { TotalView } from './total'
 import {
-  AmountCard, DIR, DirectionChips, InFlightBanner, MoveList, PermanenceNote,
+  AmountCard, DIR, InFlightBanner, MoveList,
   type Dir, type EntryProps,
 } from './move'
 import { fmt6 } from './format'
@@ -66,13 +66,27 @@ export type MoveView =
   | {
       step: 'form'; dir: Dir; amount: string; maxUsed: boolean
       available: bigint | null; leftoverNote?: string; error?: string; canReview: boolean
+      /** The floor the builder enforces. Stated up front rather than discovered by being refused. */
+      minMicrotari: bigint
+      /** The CEILING, not the balance — what MAX pins, and on the unshield side that is less than
+       *  the shielded total because the fee comes out of it. Both figures are already computed by
+       *  the container; this only carries them to the screen. */
+      maxMicrotari: bigint
     }
   | {
       step: 'review'; dir: Dir; amountMicrotari: bigint
       /** null while the dry run is in flight — the fee row spins and confirm stays inert. */
       feeMicrotari: bigint | null
       resulting: Resulting | null
-      showPermanenceNote?: boolean
+      /**
+       * The fee-reserve remainder, WHEN THERE IS ONE.
+       *
+       * Set only when a remainder genuinely exists — MAX was used and the ceiling really did hold
+       * something back — and it names the figure. Unset otherwise, because "a small amount stays
+       * shielded to cover the fee" said over an ordinary partial unshield describes nothing that
+       * happened. Same value the form shows, so the two screens cannot disagree.
+       */
+      leftoverNote?: string
     }
   | { step: 'moving'; dir: Dir; amountMicrotari: bigint; progress: string }
   | { step: 'settling'; dir: Dir; amountMicrotari: bigint; txId: string }
@@ -159,11 +173,14 @@ const XTR = (n: bigint) => `${fmt6(n)} XTR`
 
 export default function WalletModalV2(p: WalletModalV2Props) {
   const m = p.move
+  const tab = p.tab ?? 'overview'
 
-  // ── Root view: the tab bar, and whichever area is selected ──
-  if (m.step === 'idle') {
-    const tab = p.tab ?? 'overview'
-    const root = (
+  // ── The root view. ALWAYS RENDERED ──────────────────────────────────────────
+  //
+  // Every flow is a sheet over this, so the wallet a user is operating on stays visible behind the
+  // thing they are doing to it. Before stage 5 the move flow REPLACED this view outright, which
+  // meant shielding funds hid the balances the move was about.
+  const root = (
       <ModalShell>
         <RootHeader chip={p.networkChip} right={<>
           <span role="button" tabIndex={0} onClick={p.onToggleHidden} onKeyDown={e => e.key === 'Enter' && p.onToggleHidden()}
@@ -210,190 +227,213 @@ export default function WalletModalV2(p: WalletModalV2Props) {
           )}
         </Body>
       </ModalShell>
-    )
+  )
 
-    return (
-      <>
-        {root}
-        {/* The flows, over the page. `dismissable` is false while a transaction is on the wire:
-            nothing here can cancel a broadcast, so a close affordance would misdescribe itself. */}
-        {tab === 'send' && p.send && (
-          <Sheet
-            title="Send"
-            dismissable={p.send.view.step !== 'sending'}
-            onClose={() => { p.send!.onDone(); p.onTab?.('overview') }}
-          ><SendPanel {...p.send} /></Sheet>
-        )}
-        {tab === 'receive' && p.receive && (
-          <Sheet title="Receive" onClose={() => p.onTab?.('overview')}>
-            <ReceivePanel {...p.receive} />
-          </Sheet>
-        )}
-      </>
-    )
-  }
-
-  // ── Amount entry ──
-  if (m.step === 'form') {
-    return (
-      <ModalShell>
-        <SubHeader title={DIR[m.dir].title} onBack={p.onBack} onClose={p.onClose} />
-        <Body gap={16}>
-          <DirectionChips dir={m.dir} />
-          <AmountCard
-            dir={m.dir} value={m.amount} onChange={p.onAmountChange} onMax={p.onMax}
-            maxUsed={m.maxUsed} available={m.available} hidden={p.hidden}
-            leftoverNote={m.leftoverNote} error={m.error}
-          />
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: C.mutedDim, padding: '0 4px' }}>
-            <span>Network fee</span>
-            <span style={{ color: C.muted }}>Shown before you confirm</span>
-          </div>
-          <Button tone={m.canReview ? (m.dir === 'conceal' ? 'primary' : 'neutral') : 'disabled'} onClick={p.onReview}>Review</Button>
-        </Body>
-      </ModalShell>
-    )
-  }
-
-  // ── Review (prices in place) ──
-  if (m.step === 'review') {
-    const pricing = m.feeMicrotari === null
-    const isReveal = m.dir === 'reveal'
-    return (
-      <ModalShell>
-        <SubHeader title="Review" onBack={p.onBack} onClose={p.onClose} />
-        <Body gap={16}>
-          <Headline amount={m.amountMicrotari} dir={m.dir} />
-          {isReveal && m.showPermanenceNote && <PermanenceNote />}
-          <DetailCard>
-            <FeeRow fee={m.feeMicrotari === null ? null : fmt6(m.feeMicrotari)} last={!m.resulting} />
-            {/* THE NUMBER THE OLD REVIEW NEVER SHOWED. The M4 report's gap #10: users want to know
-                what they will be left with, not how the transaction is assembled. */}
-            {m.resulting && <>
-              <DetailRow label="Shielded after" value={XTR(m.resulting.privateAfter)} valueColor={C.teal300} />
-              <DetailRow label="Unshielded after" value={XTR(m.resulting.publicAfter)} last />
-            </>}
-          </DetailCard>
-          <Button
-            tone={pricing ? 'disabled' : isReveal ? 'amber' : 'primary'}
-            onClick={pricing ? undefined : p.onConfirm}
-          >
-            {isReveal ? `Unshield ${fmt6(m.amountMicrotari)} XTR` : 'Shield'}
-          </Button>
-        </Body>
-      </ModalShell>
-    )
-
-  }
-
-  // ── In flight ──
-  if (m.step === 'moving') {
-    return (
-      <ModalShell>
-        <SubHeader title={DIR[m.dir].title} onClose={p.onClose} />
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 18, padding: '44px 22px 40px' }}>
-          <Spinner size={34} ring={3} />
-          <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
-            <span style={{ fontSize: 16, fontWeight: 700, color: C.bright, textAlign: 'center' }}>
-              Moving {fmt6(m.amountMicrotari)} XTR to {m.dir === 'conceal' ? 'shielded' : 'unshielded'}
-            </span>
-            <span style={{ fontSize: 13, color: C.mutedDim, textAlign: 'center' }}>{m.progress}</span>
-          </span>
-        </div>
-      </ModalShell>
-    )
-  }
-
-  // ── Settling: the move is DONE; only the index is behind ──
-  if (m.step === 'settling') {
-    return (
-      <ModalShell>
-        <SubHeader title={DIR[m.dir].title} onClose={p.onClose} />
-        <Body gap={18}>
-          <StatusBlock
-            ring={{ fill: tealFill(0.1), border: tealBorder(0.35) }}
-            icon={<Check color={C.teal} />}
-            title="Move complete"
-            sub={`${fmt6(m.amountMicrotari)} XTR is now ${m.dir === 'conceal' ? 'shielded' : 'unshielded'}. Your balances update in about a minute.`}
-          />
-          <SettleBar caption="Updating balances — the move itself is finished." />
-          <TxRow txId={m.txId} onCopy={() => p.onCopyTx(m.txId)} />
-          <Button tone="neutral" onClick={p.onDone}>Done</Button>
-        </Body>
-      </ModalShell>
-    )
-
-  }
-
-  // ── Success (settled, or the deadline passed — both are successes) ──
-  if (m.step === 'success') {
-    return (
-      <ModalShell>
-        <SubHeader title={DIR[m.dir].title} onClose={p.onClose} />
-        <Body gap={18}>
-          <StatusBlock
-            ring={{ fill: tealFill(0.1), border: tealBorder(0.35) }}
-            icon={<Check color={C.teal} />}
-            title={`${fmt6(m.amountMicrotari)} XTR is now ${m.dir === 'conceal' ? 'shielded' : 'unshielded'}`}
-            sub={m.lagged
-              ? 'Confirmed on the network. Your balances haven’t caught up yet — tap Refresh in a moment. Nothing is at risk.'
-              : 'The move settled on the network.'}
-          />
-          {m.resulting && (
-            <DetailCard>
-              <DetailRow label="Shielded" value={XTR(m.resulting.privateAfter)} valueColor={C.teal300} />
-              <DetailRow label="Unshielded" value={XTR(m.resulting.publicAfter)} last />
-            </DetailCard>
-          )}
-          <TxRow txId={m.txId} onCopy={() => p.onCopyTx(m.txId)} />
-          <Button tone="primary" onClick={p.onDone}>Done</Button>
-        </Body>
-      </ModalShell>
-    )
-
-  }
-
-  // ── Failure. The verbatim text is load-bearing — see the M4 report. ──
   return (
-    <ModalShell>
-      <SubHeader title={DIR[m.dir].title} onClose={p.onClose} />
-      <Body gap={16}>
-        <StatusBlock
-          ring={{ fill: 'rgba(var(--danger-rgb),0.10)', border: '1px solid rgba(var(--danger-rgb),0.28)' }}
-          icon={<Alert color={C.danger} />}
-          title="The move didn’t go through"
-          sub="Your funds haven’t moved. You can try again."
-        />
-        <div style={{
-          padding: '13px 15px', borderRadius: 11, background: C.errorGround,
-          border: `1px solid rgba(var(--danger-rgb),0.28)`, fontFamily: MONO,
-          fontSize: 11.5, lineHeight: 1.65, color: C.dangerText,
-          overflowWrap: 'anywhere', userSelect: 'text', cursor: 'text',
-          maxHeight: 180, overflowY: 'auto',
-        }}>{m.message}</div>
-        {m.txId && <TxRow txId={m.txId} onCopy={() => p.onCopyTx(m.txId!)} />}
-        <div style={{ display: 'flex', gap: 10 }}>
-          <Button tone="neutral" flex={1} onClick={p.onDone}>Close</Button>
-          <Button tone="primary" flex={2} onClick={p.onRetryMove}>Try again</Button>
-        </div>
-      </Body>
-    </ModalShell>
+    <>
+      {root}
+
+      {/* ── The flows, over the page ──────────────────────────────────────────
+          `dismissable` is false while a transaction is on the wire. Nothing here can call a
+          broadcast back, so a close control would misdescribe what it does — the sheet reopens to
+          the outcome instead, whatever that turns out to be. */}
+      {tab === 'send' && p.send && (
+        <Sheet
+          title="Send"
+          dismissable={p.send.view.step !== 'sending'}
+          onClose={() => { p.send!.onDone(); p.onTab?.('overview') }}
+        ><SendPanel {...p.send} /></Sheet>
+      )}
+      {tab === 'receive' && p.receive && (
+        <Sheet title="Receive" onClose={() => p.onTab?.('overview')}>
+          <ReceivePanel {...p.receive} />
+        </Sheet>
+      )}
+      {m.step !== 'idle' && (
+        <Sheet
+          title={DIR[m.dir].title}
+          dismissable={m.step !== 'moving'}
+          onClose={p.onDone}
+        ><MoveBody m={m} p={p} /></Sheet>
+      )}
+    </>
   )
 }
 
-/** The amount, then what happens to it. Amber on the permanent direction, teal on the routine one. */
-function Headline({ amount, dir }: { amount: bigint; dir: Dir }): ReactNode {
-  const isReveal = dir === 'reveal'
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '14px 0 4px' }}>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 9, flexWrap: 'wrap', justifyContent: 'center' }}>
-        <span style={{ fontSize: 30, fontWeight: 600, letterSpacing: '-0.02em', fontFeatureSettings: "'tnum'", color: C.bright }}>{fmt6(amount)}</span>
-        <span style={{ fontSize: 14, fontWeight: 600, color: C.teal300 }}>XTR</span>
+// ── The move flow ─────────────────────────────────────────────────────────────
+//
+// ── WHY THE TWO DIRECTIONS DO NOT LOOK ALIKE ─────────────────────────────────
+//
+// Shield is routine and reversible: unshielded value becomes shielded, and it can be unshielded
+// again. Unshield is neither. It publishes an amount to a public vault where it stays readable
+// forever, and no later action takes that back.
+//
+// So the directions are drawn differently on purpose — blue for shield, amber for unshield, an
+// explicit warning above the numbers on the irreversible one, and an amber confirm button labelled
+// with the act rather than with "Confirm". Colour is never the ONLY carrier: the title, the warning
+// sentence and the button label each say it independently, because a colour-only signal is
+// invisible to a colour-blind user and this is the one screen where that matters most.
+
+function MoveBody({ m, p }: { m: Exclude<MoveView, { step: 'idle' }>; p: WalletModalV2Props }) {
+  const isUnshield = m.dir === 'reveal'
+  const accent = isUnshield ? 'var(--warn)' : 'var(--accent-400)'
+
+  if (m.step === 'form') {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div style={{ fontSize: 12.5, color: C.mutedDim, lineHeight: 1.5 }}>{DIR[m.dir].blurb}</div>
+
+        <AmountCard
+          dir={m.dir} value={m.amount} onChange={p.onAmountChange} onMax={p.onMax}
+          maxUsed={m.maxUsed} available={m.available} hidden={p.hidden}
+          leftoverNote={m.leftoverNote} error={m.error}
+        />
+
+        {/* The two figures that decide whether the amount is even allowed, stated up front rather
+            than discovered by typing and being refused. */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, fontSize: 11.5, color: C.mutedDim }}>
+          <span>Min {fmt6(m.minMicrotari)} XTR</span>
+          <span>
+            Max {p.hidden ? '••••••' : fmt6(m.maxMicrotari)} XTR{' · '}
+            <span role="button" tabIndex={0} onClick={p.onMax} onKeyDown={e => e.key === 'Enter' && p.onMax()}
+              style={{ color: 'var(--accent-ink)', cursor: 'pointer', fontWeight: 600 }}>Use max</span>
+          </span>
+        </div>
+
+        <Button tone={m.canReview ? (isUnshield ? 'amber' : 'primary') : 'disabled'} onClick={m.canReview ? p.onReview : undefined}>
+          Review
+        </Button>
       </div>
-      <span style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, fontWeight: 600, color: isReveal ? C.warn300 : C.tealLabel }}>
-        {DIR[dir].verb}
-        {isReveal ? <Eye size={12} color={C.warn} /> : <Shield size={12} color={C.teal} />}
-      </span>
+    )
+  }
+
+  if (m.step === 'review') {
+    const pricing = m.feeMicrotari === null
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        {/* BEFORE THE NUMBERS AND BEFORE THE BUTTON. Someone who confirms without reading has still
+            been told; someone who reads has been told first. */}
+        {isUnshield && (
+          <div style={{
+            display: 'flex', alignItems: 'flex-start', gap: 8, padding: '10px 12px',
+            borderRadius: 'var(--r-md)', background: 'rgba(var(--warn-rgb),0.12)',
+            color: 'var(--warn)', fontSize: 12.5, lineHeight: 1.5,
+          }}>
+            <Alert size={13} color="currentColor" />
+            <span>Unshielding makes funds visible on chain. This cannot be undone.</span>
+          </div>
+        )}
+
+        <DetailCard>
+          <DetailRow label="Amount" value={XTR(m.amountMicrotari)} valueColor={C.bright} />
+          <DetailRow label="Direction" value={`${DIR[m.dir].from} to ${DIR[m.dir].to}`} valueColor={C.bodyDim} />
+          <FeeRow fee={m.feeMicrotari === null ? null : fmt6(m.feeMicrotari)} last={!m.resulting} />
+          {/* What you are left with — the figure a person actually wants before confirming. */}
+          {m.resulting && <>
+            <DetailRow label="Shielded after" value={XTR(m.resulting.privateAfter)} valueColor={C.body} />
+            <DetailRow label="Unshielded after" value={XTR(m.resulting.publicAfter)} last />
+          </>}
+        </DetailCard>
+
+        {m.leftoverNote && (
+          <div style={{ fontSize: 11.5, color: C.mutedDim, lineHeight: 1.5 }}>{m.leftoverNote}</div>
+        )}
+
+        <div style={{ display: 'flex', gap: 10 }}>
+          <Button tone="neutral" flex={1} onClick={p.onBack}>Back</Button>
+          <Button
+            tone={pricing ? 'disabled' : isUnshield ? 'amber' : 'primary'} flex={2}
+            onClick={pricing ? undefined : p.onConfirm}
+          >{isUnshield ? 'Unshield' : 'Shield'}</Button>
+        </div>
+      </div>
+    )
+  }
+
+  if (m.step === 'moving') {
+    return (
+      <MoveStatus
+        icon={<Spinner size={26} ring={3} />}
+        title="Moving funds"
+        sub={m.progress || 'Then settling on the Ootle. This can take a moment.'}
+      />
+    )
+  }
+
+  // The transaction is FINISHED. This window is the index catching up, and it says so.
+  if (m.step === 'settling') {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <MoveStatus
+          ring={{ bg: 'rgba(var(--positive-rgb),0.12)', ink: C.positive }}
+          icon={<Check size={16} color="currentColor" />}
+          title={DIR[m.dir].done}
+          sub={`${fmt6(m.amountMicrotari)} XTR ${DIR[m.dir].pastTense}. Your balances update in about a minute.`}
+        />
+        <SettleBar caption="Updating balances — the move itself is finished." />
+        <TxRow txId={m.txId} onCopy={() => p.onCopyTx(m.txId)} />
+        <Button tone="neutral" onClick={p.onDone}>Done</Button>
+      </div>
+    )
+  }
+
+  if (m.step === 'success') {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <MoveStatus
+          ring={{ bg: 'rgba(var(--positive-rgb),0.12)', ink: C.positive }}
+          icon={<Check size={16} color="currentColor" />}
+          title={DIR[m.dir].done}
+          sub={m.lagged
+            // A PASSED DEADLINE IS STILL A SUCCESS. The transaction committed; only the index is
+            // behind, and telling someone their funds did not move when they demonstrably did is
+            // the worst outcome available here.
+            ? `${fmt6(m.amountMicrotari)} XTR ${DIR[m.dir].pastTense}. Confirmed on the network — your balances haven’t caught up yet, so tap Refresh in a moment. Nothing is at risk.`
+            : `${fmt6(m.amountMicrotari)} XTR ${DIR[m.dir].pastTense}.`}
+        />
+        {m.resulting && (
+          <DetailCard>
+            <DetailRow label="Shielded" value={XTR(m.resulting.privateAfter)} valueColor={C.body} />
+            <DetailRow label="Unshielded" value={XTR(m.resulting.publicAfter)} last />
+          </DetailCard>
+        )}
+        <TxRow txId={m.txId} onCopy={() => p.onCopyTx(m.txId)} />
+        <Button tone="primary" onClick={p.onDone}>Done</Button>
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <MoveStatus
+        ring={{ bg: 'rgba(var(--danger-rgb),0.12)', ink: C.danger }}
+        icon={<Alert size={16} color="currentColor" />}
+        title="Something went wrong"
+        sub="Your funds are untouched."
+      />
+      <VerbatimBox>{m.message}</VerbatimBox>
+      {m.txId && <TxRow txId={m.txId} onCopy={() => p.onCopyTx(m.txId!)} />}
+      <div style={{ display: 'flex', gap: 10 }}>
+        <Button tone="neutral" flex={1} onClick={p.onDone}>Close</Button>
+        <Button tone={accent === 'var(--warn)' ? 'amber' : 'primary'} flex={2} onClick={p.onRetryMove}>Try again</Button>
+      </div>
+    </div>
+  )
+}
+
+/** The centred icon-over-title block the design uses for every move outcome. */
+function MoveStatus({ ring, icon, title, sub }: {
+  ring?: { bg: string; ink: string }; icon: ReactNode; title: string; sub: string
+}) {
+  return (
+    <div style={{ textAlign: 'center', padding: '10px 0 4px' }}>
+      <span style={{
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        width: 34, height: 34, borderRadius: 'var(--r-pill)',
+        background: ring?.bg ?? 'transparent', color: ring?.ink ?? 'inherit',
+      }}>{icon}</span>
+      <div style={{ fontSize: 14, fontWeight: 600, color: C.primary, marginTop: 12 }}>{title}</div>
+      <div style={{ fontSize: 12.5, color: C.mutedDim, marginTop: 3, lineHeight: 1.5 }}>{sub}</div>
     </div>
   )
 }

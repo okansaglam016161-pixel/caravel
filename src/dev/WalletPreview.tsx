@@ -156,8 +156,19 @@ function Drive() {
     return BigInt(w || '0') * 1_000_000n + BigInt((f + '000000').slice(0, 6))
   }
 
+  /** The same ceiling rule the app applies: the fee comes out of the shielded side on an unshield. */
+  const ceilingFor = (dir: Dir) => {
+    const available = dir === 'conceal' ? pubV : privV
+    return dir === 'conceal' ? available : (available > RESERVE ? available - RESERVE : 0n)
+  }
+
   function openMove(dir: Dir) {
-    setMove({ step: 'form', dir, amount: '', maxUsed: false, available: dir === 'conceal' ? pubV : privV, canReview: false })
+    setMove({
+      step: 'form', dir, amount: '', maxUsed: false,
+      available: dir === 'conceal' ? pubV : privV,
+      minMicrotari: 100_000n, maxMicrotari: ceilingFor(dir),
+      canReview: false,
+    })
   }
 
   function refreshForm(dir: Dir, next: string, usedMax: boolean) {
@@ -168,11 +179,12 @@ function Drive() {
     const over = next !== '' && entered > ceiling
     setMove({
       step: 'form', dir, amount: next, maxUsed: usedMax, available,
+      minMicrotari: 100_000n, maxMicrotari: ceiling,
       canReview: next !== '' && !belowMin && !over,
-      error: belowMin ? 'Minimum 0.10 TARI.'
+      error: belowMin ? 'Minimum 0.10 XTR.'
         : over ? (dir === 'reveal'
-            ? `More than you can make public — the fee comes out of your private balance too. Most you can move now: ${fmt6(ceiling)} TARI.`
-            : 'More than your public balance.')
+            ? `More than you can unshield — the fee comes out of your shielded balance too. Most you can move now: ${fmt6(ceiling)} XTR.`
+            : 'More than your unshielded balance.')
           : undefined,
       leftoverNote: dir === 'reveal' && usedMax
         ? `About ${fmt6(RESERVE)} TARI stays private to cover the fee. It’s still yours and still spendable.`
@@ -212,8 +224,8 @@ function Drive() {
       refreshForm(dir, toInput(ceiling), true)
     },
     onReview: () => {
-      setMove({ step: 'review', dir, amountMicrotari: amt, feeMicrotari: null, resulting: null, showPermanenceNote: showFacts })
-      setTimeout(() => setMove({ step: 'review', dir, amountMicrotari: amt, feeMicrotari: FEE, resulting: resulting(amt, dir), showPermanenceNote: showFacts }), 1400)
+      setMove({ step: 'review', dir, amountMicrotari: amt, feeMicrotari: null, resulting: null })
+      setTimeout(() => setMove({ step: 'review', dir, amountMicrotari: amt, feeMicrotari: FEE, resulting: resulting(amt, dir) }), 1400)
     },
     onConfirm: () => {
       if (move.step !== 'review') return
@@ -339,13 +351,14 @@ function Drive() {
           <button onClick={() => { setAddrReady(false); setTab('receive') }} style={btn(!addrReady)}>Preparing address</button>
         </Group>
         <Group title="Jump to a move state" note="Bypasses the flow — for states that are hard to reach">
-          {jump('Form · make private', { step: 'form', dir: 'conceal', amount: '100', maxUsed: false, available: pubV, canReview: true })}
-          {jump('Form · make public', { step: 'form', dir: 'reveal', amount: '1', maxUsed: false, available: privV, canReview: true })}
-          {jump('Form · MAX pressed', { step: 'form', dir: 'reveal', amount: toInput(privV - RESERVE), maxUsed: true, available: privV, canReview: true, leftoverNote: `About ${fmt6(RESERVE)} TARI stays private to cover the fee. It’s still yours and still spendable.` })}
-          {jump('Form · below minimum', { step: 'form', dir: 'reveal', amount: '0.05', maxUsed: false, available: privV, canReview: false, error: 'Minimum 0.10 TARI.' })}
+          {jump('Form · shield', { step: 'form', dir: 'conceal', amount: '100', maxUsed: false, available: pubV, minMicrotari: 100_000n, maxMicrotari: pubV, canReview: true })}
+          {jump('Form · unshield', { step: 'form', dir: 'reveal', amount: '1', maxUsed: false, available: privV, minMicrotari: 100_000n, maxMicrotari: privV - RESERVE, canReview: true })}
+          {jump('Form · MAX pressed', { step: 'form', dir: 'reveal', amount: toInput(privV - RESERVE), maxUsed: true, available: privV, minMicrotari: 100_000n, maxMicrotari: privV - RESERVE, canReview: true, leftoverNote: `About ${fmt6(RESERVE)} XTR stays shielded to cover the fee. It’s still yours and still spendable.` })}
+          {jump('Form · below minimum', { step: 'form', dir: 'reveal', amount: '0.05', maxUsed: false, available: privV, minMicrotari: 100_000n, maxMicrotari: privV - RESERVE, canReview: false, error: 'Minimum 0.10 XTR.' })}
           {jump('Review · pricing', { step: 'review', dir: 'conceal', amountMicrotari: 100_000_000n, feeMicrotari: null, resulting: null })}
-          {jump('Review · make private', { step: 'review', dir: 'conceal', amountMicrotari: 100_000_000n, feeMicrotari: FEE, resulting: resulting(100_000_000n, 'conceal') })}
-          {jump('Review · make public', { step: 'review', dir: 'reveal', amountMicrotari: 1_000_000n, feeMicrotari: FEE, resulting: resulting(1_000_000n, 'reveal'), showPermanenceNote: showFacts })}
+          {jump('Review · shield', { step: 'review', dir: 'conceal', amountMicrotari: 100_000_000n, feeMicrotari: FEE, resulting: resulting(100_000_000n, 'conceal') })}
+          {jump('Review · unshield', { step: 'review', dir: 'reveal', amountMicrotari: 1_000_000n, feeMicrotari: FEE, resulting: resulting(1_000_000n, 'reveal') })}
+          {jump('Review · unshield MAX (leftover)', { step: 'review', dir: 'reveal', amountMicrotari: privV - RESERVE, feeMicrotari: FEE, resulting: resulting(privV - RESERVE, 'reveal'), leftoverNote: `About ${fmt6(RESERVE)} XTR stays shielded to cover the fee. It’s still yours and still spendable.` })}
           {jump('Moving', { step: 'moving', dir: 'reveal', amountMicrotari: 1_000_000n, progress: 'Submitting to the network — a few seconds.' })}
           {jump('Settling', { step: 'settling', dir: 'reveal', amountMicrotari: 1_000_000n, txId: TXID })}
           {jump('Success', { step: 'success', dir: 'reveal', amountMicrotari: 1_000_000n, txId: TXID, lagged: false, resulting: resulting(1_000_000n, 'reveal') })}
@@ -416,14 +429,15 @@ function Gallery() {
     { label: 'LOADING', props: still({ privateBalance: LOADING, publicBalance: LOADING, entries: [], lockedText: 'Checking your balances…' }) },
     { label: 'UNAVAILABLE · NOT A ZERO', props: still({ privateBalance: UNAVAIL, publicBalance: UNAVAIL, entries: [], lockedText: 'Unavailable while balances are unknown' }) },
     { label: 'HIDDEN · ONE TOGGLE, EVERYTHING', props: still({ hidden: true }) },
-    { label: 'IN FLIGHT · LOCKED', props: still({ inFlightText: 'Making 1.000000 TARI public', entries: [], lockedText: 'Locked while a move is in flight', lockedIsFlight: true }) },
-    { label: 'FORM · MAKE PRIVATE', props: still({ move: { step: 'form', dir: 'conceal', amount: '100', maxUsed: false, available: PUBLIC, canReview: true } }) },
-    { label: 'FORM · MAKE PUBLIC, MAX', props: still({ move: { step: 'form', dir: 'reveal', amount: toInput(PRIVATE - RESERVE), maxUsed: true, available: PRIVATE, canReview: true, leftoverNote: `About ${fmt6(RESERVE)} TARI stays private to cover the fee. It’s still yours and still spendable.` } }) },
-    { label: 'FORM · BELOW MINIMUM', props: still({ move: { step: 'form', dir: 'reveal', amount: '0.05', maxUsed: false, available: PRIVATE, canReview: false, error: 'Minimum 0.10 TARI.' } }) },
+    { label: 'IN FLIGHT · LOCKED', props: still({ inFlightText: 'Unshielding 1.000000 XTR', entries: [], lockedText: 'Locked while a move is in flight', lockedIsFlight: true }) },
+    { label: 'FORM · SHIELD', props: still({ move: { step: 'form', dir: 'conceal', amount: '100', maxUsed: false, available: PUBLIC, minMicrotari: 100_000n, maxMicrotari: PUBLIC, canReview: true } }) },
+    { label: 'FORM · UNSHIELD, MAX', props: still({ move: { step: 'form', dir: 'reveal', amount: toInput(PRIVATE - RESERVE), maxUsed: true, available: PRIVATE, minMicrotari: 100_000n, maxMicrotari: PRIVATE - RESERVE, canReview: true, leftoverNote: `About ${fmt6(RESERVE)} XTR stays shielded to cover the fee. It’s still yours and still spendable.` } }) },
+    { label: 'FORM · BELOW MINIMUM', props: still({ move: { step: 'form', dir: 'reveal', amount: '0.05', maxUsed: false, available: PRIVATE, minMicrotari: 100_000n, maxMicrotari: PRIVATE - RESERVE, canReview: false, error: 'Minimum 0.10 XTR.' } }) },
     { label: 'REVIEW · PRICING', props: still({ move: { step: 'review', dir: 'conceal', amountMicrotari: 100_000_000n, feeMicrotari: null, resulting: null } }) },
-    { label: 'REVIEW · MAKE PRIVATE', props: still({ move: { step: 'review', dir: 'conceal', amountMicrotari: 100_000_000n, feeMicrotari: FEE, resulting: r(100_000_000n, 'conceal') } }) },
-    { label: 'REVIEW · MAKE PUBLIC', props: still({ move: { step: 'review', dir: 'reveal', amountMicrotari: 1_000_000n, feeMicrotari: FEE, resulting: r(1_000_000n, 'reveal'), showPermanenceNote: true } }) },
-    { label: 'REVIEW · MAKE PUBLIC (no note — design as drawn)', props: still({ move: { step: 'review', dir: 'reveal', amountMicrotari: 1_000_000n, feeMicrotari: FEE, resulting: r(1_000_000n, 'reveal'), showPermanenceNote: false } }) },
+    { label: 'REVIEW · SHIELD', props: still({ move: { step: 'review', dir: 'conceal', amountMicrotari: 100_000_000n, feeMicrotari: FEE, resulting: r(100_000_000n, 'conceal') } }) },
+    { label: 'REVIEW · UNSHIELD', props: still({ move: { step: 'review', dir: 'reveal', amountMicrotari: 1_000_000n, feeMicrotari: FEE, resulting: r(1_000_000n, 'reveal') } }) },
+    { label: 'REVIEW · UNSHIELD MAX (fee remainder)', props: still({ move: { step: 'review', dir: 'reveal', amountMicrotari: PRIVATE - RESERVE, feeMicrotari: FEE, resulting: r(PRIVATE - RESERVE, 'reveal'), leftoverNote: `About ${fmt6(RESERVE)} XTR stays shielded to cover the fee. It’s still yours and still spendable.` } }) },
+    { label: 'REVIEW · MAKE PUBLIC (no note — design as drawn)', props: still({ move: { step: 'review', dir: 'reveal', amountMicrotari: 1_000_000n, feeMicrotari: FEE, resulting: r(1_000_000n, 'reveal') } }) },
     { label: 'MOVING', props: still({ move: { step: 'moving', dir: 'conceal', amountMicrotari: 100_000_000n, progress: 'Submitting to the network — a few seconds.' } }) },
     { label: 'SETTLING · DONE, CATCHING UP', props: still({ move: { step: 'settling', dir: 'conceal', amountMicrotari: 100_000_000n, txId: TXID } }) },
     { label: 'SUCCESS · SETTLED', props: still({ move: { step: 'success', dir: 'reveal', amountMicrotari: 1_000_000n, txId: TXID, lagged: false, resulting: r(1_000_000n, 'reveal') } }) },

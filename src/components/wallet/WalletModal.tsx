@@ -692,10 +692,37 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
       ? (movePrepared.dir === 'reveal' ? movePrepared.p.revealedAmount : movePrepared.p.concealedAmount)
       : enteredMicro)
 
+  /**
+   * What the unshield ceiling actually held back, when it held anything back.
+   *
+   * ONLY WHEN IT IS TRUE. A remainder exists when MAX was used and the balance genuinely exceeds
+   * what can be unshielded — the fee comes out of the shielded side, so the ceiling reserves for
+   * it. Said over an ordinary partial unshield it would describe nothing that happened, and this
+   * wallet does not narrate mechanics that did not occur.
+   *
+   * Computed once and shown on BOTH the form and the review, so the two cannot tell different
+   * stories about the same move.
+   */
+  const moveLeftoverNote =
+    moveDir === 'reveal' && moveExact !== null && privateAmount > ceiling
+      ? [
+          `About ${toInput(privateAmount - ceiling)} XTR stays shielded to cover the fee. It’s still yours and still spendable.`,
+          privateFiguresIncomplete ? incompleteAvailableNote() : '',
+        ].filter(Boolean).join(' ')
+      : moveDir === 'reveal' && privateFiguresIncomplete
+      ? incompleteAvailableNote()
+      : undefined
+
   const moveView: MoveView =
     moveStep === 'form' ? {
       step: 'form', dir: moveDir, amount: moveAmount, maxUsed: moveExact !== null,
       available: moveDir === 'conceal' ? revealedAmount : privateAmount,
+      // Already computed above for the validation rules — passed through so the form can STATE the
+      // bounds instead of leaving them to be discovered by being refused. `ceiling`, not the
+      // balance: on the unshield side the fee comes out of the shielded total, so what MAX pins is
+      // less than what the breakdown shows, and the form must say the number MAX will actually use.
+      minMicrotari: minAmount,
+      maxMicrotari: ceiling,
       canReview: moveAmount !== '' && !belowMin && !overCeiling,
       error: belowMin ? `The smallest amount you can move is ${toInput(minAmount)} XTR.`
         : overCeiling ? (moveDir === 'reveal'
@@ -706,14 +733,7 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
       // everything" reads as a bug, or as funds gone astray on an irreversible action.
       // Both notes can be true at once and both matter, so they are joined rather than ranked —
       // the leftover explains the number, the incompleteness qualifies it.
-      leftoverNote: moveDir === 'reveal' && moveExact !== null && privateAmount > ceiling
-        ? [
-            `About ${toInput(privateAmount - ceiling)} XTR stays shielded to cover the fee. It’s still yours and still spendable.`,
-            privateFiguresIncomplete ? incompleteAvailableNote() : '',
-          ].filter(Boolean).join(' ')
-        : moveDir === 'reveal' && privateFiguresIncomplete
-        ? incompleteAvailableNote()
-        : undefined,
+      leftoverNote: moveLeftoverNote,
     }
     // PRICING IS NOT ITS OWN SCREEN. The design prices inside review: the fee row spins and the
     // confirm button stays inert, so the user reads the amount and direction while it resolves
@@ -726,8 +746,7 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
       amountMicrotari: movePrepared.dir === 'reveal' ? movePrepared.p.revealedAmount : movePrepared.p.concealedAmount,
       feeMicrotari: movePrepared.p.feeMicrotari,
       resulting: resultingFor(movePrepared),
-      // The amber arrow, label and confirm button carry the signal; no three-facts block.
-      showPermanenceNote: false,
+      leftoverNote: moveLeftoverNote,
     }
     : moveStep === 'moving' ? {
       step: 'moving', dir: moveDir,

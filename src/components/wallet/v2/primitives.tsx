@@ -352,15 +352,20 @@ export function TextField({ value, onChange, placeholder, mono = true, invalid, 
 export function AmountField({ value, onChange, onMax, maxUsed, accent = 'teal', availableLabel, availableValue, note, error, readOnly }: {
   value: string; onChange: (v: string) => void
   onMax?: () => void; maxUsed?: boolean
-  accent?: 'teal' | 'neutral'
+  /** `amber` is the irreversible direction — see the move flow. */
+  accent?: 'teal' | 'neutral' | 'amber'
   availableLabel?: string; availableValue?: ReactNode
   note?: ReactNode; error?: ReactNode; readOnly?: boolean
 }) {
   const teal = accent === 'teal'
+  const amber = accent === 'amber'
   return (
     <div style={{
       padding: '16px 18px', borderRadius: 'var(--r-lg)', background: C.trough,
-      border: error ? '1px solid var(--danger-500)' : teal ? tealBorder(0.28) : '1px solid var(--border-strong)',
+      border: error ? '1px solid var(--danger-500)'
+        : amber ? warnBorder(0.35)
+        : teal ? tealBorder(0.28)
+        : '1px solid var(--border-strong)',
     }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 8 }}>
         <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.14em', color: C.faintDim }}>AMOUNT</span>
@@ -380,9 +385,9 @@ export function AmountField({ value, onChange, onMax, maxUsed, accent = 'teal', 
         {onMax && (
           <span role="button" tabIndex={0} onClick={onMax} onKeyDown={e => e.key === 'Enter' && onMax()} style={{
             padding: '5px 12px', borderRadius: 'var(--r-sm)', fontSize: 12, fontWeight: 600, cursor: 'pointer', flexShrink: 0, userSelect: 'none',
-            background: maxUsed ? C.maxActive : teal ? tealFill(0.1) : C.inset,
-            border: maxUsed ? border(0.4) : teal ? tealBorder(0.3) : border(0.22),
-            color: maxUsed ? C.body : teal ? C.teal300 : C.muted,
+            background: maxUsed ? C.maxActive : amber ? 'rgba(var(--warn-rgb),0.12)' : teal ? tealFill(0.1) : C.inset,
+            border: maxUsed ? border(0.4) : amber ? warnBorder(0.3) : teal ? tealBorder(0.3) : border(0.22),
+            color: maxUsed ? C.body : amber ? C.warn300 : teal ? C.teal300 : C.muted,
           }}>MAX</span>
         )}
       </div>

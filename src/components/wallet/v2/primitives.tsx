@@ -49,15 +49,21 @@ export function RootHeader({ chip, right }: { chip?: string; right: ReactNode })
   )
 }
 
-/** Header for a sub-view: a back affordance, the view's name, and close. */
-export function SubHeader({ title, onBack, onClose }: { title: string; onBack?: () => void; onClose: () => void }) {
+/**
+ * Header for a sub-view: a back affordance, the view's name, and close.
+ *
+ * `onClose` is optional because the wallet also renders as a PAGE, where there is nothing to close
+ * — the shell is what it would close back to. The ✕ is omitted rather than made inert: a control
+ * that visibly does nothing is worse than one that is not offered.
+ */
+export function SubHeader({ title, onBack, onClose }: { title: string; onBack?: () => void; onClose?: () => void }) {
   return (
     <div style={headerBase}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
         {onBack && <span role="button" tabIndex={0} onClick={onBack} onKeyDown={e => e.key === 'Enter' && onBack()} style={{ ...iconBtn, fontSize: 15 }} aria-label="Back">←</span>}
         <span style={{ fontSize: 17, fontWeight: 700, color: C.primary }}>{title}</span>
       </div>
-      <span role="button" tabIndex={0} onClick={onClose} onKeyDown={e => e.key === 'Enter' && onClose()} style={iconBtn} aria-label="Close">✕</span>
+      {onClose && <span role="button" tabIndex={0} onClick={onClose} onKeyDown={e => e.key === 'Enter' && onClose()} style={iconBtn} aria-label="Close">✕</span>}
     </div>
   )
 }

@@ -96,7 +96,8 @@ export interface WalletModalV2Props {
   inFlightText?: string
   onToggleHidden: () => void
   onRefresh: () => void
-  onClose: () => void
+  /** Omitted in page chrome — see SubHeader. The ✕ is not rendered rather than made inert. */
+  onClose?: () => void
   onBack: () => void
   onAmountChange: (v: string) => void
   onMax: () => void
@@ -156,7 +157,7 @@ export default function WalletModalV2(p: WalletModalV2Props) {
               : { ...iconBtn, background: 'transparent', border: 'none', width: 24 }}>
             {p.hidden ? <EyeOff color={C.teal} /> : <Eye size={17} color={C.tealDim} />}
           </span>
-          <span role="button" tabIndex={0} onClick={p.onClose} onKeyDown={e => e.key === 'Enter' && p.onClose()} style={iconBtn} aria-label="Close">✕</span>
+          {p.onClose && <span role="button" tabIndex={0} onClick={p.onClose} onKeyDown={e => e.key === 'Enter' && p.onClose!()} style={iconBtn} aria-label="Close">✕</span>}
         </>} />
         {p.scanSummary && <ScanStrip scan={p.scanSummary} refreshing={p.refreshing} onRefresh={p.onRefresh} />}
         <Body gap={14}>

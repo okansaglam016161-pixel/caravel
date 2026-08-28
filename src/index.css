@@ -290,6 +290,13 @@ a:hover { color: var(--accent-200); }
 .cv-step:hover { border-color: rgba(var(--accent-400-rgb), 0.4) !important; }
 .cv-conv:hover { background: var(--surface-row-selected); }
 
+/* Service rail rows. The rail sits on navy in both themes, so its hover is a light wash rather
+   than a surface token — the same treatment the foundation draws on the nav. Lives here for the
+   usual reason: :hover has no inline-style equivalent. */
+.cv-nav-item { transition: background 0.15s, color 0.15s; }
+.cv-nav-item:hover { background: rgba(255, 255, 255, 0.05); color: #F2F6FA; }
+.cv-nav-item[aria-current="page"]:hover { background: var(--nav-selected); }
+
 /* Chat composer + the per-message hover affordances (M3/M4, replies v1, reactions C). Shared by
    BOTH chat views — the DM thread in ChatApp and the group thread in GroupThread — which is exactly
    why they live here rather than in a <style> element inside one of them. They used to sit in

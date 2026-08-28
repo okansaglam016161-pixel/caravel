@@ -106,7 +106,14 @@ function ReceivedRowV2({ row, hidden }: { row: Extract<ActivityRow, { kind: 'rec
 
 // ══════════════════════════════════════════════════════════════════════════════
 
-export default function WalletModal({ onClose }: { onClose: () => void }) {
+/**
+ * `modal` wraps the body in a backdrop and centres it over whatever is behind — the in-chat wallet.
+ * `page` hands the body back bare, for the service shell to place. THE ONLY DIFFERENCE IS CHROME:
+ * every step machine, guard and settle reaction below is shared, so the two surfaces cannot drift.
+ */
+type Chrome = 'modal' | 'page'
+
+export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: () => void; chrome?: Chrome }) {
   const {
     wallet, address, scan, revealed, rescan, txHistory, messages, recordSent,
     balanceHidden, setBalanceHidden,
@@ -175,11 +182,14 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
   const moveGen = useRef(new GenerationGuard())
   const sendGen = useRef(new GenerationGuard())
 
+  // Escape closes the MODAL. A page has nothing to close, and binding a global key handler that
+  // did nothing would still swallow Escape from anything inside it.
   useEffect(() => {
-    function onKey(e: KeyboardEvent) { if (e.key === 'Escape') onClose() }
+    if (chrome !== 'modal' || !onClose) return
+    function onKey(e: KeyboardEvent) { if (e.key === 'Escape') onClose!() }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+  }, [onClose, chrome])
 
   const { status, balance } = scan
   /**
@@ -817,68 +827,74 @@ export default function WalletModal({ onClose }: { onClose: () => void }) {
 
   const activity = buildActivity(txHistory, messages)
 
+  const body = (
+    <WalletModalV2
+      privateBalance={privateBalance}
+      publicBalance={publicBalance}
+      total={total}
+      hidden={balanceHidden}
+      networkChip="Esmeralda testnet"
+      refreshing={refreshing}
+      // The literal scan diagnostic, restored beside Refresh. Private scan only — the public
+      // balance is a vault read with nothing to enumerate.
+      scanSummary={{
+        status,
+        scanned: scan.totalScanned,
+        owned: scan.utxos.length,
+        progressScanned: scan.progress.scanned,
+      }}
+      move={moveView}
+      entries={entries}
+      lockedText={balancesUnknown ? 'Unavailable while balances are unknown' : undefined}
+      tab={tab}
+      onTab={setTab}
+      onToggleHidden={() => setBalanceHidden(v => !v)}
+      onRefresh={handleRefresh}
+      onClose={onClose}
+      onBack={resetMove}
+      onAmountChange={v => { setMoveAmount(v); setMoveExact(null); setMoveError('') }}
+      onMax={() => { setMoveExact(ceiling); setMoveAmount(toInput(ceiling)); setMoveError('') }}
+      onReview={() => void handlePrepareMove()}
+      onConfirm={() => void handleConfirmMove()}
+      onDone={resetMove}
+      onRetryMove={() => { setMoveStep('form'); setMoveError('') }}
+      onCopyTx={t => { navigator.clipboard.writeText(t).catch(() => {}) }}
+      onRetryBalance={handleRefresh}
+      faucet={undefined}
+      overviewExtras={<><FaucetClaimPanel /><OnsRegisterPanel /></>}
+      send={{
+        view: sendView, hidden: balanceHidden,
+        onSource: s => { setSendSource(s); setSendExact(null); setSendValidationError('') },
+        onRecipient: v => { setSendRecipient(v); setSendValidationError('') },
+        onAmount: v => { setSendAmount(v); setSendExact(null); setSendValidationError('') },
+        onNote: setSendNote,
+        // EXACT BIGINT per source. The string is only what the user sees; the precise figure
+        // rides in sendExact so nothing round-trips through a lossy formatter.
+        onMax: () => { setSendExact(sendCeiling); setSendAmount(toInput(sendCeiling)); setSendValidationError('') },
+        onReview: () => void handleReview(),
+        // Back out of review: whatever is being priced must not come back and re-arm it.
+        onBack: () => { sendGen.current.cancel(); setSendPrepared(null); setSendStep('form') },
+        onConfirm: () => void handleConfirmSend(),
+        onDone: resetSend,
+        onRetry: resetSend,
+        onCopyTx: t => { navigator.clipboard.writeText(t).catch(() => {}) },
+        onViewActivity: () => { resetSend(); setTab('activity') },
+      }}
+      receive={{ address, copied: addrCopied, onCopy: copyAddr }}
+      activityEmpty={activity.length === 0}
+      activity={activity.map(row => row.kind === 'sent'
+    ? <SentRowV2 key={row.id} row={row} hidden={balanceHidden} />
+    : <ReceivedRowV2 key={row.id} row={row} hidden={balanceHidden} />)}
+    />
+  )
+
+  if (chrome === 'page') return body
+
   return (
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(5,8,14,0.78)', backdropFilter: 'blur(3px)', zIndex: 200 }} />
       <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', zIndex: 201, display: 'flex' }}>
-        <WalletModalV2
-          privateBalance={privateBalance}
-          publicBalance={publicBalance}
-          total={total}
-          hidden={balanceHidden}
-          networkChip="Esmeralda testnet"
-          refreshing={refreshing}
-          // The literal scan diagnostic, restored beside Refresh. Private scan only — the public
-          // balance is a vault read with nothing to enumerate.
-          scanSummary={{
-            status,
-            scanned: scan.totalScanned,
-            owned: scan.utxos.length,
-            progressScanned: scan.progress.scanned,
-          }}
-          move={moveView}
-          entries={entries}
-          lockedText={balancesUnknown ? 'Unavailable while balances are unknown' : undefined}
-          tab={tab}
-          onTab={setTab}
-          onToggleHidden={() => setBalanceHidden(v => !v)}
-          onRefresh={handleRefresh}
-          onClose={onClose}
-          onBack={resetMove}
-          onAmountChange={v => { setMoveAmount(v); setMoveExact(null); setMoveError('') }}
-          onMax={() => { setMoveExact(ceiling); setMoveAmount(toInput(ceiling)); setMoveError('') }}
-          onReview={() => void handlePrepareMove()}
-          onConfirm={() => void handleConfirmMove()}
-          onDone={resetMove}
-          onRetryMove={() => { setMoveStep('form'); setMoveError('') }}
-          onCopyTx={t => { navigator.clipboard.writeText(t).catch(() => {}) }}
-          onRetryBalance={handleRefresh}
-          faucet={undefined}
-          overviewExtras={<><FaucetClaimPanel /><OnsRegisterPanel /></>}
-          send={{
-            view: sendView, hidden: balanceHidden,
-            onSource: s => { setSendSource(s); setSendExact(null); setSendValidationError('') },
-            onRecipient: v => { setSendRecipient(v); setSendValidationError('') },
-            onAmount: v => { setSendAmount(v); setSendExact(null); setSendValidationError('') },
-            onNote: setSendNote,
-            // EXACT BIGINT per source. The string is only what the user sees; the precise figure
-            // rides in sendExact so nothing round-trips through a lossy formatter.
-            onMax: () => { setSendExact(sendCeiling); setSendAmount(toInput(sendCeiling)); setSendValidationError('') },
-            onReview: () => void handleReview(),
-            // Back out of review: whatever is being priced must not come back and re-arm it.
-            onBack: () => { sendGen.current.cancel(); setSendPrepared(null); setSendStep('form') },
-            onConfirm: () => void handleConfirmSend(),
-            onDone: resetSend,
-            onRetry: resetSend,
-            onCopyTx: t => { navigator.clipboard.writeText(t).catch(() => {}) },
-            onViewActivity: () => { resetSend(); setTab('activity') },
-          }}
-          receive={{ address, copied: addrCopied, onCopy: copyAddr }}
-          activityEmpty={activity.length === 0}
-          activity={activity.map(row => row.kind === 'sent'
-            ? <SentRowV2 key={row.id} row={row} hidden={balanceHidden} />
-            : <ReceivedRowV2 key={row.id} row={row} hidden={balanceHidden} />)}
-        />
+        {body}
       </div>
     </>
   )

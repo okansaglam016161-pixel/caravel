@@ -6,9 +6,10 @@ import { useWallet } from '../../context/WalletContext'
 import WalletModal from '../wallet/WalletModal'
 import { assertValidRecipient } from '../../crypto/publicSend'
 import { parseOotleAddress } from '@tari-project/ootle-wasm'
-import { computeTotal, unreadableReasonText } from '../wallet/v2/total'
+import { unreadableReasonText } from '../wallet/v2/total'
 import { plainError } from '../wallet/v2/plainError'
 import { totalPillValue } from '../wallet/v2/TotalHero'
+import { useWalletTotal } from '../../hooks/useWalletTotal'
 import ProfilePanel from '../wallet/ProfilePanel'
 import { compareMessages, sortKey, type CaravelMessage, type Group } from '../../messaging/types'
 import GroupThread from './GroupThread'
@@ -229,7 +230,9 @@ function PaymentMessageCard({ message, lid, flashed }: { message: CaravelMessage
 // ── Component ────────────────────────────────────────────────────────────────────
 
 export default function ChatApp() {
-  const { wallet, address, scan, revealed, isSettling, settleLagged, messages, nostrPubkeyHex, messagingStatus, contacts, acceptContact, contactAddresses, setManualTariAddress, createMessagingProvider, recordSentMessage, deleteConversation, editMessage, reactMessage, getRelayStates, reconnectAll, balanceHidden, setBalanceHidden, groups, createGroup, acceptGroup, declineGroup, leaveGroup, reinviteGroup } = useWallet()
+  const { wallet, address, scan, messages, nostrPubkeyHex, messagingStatus, contacts, acceptContact, contactAddresses, setManualTariAddress, createMessagingProvider, recordSentMessage, deleteConversation, editMessage, reactMessage, getRelayStates, reconnectAll, balanceHidden, setBalanceHidden, groups, createGroup, acceptGroup, declineGroup, leaveGroup, reinviteGroup } = useWallet()
+  // The combined balance for the sidebar pill — one shared derivation, see useWalletTotal.
+  const walletTotal = useWalletTotal()
   const [walletOpen, setWalletOpen] = useState(false)
   const [profileOpen, setProfileOpen] = useState(false)
   // The user's own generated avatar (deterministic gradient from their pubkey hash) — used for the
@@ -1243,32 +1246,13 @@ export default function ChatApp() {
 
             {/* Balance widget — click to open wallet panel */}
             {(() => {
-              // THE TOTAL, not just the private balance. Same rules as the modal's hero, from the
-              // same shared state — no second scan, no second set of degradation rules. A pill
-              // showing only the private half would disagree with the wallet it opens.
-              const { status, balance } = scan
-              const isScanning = status === 'scanning'
-              const total = computeTotal({
-                privateBalance:
-                  status === 'error' ? { status: 'unavailable' }
-                  : balance === null ? { status: 'loading' }
-                  : { status: 'ready', microtari: balance },
-                privateIncomplete: scan.incomplete,
-                // Same freshness rule as the modal's hero. The pill is smaller, not laxer — a
-                // wrong total is no more acceptable for being a pill.
-                privateGeneration: scan.generation,
-                publicGeneration: revealed.generation,
-                publicBalance:
-                  revealed.status === 'done' ? { status: 'ready', microtari: revealed.amount ?? 0n }
-                  : revealed.status === 'unavailable' ? { status: 'unavailable' }
-                  : { status: 'loading' },
-                // The pill has no move flow of its OWN, but the wallet does, and the settle it
-                // starts is wallet state — it outlives the modal that started it. Passing `false`
-                // here meant the pill kept drawing a confident figure over exactly the pair the
-                // hero three lines away was refusing to add.
-                settling: isSettling,
-                settleLagged,
-              })
+              // THE TOTAL, not just the private balance — and computed by the SHARED hook, which
+              // is the same derivation the service nav uses. This pill used to hold its own
+              // transcription of computeTotal's six inputs; a third copy arriving with the shell
+              // is where hand-kept duplicates start to drift. See useWalletTotal for the one
+              // input the wallet modal's own hero legitimately differs on.
+              const isScanning = scan.status === 'scanning'
+              const total = walletTotal
               const balanceValue = totalPillValue(total, balanceHidden)
               // Bright only when the figure is a fact. A dash or an ellipsis stays muted so the
               // pill never looks like it is reporting a balance it cannot vouch for.

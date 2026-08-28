@@ -61,9 +61,7 @@ export default function AppShell() {
       <Pane show={service === 'name'}><NamePage /></Pane>
 
       {profileOpen && (
-        <DarkPin>
-          <ProfilePanel onClose={() => setProfileOpen(false)} avatar={avatarFor(nostrPubkeyHex ?? '')} />
-        </DarkPin>
+        <ProfilePanel onClose={() => setProfileOpen(false)} avatar={avatarFor(nostrPubkeyHex ?? '')} />
       )}
     </div>
   )

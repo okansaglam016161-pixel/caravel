@@ -7,11 +7,10 @@
 
 import { useState } from 'react'
 import { useWallet } from '../../context/WalletContext'
-import { useTheme } from '../../hooks/useTheme'
-import { Logo, CryptoBusy } from '../primitives'
+import { CryptoBusy } from '../primitives'
 import PasswordField from './PasswordField'
 import RestoreFlow from './RestoreFlow'
-import { MONO, entryCard, pageShell, primaryBtn, disabledBtn, secondaryBtn, backBtn } from './entryStyles'
+import { MONO, entryCard, logoTile, pageShell, primaryBtn, disabledBtn, secondaryBtn, backBtn, wordChip } from './entryStyles'
 
 // Word positions to quiz in step 3 (1-indexed).
 const QUIZ_POSITIONS = [5, 12, 20]
@@ -19,17 +18,22 @@ const QUIZ_POSITIONS = [5, 12, 20]
 // ── Step 1: Welcome ──────────────────────────────────────────────────────────
 
 function Welcome({ onCreate, onRestore, genError }: { onCreate: () => void; onRestore: () => void; genError?: string }) {
-  // See UnlockWallet: the mark swaps with the theme now that the gate does.
-  const { theme } = useTheme()
   return (
-    <div style={entryCard({ padding: '34px 26px 26px', border: '1px solid rgba(var(--border-rgb),0.16)', textAlign: 'center' })}>
-      <div style={{ marginBottom: 18 }}><Logo size={46} onLight={theme === 'light'} /></div>
-      <div style={{ fontSize: 24, fontWeight: 700, color: 'var(--text-primary)', letterSpacing: '-0.02em', marginBottom: 10 }}>Create your Caravel wallet</div>
-      <div style={{ fontSize: 14, color: 'var(--text-muted)', lineHeight: 1.6, marginBottom: 24 }}>Your keys are generated here in your browser and never leave this device. We hold nothing.</div>
-      {genError && <div style={{ fontSize: 12, color: 'var(--danger-300)', marginBottom: 12 }}>{genError}</div>}
-      <button onClick={onCreate} style={{ ...primaryBtn, padding: 14, fontSize: 15, marginBottom: 16 }}>Create wallet</button>
-      <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>
-        I already have a wallet. <span onClick={onRestore} style={{ color: 'var(--teal-500)', fontWeight: 600, cursor: 'pointer' }}>Restore from recovery phrase</span>
+    <div style={entryCard({ padding: '28px 24px', textAlign: 'center' })}>
+      {/* The mark on its accent tile, as the design draws it — the light mark on a blue ground, so
+          the lockup is identical in both themes and needs no per-theme variant of its own. */}
+      <span style={{ ...logoTile, width: 44, height: 44 }}>
+        <img src="/logo-light.png" alt="" aria-hidden="true" style={{ height: 23, width: 'auto', display: 'block' }} />
+      </span>
+      <div style={{ fontSize: 17, fontWeight: 600, color: 'var(--text-primary)', marginTop: 14 }}>Welcome to Caravel</div>
+      <div style={{ fontSize: 12.5, color: 'var(--text-muted-dim)', marginTop: 4, lineHeight: 1.5, textWrap: 'pretty' }}>
+        A private wallet, generated on your device. Your keys never leave it.
+      </div>
+      {genError && <div style={{ fontSize: 12, color: 'var(--danger-500)', marginTop: 12 }}>{genError}</div>}
+      <button onClick={onCreate} style={{ ...primaryBtn, marginTop: 16 }}>Create wallet</button>
+      <div onClick={onRestore} role="button" tabIndex={0} onKeyDown={e => e.key === 'Enter' && onRestore()}
+        style={{ fontSize: 12, color: 'var(--accent-ink)', marginTop: 10, cursor: 'pointer', fontWeight: 500 }}>
+        I have a recovery phrase
       </div>
     </div>
   )
@@ -42,26 +46,29 @@ function SeedReveal({ words, onNext }: { words: string[]; onNext: () => void }) 
   const copy = () => navigator.clipboard.writeText(words.join(' ')).catch(() => {})
 
   return (
-    <div style={entryCard({ padding: 22, border: '1px solid rgba(var(--warn-rgb),0.28)' })}>
-      <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 6 }}>Your recovery phrase</div>
-      <div style={{ fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.55, marginBottom: 14 }}>Write these 24 words down in order, offline.</div>
-      <div style={{ display: 'flex', gap: 10, padding: '12px 14px', borderRadius: 11, background: 'rgba(var(--warn-rgb),0.05)', border: '1px solid rgba(var(--warn-rgb),0.28)', marginBottom: 14 }}>
-        <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="var(--warn)" strokeWidth={2} strokeLinecap="round" style={{ flexShrink: 0, marginTop: 1 }}><path d="M12 8v5M12 17h.01" /><circle cx="12" cy="12" r="9" /></svg>
-        <span style={{ fontSize: 12, color: 'var(--warn-300)', lineHeight: 1.5 }}>Anyone with these words owns your wallet. Caravel cannot recover them for you.</span>
-      </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 7, marginBottom: 14 }}>
+    <div style={entryCard({ padding: 22 })}>
+      <div style={{ fontSize: 14.5, fontWeight: 600, color: 'var(--text-primary)' }}>Your recovery phrase</div>
+      <div style={{ fontSize: 12, color: 'var(--text-muted-dim)', marginTop: 3 }}>24 words. The only way back in, held by you.</div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6, marginTop: 12 }}>
         {words.map((word, i) => (
-          <div key={i} style={{ display: 'flex', alignItems: 'baseline', gap: 6, padding: '8px 9px', borderRadius: 8, background: 'var(--surface-raised)', border: '1px solid rgba(var(--border-rgb),0.1)', userSelect: 'all' }}>
-            <span style={{ fontFamily: MONO, fontSize: 10, color: 'var(--text-muted-dim)' }}>{String(i + 1).padStart(2, '0')}</span>
-            <span style={{ fontFamily: MONO, fontSize: 12, color: 'var(--text-body)' }}>{word}</span>
-          </div>
+          <span key={i} style={{ ...wordChip, userSelect: 'all' }}>
+            <span style={{ color: 'var(--text-muted-dim)' }}>{i + 1}</span>{word}
+          </span>
         ))}
       </div>
-      <div onClick={copy} style={{ ...secondaryBtn, padding: 11, borderRadius: 11, fontSize: 13, marginBottom: 14 }}>
-        <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="var(--teal-500)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>Copy all 24 words
+      {/* The one warning that has to survive any reskin: these words ARE the wallet. */}
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7, marginTop: 12, fontSize: 11.5, color: 'var(--warn)', lineHeight: 1.5 }}>
+        <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" style={{ flexShrink: 0, marginTop: 2 }}>
+          <path d="M12 9v4M12 17h.01" /><path d="M10.3 3.8L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.8a2 2 0 0 0-3.4 0z" />
+        </svg>
+        <span>Write it down offline. Anyone with these words owns your wallet, and Caravel cannot recover them.</span>
       </div>
-      <div onClick={() => setConfirmed(c => !c)} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '12px 14px', borderRadius: 11, background: 'var(--surface-raised)', border: `1px solid ${confirmed ? 'rgba(var(--teal-500-rgb),0.3)' : 'rgba(var(--border-rgb),0.14)'}`, marginBottom: 14, cursor: 'pointer' }}>
-        <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 19, height: 19, borderRadius: 6, flexShrink: 0, background: confirmed ? 'var(--teal-500)' : 'transparent', border: confirmed ? 'none' : '1.5px solid rgba(var(--border-rgb),0.3)' }}>
+      <div style={{ marginTop: 12 }} />
+      <div onClick={copy} style={{ ...secondaryBtn, marginBottom: 12 }}>
+        <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="var(--accent-400)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>Copy all 24 words
+      </div>
+      <div onClick={() => setConfirmed(c => !c)} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '12px 14px', borderRadius: 11, background: 'var(--surface-void)', border: `1px solid ${confirmed ? 'var(--accent-400)' : 'var(--border)'}`, marginBottom: 14, cursor: 'pointer' }}>
+        <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 19, height: 19, borderRadius: 6, flexShrink: 0, background: confirmed ? 'var(--accent-400)' : 'transparent', border: confirmed ? 'none' : '1.5px solid var(--border-strong)' }}>
           {confirmed && <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="var(--ink-on-accent)" strokeWidth={3.4} strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>}
         </span>
         <span style={{ fontSize: 13, color: 'var(--text-bright)', fontWeight: 500 }}>I have saved my recovery phrase</span>
@@ -79,19 +86,19 @@ function SeedConfirm({ words, onBack, onNext }: { words: string[]; onBack: () =>
   const allCorrect = QUIZ_POSITIONS.every(p => (inputs[p] ?? '') === words[p - 1])
 
   return (
-    <div style={entryCard({ padding: 22, border: '1px solid rgba(var(--border-rgb),0.16)' })}>
-      <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 6 }}>Confirm your phrase</div>
+    <div style={entryCard({ padding: 22 })}>
+      <div style={{ fontSize: 14.5, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 3 }}>Confirm your phrase</div>
       <div style={{ fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.55, marginBottom: 18 }}>Type these three words to prove you saved it.</div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 14 }}>
         {QUIZ_POSITIONS.map(pos => {
           const val = inputs[pos] ?? ''
           const correct = val === words[pos - 1]
           const wrong = val.length > 0 && !correct
-          const border = correct ? 'rgba(var(--teal-500-rgb),0.45)' : wrong ? 'rgba(var(--danger-rgb),0.5)' : 'rgba(var(--border-rgb),0.14)'
+          const border = correct ? 'var(--accent-400)' : wrong ? 'var(--danger-500)' : 'var(--border)'
           return (
             <div key={pos}>
               <div style={{ fontFamily: MONO, fontSize: 11, color: 'var(--text-muted-dim)', marginBottom: 6 }}>WORD #{pos}</div>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '12px 14px', borderRadius: 11, background: 'var(--surface-raised)', border: `1px solid ${border}`, boxShadow: correct ? '0 0 0 3px rgba(var(--teal-500-rgb),0.09)' : undefined }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '12px 14px', borderRadius: 11, background: 'var(--surface-void)', border: `1px solid ${border}`, boxShadow: correct ? '0 0 0 3px rgba(var(--accent-400-rgb),0.18)' : undefined }}>
                 <input
                   value={val}
                   onChange={e => setInput(pos, e.target.value)}
@@ -99,7 +106,7 @@ function SeedConfirm({ words, onBack, onNext }: { words: string[]; onBack: () =>
                   placeholder={`Type word #${pos}`}
                   style={{ flex: 1, minWidth: 0, background: 'transparent', border: 'none', outline: 'none', fontFamily: MONO, fontSize: 14, color: correct ? 'var(--text-bright)' : 'var(--text-body)', padding: 0 }}
                 />
-                {correct && <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="var(--teal-500)" strokeWidth={2.8} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><path d="M20 6L9 17l-5-5" /></svg>}
+                {correct && <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="var(--accent-400)" strokeWidth={2.8} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><path d="M20 6L9 17l-5-5" /></svg>}
                 {wrong && <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="var(--danger-500)" strokeWidth={2.6} strokeLinecap="round" style={{ flexShrink: 0 }}><path d="M6 6l12 12M18 6L6 18" /></svg>}
               </div>
               {wrong && <div style={{ fontSize: 12, color: 'var(--danger-300)', marginTop: 6 }}>That doesn’t match word #{pos}.</div>}
@@ -142,8 +149,8 @@ function SetPassword({ mnemonic }: { mnemonic: string }) {
   if (loading) return <CryptoBusy title="Encrypting your wallet on this device" reassurance="Deriving your keys and locking the phrase behind your password. Both are deliberately slow, so a stolen file is hard to crack." />
 
   return (
-    <div style={entryCard({ padding: 22, border: '1px solid rgba(var(--border-rgb),0.16)' })}>
-      <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 6 }}>Set a password</div>
+    <div style={entryCard({ padding: 22 })}>
+      <div style={{ fontSize: 14.5, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 3 }}>Set a password</div>
       <div style={{ fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.55, marginBottom: 18 }}>This unlocks your wallet on this device.</div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 14 }}>
         <PasswordField value={pass} onChange={v => { setPass(v); setError('') }} />

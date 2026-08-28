@@ -18,11 +18,10 @@
 //   ── WHAT IS PINNED, AND WHEN IT LIFTS ────────────────────────────────────────
 //
 //     Chat pane .......... the chat redesign
-//     Profile panel ...... stage 10 (gates + profile)
 //
-//   The create / unlock / restore gates were pinned here and are NOT any more: their backdrop was
-//   the only thing holding them back — a radial gradient built from the theme-independent navy
-//   scale — and it reads role tokens now (see entryStyles). They follow the theme.
+//   CHAT IS THE LAST ONE. The create / unlock / restore gates un-pinned when their backdrop stopped
+//   being a navy-scale gradient, and the profile panel un-pinned when stage 10 reskinned it. When
+//   chat's redesign lands, this component has no callers left and should be deleted with it.
 //
 //   The in-chat wallet modal is NOT pinned separately, and inherits chat's pin because it renders
 //   inside chat's tree. That is correct rather than incidental: it floats over the conversation, so

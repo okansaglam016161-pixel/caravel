@@ -106,7 +106,7 @@ export default function RestoreFlow({ onBack }: { onBack: () => void }) {
     const choose = (s: DerivationScheme) => { setScheme(s); setStep('password') }
     return (
       <div style={entryCard({ padding: 22, border: '1px solid rgba(var(--warn-rgb),0.3)' })}>
-        <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 6 }}>Which wallet is this?</div>
+        <div style={{ fontSize: 14.5, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 3 }}>Which wallet is this?</div>
         <div style={{ fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.55, marginBottom: 18 }}>
           This phrase is valid in both recovery-phrase formats, which is extraordinarily rare. Pick
           the one it came from — choosing wrong opens a different, empty wallet, so if you aren’t
@@ -145,7 +145,7 @@ export default function RestoreFlow({ onBack }: { onBack: () => void }) {
             {cells.map(n => {
               const isBad = n === bad
               return (
-                <div key={n} style={{ display: 'flex', alignItems: 'baseline', gap: 6, padding: '8px 9px', borderRadius: 8, background: 'var(--surface-raised)', border: `1px solid ${isBad ? 'rgba(var(--danger-rgb),0.5)' : 'rgba(var(--border-rgb),0.1)'}` }}>
+                <div key={n} style={{ display: 'flex', alignItems: 'baseline', gap: 6, padding: '8px 9px', borderRadius: 8, background: 'var(--surface-void)', border: `1px solid ${isBad ? 'var(--danger-500)' : 'var(--border)'}` }}>
                   <span style={{ fontFamily: MONO, fontSize: 10, color: isBad ? 'var(--danger-300)' : 'var(--text-muted-dim)' }}>{n}</span>
                   <span style={{ fontFamily: MONO, fontSize: 12, color: isBad ? 'var(--danger-300)' : 'var(--text-body)' }}>{phraseInputs[n - 1]}</span>
                 </div>
@@ -166,8 +166,8 @@ export default function RestoreFlow({ onBack }: { onBack: () => void }) {
   // ── Set a new password ──────────────────────────────────────────────────────
   if (step === 'password') {
     return (
-      <div style={entryCard({ padding: 22, border: '1px solid rgba(var(--border-rgb),0.16)' })}>
-        <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 6 }}>Set a new password</div>
+      <div style={entryCard({ padding: 22 })}>
+        <div style={{ fontSize: 14.5, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 3 }}>Set a new password</div>
         <div style={{ fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.55, marginBottom: 18 }}>For unlocking the restored wallet on this device.</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 14 }}>
           <PasswordField value={pass} onChange={v => { setPass(v); setError('') }} />
@@ -188,14 +188,14 @@ export default function RestoreFlow({ onBack }: { onBack: () => void }) {
 
   // ── Phrase entry ──────────────────────────────────────────────────────────────
   return (
-    <div style={entryCard({ padding: 22, border: '1px solid rgba(var(--border-rgb),0.16)' })}>
-      <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 6 }}>Enter your recovery phrase</div>
+    <div style={entryCard({ padding: 22 })}>
+      <div style={{ fontSize: 14.5, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 3 }}>Enter your recovery phrase</div>
       <div style={{ fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.55, marginBottom: 16 }}>All 24 words, in order. Paste works too.</div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 7, marginBottom: 16 }}>
         {phraseInputs.map((word, i) => {
           const active = focusedCell === i
           return (
-            <div key={i} style={{ display: 'flex', alignItems: 'baseline', gap: 6, padding: '8px 9px', borderRadius: 8, background: 'var(--surface-raised)', minHeight: 17, border: active ? '1px solid rgba(var(--teal-500-rgb),0.45)' : '1px solid rgba(var(--border-rgb),0.1)', boxShadow: active ? '0 0 0 3px rgba(var(--teal-500-rgb),0.09)' : 'none' }}>
+            <div key={i} style={{ display: 'flex', alignItems: 'baseline', gap: 6, padding: '8px 9px', borderRadius: 8, background: 'var(--surface-void)', minHeight: 17, border: active ? '1px solid var(--accent-400)' : '1px solid var(--border)', boxShadow: active ? '0 0 0 3px rgba(var(--accent-400-rgb),0.18)' : 'none' }}>
               <span style={{ fontFamily: MONO, fontSize: 10, color: 'var(--text-muted-dim)', flexShrink: 0 }}>{String(i + 1).padStart(2, '0')}</span>
               <input
                 value={word}

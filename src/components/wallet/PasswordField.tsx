@@ -1,9 +1,10 @@
 //   PasswordField — masked input with an eye toggle, used by every entry password field
-//   (create set-password, restore set-password, unlock). Transcribed from the entry-flows design:
-//   surface-raised row, mono value with 0.2em tracking, teal focus ring, danger border when invalid.
+//   (create set-password, restore set-password, unlock). A field WELL: the page ground inset into
+//   the card, which reads as a field in both themes — in light the card is white and `raised` is
+//   also white, so a raised field would have been invisible on it.
 
 import { useState } from 'react'
-import { MONO } from './entryStyles'
+import { MONO, fieldSurface } from './entryStyles'
 
 interface PasswordFieldProps {
   value: string
@@ -19,14 +20,15 @@ export default function PasswordField({ value, onChange, onKeyDown, placeholder 
   const [focused, setFocused] = useState(false)
 
   const border = invalid
-    ? '1px solid rgba(var(--danger-rgb),0.5)'
+    ? '1px solid var(--danger-500)'
     : focused
-      ? '1px solid rgba(var(--teal-500-rgb),0.45)'
-      : '1px solid rgba(var(--border-rgb),0.14)'
-  const boxShadow = focused && !invalid ? '0 0 0 3px rgba(var(--teal-500-rgb),0.09)' : undefined
+      ? '1px solid var(--accent-400)'
+      : '1px solid var(--border-strong)'
+  // The foundation's focus ring, same as every other input in the app.
+  const boxShadow = focused && !invalid ? '0 0 0 3px rgba(var(--accent-400-rgb),0.18)' : undefined
 
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '13px 15px', borderRadius: 11, background: 'var(--surface-raised)', border, boxShadow }}>
+    <div style={{ ...fieldSurface, display: 'flex', alignItems: 'center', gap: 10, padding: '10px 13px', border, boxShadow }}>
       <input
         type={show ? 'text' : 'password'}
         value={value}
@@ -36,7 +38,7 @@ export default function PasswordField({ value, onChange, onKeyDown, placeholder 
         onFocus={() => setFocused(true)}
         onBlur={() => setFocused(false)}
         placeholder={placeholder}
-        style={{ flex: 1, minWidth: 0, background: 'transparent', border: 'none', outline: 'none', fontFamily: MONO, fontSize: 15, color: 'var(--text-body)', letterSpacing: show ? '0' : '0.2em', padding: 0 }}
+        style={{ flex: 1, minWidth: 0, background: 'transparent', border: 'none', outline: 'none', fontFamily: MONO, fontSize: 14, color: 'var(--text-primary)', letterSpacing: show ? '0' : '0.2em', padding: 0 }}
       />
       <svg onClick={() => setShow(s => !s)} width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round" style={{ cursor: 'pointer', flexShrink: 0 }}>
         <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" /><circle cx="12" cy="12" r="3" />

@@ -15,7 +15,7 @@ const MONO = 'var(--font-mono)'
 
 const eyeOpen = (c: string) => (<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" /><circle cx="12" cy="12" r="3" /></svg>)
 const eyeOff = (c: string) => (<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" /><circle cx="12" cy="12" r="3" /><path d="M4 4l16 16" /></svg>)
-const copyIcon = (c = 'var(--teal-500)') => (<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>)
+const copyIcon = (c = 'var(--accent-400)') => (<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>)
 
 // Truncate the bech32 npub for display; the full value is what CopyBtn copies.
 function truncNpub(npub: string): string {
@@ -90,23 +90,23 @@ export default function ProfilePanel({ onClose, avatar }: { onClose: () => void;
 
   return (
     <>
-      <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(5,8,14,0.78)', backdropFilter: 'blur(3px)', zIndex: 200 }} />
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(6,12,21,0.72)', backdropFilter: 'blur(3px)', zIndex: 200 }} />
 
-      <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', width: 'min(420px, 94vw)', maxHeight: '88vh', background: 'var(--surface)', borderRadius: 20, border: '1px solid rgba(var(--border-rgb),0.2)', boxShadow: '0 30px 90px rgba(0,0,0,0.65)', zIndex: 201, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', width: 'min(420px, 94vw)', maxHeight: '88vh', background: 'var(--surface)', borderRadius: 20, border: '1px solid var(--border)', boxShadow: 'var(--e3)', zIndex: 201, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
 
         {/* Header */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 18px', borderBottom: '1px solid rgba(var(--border-rgb),0.1)', flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 18px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             {step !== 'main' && (
-              <span onClick={backToMain} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, border: '1px solid rgba(var(--border-rgb),0.16)', cursor: 'pointer' }}>
+              <span onClick={backToMain} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, border: '1px solid var(--border)', cursor: 'pointer' }}>
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5M12 5l-7 7 7 7" /></svg>
               </span>
             )}
-            <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>{headerTitle}</span>
+            <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)' }}>{headerTitle}</span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            {step === 'main' && <span style={{ padding: '3px 7px', borderRadius: 6, border: '1px solid rgba(var(--border-rgb),0.18)', fontFamily: MONO, fontSize: 10, color: 'var(--text-faint-dim)' }}>Esc</span>}
-            <span onClick={onClose} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, border: '1px solid rgba(var(--border-rgb),0.16)', cursor: 'pointer' }}>
+            {step === 'main' && <span style={{ padding: '3px 7px', borderRadius: 6, border: '1px solid var(--border)', fontFamily: MONO, fontSize: 10, color: 'var(--text-faint-dim)' }}>Esc</span>}
+            <span onClick={onClose} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, border: '1px solid var(--border)', cursor: 'pointer' }}>
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth="2.2" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
             </span>
           </div>
@@ -130,7 +130,7 @@ export default function ProfilePanel({ onClose, avatar }: { onClose: () => void;
                 ? <CopyBtn value={nostrNpub} label={truncNpub(nostrNpub)} mono />
                 : <span style={{ fontFamily: MONO, fontSize: 12, color: 'var(--text-faint)' }}>npub unavailable</span>}
 
-              <div style={{ height: 1, background: 'rgba(var(--border-rgb),0.1)', margin: '18px 0 12px' }} />
+              <div style={{ height: 1, background: 'var(--border)', margin: '18px 0 12px' }} />
 
               {/* 1b · @names you own (on-chain reverse lookup) */}
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
@@ -139,7 +139,7 @@ export default function ProfilePanel({ onClose, avatar }: { onClose: () => void;
               </div>
               {names.kind === 'loading' && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 9, fontSize: 13, color: 'var(--text-faint)' }}>
-                  <span style={{ width: 14, height: 14, borderRadius: '50%', border: '2px solid rgba(var(--border-rgb),0.25)', borderTopColor: 'var(--text-muted-dim)', animation: 'cv-spin 0.8s linear infinite' }} />
+                  <span style={{ width: 14, height: 14, borderRadius: '50%', border: '2px solid var(--border)', borderTopColor: 'var(--text-muted-dim)', animation: 'cv-spin 0.8s linear infinite' }} />
                   Looking up your names…
                 </div>
               )}
@@ -155,10 +155,10 @@ export default function ProfilePanel({ onClose, avatar }: { onClose: () => void;
                 </div>
               )}
 
-              <div style={{ height: 1, background: 'rgba(var(--border-rgb),0.1)', margin: '18px 0 6px' }} />
+              <div style={{ height: 1, background: 'var(--border)', margin: '18px 0 6px' }} />
 
               {/* 2 · Show recovery phrase (relocated) */}
-              <div onClick={() => setStep('phraseAuth')} style={{ display: 'flex', alignItems: 'center', gap: 13, padding: '15px 14px', borderRadius: 12, borderBottom: '1px solid rgba(var(--border-rgb),0.07)', cursor: 'pointer' }}>
+              <div onClick={() => setStep('phraseAuth')} style={{ display: 'flex', alignItems: 'center', gap: 13, padding: '15px 14px', borderRadius: 12, borderBottom: '1px solid var(--border)', cursor: 'pointer' }}>
                 <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><circle cx="8" cy="15" r="4" /><path d="M10.8 12.2L20 3M17 3h3v3" /></svg>
                 <div style={{ flex: 1 }}>
                   <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-body)' }}>Show recovery phrase</div>
@@ -187,15 +187,15 @@ export default function ProfilePanel({ onClose, avatar }: { onClose: () => void;
                 <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>Confirm your password</span>
               </div>
               <div style={{ fontSize: 13, color: 'var(--text-muted-dim)', lineHeight: 1.5, marginBottom: 16 }}>Your 24 words will be shown on screen. Make sure nobody is watching.</div>
-              <div style={{ display: 'flex', alignItems: 'center', padding: '13px 15px', borderRadius: 11, background: 'var(--surface-raised)', border: `1px solid ${phraseError ? 'rgba(var(--danger-rgb),0.45)' : 'rgba(var(--border-rgb),0.14)'}`, marginBottom: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', padding: '13px 15px', borderRadius: 11, background: 'var(--surface-void)', border: `1px solid ${phraseError ? 'var(--danger-500)' : 'var(--border-strong)'}`, marginBottom: 10 }}>
                 <input type={showPhrasePass ? 'text' : 'password'} value={phrasePass} autoFocus onChange={e => { setPhrasePass(e.target.value); setPhraseError('') }} onKeyDown={e => { if (e.key === 'Enter' && phrasePass) revealPhrase() }} placeholder="Password" style={{ background: 'none', border: 'none', outline: 'none', fontFamily: MONO, fontSize: 15, color: 'var(--text-muted)', letterSpacing: '0.1em', flex: 1 }} />
                 <span onClick={() => setShowPhrasePass(v => !v)} style={{ cursor: 'pointer', flexShrink: 0 }}>{showPhrasePass ? eyeOpen('var(--text-faint-dim)') : eyeOff('var(--text-faint-dim)')}</span>
               </div>
               {phraseError && <div style={{ fontSize: 12, color: 'var(--danger-300)', marginBottom: 16 }}>{phraseError}</div>}
               <div style={{ display: 'flex', gap: 10, marginTop: phraseError ? 0 : 16 }}>
-                <div onClick={backToMain} style={{ flex: '0 0 110px', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 13, borderRadius: 12, border: '1px solid rgba(var(--border-rgb),0.2)', color: 'var(--text-muted)', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>Cancel</div>
-                <div onClick={revealPhrase} style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, padding: 13, borderRadius: 12, background: phrasePass && !phraseLoading ? 'var(--teal-grad)' : 'rgba(16,21,31,0.6)', border: phrasePass && !phraseLoading ? 'none' : '1px solid rgba(var(--border-rgb),0.12)', color: phrasePass && !phraseLoading ? 'var(--ink-on-accent)' : 'var(--text-disabled)', fontSize: 14, fontWeight: 700, cursor: phrasePass && !phraseLoading ? 'pointer' : 'default' }}>
-                  {phraseLoading && <span style={{ width: 15, height: 15, borderRadius: '50%', border: '2px solid rgba(var(--border-rgb),0.25)', borderTopColor: 'var(--text-faint-dim)', animation: 'cv-spin 0.8s linear infinite' }} />}
+                <div onClick={backToMain} style={{ flex: '0 0 110px', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 13, borderRadius: 12, border: '1px solid var(--border)', color: 'var(--text-muted)', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>Cancel</div>
+                <div onClick={revealPhrase} style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, padding: 13, borderRadius: 12, background: phrasePass && !phraseLoading ? 'var(--teal-grad)' : 'rgba(16,21,31,0.6)', border: phrasePass && !phraseLoading ? 'none' : '1px solid var(--border)', color: phrasePass && !phraseLoading ? 'var(--ink-on-accent)' : 'var(--text-disabled)', fontSize: 14, fontWeight: 700, cursor: phrasePass && !phraseLoading ? 'pointer' : 'default' }}>
+                  {phraseLoading && <span style={{ width: 15, height: 15, borderRadius: '50%', border: '2px solid var(--border)', borderTopColor: 'var(--text-faint-dim)', animation: 'cv-spin 0.8s linear infinite' }} />}
                   {phraseLoading ? 'Verifying…' : 'Reveal phrase'}
                 </div>
               </div>
@@ -211,15 +211,15 @@ export default function ProfilePanel({ onClose, avatar }: { onClose: () => void;
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 7, marginBottom: 16 }}>
                 {words.map((w, i) => (
-                  <div key={i} style={{ display: 'flex', alignItems: 'baseline', gap: 6, padding: '8px 9px', borderRadius: 8, background: 'var(--surface-raised)', border: '1px solid rgba(var(--border-rgb),0.1)', userSelect: 'all' }}>
+                  <div key={i} style={{ display: 'flex', alignItems: 'baseline', gap: 6, padding: '8px 9px', borderRadius: 8, background: 'var(--surface-void)', border: '1px solid var(--border)', userSelect: 'all' }}>
                     <span style={{ fontFamily: MONO, fontSize: 10, color: 'var(--text-muted-dim)' }}>{i + 1}</span>
                     <span style={{ fontFamily: MONO, fontSize: 12, color: 'var(--text-body)' }}>{w}</span>
                   </div>
                 ))}
               </div>
               <div style={{ display: 'flex', gap: 10 }}>
-                <div onClick={() => navigator.clipboard.writeText(words.join(' ')).catch(() => {})} style={{ flex: '0 0 110px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, padding: 13, borderRadius: 12, border: '1px solid rgba(var(--border-rgb),0.2)', color: 'var(--text-muted)', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>{copyIcon('var(--text-muted)')}Copy</div>
-                <div onClick={backToMain} style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 13, borderRadius: 12, background: 'var(--surface-raised)', border: '1px solid rgba(var(--teal-500-rgb),0.26)', color: 'var(--text-bright)', fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>Hide</div>
+                <div onClick={() => navigator.clipboard.writeText(words.join(' ')).catch(() => {})} style={{ flex: '0 0 110px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, padding: 13, borderRadius: 12, border: '1px solid var(--border)', color: 'var(--text-muted)', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>{copyIcon('var(--text-muted)')}Copy</div>
+                <div onClick={backToMain} style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 13, borderRadius: 12, background: 'var(--surface-void)', border: '1px solid var(--border-strong)', color: 'var(--text-primary)', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>Hide</div>
               </div>
             </div>
           )}

@@ -21,7 +21,7 @@ import { C, MONO, tealBorder, tealFill } from './tokens'
 import { Alert, Check, Eye, EyeOff, Shield, Spinner } from './icons'
 import {
   Body, Button, DetailCard, DetailRow, FeeRow, ModalShell, RootHeader, ScanStrip, SettleBar,
-  StatusBlock, SubHeader, TabBar, TxRow, iconBtn, type ScanSummary,
+  Sheet, StatusBlock, SubHeader, TabBar, TxRow, iconBtn, type ScanSummary,
 } from './primitives'
 import {
   ActivityPanel, FaucetPanel, OnsPanel, ReceivePanel, SendPanel,
@@ -44,6 +44,19 @@ import { fmt6 } from './format'
  */
 export const WALLET_TABS = ['overview', 'send', 'receive', 'activity'] as const
 export type WalletTab = (typeof WALLET_TABS)[number]
+
+/**
+ * The tabs the TAB BAR draws.
+ *
+ * Send and Receive left it in stage 4 without leaving the `tab` state: they are still selected the
+ * same way, they simply render as sheets now. Keeping one piece of state for "which view is up"
+ * means the existing transitions — "View in Activity" from an unconfirmed send, for one — keep
+ * working untouched, and there is no second source of truth to fall out of step.
+ */
+const VISIBLE_TABS = ['overview', 'activity'] as const
+
+/** Send and Receive are tasks, and tasks get a sheet. See primitives/Sheet. */
+const SHEET_TABS: readonly WalletTab[] = ['send', 'receive']
 
 /** Balances after the move lands — the number the M4 report found missing from both reviews. */
 export interface Resulting { privateAfter: bigint; publicAfter: bigint }
@@ -150,7 +163,7 @@ export default function WalletModalV2(p: WalletModalV2Props) {
   // ── Root view: the tab bar, and whichever area is selected ──
   if (m.step === 'idle') {
     const tab = p.tab ?? 'overview'
-    return (
+    const root = (
       <ModalShell>
         <RootHeader chip={p.networkChip} right={<>
           <span role="button" tabIndex={0} onClick={p.onToggleHidden} onKeyDown={e => e.key === 'Enter' && p.onToggleHidden()}
@@ -163,13 +176,15 @@ export default function WalletModalV2(p: WalletModalV2Props) {
           {p.onClose && <span role="button" tabIndex={0} onClick={p.onClose} onKeyDown={e => e.key === 'Enter' && p.onClose!()} style={iconBtn} aria-label="Close">✕</span>}
         </>} />
         <Body gap={14}>
-          {p.onTab && <TabBar tabs={WALLET_TABS} active={tab} onSelect={p.onTab} />}
+          {p.onTab && <TabBar tabs={VISIBLE_TABS} active={tab === 'overview' || tab === 'activity' ? tab : 'overview'} onSelect={p.onTab} />}
 
-          {tab === 'overview' && <>
+          {(tab === 'overview' || SHEET_TABS.includes(tab)) && <>
             {p.inFlightText && <InFlightBanner text={p.inFlightText} />}
             <TotalHero
               total={p.total} privateBalance={p.privateBalance} publicBalance={p.publicBalance}
               hidden={p.hidden} onRetry={p.onRetryBalance}
+              onSend={p.send && p.onTab ? () => p.onTab!('send') : undefined}
+              onReceive={p.receive && p.onTab ? () => p.onTab!('receive') : undefined}
             />
             {/* The strip acknowledges a Refresh press and carries the literal scan figures. It sits
                 UNDER the hero now rather than as a band beneath the header: it describes the read
@@ -188,8 +203,6 @@ export default function WalletModalV2(p: WalletModalV2Props) {
             {p.overviewExtras}
           </>}
 
-          {tab === 'send' && p.send && <SendPanel {...p.send} />}
-          {tab === 'receive' && p.receive && <ReceivePanel {...p.receive} />}
           {tab === 'activity' && (
             <ActivityPanel empty={p.activityEmpty ?? !p.activity} hidden={p.hidden} onToggleHidden={p.onToggleHidden}>
               {p.activity}
@@ -197,6 +210,26 @@ export default function WalletModalV2(p: WalletModalV2Props) {
           )}
         </Body>
       </ModalShell>
+    )
+
+    return (
+      <>
+        {root}
+        {/* The flows, over the page. `dismissable` is false while a transaction is on the wire:
+            nothing here can cancel a broadcast, so a close affordance would misdescribe itself. */}
+        {tab === 'send' && p.send && (
+          <Sheet
+            title="Send"
+            dismissable={p.send.view.step !== 'sending'}
+            onClose={() => { p.send!.onDone(); p.onTab?.('overview') }}
+          ><SendPanel {...p.send} /></Sheet>
+        )}
+        {tab === 'receive' && p.receive && (
+          <Sheet title="Receive" onClose={() => p.onTab?.('overview')}>
+            <ReceivePanel {...p.receive} />
+          </Sheet>
+        )}
+      </>
     )
   }
 
@@ -250,6 +283,7 @@ export default function WalletModalV2(p: WalletModalV2Props) {
         </Body>
       </ModalShell>
     )
+
   }
 
   // ── In flight ──
@@ -288,6 +322,7 @@ export default function WalletModalV2(p: WalletModalV2Props) {
         </Body>
       </ModalShell>
     )
+
   }
 
   // ── Success (settled, or the deadline passed — both are successes) ──
@@ -315,6 +350,7 @@ export default function WalletModalV2(p: WalletModalV2Props) {
         </Body>
       </ModalShell>
     )
+
   }
 
   // ── Failure. The verbatim text is load-bearing — see the M4 report. ──

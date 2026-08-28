@@ -4,7 +4,7 @@
 // bigint arithmetic beyond formatting what it is handed. That is what makes Stage 2 a reskin: the
 // proven fund logic keeps computing the numbers and simply hands them to these.
 
-import type { CSSProperties, ReactNode } from 'react'
+import { useEffect, type CSSProperties, type ReactNode } from 'react'
 import { C, MODAL_WIDTH, MONO, border, tealBorder, tealFill, warnBorder } from './tokens'
 import { Copy, Spinner } from './icons'
 
@@ -29,6 +29,72 @@ export const iconBtn: CSSProperties = {
   display: 'flex', alignItems: 'center', justifyContent: 'center', width: 30, height: 30,
   borderRadius: 'var(--r-md)', background: C.raised, border: '1px solid var(--border)', color: C.mutedDim,
   fontSize: 14, cursor: 'pointer', flexShrink: 0, userSelect: 'none',
+}
+
+/**
+ * An overlay sheet — the host for the flows that used to be tabs.
+ *
+ * ── WHY A SHEET AND NOT A TAB ────────────────────────────────────────────────
+ *
+ * Send and Receive are TASKS, with a beginning and an end. A tab implies a place you can browse to
+ * and leave at no cost, which is the wrong promise for a screen holding a half-built payment: the
+ * old tab bar let a typed recipient and a pinned MAX amount slide out of view behind a click on
+ * Activity, still live, with nothing saying so. A sheet has to be dismissed on purpose.
+ *
+ * It is fixed to the VIEWPORT, not to the wallet, so the same component works over the page in the
+ * shell and over the wallet modal in chat. The z-index clears the chat modal's own layer.
+ *
+ * The scrim closes on click, and Escape closes, EXCEPT when `dismissable` is false — which the send
+ * flow sets while a transaction is on the wire. Nothing here can cancel a broadcast, so offering a
+ * gesture that looks like cancelling would be a lie about what it does.
+ */
+export function Sheet({ title, onClose, dismissable = true, children }: {
+  title: string
+  onClose: () => void
+  dismissable?: boolean
+  children: ReactNode
+}) {
+  useEffect(() => {
+    if (!dismissable) return
+    function onKey(e: KeyboardEvent) { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose, dismissable])
+
+  return (
+    <>
+      <div
+        onClick={dismissable ? onClose : undefined}
+        style={{
+          position: 'fixed', inset: 0, zIndex: 300,
+          background: 'rgba(6,12,21,0.72)', backdropFilter: 'blur(3px)',
+          cursor: dismissable ? 'pointer' : 'default',
+        }}
+      />
+      <div
+        role="dialog" aria-modal="true" aria-label={title}
+        style={{
+          position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+          zIndex: 301, width: `min(${MODAL_WIDTH}px, 94vw)`, maxHeight: '88vh',
+          display: 'flex', flexDirection: 'column',
+          borderRadius: 16, background: 'var(--surface)',
+          border: '1px solid var(--border)', boxShadow: 'var(--e3)', overflow: 'hidden',
+        }}
+      >
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          padding: '16px 20px', borderBottom: '1px solid var(--border)', flexShrink: 0,
+        }}>
+          <span style={{ fontSize: 15, fontWeight: 600, color: C.primary }}>{title}</span>
+          {dismissable && (
+            <span role="button" tabIndex={0} onClick={onClose} onKeyDown={e => e.key === 'Enter' && onClose()}
+              style={iconBtn} aria-label="Close">✕</span>
+          )}
+        </div>
+        <div style={{ padding: 20, overflowY: 'auto' }}>{children}</div>
+      </div>
+    </>
+  )
 }
 
 /** Header for the modal's root view: name, network chip, and the global controls. */

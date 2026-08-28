@@ -15,7 +15,7 @@
 import type { ReactNode } from 'react'
 import { QRCodeSVG } from 'qrcode.react'
 import { C, MONO, tealBorder, tealFill, warnBorder, warnFill } from './tokens'
-import { Alert, Check, Copy, Eye, EyeOff, Shield, Spinner } from './icons'
+import { Alert, Check, Clock, Copy, Eye, EyeOff, Shield, Spinner } from './icons'
 import {
   AmountField, Body, Button, DetailCard, DetailRow, FieldLabel, Panel, PanelText,
   SettleBar, StatusBlock, SubHeader, TextField, TxRow,
@@ -210,23 +210,25 @@ function SourceToggle({ source, onSource }: { source: SendSource; onSource: (s: 
       <span role="radio" tabIndex={0} aria-checked={on}
         onClick={() => onSource(kind)} onKeyDown={e => e.key === 'Enter' && onSource(kind)}
         style={{
-          flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
-          padding: '9px 0', borderRadius: 'var(--r-md)', cursor: 'pointer', userSelect: 'none',
-          fontSize: 13, fontWeight: on ? 700 : 600,
-          background: on ? C.inset : 'transparent',
-          color: on ? (kind === 'private' ? C.teal300 : C.body) : C.mutedDim,
-          boxShadow: 'none',
+          flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+          padding: '8px 4px', borderRadius: 8, cursor: 'pointer', userSelect: 'none',
+          fontSize: 12.5, fontWeight: 600,
+          background: on ? 'var(--accent-400)' : 'transparent',
+          color: on ? '#FFFFFF' : 'var(--text-body-dim)',
         }}>
-        <Icon size={13} color={on ? (kind === 'private' ? C.teal : C.body) : C.mutedDim} />{label}
+        <Icon size={11} color="currentColor" />{label}
       </span>
     )
   }
   return (
     <div>
       <FieldLabel>SPEND FROM</FieldLabel>
-      <div style={{ display: 'flex', gap: 4, padding: 4, borderRadius: 'var(--r-md)', background: C.trough, border: '1px solid var(--border)' }}>
-        {opt('private', 'Shielded', Shield)}
-        {opt('public', 'Unshielded', Eye)}
+      <div style={{
+        display: 'flex', gap: 3, padding: 3, borderRadius: 'var(--r-md)',
+        background: 'var(--surface-void)', border: '1px solid var(--border)',
+      }}>
+        {opt('private', 'Shielded funds', Shield)}
+        {opt('public', 'Unshielded funds', Eye)}
       </div>
     </div>
   )
@@ -296,10 +298,18 @@ export function SendPanel({ view, hidden, onSource, onRecipient, onAmount, onNot
           <DetailRow label="From" value={view.source === 'private' ? 'Shielded balance' : 'Unshielded balance'}
             valueColor={view.source === 'private' ? C.teal300 : C.bodyDim} />
           <DetailRow label="Amount" value={XTR(view.amountMicrotari)} valueColor={C.bright} />
-          <DetailRow label="Network fee" last value={pricing
+          <DetailRow label={view.feeIsCeiling ? 'Fee, at most' : 'Network fee'} last value={pricing
             ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><Spinner size={12} /><span style={{ fontFamily: 'inherit', fontSize: 12.5, color: C.faint }}>Pricing…</span></span>
-            : view.feeIsCeiling ? `up to ${XTR(view.feeMicrotari!)}` : XTR(view.feeMicrotari!)} />
+            : XTR(view.feeMicrotari!)} />
         </DetailCard>
+        {/* A CEILING IS NOT A MEASUREMENT. The shielded path dry-runs inside submission, so before
+            confirming there is no exact figure to give — and presenting the ceiling as though there
+            were would be a quieter kind of lie than showing no fee at all. */}
+        {view.feeIsCeiling && !pricing && (
+          <div style={{ fontSize: 11.5, color: 'var(--text-muted-dim)', marginTop: -6, lineHeight: 1.5 }}>
+            Shielded sends show a fee ceiling. The exact fee is known once it settles.
+          </div>
+        )}
         <PrivacyNote source={view.source} />
         {view.note && (
           <div style={{ padding: '12px 14px', borderRadius: 'var(--r-md)', background: C.trough, border: '1px dashed var(--border-strong)' }}>
@@ -333,8 +343,8 @@ export function SendPanel({ view, hidden, onSource, onRecipient, onAmount, onNot
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
         <StatusBlock
-          ring={{ fill: tealFill(0.1), border: tealBorder(0.35) }}
-          icon={<Check color={C.teal} />}
+          ring={{ fill: 'rgba(var(--positive-rgb),0.12)', border: '1px solid transparent' }}
+          icon={<Check color={C.positive} />}
           title="Sent"
           sub={`${fmt6(view.amountMicrotari)} XTR to ${shortAddr(view.recipient)}. Your balance updates in about a minute.`}
         />
@@ -350,8 +360,8 @@ export function SendPanel({ view, hidden, onSource, onRecipient, onAmount, onNot
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
         <StatusBlock
-          ring={{ fill: tealFill(0.1), border: tealBorder(0.35) }}
-          icon={<Check color={C.teal} />}
+          ring={{ fill: 'rgba(var(--positive-rgb),0.12)', border: '1px solid transparent' }}
+          icon={<Check color={C.positive} />}
           title="Sent"
           sub={view.lagged
             ? `${fmt6(view.amountMicrotari)} XTR to ${shortAddr(view.recipient)}. Confirmed on the network — your balance hasn’t caught up yet, so tap Refresh in a moment. Nothing is at risk.`
@@ -367,10 +377,14 @@ export function SendPanel({ view, hidden, onSource, onRecipient, onAmount, onNot
   if (view.step === 'unconfirmed') {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        {/* NORMAL, NOT AN ERROR. Broadcast and undecided is an ordinary outcome on this network:
+            the payment may still land, nothing has failed, and nothing needs re-sending. It wears
+            the ACCENT wash and a clock — the warning triangle and amber it used to carry read as
+            "something went wrong", which is the one thing this state is not. */}
         <StatusBlock
-          ring={{ fill: warnFill(0.10), border: warnBorder(0.35) }}
-          icon={<Alert color={C.warn} />}
-          title="Not confirmed yet"
+          ring={{ fill: 'var(--accent-wash)', border: '1px solid transparent' }}
+          icon={<Clock size={18} color="var(--accent-ink)" />}
+          title="Sent, not yet confirmed"
           sub={view.message}
         />
         <TxRow txId={view.txId} onCopy={() => onCopyTx(view.txId)} />
@@ -410,47 +424,70 @@ export function VerbatimBox({ children }: { children: ReactNode }) {
 
 // ══ RECEIVE ═══════════════════════════════════════════════════════════════════
 
+/**
+ * Receive.
+ *
+ * ── THE QR AND THE CLIPBOARD CARRY THE FULL ADDRESS ─────────────────────────
+ *
+ * The address is shown TRUNCATED, because 100-odd characters of base58 is not something anyone
+ * reads and the design gives it one line. But truncation is a display concern and nothing else:
+ * `QRCodeSVG` encodes `address` and the copy button copies `address`, both in full. A scannable
+ * code or a clipboard holding an elided address would send funds nowhere recoverable, so the two
+ * are deliberately fed from the value rather than from the label.
+ *
+ * The plate stays WHITE in both themes. A QR needs a guaranteed light ground with dark modules to
+ * scan reliably, so this is one of the few places a literal is correct rather than lazy.
+ */
 export function ReceivePanel({ address, copied, onCopy }: { address: string | null; copied: boolean; onCopy: () => void }) {
+  const plate: React.CSSProperties = {
+    width: 172, height: 172, borderRadius: 'var(--r-lg)', margin: '0 auto',
+    display: 'flex', alignItems: 'center', justifyContent: 'center', boxSizing: 'border-box',
+  }
+
   if (!address) {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16 }}>
-        <div style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'center', width: 178, height: 178,
-          borderRadius: 'var(--r-lg)', background: C.raised, border: '1px dashed var(--border-strong)',
-        }}><Spinner size={30} ring={3} color={C.mutedDim} /></div>
-        <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5 }}>
-          <span style={{ fontSize: 14, fontWeight: 700, color: C.muted }}>Preparing your address</span>
-          <span style={{ fontSize: 13, color: C.faint }}>This happens here, on your device.</span>
-        </span>
-        <div style={{ width: '100%' }}><Button tone="disabled">Copy address</Button></div>
+      <div style={{ textAlign: 'center' }}>
+        <div style={{ ...plate, background: 'var(--surface-void)', border: '1px solid var(--border)' }}>
+          <Spinner size={22} ring={2.5} />
+        </div>
+        <div style={{ fontSize: 12.5, color: 'var(--text-muted-dim)', marginTop: 14 }}>Preparing your address</div>
+        <div style={{ fontSize: 12, color: 'var(--text-muted-dim)', marginTop: 4, opacity: 0.8 }}>
+          This happens here, on your device.
+        </div>
       </div>
     )
   }
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16 }}>
-      {/* The QR keeps LITERAL colours, not tokens. qrcode.react writes them into fill attributes
-          and a scanner needs a guaranteed light-on-dark contrast ratio; a var() that failed to
-          resolve would produce an unreadable code rather than an ugly one. */}
-      <div style={{ display: 'inline-flex', padding: 14, borderRadius: 'var(--r-lg)', background: '#FFFFFF' }}>
-        <QRCodeSVG value={address} size={150} bgColor="#FFFFFF" fgColor="#0A1322" level="M" />
+    <div style={{ textAlign: 'center' }}>
+      <div style={{ ...plate, background: '#FFFFFF', border: '1px solid var(--border)', padding: 12 }}>
+        <QRCodeSVG value={address} size={148} bgColor="#FFFFFF" fgColor="#0A1322" level="M" />
       </div>
-      <span style={{ fontSize: 13, color: C.mutedDim, textAlign: 'center', lineHeight: 1.5 }}>
-        Share this to receive private payments. Nobody can see the amounts.
+      <div
+        title={address}
+        style={{
+          fontFamily: MONO, fontSize: 11.5, color: 'var(--text-body-dim)',
+          marginTop: 14, lineHeight: 1.5, wordBreak: 'break-all',
+        }}
+      >{shortAddr(address)}</div>
+      <div style={{ fontSize: 12, color: 'var(--text-muted-dim)', marginTop: 8, lineHeight: 1.5 }}>
+        Share this to receive shielded payments. Nobody can see the amounts.
+      </div>
+      <span
+        role="button" tabIndex={0} onClick={onCopy} onKeyDown={e => e.key === 'Enter' && onCopy()}
+        style={{
+          display: 'inline-flex', alignItems: 'center', gap: 7, marginTop: 14,
+          padding: '9px 16px', borderRadius: 'var(--r-md)', fontSize: 12.5, fontWeight: 600,
+          border: '1px solid var(--border-strong)', color: C.primary,
+          cursor: 'pointer', userSelect: 'none',
+        }}
+      >
+        <Copy size={12} color="currentColor" />{copied ? 'Copied' : 'Copy address'}
       </span>
-      <div style={{
-        width: '100%', padding: '13px 15px', borderRadius: 'var(--r-md)', background: C.trough, border: '1px solid var(--border)',
-        fontFamily: MONO, fontSize: 12, color: C.bodyDim, lineHeight: 1.6, wordBreak: 'break-all',
-      }}>{address}</div>
-      <div style={{ width: '100%' }}>
-        <Button tone="primary" onClick={onCopy}>
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 9 }}>
-            <Copy color={C.inkOnTeal} />{copied ? 'Copied' : 'Copy address'}
-          </span>
-        </Button>
-      </div>
     </div>
   )
 }
+
 
 // ══ ONS — register a name ═════════════════════════════════════════════════════
 

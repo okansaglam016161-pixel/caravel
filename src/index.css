@@ -327,6 +327,11 @@ a:hover { color: var(--accent-200); }
 .cv-asset-row { transition: background 0.15s; }
 .cv-asset-row:hover { background: var(--surface-void); }
 
+/* Send / Receive on the vault. The vault is navy in both themes, so these hovers are fixed
+   treatments rather than theme tokens — see TotalHero. */
+.cv-vault-action { transition: filter 0.15s; }
+.cv-vault-action:hover { filter: brightness(1.12); }
+
 /* Chat composer + the per-message hover affordances (M3/M4, replies v1, reactions C). Shared by
    BOTH chat views — the DM thread in ChatApp and the group thread in GroupThread — which is exactly
    why they live here rather than in a <style> element inside one of them. They used to sit in

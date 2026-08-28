@@ -45,6 +45,29 @@ export const Alert = ({ size = 20, color }: I) => (
   </svg>
 )
 
+/** A clock — "still in progress", NOT "something is wrong". The unconfirmed send wears this
+ *  instead of the warning triangle, because a broadcast payment awaiting confirmation has not
+ *  failed and must not be dressed as though it had. */
+export const Clock = ({ size = 14, color }: I) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+    <circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 3" />
+  </svg>
+)
+
+/** Outbound — the Send affordance on the vault. */
+export const ArrowOut = ({ size = 15, color }: I) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+    <path d="M7 17L17 7" /><path d="M9 7h8v8" />
+  </svg>
+)
+
+/** Inbound — the Receive affordance on the vault. */
+export const ArrowIn = ({ size = 15, color }: I) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+    <path d="M17 7L7 17" /><path d="M15 17H7V9" />
+  </svg>
+)
+
 export const Copy = ({ size = 13, color }: I) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <rect x="9" y="9" width="13" height="13" rx="2" />

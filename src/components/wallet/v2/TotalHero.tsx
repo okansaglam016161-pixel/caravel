@@ -21,7 +21,7 @@
 // uses ordinary role tokens like everywhere else.
 
 import { C, MONO } from './tokens'
-import { Eye, Shield, Spinner } from './icons'
+import { ArrowIn, ArrowOut, Eye, Shield, Spinner } from './icons'
 import { MASK_SHORT, fmt6 } from './format'
 import { unreadableReasonText, type TotalView } from './total'
 import type { BalanceView } from './balances'
@@ -96,7 +96,7 @@ function BreakdownCard({ kind, balance, hidden }: {
   )
 }
 
-export function TotalHero({ total, privateBalance, publicBalance, hidden, onRetry }: {
+export function TotalHero({ total, privateBalance, publicBalance, hidden, onRetry, onSend, onReceive }: {
   total: TotalView
   /** The SHIELDED balance. The prop keeps the name of the state it is derived from. */
   privateBalance: BalanceView
@@ -105,6 +105,9 @@ export function TotalHero({ total, privateBalance, publicBalance, hidden, onRetr
   hidden: boolean
   /** Offered on `unreadable` — the one state where waiting will not fix it. */
   onRetry?: () => void
+  /** The two primary actions. Omitted where the hero is shown without them (the preview gallery). */
+  onSend?: () => void
+  onReceive?: () => void
 }) {
   const headline = () => {
     if (hidden) {
@@ -177,7 +180,36 @@ export function TotalHero({ total, privateBalance, publicBalance, hidden, onRetr
           The {unreadableSide} half could not be read, so the total is not shown.
         </div>
       )}
+
+      {/* The two primary actions live ON the vault, per the design. They stay enabled through every
+          balance state: a read that failed says nothing about whether a payment can be built, and
+          the send form does its own checking with far better reasons than this card could give. */}
+      {(onSend || onReceive) && (
+        <div style={{ display: 'flex', gap: 9, marginTop: 14 }}>
+          {onSend && <VaultAction tone="primary" icon={<ArrowOut color="currentColor" />} label="Send" onClick={onSend} />}
+          {onReceive && <VaultAction tone="quiet" icon={<ArrowIn color="currentColor" />} label="Receive" onClick={onReceive} />}
+        </div>
+      )}
     </div>
+  )
+}
+
+/** A button on the vault: accent for the primary action, the vault's own card colour for the rest. */
+function VaultAction({ tone, icon, label, onClick }: {
+  tone: 'primary' | 'quiet'; icon: React.ReactNode; label: string; onClick: () => void
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className="cv-vault-action"
+      style={{
+        flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+        padding: '10px 6px', borderRadius: 9, border: 'none', cursor: 'pointer',
+        fontFamily: 'inherit', fontSize: 13, fontWeight: 600,
+        background: tone === 'primary' ? 'var(--accent-400)' : 'var(--vault-card)',
+        color: '#FFFFFF',
+      }}
+    >{icon}{label}</button>
   )
 }
 

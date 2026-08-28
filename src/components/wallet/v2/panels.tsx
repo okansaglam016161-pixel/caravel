@@ -24,9 +24,27 @@ import { fmt6 } from './format'
 
 const XTR = (n: bigint) => `${fmt6(n)} XTR`
 
+/**
+ * A section heading, drawn OUTSIDE the card it introduces.
+ *
+ * V3 lifts these out of the cards they used to sit inside, and the reason is rhythm rather than
+ * taste: with the heading inside, every card began with a row of text that pushed its first real
+ * row down, so a page of three cards read as nine bands. Outside, the heading is the label and the
+ * card is the content, and the page has three things on it.
+ */
+export function SectionHead({ title, action }: { title: string; action?: ReactNode }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '0 6px', marginBottom: -4 }}>
+      <span style={{ flex: 1, fontSize: 15, fontWeight: 600, color: C.primary }}>{title}</span>
+      {action}
+    </div>
+  )
+}
+
 // ══ FAUCET ════════════════════════════════════════════════════════════════════
 
 export type FaucetPhase = 'idle' | 'locked' | 'claiming' | 'verifying' | 'done' | 'lagging' | 'error' | 'cooldown' | 'plenty'
+
 
 export interface FaucetPanelProps {
   phase: FaucetPhase
@@ -711,18 +729,19 @@ const STATUS: Record<ActivityStatus, {
   ink: string
   wash: string
   signed: boolean
+  settled: boolean
 }> = {
-  confirmed:   { label: 'Confirmed',   ink: 'var(--positive)',      wash: 'rgba(var(--positive-rgb),0.12)', signed: true },
-  received:    { label: 'Received',    ink: 'var(--positive)',      wash: 'rgba(var(--positive-rgb),0.12)', signed: true },
-  sent:        { label: 'Sent',        ink: 'var(--accent-ink)',    wash: 'var(--accent-wash)',             signed: true },
-  checking:    { label: 'Checking',    ink: 'var(--accent-ink)',    wash: 'var(--accent-wash)',             signed: false },
+  confirmed:   { label: 'Confirmed',   ink: 'var(--positive)',      wash: 'rgba(var(--positive-rgb),0.12)', signed: true,  settled: true },
+  received:    { label: 'Received',    ink: 'var(--positive)',      wash: 'rgba(var(--positive-rgb),0.12)', signed: true,  settled: true },
+  sent:        { label: 'Sent',        ink: 'var(--accent-ink)',    wash: 'var(--accent-wash)',             signed: true,  settled: true },
+  checking:    { label: 'Checking',    ink: 'var(--accent-ink)',    wash: 'var(--accent-wash)',             signed: false, settled: false },
   // AMBER, NOT RED, for both. Broadcast-and-undecided and waiting-to-settle are ordinary outcomes
   // on this network: nothing failed, and nothing needs re-sending.
-  unconfirmed: { label: 'Unconfirmed', ink: 'var(--warn)',          wash: 'rgba(var(--warn-rgb),0.12)',     signed: true },
-  pending:     { label: 'Pending',     ink: 'var(--warn)',          wash: 'rgba(var(--warn-rgb),0.12)',     signed: true },
-  failed:      { label: 'Failed',      ink: 'var(--danger-500)',    wash: 'rgba(var(--danger-rgb),0.12)',   signed: false },
-  spent:       { label: 'Spent',       ink: 'var(--text-muted-dim)', wash: 'var(--surface-void)',           signed: false },
-  unreadable:  { label: 'Unreadable',  ink: 'var(--text-muted-dim)', wash: 'var(--surface-void)',           signed: false },
+  unconfirmed: { label: 'Unconfirmed', ink: 'var(--warn)',          wash: 'rgba(var(--warn-rgb),0.12)',     signed: true,  settled: false },
+  pending:     { label: 'Pending',     ink: 'var(--warn)',          wash: 'rgba(var(--warn-rgb),0.12)',     signed: true,  settled: false },
+  failed:      { label: 'Failed',      ink: 'var(--danger-500)',    wash: 'rgba(var(--danger-rgb),0.12)',   signed: false, settled: false },
+  spent:       { label: 'Spent',       ink: 'var(--text-muted-dim)', wash: 'var(--surface-void)',           signed: false, settled: false },
+  unreadable:  { label: 'Unreadable',  ink: 'var(--text-muted-dim)', wash: 'var(--surface-void)',           signed: false, settled: false },
 }
 
 /**
@@ -809,10 +828,19 @@ export function ActivityRowShell({ row, hidden }: { row: ActivityRowView; hidden
           {row.note || (row.amountMicrotari === null && !hidden ? UNKNOWN_AMOUNT[row.status] : st.label)}
         </div>
       </div>
-      <span style={{
-        display: 'inline-flex', alignItems: 'center', padding: '3px 9px', borderRadius: 'var(--r-pill)',
-        background: st.wash, color: st.ink, fontSize: 10.5, fontWeight: 600, flexShrink: 0,
-      }}>{st.label}</span>
+      {/* THE PILL IS FOR EXCEPTIONS ONLY.
+          A settled send already says "Sent to otl_esm_1t…f4a2" on the title line, with an outward
+          arrow in its tile and a signed amount on the right. A "Sent" pill between them is the
+          fourth restatement of one fact, and when every row carries one the colour stops meaning
+          anything — which is a real cost, because the rows that DO need it (unconfirmed, failed,
+          still checking) are the ones a user is scanning for. So the ordinary outcomes drop it and
+          the exceptional ones keep it, and now it reads as a flag rather than a decoration. */}
+      {!st.settled && (
+        <span style={{
+          display: 'inline-flex', alignItems: 'center', padding: '3px 9px', borderRadius: 'var(--r-pill)',
+          background: st.wash, color: st.ink, fontSize: 10.5, fontWeight: 600, flexShrink: 0,
+        }}>{st.label}</span>
+      )}
       <span style={{
         fontFamily: MONO, fontSize: 12.5, fontWeight: 500, textAlign: 'right',
         flexShrink: 0, minWidth: 104, color: amountColor,
@@ -854,23 +882,25 @@ export function RecentActivity({ rows, onViewAll }: {
 }) {
   const shown = rows.slice(0, 3)
   return (
-    <div style={{
-      background: 'var(--surface)', border: '1px solid var(--border)',
-      borderRadius: 'var(--r-lg)', padding: 6, boxShadow: 'var(--e1)',
-    }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px 8px' }}>
-        <span style={{ flex: 1, fontSize: 13.5, fontWeight: 600, color: C.primary }}>Recent activity</span>
-        {/* Only offered when there is more than the page is showing — a "Show all" over three rows
-            of three would be a control that changes nothing. */}
-        {rows.length > shown.length && (
+    <>
+      <SectionHead
+        title="Recent activity"
+        // Only offered when there is more than the page is showing — a "Show all" over three rows
+        // of three would be a control that changes nothing.
+        action={rows.length > shown.length && (
           <span role="button" tabIndex={0} onClick={onViewAll} onKeyDown={e => e.key === 'Enter' && onViewAll()}
-            style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--accent-ink)', cursor: 'pointer', userSelect: 'none', flexShrink: 0 }}>
+            style={{ fontSize: 13, fontWeight: 500, color: 'var(--accent-ink)', cursor: 'pointer', userSelect: 'none', flexShrink: 0 }}>
             Show all
           </span>
         )}
+      />
+      <div style={{
+        background: 'var(--surface)', border: '1px solid var(--border)',
+        borderRadius: 14, padding: 5, boxShadow: 'var(--e1)',
+      }}>
+        {shown.length === 0 ? <ActivityEmpty compact /> : shown}
       </div>
-      {shown.length === 0 ? <ActivityEmpty compact /> : shown}
-    </div>
+    </>
   )
 }
 

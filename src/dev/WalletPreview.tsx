@@ -15,7 +15,7 @@
 
 import { useState } from 'react'
 import WalletModalV2, { WALLET_TABS, type MoveView, type WalletModalV2Props, type WalletTab } from '../components/wallet/v2/WalletModalV2'
-import { ActivityRowShell, NameCard, type ActivityRowView, type FaucetPhase, type OnsStatus, type SendView } from '../components/wallet/v2/panels'
+import { ActivityRowShell, FaucetPanel, NameCard, OnsPanel, type ActivityRowView, type FaucetPhase, type OnsStatus, type SendView } from '../components/wallet/v2/panels'
 import type { BalanceView } from '../components/wallet/v2/balances'
 import { computeTotal } from '../components/wallet/v2/total'
 import type { Dir, EntryProps } from '../components/wallet/v2/move'
@@ -245,25 +245,31 @@ function Drive() {
     activity: emptyActivity ? undefined : ACTIVITY.map(r => <ActivityRowShell key={r.id} row={r} hidden={hidden} />),
 
     tab, onTab: setTab,
-    faucet: {
-      phase: faucet, received: 1_000_000_000n, balance: privV,
-      onClaim: () => {
-        setFaucet('claiming')
-        setTimeout(() => setFaucet('verifying'), 1400)
-        setTimeout(() => setFaucet('done'), 3200)
-      },
-      onRefresh: () => setFaucet('done'),
-    },
-    ons: {
-      status: ons, name: onsName || 'yourname', feeMicrotari: ONS_FEE, txId: TXID,
-      policyError: /[^a-z0-9_]/.test(onsName) ? 'Letters, numbers and underscores only.' : undefined,
-      onName: v => { setOnsName(v.toLowerCase()); setOns('idle') },
-      onCheck: () => { setOns('checking'); setTimeout(() => setOns(onsName === 'taken' ? 'taken' : 'available'), 1200) },
-      onRegister: () => { setOns('estimating'); setTimeout(() => setOns('confirm'), 1200) },
-      onConfirm: () => { setOns('registering'); setTimeout(() => setOns('done'), 1600) },
-      onReset: () => setOns('idle'),
-      onCopyTx: t => navigator.clipboard?.writeText(t).catch(() => {}),
-    },
+    overviewExtras: (
+      <>
+      <FaucetPanel
+        phase={faucet}
+        received={1_000_000_000n}
+        balance={privV}
+        onClaim={() => {
+          setFaucet('claiming')
+          setTimeout(() => setFaucet('verifying'), 1400)
+          setTimeout(() => setFaucet('done'), 3200)
+        }}
+        onRefresh={() => setFaucet('done')}
+      />
+      <OnsPanel
+        status={ons} name={onsName || 'yourname'} feeMicrotari={ONS_FEE} txId={TXID}
+        policyError={/[^a-z0-9_]/.test(onsName) ? 'Letters, numbers and underscores only.' : undefined}
+        onName={(v: string) => { setOnsName(v.toLowerCase()); setOns('idle') }}
+        onCheck={() => { setOns('checking'); setTimeout(() => setOns(onsName === 'taken' ? 'taken' : 'available'), 1200) }}
+        onRegister={() => { setOns('estimating'); setTimeout(() => setOns('confirm'), 1200) }}
+        onConfirm={() => { setOns('registering'); setTimeout(() => setOns('done'), 1600) }}
+        onReset={() => setOns('idle')}
+        onCopyTx={(t: string) => { navigator.clipboard?.writeText(t).catch(() => {}) }}
+      />
+      </>
+    ),
     receive: {
       address: addrReady ? ADDRESS : null, copied,
       onCopy: () => { setCopied(true); setTimeout(() => setCopied(false), 1800) },
@@ -406,8 +412,6 @@ function still(over: Partial<WalletModalV2Props>): WalletModalV2Props {
     onAmountChange: noop, onMax: noop, onReview: noop, onConfirm: noop,
     onDone: noop, onRetryMove: noop, onCopyTx: noop, onRetryBalance: noop,
     tab: 'overview', onTab: noop,
-    faucet: { phase: 'idle', onClaim: noop, onRefresh: noop },
-    ons: { status: 'idle', name: '', onName: noop, onCheck: noop, onRegister: noop, onConfirm: noop, onReset: noop, onCopyTx: noop },
     receive: { address: ADDRESS, copied: false, onCopy: noop },
     activity: ACTIVITY.map(r => <ActivityRowShell key={r.id} row={r} hidden={false} />),
     scanSummary: { status: 'done', scanned: 1247, owned: 6, progressScanned: 1247 },
@@ -423,10 +427,12 @@ function still(over: Partial<WalletModalV2Props>): WalletModalV2Props {
 }
 
 /** Shorthands so the gallery entries below stay one line each. */
-const faucetAt = (phase: FaucetPhase, extra: Record<string, unknown> = {}) =>
-  ({ faucet: { phase, received: 1_000_000_000n, balance: 250_000_000n, onClaim: noop, onRefresh: noop, ...extra } })
-const onsAt = (status: OnsStatus, name = 'okan') =>
-  ({ ons: { status, name, feeMicrotari: ONS_FEE, txId: TXID, onName: noop, onCheck: noop, onRegister: noop, onConfirm: noop, onReset: noop, onCopyTx: noop } })
+// The faucet and ONS are rendered NODES now rather than data props — the wallet stopped describing
+// them and started taking them pre-built, so the gallery builds them the same way the app does.
+const faucetAt = (phase: FaucetPhase): Partial<WalletModalV2Props> =>
+  ({ overviewExtras: <FaucetPanel phase={phase} received={1_000_000_000n} balance={250_000_000n} onClaim={noop} onRefresh={noop} /> })
+const onsAt = (status: OnsStatus, name = 'okan'): Partial<WalletModalV2Props> =>
+  ({ overviewExtras: <OnsPanel status={status} name={name} feeMicrotari={ONS_FEE} txId={TXID} onName={noop} onCheck={noop} onRegister={noop} onConfirm={noop} onReset={noop} onCopyTx={noop} /> })
 const sendAt = (view: SendView) =>
   ({ tab: 'send' as WalletTab, send: { view, hidden: false, onSource: noop, onRecipient: noop, onAmount: noop, onNote: noop, onMax: noop, onReview: noop, onBack: noop, onConfirm: noop, onDone: noop, onRetry: noop, onCopyTx: noop, onViewActivity: noop } })
 
@@ -475,9 +481,9 @@ function Gallery() {
     { label: 'ASSET · BALANCES HIDDEN', props: still({ assetOpen: true, hidden: true, onCloseAsset: noop, onOpenAsset: noop }) },
 
     // ── The @name entry card. The overview slot the app shows before the flow is opened. ──
-    { label: 'NAME CARD · UNCLAIMED', props: still({ ons: undefined, overviewExtras: <NameCard claimedName={null} onClaim={noop} /> }) },
-    { label: 'NAME CARD · CLAIMED', props: still({ ons: undefined, overviewExtras: <NameCard claimedName="okz61" onClaim={noop} /> }) },
-    { label: 'NAME CARD · LOOKING UP', props: still({ ons: undefined, overviewExtras: <NameCard claimedName={null} loading onClaim={noop} /> }) },
+    { label: 'NAME CARD · UNCLAIMED', props: still({ overviewExtras: <NameCard claimedName={null} onClaim={noop} /> }) },
+    { label: 'NAME CARD · CLAIMED', props: still({ overviewExtras: <NameCard claimedName="okz61" onClaim={noop} /> }) },
+    { label: 'NAME CARD · LOOKING UP', props: still({ overviewExtras: <NameCard claimedName={null} loading onClaim={noop} /> }) },
 
     // ── Name (ONS) ──
     { label: 'NAME · IDLE', props: still(onsAt('idle', '')) },

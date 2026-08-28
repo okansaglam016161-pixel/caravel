@@ -8,7 +8,7 @@
 //   total has to apply all of them.
 //
 //   Two surfaces did, by hand: the wallet modal's hero and the chat sidebar's balance pill, which
-//   held its own transcription of the same six inputs. Now the service nav needs it too, and three
+//   held its own transcription of the same six inputs. A second summary surface needed it, and three
 //   hand-kept copies is where they start to drift. This is that derivation, once.
 //
 //   ── ONE DELIBERATE DIFFERENCE FROM THE MODAL'S HERO ──────────────────────────
@@ -29,7 +29,12 @@ import { useWallet } from '../context/WalletContext'
 import { computeTotal, type TotalView } from '../components/wallet/v2/total'
 
 /**
- * The combined balance for a SUMMARY surface — the service nav, the chat sidebar pill.
+ * The combined balance for a SUMMARY surface — today, the chat sidebar pill.
+ *
+ * The service rail was the other caller until V3 dropped its balance card (see ServiceNav for why).
+ * This stays shared rather than folding back into chat: the point of the hook is that a summary
+ * figure anywhere in the app derives from the same precedence as the wallet's own hero, and the
+ * next summary surface should not have to rediscover that.
  *
  * Reads the shared wallet state; starts no scan and owns no state of its own, so any number of
  * callers cost nothing beyond a re-render they were already getting from the context.

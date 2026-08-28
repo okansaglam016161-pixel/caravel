@@ -1,12 +1,24 @@
 //   The service rail — the app's permanent left edge.
 //
-//   Built to the wallet design's "01 SHELL & OVERVIEW" nav: the lockup, a persistent balance
-//   summary, one row per service, and the identity footer. It sits on navy in both themes, which is
-//   the foundation's rule for nav and the balance hero ("the balance hero and nav live on 900-950").
+//   Built to the wallet design's nav: the lockup, one row per service, and the identity footer. It
+//   sits on navy in both themes, which is the foundation's rule for nav and the balance hero ("the
+//   balance hero and nav live on 900-950").
 //
-//   THE BALANCE HERE IS THE REAL ONE. It reads the same wallet state and the same computeTotal
-//   precedence as everything else via useWalletTotal, so it cannot disagree with the wallet it sits
-//   beside — including refusing to show a figure while a transaction is settling.
+//   ── THE BALANCE CARD IS GONE ─────────────────────────────────────────────────
+//
+//   The rail used to carry a "Total balance" card under the lockup. V3 drops it, and the reason is
+//   not just that the design omits it: the wallet page's whole point is now one centred figure at
+//   52px, and a second copy of that same number 200px to its left is the screen saying the most
+//   important thing twice, in two type sizes, where the smaller one looks like a different fact.
+//
+//   IT COST SOMETHING REAL TO KEEP. The card had to reproduce the hero's entire honesty ladder —
+//   settling shows no figure, unreadable shows a dash, hidden shows dots — because a rail that
+//   disagreed with the wallet beside it would be worse than no rail at all. That was a second
+//   render path over the same unions, kept in step by hand.
+//
+//   WHERE IT SHOULD COME BACK, IF IT DOES: on a service OTHER than the wallet, where the balance is
+//   genuinely out of sight. Chat is the case that would justify it. Restoring it unconditionally is
+//   what this pass removed.
 //
 //   AN ALWAYS-DARK ISLAND, like the vault hero. The rail carries data-theme="dark" so its contents
 //   resolve the dark ramp whatever the page around it is, which is what lets it use ordinary role
@@ -14,10 +26,6 @@
 //   foundation keeps the nav on navy in both themes.
 
 import { useWallet } from '../../context/WalletContext'
-import { useWalletTotal } from '../../hooks/useWalletTotal'
-import { fiatForTotal } from '../wallet/v2/fiat'
-import { totalPillValue } from '../wallet/v2/TotalHero'
-import { unreadableReasonText } from '../wallet/v2/total'
 
 const SERVICES = ['wallet', 'chat', 'name'] as const
 
@@ -54,16 +62,15 @@ export default function ServiceNav({ service, onSelect, onProfile }: {
   onSelect: (s: Service) => void
   onProfile: () => void
 }) {
-  const { nostrNpub, balanceHidden } = useWallet()
-  const total = useWalletTotal()
+  const { nostrNpub } = useWallet()
 
   return (
     <nav data-theme="dark" style={{
-      width: 224, flexShrink: 0, background: 'var(--nav-ground)', borderRight: '1px solid var(--border)',
+      width: 210, flexShrink: 0, background: 'var(--nav-ground)', borderRight: '1px solid var(--border)',
       padding: '18px 14px', display: 'flex', flexDirection: 'column', gap: 4,
     }}>
       {/* Lockup */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 10px 18px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 10px 22px' }}>
         <span style={{
           width: 30, height: 30, borderRadius: 9, background: 'var(--accent-400)',
           display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
@@ -71,24 +78,6 @@ export default function ServiceNav({ service, onSelect, onProfile }: {
           <img src="/logo-light.png" alt="" aria-hidden="true" style={{ height: 16, width: 'auto', display: 'block' }} />
         </span>
         <span style={{ fontSize: 16, fontWeight: 600, color: 'var(--text-bright)' }}>Caravel</span>
-      </div>
-
-      {/* Persistent balance. Muted whenever the figure is not a fact, so the rail never looks like
-          it is reporting a balance the wallet itself is refusing to vouch for. */}
-      <div
-        title={total.status === 'unreadable' ? unreadableReasonText(total.reason) : undefined}
-        style={{ background: 'var(--vault-card)', borderRadius: 11, padding: '12px 14px', marginBottom: 12 }}
-      >
-        <div style={{ fontSize: 11, fontWeight: 500, color: 'var(--vault-label)' }}>Total balance</div>
-        {/* Dollars, matching the hero. A rail reading XTR beside a hero reading dollars would be
-            the same balance disagreeing with itself. When there is no figure this falls through to
-            totalPillValue's `···` / `—` — the state, never a priced guess. */}
-        <div style={{
-          fontSize: 17, fontWeight: 600, fontFeatureSettings: "'tnum'", marginTop: 3,
-          color: balanceHidden || total.status === 'ready' ? 'var(--text-bright)' : 'var(--vault-label)',
-        }}>
-          {balanceHidden ? totalPillValue(total, balanceHidden) : fiatForTotal(total) ?? totalPillValue(total, balanceHidden)}
-        </div>
       </div>
 
       {/* Services */}

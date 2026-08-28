@@ -10,8 +10,13 @@
 //   `size` exists so it can sit at 36 in the landing's top bar and at 30 beside the wallet's
 //   hide-balance eye without either row looking mismatched. Same component, same icons, same
 //   behaviour; only the box it fills differs.
+//
+//   THE BOX ITSELF IS SHARED — see primitives/iconBox. The wallet header sets two more controls
+//   beside this one, and the row only reads as one control repeated if all three take their
+//   geometry from the same place.
 
 import { useTheme } from '../../hooks/useTheme'
+import { iconBoxStyle } from './iconBox'
 
 const Sun = ({ px }: { px: number }) => (
   <svg width={px} height={px} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" style={{ flexShrink: 0 }}>
@@ -37,11 +42,7 @@ export default function ThemeToggle({ size = 36 }: { size?: number }) {
       aria-label={label}
       title={label}
       className="cv-icon-btn"
-      style={{
-        cursor: 'pointer', width: size, height: size, borderRadius: 'var(--r-md)',
-        border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text-body-dim)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, padding: 0,
-      }}
+      style={iconBoxStyle(size)}
     >{dark ? <Sun px={Math.round(size * 0.44)} /> : <Moon px={Math.round(size * 0.44)} />}</button>
   )
 }

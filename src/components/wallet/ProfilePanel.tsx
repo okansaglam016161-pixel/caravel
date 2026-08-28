@@ -1,6 +1,10 @@
-//   ProfilePanel — account / identity actions, opened from the chat sidebar's profile button.
+//   ProfilePanel — account / identity actions, opened from the service rail's profile row.
 //   Same modal chrome as WalletModal (dimmed backdrop, Esc to close). Three sections:
-//     1. Copy your npub — the user's own npub (truncated, mono) via the CopyBtn chip primitive.
+//     1. Your identity — the Tari ADDRESS and the npub, as two labelled rows.
+//        The address is new in V3, and it closes a real gap: this panel is reached from the row
+//        showing who you are, and it could tell you how to be messaged but not how to be PAID.
+//        The address was only obtainable from the wallet's Receive sheet.
+//        Both are truncated for display and copy in full — see IdRow.
 //     2. Show recovery phrase — RELOCATED verbatim from WalletModal Settings: password gate
 //        (getMnemonic) → 24-word reveal. The password gate is preserved intact (security).
 //     3. Lock wallet — RELOCATED verbatim: lock() then close.
@@ -17,9 +21,50 @@ const eyeOpen = (c: string) => (<svg width="14" height="14" viewBox="0 0 24 24" 
 const eyeOff = (c: string) => (<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" /><circle cx="12" cy="12" r="3" /><path d="M4 4l16 16" /></svg>)
 const copyIcon = (c = 'var(--accent-400)') => (<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>)
 
-// Truncate the bech32 npub for display; the full value is what CopyBtn copies.
-function truncNpub(npub: string): string {
-  return npub.length > 24 ? `${npub.slice(0, 12)}…${npub.slice(-8)}` : npub
+/**
+ * One identity row: a fixed-width label, the value, and a copy control.
+ *
+ * IT COPIES THE FULL VALUE, ALWAYS. What is drawn is a middle-truncated preview so the row fits;
+ * `value` is what reaches the clipboard. A partially-copied Tari address is an unrecoverable
+ * payment, so the two are kept deliberately separate — nothing here formats what it copies.
+ *
+ * Its own copy state rather than CopyBtn's: CopyBtn renders a pill or a text button, and V3 draws
+ * this as a bordered row with a bare icon at its end. The behaviour is the same 1800ms
+ * acknowledgement.
+ */
+function IdRow({ label, value, missing }: { label: string; value: string | null; missing: string }) {
+  const [copied, setCopied] = useState(false)
+
+  function copy() {
+    if (!value) return
+    void navigator.clipboard?.writeText(value)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1800)
+  }
+
+  const shown = value ? (value.length > 30 ? `${value.slice(0, 14)}…${value.slice(-10)}` : value) : missing
+
+  return (
+    <div
+      onClick={value ? copy : undefined}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 10,
+        padding: '11px 13px', borderRadius: 10, marginBottom: 8,
+        background: 'var(--surface-void)', border: '1px solid var(--border)',
+        cursor: value ? 'pointer' : 'default',
+      }}
+    >
+      <span style={{ width: 42, flexShrink: 0, fontSize: 11.5, fontWeight: 600, color: 'var(--text-faint-dim)' }}>{label}</span>
+      <span style={{
+        flex: 1, minWidth: 0, fontFamily: MONO, fontSize: 12,
+        color: value ? 'var(--text-body)' : 'var(--text-faint)',
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+      }}>{copied ? 'Copied' : shown}</span>
+      {value && (copied
+        ? <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--accent-400)" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><path d="M20 6L9 17l-5-5" /></svg>
+        : <span style={{ flexShrink: 0, display: 'flex' }}>{copyIcon()}</span>)}
+    </div>
+  )
 }
 
 type Step = 'main' | 'phraseAuth' | 'phraseWords'
@@ -30,7 +75,7 @@ type NamesState =
   | { kind: 'error'; msg: string }
 
 export default function ProfilePanel({ onClose, avatar }: { onClose: () => void; avatar: { grad: string; color: string } }) {
-  const { nostrNpub, getMnemonic, lock, wallet } = useWallet()
+  const { nostrNpub, getMnemonic, lock, wallet, address } = useWallet()
   const [step, setStep] = useState<Step>('main')
   const [phrasePass, setPhrasePass] = useState('')
   const [showPhrasePass, setShowPhrasePass] = useState(false)
@@ -118,17 +163,19 @@ export default function ProfilePanel({ onClose, avatar }: { onClose: () => void;
           {/* ═══ MAIN ═══ */}
           {step === 'main' && (
             <>
-              {/* 1 · Copy your npub */}
-              <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.14em', color: 'var(--text-faint-dim)', marginBottom: 12 }}>YOUR NPUB</div>
+              {/* 1 · Your identity — the two things other people need from you. */}
+              <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.14em', color: 'var(--text-faint-dim)', marginBottom: 12 }}>YOUR IDENTITY</div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 13, marginBottom: 12 }}>
                 <div style={{ width: 48, height: 48, borderRadius: 14, background: avatar.grad, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
                   <svg width={22} height={22} viewBox="0 0 24 24" fill="none" stroke={avatar.color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg>
                 </div>
-                <div style={{ fontSize: 13, color: 'var(--text-muted-dim)', lineHeight: 1.5 }}>Your public address on Caravel. Share it so others can start a conversation with you.</div>
+                <div style={{ fontSize: 13, color: 'var(--text-muted-dim)', lineHeight: 1.5 }}>Your address receives payments. Your npub is how people start a conversation with you.</div>
               </div>
-              {nostrNpub
-                ? <CopyBtn value={nostrNpub} label={truncNpub(nostrNpub)} mono />
-                : <span style={{ fontFamily: MONO, fontSize: 12, color: 'var(--text-faint)' }}>npub unavailable</span>}
+              {/* The address comes from the same context field the Receive sheet shows, so the two
+                  cannot disagree. It is null until the account is resolved after unlock — said as
+                  "resolving", never as an empty row the user might copy. */}
+              <IdRow label="Address" value={address} missing="Resolving your account…" />
+              <IdRow label="npub" value={nostrNpub} missing="npub unavailable" />
 
               <div style={{ height: 1, background: 'var(--border)', margin: '18px 0 12px' }} />
 

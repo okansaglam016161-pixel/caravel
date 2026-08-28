@@ -18,23 +18,24 @@
 
 import type { ReactNode } from 'react'
 import ThemeToggle from '../../primitives/ThemeToggle'
-import { C, tealBorder, tealFill } from './tokens'
-import { Alert, Check, Eye, EyeOff, Spinner } from './icons'
+import { C } from './tokens'
+import { Alert, Check, Eye, EyeOff, Refresh, Spinner } from './icons'
 import {
-  Body, Button, DetailCard, DetailRow, FeeRow, ModalShell, RootHeader, ScanStrip, SettleBar,
-  Sheet, TxRow, iconBtn, type Chrome, type ScanSummary,
+  Body, Button, DetailCard, DetailRow, FeeRow, HeaderIcon, ModalShell, RootHeader, ScanLine,
+  SettleBar, Sheet, TxRow, type Chrome, type ScanSummary,
 } from './primitives'
 import {
-  ActivityPanel, FaucetPanel, OnsPanel, ReceivePanel, RecentActivity, SendPanel, VerbatimBox,
-  type FaucetPanelProps, type OnsPanelProps, type SendPanelProps,
+  ActivityPanel, ReceivePanel, RecentActivity, SectionHead, SendPanel, VerbatimBox,
+  type SendPanelProps,
 } from './panels'
 import { AssetDetail } from './AssetDetail'
 import { AssetsPanel } from './assets'
+import { PrivacyCard } from './PrivacyCard'
 import type { BalanceView } from './balances'
 import { TotalHero } from './TotalHero'
 import type { TotalView } from './total'
 import {
-  AmountCard, DIR, InFlightBanner, MoveList,
+  AmountCard, DIR, InFlightBanner,
   type Dir, type EntryProps,
 } from './move'
 import { fmt6 } from './format'
@@ -146,14 +147,16 @@ export interface WalletModalV2Props {
   tab?: WalletTab
   onTab?: (t: WalletTab) => void
   /**
-   * Faucet and name panels as DATA — used by the preview harness, which has no real logic behind
-   * them. The app passes `overviewExtras` instead: those two panels own their own state machines
-   * (claim, cooldown, the settle loop; check/estimate/register) and reskinning them meant keeping
-   * that logic where it lives rather than lifting it up here.
+   * Rendered at the foot of Overview — the app's own stateful cards.
+   *
+   * NODES, NOT DATA. The faucet owns a claim/cooldown/settle machine, so it is passed
+   * already-rendered rather than described here. The `faucet` and `ons` DATA props that used to
+   * duplicate this slot are gone: the app passed `faucet={undefined}`, and they were dead render
+   * branches. The preview harness drives this slot the same way the app does.
+   *
+   * The @name card left the overview in V3 and lives on the Name page, so today this holds the
+   * faucet alone.
    */
-  faucet?: FaucetPanelProps
-  ons?: OnsPanelProps
-  /** Rendered at the foot of Overview — the app's own stateful panels. */
   overviewExtras?: ReactNode
   send?: SendPanelProps
   receive?: { address: string | null; copied: boolean; onCopy: () => void }
@@ -202,21 +205,30 @@ export default function WalletModalV2(p: WalletModalV2Props) {
 
   const root = (
       <ModalShell chrome={p.chrome}>
+        {/* ── THE TOP-RIGHT CLUSTER ──
+            The network chip, then three boxed controls sharing one geometry (primitives/iconBox):
+            hide-balance, refresh, theme. They belong together because they are the same kind of
+            thing — none of them moves money, all of them change what you are looking at. Refresh
+            joined them when the scan card was demoted to a line. */}
         <RootHeader chip={p.networkChip} chrome={p.chrome} right={<>
-          <span role="button" tabIndex={0} onClick={p.onToggleHidden} onKeyDown={e => e.key === 'Enter' && p.onToggleHidden()}
-            aria-label={p.hidden ? 'Show balances' : 'Hide balances'}
-            style={p.hidden
-              ? { ...iconBtn, background: tealFill(0.1), border: tealBorder(0.35) }
-              : { ...iconBtn, background: 'transparent', border: 'none', width: 24 }}>
-            {p.hidden ? <EyeOff color={C.teal} /> : <Eye size={17} color={C.tealDim} />}
-          </span>
-          {/* Theme, beside the hide-balance eye — the two view controls the wallet has, together.
-              The SAME component the landing page's top bar uses, sized to match the eye.
+          <HeaderIcon
+            label={p.hidden ? 'Show balances' : 'Hide balances'}
+            onClick={p.onToggleHidden}
+            // The only departure from the shared box: the EMBLEM takes the accent while balances
+            // are masked. The box stays identical so the row still reads as one control repeated,
+            // but a hidden balance is a state worth seeing from across the screen.
+            tint={p.hidden ? 'var(--accent-400)' : undefined}
+          >{p.hidden ? <EyeOff size={15} color="currentColor" /> : <Eye size={15} color="currentColor" />}</HeaderIcon>
+          <HeaderIcon label="Refresh balances" onClick={p.onRefresh} busy={p.refreshing}>
+            <Refresh color="currentColor" />
+          </HeaderIcon>
+          {/* Theme, beside the eye — the two view controls the wallet has, together. The SAME
+              component the landing page's top bar uses, sized to match.
               PAGE ONLY: the in-chat wallet sits inside a subtree pinned dark until chat is
               reskinned, so a toggle there would change the app theme while the screen holding it
               stayed dark — a control that visibly does nothing. */}
           {p.chrome === 'page' && <ThemeToggle size={30} />}
-          {p.onClose && <span role="button" tabIndex={0} onClick={p.onClose} onKeyDown={e => e.key === 'Enter' && p.onClose!()} style={iconBtn} aria-label="Close">✕</span>}
+          {p.onClose && <HeaderIcon label="Close" onClick={p.onClose}>✕</HeaderIcon>}
         </>} />
         <Body gap={14} chrome={p.chrome}>
           {showAsset ? (
@@ -238,26 +250,24 @@ export default function WalletModalV2(p: WalletModalV2Props) {
               onSend={p.send && p.onTab ? () => p.onTab!('send') : undefined}
               onReceive={p.receive && p.onTab ? () => p.onTab!('receive') : undefined}
             />
-            {/* The strip acknowledges a Refresh press and carries the literal scan figures. It sits
-                UNDER the hero now rather than as a band beneath the header: it describes the read
-                that produced the numbers above it, and reads as a caption to them. */}
-            {p.scanSummary && <ScanStrip scan={p.scanSummary} refreshing={p.refreshing} onRefresh={p.onRefresh} />}
-            {/* The portfolio. One real asset today — see assets.tsx for why that is a presentation
-                and not a model. `onOpenAsset` is unset until the detail page exists, which is what
-                keeps the row from advertising a destination it cannot reach. */}
-            <MoveList entries={p.entries} lockedText={p.lockedText} lockedIsFlight={p.lockedIsFlight} />
-            <AssetsPanel
+            {/* The literal scan figures, as a caption to the number above them. The Refresh press
+                is acknowledged by the header icon, which spins — see ScanLine. */}
+            {p.scanSummary && <ScanLine scan={p.scanSummary} refreshing={p.refreshing} />}
+            {/* The composition, and the two controls that change it. This card also inherits the
+                hero's old breakdown duty — when the total cannot be shown, it is the only thing on
+                screen saying which half is the reason. See PrivacyCard. */}
+            <PrivacyCard
               privateBalance={p.privateBalance} publicBalance={p.publicBalance}
-              total={p.total} hidden={p.hidden} onOpen={p.onOpenAsset}
+              total={p.total} hidden={p.hidden}
+              entries={p.entries} lockedText={p.lockedText} lockedIsFlight={p.lockedIsFlight}
             />
+            {/* The portfolio. One real asset today — see assets.tsx for why that is a presentation
+                and not a model. */}
+            <SectionHead title="Assets" />
+            <AssetsPanel total={p.total} hidden={p.hidden} onOpen={p.onOpenAsset} />
             {p.activity && p.onTab && (
               <RecentActivity rows={p.activity} onViewAll={() => p.onTab!('activity')} />
             )}
-            {p.faucet && <FaucetPanel {...p.faucet} />}
-            {p.ons && <OnsPanel {...p.ons} />}
-            {/* Faucet and name, side by side where there is room. `auto-fit` + a 280 floor does
-                that without a media query, and collapses to one column in the 480 modal and on a
-                narrow window — the same rule serves both surfaces. */}
             {p.overviewExtras && (
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 12, alignItems: 'start' }}>
                 {p.overviewExtras}

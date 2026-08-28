@@ -29,7 +29,6 @@ import { useWallet } from '../../context/WalletContext'
 import { MIN_CONCEAL_MICROTARI, prepareConceal, type PreparedConceal } from '../../crypto/conceal'
 import { MIN_REVEAL_MICROTARI, maxRevealable, prepareReveal, type PreparedReveal } from '../../crypto/reveal'
 import { loadAccountAddress } from '../../crypto/accountStore'
-import OnsRegisterPanel from './OnsRegisterPanel'
 import FaucetClaimPanel from './FaucetClaimPanel'
 import { sendConfidential, tariToMicrotari, maxStealthSend, MAX_FEE, type SendOutcome } from '../../crypto/confidentialSend'
 import {
@@ -891,8 +890,10 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
       assetOpen={assetOpen}
       onOpenAsset={() => setAssetOpen(true)}
       onCloseAsset={() => setAssetOpen(false)}
-      faucet={undefined}
-      overviewExtras={<><FaucetClaimPanel /><OnsRegisterPanel /></>}
+      // The faucet is a quiet card in the extras slot. The @name card left the overview entirely —
+      // ONS lives on the Name page, which is where OnsRegisterPanel is mounted and where its state
+      // machine is untouched.
+      overviewExtras={<FaucetClaimPanel />}
       send={{
         view: sendView, hidden: balanceHidden,
         onSource: s => { setSendSource(s); setSendExact(null); setSendValidationError('') },

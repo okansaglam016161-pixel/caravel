@@ -1,105 +1,55 @@
-// The combined balance — the vault.
+// The combined balance — the vault, and the wallet's single loudest thing.
 //
-// THE HIERARCHY THIS ESTABLISHES. The total is the hero; shielded and unshielded become the
-// breakdown beneath it. The first question is "how much do I have", and the second is "how much of
-// it is visible".
+// ── WHAT LEFT THIS FILE, AND WHY IT IS SAFE ──────────────────────────────────
 //
-// WHAT THE BREAKDOWN IS FOR, beyond detail. When the total cannot be shown, the two cards below are
-// the ONLY thing telling the user which half is the problem. A missing total with no breakdown is a
-// dead end; one above "shielded 348.86 / unshielded unavailable" is diagnosable at a glance. So the
-// breakdown renders in EVERY state, including the ones where the total cannot.
+// It used to carry a two-card breakdown beneath the figure, and that breakdown had a real job: when
+// the total could not be shown, it was the ONLY thing telling the user which half was the problem.
+// A missing total with no breakdown is a dead end.
+//
+// THAT JOB DID NOT DISAPPEAR — IT MOVED to the Privacy card, which sits directly below this one,
+// always renders, and reports each side's status independently. The guarantee is unchanged; the
+// place that keeps it is one card lower. Do not remove the Privacy card without putting the
+// breakdown back here first.
+//
+// What the hero gains for it is what V3 is after: one number, centred, with nothing competing.
 //
 // ── WHY THIS IS AN ALWAYS-DARK ISLAND ────────────────────────────────────────
 //
-// The foundation keeps the balance hero and the nav on navy 900–950 in BOTH themes. So this card
+// The foundation keeps the balance hero and the nav on navy 900-950 in BOTH themes. So this card
 // carries data-theme="dark" and its contents resolve the dark ramp regardless of the page around
-// it — white stays legible, the hairline stays navy, and the amber "Unavailable" pill stays the
-// light amber that reads on navy rather than the dark ochre that reads on white.
+// it — white stays legible and the hairline stays navy.
 //
 // That is why nothing in here is a literal. Hardcoding the dark values would render identically
 // today and rot silently the moment a token moves; the island declares its context once and then
 // uses ordinary role tokens like everywhere else.
 
 import { C, MONO } from './tokens'
-import { ArrowIn, ArrowOut, Eye, Shield, Spinner } from './icons'
-import { fiatForBalance, fiatForTotal } from './fiat'
+import { Receive, Send, Shield, Spinner } from './icons'
+import { fiatForTotal } from './fiat'
 import { MASK_SHORT, fmt6 } from './format'
 import { unreadableReasonText, type TotalView } from './total'
 import type { BalanceView } from './balances'
 
-const cardStyle = {
-  background: 'var(--vault-card)',
-  borderRadius: 11,
-  padding: '12px 14px',
-} as const
-
 const num = { fontWeight: 600, color: C.bright, fontFeatureSettings: "'tnum'" } as const
 
 /**
- * One side of the breakdown.
+ * The hero figure, with the currency mark set slightly apart from the number.
  *
- * ── THE TWO SIDES ARE NOT COLOUR-CODED ──────────────────────────────────────
+ * PURELY TYPOGRAPHIC, and deliberately not done in fiat.ts. That module's output is a VALUE — it is
+ * asserted over by tests that read the exact string, and it is also what the assets row and the
+ * service rail print inline, where a gap would look like a stray space. At 52px the mark and the
+ * first digit collide; at 13px they do not. So the spacing belongs to the place with the type
+ * problem, and the string keeps its single canonical form.
  *
- * Shielded used to be teal and unshielded neutral, so colour alone carried the distinction. The
- * foundation is explicit that it must not: "Private vs public is icon + label, never color." Both
- * cards share one ground, one label colour and one value colour; the lock-vs-eye icon plus the word
- * Shielded/Unshielded is what tells them apart. A deliberate trade — colour is the faster read —
- * and the right one for a wallet: a colour-only signal is invisible to a colour-blind user and
- * unreadable in a screenshot, on the one distinction the product is about.
+ * The split is on a LEADING '$' only, and anything else falls through untouched — the fallback
+ * branches print token amounts with no mark at all.
  */
-function BreakdownCard({ kind, balance, hidden }: {
-  kind: 'shielded' | 'unshielded'; balance: BalanceView; hidden: boolean
-}) {
-  const Icon = kind === 'shielded' ? Shield : Eye
-
-  const value = () => {
-    if (hidden) {
-      return <div style={{ fontFamily: MONO, fontSize: 13, color: C.bright, marginTop: 5 }}>{MASK_SHORT}</div>
-    }
-    if (balance.status === 'loading') {
-      return (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 7 }}>
-          <Spinner size={12} /><span style={{ fontSize: 12.5, color: 'var(--vault-label)' }}>Checking</span>
-        </div>
-      )
-    }
-    // NEVER A ZERO. `unavailable` means the read failed, not that the balance is nothing, and the
-    // two are a world apart to someone looking at their own money.
-    if (balance.status === 'unavailable') {
-      return (
-        <div style={{ marginTop: 6 }}>
-          <span style={{
-            display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 9px',
-            borderRadius: 'var(--r-pill)', background: 'rgba(var(--warn-rgb),0.12)',
-            color: 'var(--warn)', fontSize: 11, fontWeight: 600,
-          }}>Unavailable</span>
-        </div>
-      )
-    }
-    // Dollars lead, the token amount stays underneath. `fiatForBalance` cannot return null on this
-    // branch — the status is `ready` — but the fallback is written out rather than asserted,
-    // because a `!` here is exactly where a future edit would slip an invented figure back in.
-    const usd = fiatForBalance(balance)
-    return (
-      <>
-        <div style={{ ...num, fontSize: 16, marginTop: 5 }}>{usd ?? fmt6(balance.microtari)}</div>
-        <div style={{ fontFamily: MONO, fontSize: 10.5, color: 'var(--vault-label)', marginTop: 2 }}>
-          {fmt6(balance.microtari)} XTR
-        </div>
-      </>
-    )
-  }
-
+function Figure({ usd }: { usd: string }) {
+  if (!usd.startsWith('$')) return <>{usd}</>
   return (
-    <div style={cardStyle}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        <Icon size={11} color="var(--vault-label)" />
-        <span style={{ fontSize: 11.5, fontWeight: 500, color: C.bodyDim }}>
-          {kind === 'shielded' ? 'Shielded' : 'Unshielded'}
-        </span>
-      </div>
-      {value()}
-    </div>
+    <>
+      <span style={{ marginRight: '0.09em' }}>$</span>{usd.slice(1)}
+    </>
   )
 }
 
@@ -118,7 +68,11 @@ export function TotalHero({ total, privateBalance, publicBalance, hidden, onRetr
 }) {
   const headline = () => {
     if (hidden) {
-      return <div style={{ fontFamily: MONO, fontSize: 24, fontWeight: 500, color: C.bright, marginTop: 8 }}>{MASK_SHORT}</div>
+      return (
+        <div style={{ fontFamily: MONO, fontSize: 40, fontWeight: 500, color: C.bright, marginTop: 8, lineHeight: 1.05 }}>
+          {MASK_SHORT}
+        </div>
+      )
     }
     switch (total.status) {
       case 'ready': {
@@ -127,11 +81,11 @@ export function TotalHero({ total, privateBalance, publicBalance, hidden, onRetr
         // has read.
         const usd = fiatForTotal(total)
         return (
-          <div style={{ marginTop: 6 }}>
-            <div style={{ ...num, fontSize: 40, fontWeight: 700, letterSpacing: '-0.03em', lineHeight: 1.05 }}>
-              {usd ?? fmt6(total.microtari)}
+          <div style={{ marginTop: 8 }}>
+            <div style={{ ...num, fontSize: 52, fontWeight: 700, letterSpacing: '-0.03em', lineHeight: 1.02 }}>
+              {usd ? <Figure usd={usd} /> : fmt6(total.microtari)}
             </div>
-            <div style={{ fontFamily: MONO, fontSize: 12.5, color: 'var(--accent-300)', marginTop: 4 }}>
+            <div style={{ fontFamily: MONO, fontSize: 13, color: 'var(--accent-300)', marginTop: 8 }}>
               {fmt6(total.microtari)} XTR
             </div>
           </div>
@@ -142,19 +96,19 @@ export function TotalHero({ total, privateBalance, publicBalance, hidden, onRetr
       // a confident 1100.207422 once appeared directly above the words "updating after your move".
       case 'settling':
         return (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 12 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, marginTop: 18, minHeight: 53 }}>
             <Spinner size={15} ring={2} />
             <span style={{ fontSize: 13.5, color: C.bodyDim }}>Settling, this can take a moment</span>
           </div>
         )
       case 'loading':
         // A skeleton, not a zero and not a dash: nothing is wrong, we simply have no reading yet.
-        return <div style={{ width: 150, height: 30, borderRadius: 8, background: 'var(--vault-card)', marginTop: 10 }} />
+        return <div style={{ width: 190, height: 40, borderRadius: 10, background: 'var(--vault-card)', margin: '14px auto 13px' }} />
       case 'unreadable':
         return (
-          <div style={{ marginTop: 10 }}>
-            <div style={{ fontSize: 14, fontWeight: 500, color: C.primary }}>Balance unreadable right now</div>
-            <div style={{ fontSize: 12.5, color: 'var(--vault-label)', marginTop: 3, lineHeight: 1.5 }}>
+          <div style={{ marginTop: 14, marginBottom: 4 }}>
+            <div style={{ fontSize: 15, fontWeight: 500, color: C.primary }}>Balance unreadable right now</div>
+            <div style={{ fontSize: 12.5, color: 'var(--vault-label)', marginTop: 4, lineHeight: 1.5 }}>
               {unreadableReasonText(total.reason)}
               {onRetry && <>{' '}<span
                 role="button" tabIndex={0} onClick={onRetry}
@@ -167,27 +121,43 @@ export function TotalHero({ total, privateBalance, publicBalance, hidden, onRetr
     }
   }
 
-  // Said once, under the breakdown, when a side is the reason the total is missing. The cards above
-  // show WHICH half failed; this line says what that costs.
+  // Said once, when a side is the reason the total is missing. The Privacy card below shows WHICH
+  // half failed; this line says what that costs — which is the one thing that card cannot say,
+  // because it is a fact about the total rather than about either side.
   const unreadableSide =
     !hidden && total.status === 'unreadable' && privateBalance.status === 'unavailable' ? 'shielded'
     : !hidden && total.status === 'unreadable' && publicBalance.status === 'unavailable' ? 'unshielded'
     : null
 
+  // ── THE DESIGN'S LINE, SHOWN ONLY WHERE IT IS TRUE ──────────────────────────
+  //
+  // V3 draws "Your balance is private" under a shield, over a wallet that is 90% private. Sitting
+  // four inches above a Privacy card reading "90% private", that sentence is not a slogan any more
+  // — it is a claim about this balance, and it contradicts the card. So it renders when it is a
+  // fact and hands back to "Total balance" when it is not.
+  //
+  // Note what it takes to earn: a KNOWN total, both halves read, nothing hidden, and nothing
+  // public. Anything less falls through — the label never asserts privacy over a reading we do not
+  // have.
+  const allPrivate =
+    !hidden
+    && total.status === 'ready'
+    && publicBalance.status === 'ready' && publicBalance.microtari === 0n
+    && privateBalance.status === 'ready' && privateBalance.microtari > 0n
+
   return (
     <div data-theme="dark" style={{
       background: 'var(--nav-ground)', border: '1px solid var(--border)',
-      borderRadius: 18, padding: 24,
+      borderRadius: 18, padding: 32, textAlign: 'center',
     }}>
-      <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--vault-label)' }}>Total balance</span>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7 }}>
+        {allPrivate && <Shield size={13} color="var(--vault-label)" />}
+        <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--vault-label)' }}>
+          {allPrivate ? 'Your balance is private' : 'Total balance'}
+        </span>
+      </div>
 
       {headline()}
-
-      {/* Always rendered — when the total cannot be shown, this is the only thing that says why. */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 18 }}>
-        <BreakdownCard kind="shielded" balance={privateBalance} hidden={hidden} />
-        <BreakdownCard kind="unshielded" balance={publicBalance} hidden={hidden} />
-      </div>
 
       {unreadableSide && (
         <div style={{ fontSize: 11.5, color: 'var(--vault-label)', marginTop: 10, lineHeight: 1.5 }}>
@@ -199,9 +169,9 @@ export function TotalHero({ total, privateBalance, publicBalance, hidden, onRetr
           balance state: a read that failed says nothing about whether a payment can be built, and
           the send form does its own checking with far better reasons than this card could give. */}
       {(onSend || onReceive) && (
-        <div style={{ display: 'flex', gap: 9, marginTop: 14 }}>
-          {onSend && <VaultAction tone="primary" icon={<ArrowOut color="currentColor" />} label="Send" onClick={onSend} />}
-          {onReceive && <VaultAction tone="quiet" icon={<ArrowIn color="currentColor" />} label="Receive" onClick={onReceive} />}
+        <div style={{ display: 'flex', gap: 10, marginTop: 22, justifyContent: 'center', flexWrap: 'wrap' }}>
+          {onSend && <VaultAction tone="primary" icon={<Send color="currentColor" />} label="Send" onClick={onSend} />}
+          {onReceive && <VaultAction tone="quiet" icon={<Receive color="currentColor" />} label="Receive" onClick={onReceive} />}
         </div>
       )}
     </div>
@@ -217,9 +187,9 @@ function VaultAction({ tone, icon, label, onClick }: {
       onClick={onClick}
       className="cv-vault-action"
       style={{
-        flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-        padding: '10px 6px', borderRadius: 9, border: 'none', cursor: 'pointer',
-        fontFamily: 'inherit', fontSize: 13, fontWeight: 600,
+        minWidth: 150, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+        padding: '12px 24px', borderRadius: 10, border: 'none', cursor: 'pointer',
+        fontFamily: 'inherit', fontSize: 14, fontWeight: 600,
         background: tone === 'primary' ? 'var(--accent-400)' : 'var(--vault-card)',
         color: '#FFFFFF',
       }}

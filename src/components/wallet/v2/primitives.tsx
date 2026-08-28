@@ -16,6 +16,7 @@ import { C, MODAL_WIDTH, MONO, border, tealBorder, tealFill, warnBorder } from '
  */
 export type Chrome = 'modal' | 'page'
 import { Copy, Spinner } from './icons'
+import { iconBoxStyle } from '../../primitives/iconBox'
 
 // ── Shell ─────────────────────────────────────────────────────────────────────
 
@@ -127,8 +128,12 @@ export function RootHeader({ chip, right, chrome = 'modal' }: { chip?: string; r
     <div style={page
       ? { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '0 0 4px', flexShrink: 0 }
       : headerBase}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-        <span style={{ fontSize: page ? 22 : 20, fontWeight: 600, letterSpacing: '-0.015em', color: C.primary }}>Wallet</span>
+      <span style={{ fontSize: page ? 22 : 20, fontWeight: 600, letterSpacing: '-0.015em', color: C.primary }}>Wallet</span>
+      {/* ── THE TOP-RIGHT CLUSTER ──
+          The network chip joins the view controls rather than sitting beside the title. Both halves
+          of the header now have one job each: the left names the screen, the right holds everything
+          that describes or changes how you are looking at it. */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         {/* The network is a STATEMENT OF FACT, not an accent: mono, quiet, with an amber dot. It
             used to wear the brand colour, which read as a badge of approval for a testnet. */}
         {chip && (
@@ -142,9 +147,45 @@ export function RootHeader({ chip, right, chrome = 'modal' }: { chip?: string; r
             {chip}
           </span>
         )}
+        {right}
       </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>{right}</div>
     </div>
+  )
+}
+
+/**
+ * One boxed control in the header cluster.
+ *
+ * SAME BOX AS THE THEME TOGGLE, from primitives/iconBox — that is the whole point of it existing.
+ * The theme toggle is a shared component with its own state and could not simply be copied, so the
+ * geometry is shared instead and each control supplies only its emblem.
+ *
+ * `busy` swaps the emblem for a spinner AND makes the control inert, because the two must not come
+ * apart: a refresh that still accepts presses while spinning queues work nobody asked for.
+ */
+export function HeaderIcon({ label, onClick, children, tint, busy = false, size = 30 }: {
+  label: string
+  onClick: () => void
+  children: ReactNode
+  /** Overrides the emblem colour to mark a state — the eye uses it to show balances are masked. */
+  tint?: string
+  busy?: boolean
+  size?: number
+}) {
+  return (
+    <button
+      onClick={busy ? undefined : onClick}
+      aria-label={label}
+      title={label}
+      aria-disabled={busy}
+      className={busy ? undefined : 'cv-icon-btn'}
+      style={{
+        ...iconBoxStyle(size),
+        fontFamily: 'inherit', fontSize: 14,
+        color: tint ?? 'var(--text-body-dim)',
+        cursor: busy ? 'default' : 'pointer',
+      }}
+    >{busy ? <Spinner size={Math.round(size * 0.44)} /> : children}</button>
   )
 }
 
@@ -490,54 +531,51 @@ export interface ScanSummary {
   progressScanned: number
 }
 
-export function ScanStrip({ scan, refreshing, onRefresh }: {
-  scan: ScanSummary; refreshing?: boolean; onRefresh: () => void
-}) {
+/**
+ * The scan diagnostic, demoted to a line.
+ *
+ * IT WAS A CARD, and it did not earn one. Sitting between the balance and the Privacy card, a
+ * bordered strip announcing "Up to date with the chain" took a full band of the page to report
+ * that nothing was wrong — the most common state, and the least interesting.
+ *
+ * WHAT SURVIVED, AND WHY. The literal counts stay: they are the only evidence of what a Refresh
+ * actually did, and "1,247 scanned · 6 owned" is the difference between a wallet that looked and
+ * one that shrugged. The ERROR state stays loud in the same slot, because a scan that could not
+ * finish is the one case where this line is the reason a balance looks wrong.
+ *
+ * The Refresh control left entirely — it is a boxed icon in the header cluster now, beside the eye
+ * and the theme toggle, where the other controls that change what you are looking at live.
+ */
+export function ScanLine({ scan, refreshing }: { scan: ScanSummary; refreshing?: boolean }) {
   const scanning = scan.status === 'scanning'
-  const line = scanning
-    ? 'Scanning the chain for new activity'
-    : scan.status === 'error'
-      ? 'The scan could not finish'
-      : 'Up to date with the chain'
+  const busy = scanning || !!refreshing
 
-  // The literal figures, kept. They are the only evidence of what a Refresh actually did, and the
-  // design's own strip carries a counter in this slot.
   const counts = scanning
     ? `${scan.progressScanned.toLocaleString('en-US')} scanned`
     : scan.scanned > 0
       ? `${scan.scanned.toLocaleString('en-US')} scanned · ${scan.owned.toLocaleString('en-US')} owned`
       : ''
 
+  const text = refreshing ? 'Refreshing your balances'
+    : scanning ? 'Scanning the chain'
+    : scan.status === 'error' ? 'The scan could not finish'
+    : counts
+
+  // Nothing to report and nothing wrong — so nothing drawn. An empty wallet on its first load has
+  // no counts yet, and a blank line where a figure will appear is furniture.
+  if (!text) return null
+
   return (
     <div style={{
-      display: 'flex', alignItems: 'center', gap: 10,
-      padding: '10px 14px', borderRadius: 11,
-      border: '1px solid var(--border)', background: 'var(--surface)',
+      display: 'flex', alignItems: 'center', gap: 7,
+      padding: '0 6px', marginTop: -4,
+      fontFamily: MONO, fontSize: 11.5,
+      color: scan.status === 'error' ? 'var(--danger-500)' : 'var(--text-muted-dim)',
     }}>
-      {(scanning || refreshing)
-        ? <Spinner size={13} />
-        : <span style={{
-            width: 13, height: 13, borderRadius: 'var(--r-pill)', flexShrink: 0,
-            background: scan.status === 'error' ? 'rgba(var(--danger-rgb),0.9)' : 'rgba(var(--positive-rgb),0.9)',
-          }} />}
-      <span style={{
-        flex: 1, minWidth: 0, fontSize: 13,
-        color: scan.status === 'error' ? 'var(--danger-500)' : 'var(--text-body-dim)',
-        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-      }}>{refreshing ? 'Refreshing your balances' : line}</span>
-      {counts && (
-        <span style={{ fontFamily: MONO, fontSize: 11.5, color: 'var(--text-muted-dim)', flexShrink: 0 }}>{counts}</span>
-      )}
-      <span
-        role="button" tabIndex={refreshing ? -1 : 0} aria-disabled={refreshing}
-        onClick={refreshing ? undefined : onRefresh}
-        onKeyDown={e => { if (!refreshing && e.key === 'Enter') onRefresh() }}
-        style={{
-          fontSize: 12.5, fontWeight: 600, flexShrink: 0, userSelect: 'none',
-          color: refreshing ? 'var(--text-muted-dim)' : 'var(--accent-ink)',
-          cursor: refreshing ? 'default' : 'pointer',
-        }}
-      >Refresh</span>
+      {busy && <Spinner size={11} />}
+      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{text}</span>
+      {/* Said alongside the state while a read is running, so the figures do not vanish mid-scan. */}
+      {busy && !scanning && counts && <span style={{ opacity: 0.75, flexShrink: 0 }}>· {counts}</span>}
     </div>
   )
 }

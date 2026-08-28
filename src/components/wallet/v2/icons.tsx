@@ -55,16 +55,32 @@ export const Clock = ({ size = 14, color }: I) => (
 )
 
 /** Outbound — the Send affordance on the vault. */
-export const ArrowOut = ({ size = 15, color }: I) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-    <path d="M7 17L17 7" /><path d="M9 7h8v8" />
+/**
+ * Send — a paper plane.
+ *
+ * REPLACES A DIAGONAL ARROW. The arrow pair was symmetrical: the same glyph mirrored, distinguished
+ * only by which corner it pointed at, which is a difference you have to stop and read. A plane and
+ * a tray are told apart at a glance, and neither can be mistaken for the activity list's direction
+ * arrows — which DO mean literal in/out, and now have that meaning to themselves.
+ */
+export const Send = ({ size = 15, color, width = 1.9 }: I) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color ?? 'currentColor'} strokeWidth={width} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+    <path d="M21.5 2.5L11 13" /><path d="M21.5 2.5l-6.8 19-3.7-8.5L2.5 9.3z" />
   </svg>
 )
 
-/** Inbound — the Receive affordance on the vault. */
-export const ArrowIn = ({ size = 15, color }: I) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-    <path d="M17 7L7 17" /><path d="M15 17H7V9" />
+/** Receive — into a tray. The counterpart to Send, and deliberately not its mirror image. */
+export const Receive = ({ size = 15, color, width = 1.9 }: I) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color ?? 'currentColor'} strokeWidth={width} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+    <path d="M12 3v10" /><path d="M8 9.5l4 4 4-4" /><path d="M3.5 16v3a2 2 0 0 0 2 2h13a2 2 0 0 0 2-2v-3" />
+  </svg>
+)
+
+/** Refresh — re-read the chain. The header control; see HeaderIcon for the busy state. */
+export const Refresh = ({ size = 14, color, width = 2 }: I) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color ?? 'currentColor'} strokeWidth={width} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+    <path d="M20.5 11a8.5 8.5 0 0 0-14.6-5.1L2.5 9" /><path d="M2.5 4.5V9H7" />
+    <path d="M3.5 13a8.5 8.5 0 0 0 14.6 5.1l3.4-3.1" /><path d="M21.5 19.5V15H17" />
   </svg>
 )
 

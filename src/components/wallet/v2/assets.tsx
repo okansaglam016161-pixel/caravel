@@ -27,6 +27,7 @@
 
 import { C, MONO } from './tokens'
 import { Eye, Shield } from './icons'
+import { fiatForTotal } from './fiat'
 import { MASK_SHORT, fmt6 } from './format'
 import type { BalanceView } from './balances'
 import { totalPillValue } from './TotalHero'
@@ -126,11 +127,16 @@ export function AssetsPanel({ privateBalance, publicBalance, total, hidden, onOp
             // look like it is reporting a holding it is in fact refusing to state.
             color: hidden || total.status === 'ready' ? C.primary : C.mutedDim,
           }}>
-            {totalPillValue(total, hidden)}
-            {!hidden && total.status === 'ready' && (
-              <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--accent-ink)', marginLeft: 5 }}>XTR</span>
-            )}
+            {/* The dollar figure only exists when the balance does; otherwise this is the same
+                `···` / `—` the hero and the rail show, and there is nothing to price. */}
+            {hidden ? totalPillValue(total, hidden) : fiatForTotal(total) ?? totalPillValue(total, hidden)}
           </span>
+          {!hidden && total.status === 'ready' && (
+            <span style={{
+              display: 'block', fontFamily: MONO, fontSize: 11,
+              color: 'var(--text-muted-dim)', marginTop: 2, whiteSpace: 'nowrap',
+            }}>{fmt6(total.microtari)} XTR</span>
+          )}
         </span>
         {live && (
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)"

@@ -22,6 +22,7 @@
 
 import { C, MONO } from './tokens'
 import { ArrowIn, ArrowOut, Eye, Shield, Spinner } from './icons'
+import { fiatForBalance, fiatForTotal } from './fiat'
 import { MASK_SHORT, fmt6 } from './format'
 import { unreadableReasonText, type TotalView } from './total'
 import type { BalanceView } from './balances'
@@ -75,11 +76,17 @@ function BreakdownCard({ kind, balance, hidden }: {
         </div>
       )
     }
+    // Dollars lead, the token amount stays underneath. `fiatForBalance` cannot return null on this
+    // branch — the status is `ready` — but the fallback is written out rather than asserted,
+    // because a `!` here is exactly where a future edit would slip an invented figure back in.
+    const usd = fiatForBalance(balance)
     return (
-      <div style={{ ...num, fontSize: 16, marginTop: 5 }}>
-        {fmt6(balance.microtari)}
-        <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--accent-300)', marginLeft: 5 }}>XTR</span>
-      </div>
+      <>
+        <div style={{ ...num, fontSize: 16, marginTop: 5 }}>{usd ?? fmt6(balance.microtari)}</div>
+        <div style={{ fontFamily: MONO, fontSize: 10.5, color: 'var(--vault-label)', marginTop: 2 }}>
+          {fmt6(balance.microtari)} XTR
+        </div>
+      </>
     )
   }
 
@@ -114,15 +121,22 @@ export function TotalHero({ total, privateBalance, publicBalance, hidden, onRetr
       return <div style={{ fontFamily: MONO, fontSize: 24, fontWeight: 500, color: C.bright, marginTop: 8 }}>{MASK_SHORT}</div>
     }
     switch (total.status) {
-      case 'ready':
+      case 'ready': {
+        // The only branch with a figure to convert. Every other case falls through to the state it
+        // already had, which is what keeps a dollar sign from ever standing in for a number nobody
+        // has read.
+        const usd = fiatForTotal(total)
         return (
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginTop: 6, flexWrap: 'wrap' }}>
-            <span style={{ ...num, fontSize: 40, fontWeight: 700, letterSpacing: '-0.03em', lineHeight: 1.05 }}>
-              {fmt6(total.microtari)}
-            </span>
-            <span style={{ fontSize: 17, fontWeight: 600, color: 'var(--accent-300)' }}>XTR</span>
+          <div style={{ marginTop: 6 }}>
+            <div style={{ ...num, fontSize: 40, fontWeight: 700, letterSpacing: '-0.03em', lineHeight: 1.05 }}>
+              {usd ?? fmt6(total.microtari)}
+            </div>
+            <div style={{ fontFamily: MONO, fontSize: 12.5, color: 'var(--accent-300)', marginTop: 4 }}>
+              {fmt6(total.microtari)} XTR
+            </div>
           </div>
         )
+      }
       // NO NUMBER while settling — deliberately not even a faded one. The balances are
       // mid-transition, so any figure here is arithmetic across two different moments, which is how
       // a confident 1100.207422 once appeared directly above the words "updating after your move".
@@ -213,7 +227,14 @@ function VaultAction({ tone, icon, label, onClick }: {
   )
 }
 
-/** The service rail's and the chat pill's figure, as one string. Same rules, no layout. */
+/**
+ * A compact figure for a summary, as one string. Same rules, no layout.
+ *
+ * STILL IN XTR, and still used by chat's sidebar pill. The reskinned surfaces — the rail, the hero,
+ * the assets row — price through `fiatForTotal` and fall back to this when there is no figure to
+ * price. Chat is dark-pinned and un-reskinned, so it keeps the token amount until its own pass;
+ * changing it here would reach into a surface this stage is not touching.
+ */
 export function totalPillValue(total: TotalView, hidden: boolean): string {
   if (hidden) return '••••'
   switch (total.status) {

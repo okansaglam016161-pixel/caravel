@@ -15,6 +15,7 @@
 
 import { useWallet } from '../../context/WalletContext'
 import { useWalletTotal } from '../../hooks/useWalletTotal'
+import { fiatForTotal } from '../wallet/v2/fiat'
 import { totalPillValue } from '../wallet/v2/TotalHero'
 import { unreadableReasonText } from '../wallet/v2/total'
 
@@ -79,14 +80,14 @@ export default function ServiceNav({ service, onSelect, onProfile }: {
         style={{ background: 'var(--vault-card)', borderRadius: 11, padding: '12px 14px', marginBottom: 12 }}
       >
         <div style={{ fontSize: 11, fontWeight: 500, color: 'var(--vault-label)' }}>Total balance</div>
+        {/* Dollars, matching the hero. A rail reading XTR beside a hero reading dollars would be
+            the same balance disagreeing with itself. When there is no figure this falls through to
+            totalPillValue's `···` / `—` — the state, never a priced guess. */}
         <div style={{
           fontSize: 17, fontWeight: 600, fontFeatureSettings: "'tnum'", marginTop: 3,
           color: balanceHidden || total.status === 'ready' ? 'var(--text-bright)' : 'var(--vault-label)',
         }}>
-          {totalPillValue(total, balanceHidden)}
-          {!balanceHidden && total.status === 'ready' && (
-            <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--accent-300)', marginLeft: 6 }}>XTR</span>
-          )}
+          {balanceHidden ? totalPillValue(total, balanceHidden) : fiatForTotal(total) ?? totalPillValue(total, balanceHidden)}
         </div>
       </div>
 

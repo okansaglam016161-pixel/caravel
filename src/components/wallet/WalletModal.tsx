@@ -901,7 +901,6 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
         onViewActivity: () => { resetSend(); setTab('activity') },
       }}
       receive={{ address, copied: addrCopied, onCopy: copyAddr }}
-      activityEmpty={activity.length === 0}
       activity={activity.map(row => row.kind === 'sent'
     ? <SentRowV2 key={row.id} row={row} hidden={balanceHidden} />
     : <ReceivedRowV2 key={row.id} row={row} hidden={balanceHidden} />)}

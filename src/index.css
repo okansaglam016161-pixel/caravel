@@ -332,6 +332,10 @@ a:hover { color: var(--accent-200); }
 .cv-asset-row { transition: background 0.15s; }
 .cv-asset-row:hover { background: var(--surface-void); }
 
+/* Activity rows, on the page and in the overlay. */
+.cv-activity-row { transition: background 0.15s; }
+.cv-activity-row:hover { background: var(--surface-void); }
+
 /* Send / Receive on the vault. The vault is navy in both themes, so these hovers are fixed
    treatments rather than theme tokens — see TotalHero. */
 .cv-vault-action { transition: filter 0.15s; }

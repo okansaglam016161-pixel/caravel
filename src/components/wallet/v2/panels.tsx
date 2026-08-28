@@ -15,7 +15,7 @@
 import type { ReactNode } from 'react'
 import { QRCodeSVG } from 'qrcode.react'
 import { C, MONO, tealBorder, tealFill, warnBorder, warnFill } from './tokens'
-import { Alert, Check, Clock, Copy, Eye, EyeOff, Shield, Spinner } from './icons'
+import { Alert, Check, Clock, Copy, Eye, Shield, Spinner } from './icons'
 import {
   AmountField, Body, Button, DetailCard, DetailRow, FieldLabel, Panel, PanelText,
   SettleBar, StatusBlock, SubHeader, TextField, TxRow,
@@ -606,129 +606,187 @@ export interface ActivityRowView {
   amountMicrotari: bigint | null
 }
 
-const STATUS: Record<ActivityStatus, { label: string; color: string }> = {
-  confirmed: { label: 'Confirmed', color: C.teal300 },
-  sent: { label: 'Sent', color: C.teal300 },
-  failed: { label: 'Failed', color: C.dangerText },
-  unconfirmed: { label: 'Not confirmed', color: C.warn300 },
-  received: { label: 'Received', color: C.teal300 },
-  checking: { label: 'Checking…', color: C.faintDim },
-  spent: { label: 'Already spent', color: C.faintDim },
-  unreadable: { label: 'Unavailable', color: C.faintDim },
-  pending: { label: 'Still arriving', color: C.warn300 },
+/**
+ * How each status is drawn.
+ *
+ * `signed` is the one that carries meaning rather than decoration: it says whether this row
+ * represents value that actually moved. A failed send has an amount — the one that was attempted —
+ * but nothing left the wallet, so it renders muted and WITHOUT a +/− rather than as an outflow that
+ * happened. Inventing a sign there would be the same class of lie as inventing the figure.
+ */
+const STATUS: Record<ActivityStatus, {
+  label: string
+  ink: string
+  wash: string
+  signed: boolean
+}> = {
+  confirmed:   { label: 'Confirmed',   ink: 'var(--positive)',      wash: 'rgba(var(--positive-rgb),0.12)', signed: true },
+  received:    { label: 'Received',    ink: 'var(--positive)',      wash: 'rgba(var(--positive-rgb),0.12)', signed: true },
+  sent:        { label: 'Sent',        ink: 'var(--accent-ink)',    wash: 'var(--accent-wash)',             signed: true },
+  checking:    { label: 'Checking',    ink: 'var(--accent-ink)',    wash: 'var(--accent-wash)',             signed: false },
+  // AMBER, NOT RED, for both. Broadcast-and-undecided and waiting-to-settle are ordinary outcomes
+  // on this network: nothing failed, and nothing needs re-sending.
+  unconfirmed: { label: 'Unconfirmed', ink: 'var(--warn)',          wash: 'rgba(var(--warn-rgb),0.12)',     signed: true },
+  pending:     { label: 'Pending',     ink: 'var(--warn)',          wash: 'rgba(var(--warn-rgb),0.12)',     signed: true },
+  failed:      { label: 'Failed',      ink: 'var(--danger-500)',    wash: 'rgba(var(--danger-rgb),0.12)',   signed: false },
+  spent:       { label: 'Spent',       ink: 'var(--text-muted-dim)', wash: 'var(--surface-void)',           signed: false },
+  unreadable:  { label: 'Unreadable',  ink: 'var(--text-muted-dim)', wash: 'var(--surface-void)',           signed: false },
 }
 
-/** The four visual treatments a row can take, keyed off what actually happened to the money. */
-type RowLook = 'out-ok' | 'in-ok' | 'pending' | 'failed'
-function lookFor(r: ActivityRowView): RowLook {
-  if (r.status === 'failed') return 'failed'
-  if (r.status === 'unconfirmed' || r.status === 'pending' || r.status === 'checking') return 'pending'
-  return r.direction === 'out' ? 'out-ok' : 'in-ok'
+/**
+ * Why the amount is a dash, per status.
+ *
+ * The dash is honest but mute, so the line under the title explains it — and explains it
+ * DIFFERENTLY per case, because "still arriving" and "this wallet cannot read it" are not the same
+ * news. Without this the note line simply repeated the status pill sitting beside it.
+ */
+const UNKNOWN_AMOUNT: Record<ActivityStatus, string> = {
+  checking:    'Reading the amount',
+  pending:     'Arrived — amount still resolving',
+  unreadable:  'Arrived — amount not readable by this wallet',
+  spent:       'Already spent',
+  // An outflow with no amount is a send from another device: we know it happened, not its size.
+  confirmed:   'Sent from another device',
+  sent:        'Sent from another device',
+  unconfirmed: 'Sent, not yet confirmed',
+  failed:      'Nothing left your wallet',
+  received:    'Amount not known here',
 }
 
-const LOOK: Record<RowLook, { bg: string; bd: string; stroke: string; dashed?: boolean }> = {
-  'out-ok': { bg: tealFill(0.1), bd: tealBorder(0.22), stroke: C.teal },
-  'in-ok': { bg: tealFill(0.12), bd: '1px solid transparent', stroke: C.teal300 },
-  pending: { bg: warnFill(0.12), bd: '1px dashed rgba(var(--warn-rgb),0.34)', stroke: C.warn },
-  failed: { bg: 'rgba(var(--danger-rgb),0.12)', bd: '1px solid transparent', stroke: C.danger },
-}
+/** The glyph in the row's tile. Direction for the ordinary cases, state for the rest. */
+function RowGlyph({ row }: { row: ActivityRowView }) {
+  const st = STATUS[row.status]
+  const stroke = st.ink
+  const icon =
+    row.status === 'failed'
+      ? <path d="M18 6L6 18M6 6l12 12" />
+    : row.status === 'checking' || row.status === 'pending' || row.status === 'unconfirmed'
+      ? <><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 3" /></>
+    : row.status === 'unreadable'
+      ? <><circle cx="12" cy="12" r="9" /><path d="M12 16h.01M9.8 9.3a2.3 2.3 0 1 1 2.9 3.1V14" /></>
+    : row.direction === 'in'
+      ? <><path d="M17 7L7 17" /><path d="M15 17H7V9" /></>
+      : <><path d="M7 17L17 7" /><path d="M9 7h8v8" /></>
 
-function RowIcon({ look }: { look: RowLook }) {
-  const l = LOOK[look]
   return (
     <span style={{
-      display: 'flex', alignItems: 'center', justifyContent: 'center', width: 34, height: 34,
-      borderRadius: 'var(--r-md)', flexShrink: 0, background: l.bg, border: l.bd,
+      width: 34, height: 34, borderRadius: 'var(--r-md)', flexShrink: 0,
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      background: st.wash, color: st.ink,
     }}>
-      {look === 'failed' ? (
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={l.stroke} strokeWidth="2.4" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
-      ) : look === 'pending' ? (
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={l.stroke} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg>
-      ) : (
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={l.stroke} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-          {look === 'out-ok' ? <path d="M12 19V5M5 12l7-7 7 7" /> : <path d="M12 5v14M5 12l7 7 7-7" />}
-        </svg>
-      )}
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={stroke} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{icon}</svg>
     </span>
   )
 }
 
-/**
- * The list shell: header, hide toggle, empty state.
- *
- * TAKES CHILDREN RATHER THAN A ROW ARRAY, because a received row resolves its amount through a
- * hook and hooks cannot be called in a loop over a dynamic array. The shipped list solved this the
- * same way — one component per received row — and that arrangement is preserved exactly, so the
- * per-row cache-first fetch with bounded backoff keeps working as it does today.
- */
-export function ActivityPanel({ empty, hidden, onToggleHidden, children }: {
-  empty: boolean; hidden: boolean; onToggleHidden: () => void; children?: ReactNode
-}) {
-  if (empty) {
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14, padding: '44px 0 40px' }}>
-        <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 46, height: 46, borderRadius: 'var(--r-lg)', background: C.raised, border: '1px solid var(--border)' }}>
-          <Shield size={20} color={C.faintDim} />
-        </span>
-        <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
-          <span style={{ fontSize: 15, fontWeight: 700, color: C.muted }}>No payments yet</span>
-          <span style={{ fontSize: 13, color: C.faint, textAlign: 'center', maxWidth: 250, lineHeight: 1.5 }}>
-            Payments you send and receive will appear here.
-          </span>
-        </span>
-      </div>
-    )
+export function ActivityRowShell({ row, hidden }: { row: ActivityRowView; hidden: boolean }) {
+  const st = STATUS[row.status]
+
+  // A MISSING AMOUNT IS A DASH, NEVER A ZERO AND NEVER A GUESS. It is genuinely unknown here for a
+  // send from another device and for an inflow still being resolved, and both are ordinary.
+  //
+  // THE ROW STILL RENDERS. An inbound payment whose amount could not be read is a payment that
+  // arrived; dropping it would be the dishonest option, and inventing a figure worse still. The
+  // dash says "something arrived, the amount is not known here" — and the line below says why,
+  // rather than repeating the status pill back at the reader.
+  const amount = () => {
+    if (hidden) return '••••'
+    if (row.amountMicrotari === null) return '—'
+    const sign = st.signed ? (row.direction === 'in' ? '+' : '−') : ''
+    return `${sign}${fmt6(row.amountMicrotari)}`
   }
 
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column' }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 2px 11px', borderBottom: '1px solid var(--border)' }}>
-        <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.14em', color: C.faintDim }}>PRIVATE PAYMENTS</span>
-        <span role="button" tabIndex={0} onClick={onToggleHidden} onKeyDown={e => e.key === 'Enter' && onToggleHidden()}
-          style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 12, fontWeight: 600, color: hidden ? C.teal : C.tealDim, cursor: 'pointer', userSelect: 'none' }}>
-          {hidden ? <EyeOff size={13} color={C.teal} /> : <Eye size={13} color={C.tealDim} />}
-          {hidden ? 'Show amounts' : 'Hide amounts'}
-        </span>
-      </div>
-      {children}
-    </div>
-  )
-}
-
-/** One row. Presentational — the caller decides what state it is in. */
-export function ActivityRowShell({ row, hidden }: { row: ActivityRowView; hidden: boolean }) {
-  const look = lookFor(row)
-  const st = STATUS[row.status]
-  const dead = look === 'failed'
-  const amount = row.status === 'checking' ? '…' : row.amountMicrotari !== null ? fmt6(row.amountMicrotari) : '—'
-  const sub = row.note
-    ? `“${row.note}”`
-    : row.status === 'unconfirmed' ? 'Sent, never confirmed'
-    : row.status === 'failed' ? 'Nothing left your wallet'
-    : 'No note'
+  const amountColor =
+    hidden ? C.bodyDim
+    : row.amountMicrotari === null ? C.mutedDim
+    : !st.signed ? C.mutedDim
+    : row.direction === 'in' ? 'var(--positive)'
+    : C.primary
 
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 13, padding: '13px 2px', borderBottom: '1px solid var(--border)' }}>
-      <RowIcon look={look} />
+    <div className="cv-activity-row" style={{
+      display: 'flex', alignItems: 'center', gap: 12,
+      padding: '11px 12px', borderRadius: 9,
+    }}>
+      <RowGlyph row={row} />
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8 }}>
-          <span style={{ fontSize: 14, fontWeight: 600, color: dead ? C.muted : C.primary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.title}</span>
-          <span style={{
-            fontFamily: MONO, fontSize: 13, flexShrink: 0,
-            letterSpacing: hidden ? '0.1em' : undefined,
-            color: hidden ? C.tealLabel : dead ? C.faintDim : C.tealLabel,
-          }}>{hidden ? '••••' : amount}</span>
+        <div style={{ fontSize: 13.5, fontWeight: 600, color: C.primary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {row.title}
         </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, marginTop: 3 }}>
-          <span style={{
-            fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-            color: row.note ? 'var(--text-note)' : C.faint, fontStyle: row.note ? 'italic' : 'normal',
-          }}>{sub}</span>
-          <span style={{ fontSize: 11, fontWeight: 700, color: st.color, flexShrink: 0 }}>{st.label}</span>
+        <div style={{ fontSize: 12, color: C.mutedDim, marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {row.note || (row.amountMicrotari === null && !hidden ? UNKNOWN_AMOUNT[row.status] : st.label)}
         </div>
+      </div>
+      <span style={{
+        display: 'inline-flex', alignItems: 'center', padding: '3px 9px', borderRadius: 'var(--r-pill)',
+        background: st.wash, color: st.ink, fontSize: 10.5, fontWeight: 600, flexShrink: 0,
+      }}>{st.label}</span>
+      <span style={{
+        fontFamily: MONO, fontSize: 12.5, fontWeight: 500, textAlign: 'right',
+        flexShrink: 0, minWidth: 104, color: amountColor,
+      }}>{amount()}</span>
+    </div>
+  )
+}
+
+/** Nothing has happened yet — said as a fact, with what will fill it. Never blank rows. */
+export function ActivityEmpty({ compact = false }: { compact?: boolean }) {
+  return (
+    <div style={{ textAlign: 'center', padding: compact ? '26px 20px' : '40px 24px' }}>
+      <span style={{
+        width: 40, height: 40, borderRadius: 12, background: 'var(--accent-wash)', color: 'var(--accent-ink)',
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+      }}>
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M3 12h4l3-8 4 16 3-8h4" />
+        </svg>
+      </span>
+      <div style={{ fontSize: 14.5, fontWeight: 600, color: C.primary, marginTop: 14 }}>No activity yet</div>
+      <div style={{ fontSize: 12.5, color: C.mutedDim, marginTop: 4, lineHeight: 1.5, textWrap: 'pretty' }}>
+        Your sends, receives, and shields will appear here.
       </div>
     </div>
   )
 }
+
+/**
+ * The RECENT list, on the page.
+ *
+ * Three rows, newest first, whatever their kind — a shield and a receive sit together because they
+ * are both things that happened to this wallet, and sorting by type would bury the most recent
+ * event under a category. Fewer than three simply shows fewer; the empty case gets the same honest
+ * card the full list does rather than padded blank rows.
+ */
+export function RecentActivity({ rows, onViewAll }: {
+  rows: ReactNode[]; onViewAll: () => void
+}) {
+  const shown = rows.slice(0, 3)
+  return (
+    <div style={{
+      background: 'var(--surface)', border: '1px solid var(--border)',
+      borderRadius: 'var(--r-lg)', padding: 6, boxShadow: 'var(--e1)',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px 8px' }}>
+        <span style={{ flex: 1, fontSize: 13.5, fontWeight: 600, color: C.primary }}>Recent activity</span>
+        {/* Only offered when there is more than the page is showing — a "Show all" over three rows
+            of three would be a control that changes nothing. */}
+        {rows.length > shown.length && (
+          <span role="button" tabIndex={0} onClick={onViewAll} onKeyDown={e => e.key === 'Enter' && onViewAll()}
+            style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--accent-ink)', cursor: 'pointer', userSelect: 'none', flexShrink: 0 }}>
+            Show all
+          </span>
+        )}
+      </div>
+      {shown.length === 0 ? <ActivityEmpty compact /> : shown}
+    </div>
+  )
+}
+
+/** The FULL list, in an overlay. Same rows, no cap. */
+export function ActivityPanel({ rows }: { rows: ReactNode[] }) {
+  if (rows.length === 0) return <ActivityEmpty />
+  return <div style={{ display: 'flex', flexDirection: 'column' }}>{rows}</div>
+}
+
 
 export { Body, SubHeader }

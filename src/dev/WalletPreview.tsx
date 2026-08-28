@@ -241,7 +241,6 @@ function Drive() {
     onCopyTx: t => navigator.clipboard?.writeText(t).catch(() => {}),
     onRetryBalance: () => { setScenario('both'); runRefresh() },
     activity: emptyActivity ? undefined : ACTIVITY.map(r => <ActivityRowShell key={r.id} row={r} hidden={hidden} />),
-    activityEmpty: emptyActivity,
 
     tab, onTab: setTab,
     faucet: {
@@ -496,7 +495,9 @@ function Gallery() {
     // ── Activity ──
     { label: 'ACTIVITY · EVERY ROW STATE', props: still({ tab: 'activity' }) },
     { label: 'ACTIVITY · AMOUNTS HIDDEN', props: still({ tab: 'activity', hidden: true, activity: ACTIVITY.map(r => <ActivityRowShell key={r.id} row={r} hidden />) }) },
-    { label: 'ACTIVITY · EMPTY', props: still({ tab: 'activity', activity: undefined, activityEmpty: true }) },
+    { label: 'ACTIVITY · EMPTY', props: still({ tab: 'activity', activity: [] }) },
+    { label: 'RECENT · LATEST THREE ON THE PAGE', props: still({ tab: 'overview' }) },
+    { label: 'RECENT · EMPTY ON THE PAGE', props: still({ tab: 'overview', activity: [] }) },
 
     // ── The total ──
     { label: 'TOTAL · BOTH CONFIDENT', props: still({}) },

@@ -22,10 +22,10 @@ import { C, tealBorder, tealFill } from './tokens'
 import { Alert, Check, Eye, EyeOff, Spinner } from './icons'
 import {
   Body, Button, DetailCard, DetailRow, FeeRow, ModalShell, RootHeader, ScanStrip, SettleBar,
-  Sheet, TabBar, TxRow, iconBtn, type Chrome, type ScanSummary,
+  Sheet, TxRow, iconBtn, type Chrome, type ScanSummary,
 } from './primitives'
 import {
-  ActivityPanel, FaucetPanel, OnsPanel, ReceivePanel, SendPanel, VerbatimBox,
+  ActivityPanel, FaucetPanel, OnsPanel, ReceivePanel, RecentActivity, SendPanel, VerbatimBox,
   type FaucetPanelProps, type OnsPanelProps, type SendPanelProps,
 } from './panels'
 import { AssetsPanel } from './assets'
@@ -47,17 +47,15 @@ export const WALLET_TABS = ['overview', 'send', 'receive', 'activity'] as const
 export type WalletTab = (typeof WALLET_TABS)[number]
 
 /**
- * The tabs the TAB BAR draws.
+ * There is no tab bar any more.
  *
- * Send and Receive left it in stage 4 without leaving the `tab` state: they are still selected the
- * same way, they simply render as sheets now. Keeping one piece of state for "which view is up"
- * means the existing transitions — "View in Activity" from an unconfirmed send, for one — keep
- * working untouched, and there is no second source of truth to fall out of step.
+ * The wallet page is ONE vertical scroll — balance, moves, assets, recent activity, extras — and
+ * everything deeper opens over it. `tab` survives as the name of whichever sheet is up, which is
+ * why the existing transitions still work untouched: "View in Activity" from an unconfirmed send
+ * still sets 'activity', and now that opens the full list rather than switching a tab.
  */
-const VISIBLE_TABS = ['overview', 'activity'] as const
-
-/** Send and Receive are tasks, and tasks get a sheet. See primitives/Sheet. */
-const SHEET_TABS: readonly WalletTab[] = ['send', 'receive']
+const SHEET_TABS = ['send', 'receive', 'activity'] as const satisfies readonly WalletTab[]
+void SHEET_TABS // documentation of the set; the branches below name each member directly.
 
 /** Balances after the move lands — the number the M4 report found missing from both reviews. */
 export interface Resulting { privateAfter: bigint; publicAfter: bigint }
@@ -154,9 +152,14 @@ export interface WalletModalV2Props {
   overviewExtras?: ReactNode
   send?: SendPanelProps
   receive?: { address: string | null; copied: boolean; onCopy: () => void }
-  /** Pre-rendered rows — see ActivityPanel for why this is children, not data. */
-  activity?: ReactNode
-  activityEmpty?: boolean
+  /**
+   * Pre-rendered rows, NEWEST FIRST.
+   *
+   * An array rather than a node so the page can take the first three without reaching into
+   * children. They arrive pre-rendered because an inbound row resolves its own amount through a
+   * hook, which has to happen per row and cannot be lifted into a data shape.
+   */
+  activity?: ReactNode[]
   /**
    * A balance refresh is running.
    *
@@ -205,9 +208,7 @@ export default function WalletModalV2(p: WalletModalV2Props) {
           {p.onClose && <span role="button" tabIndex={0} onClick={p.onClose} onKeyDown={e => e.key === 'Enter' && p.onClose!()} style={iconBtn} aria-label="Close">✕</span>}
         </>} />
         <Body gap={14} chrome={p.chrome}>
-          {p.onTab && <TabBar tabs={VISIBLE_TABS} active={tab === 'overview' || tab === 'activity' ? tab : 'overview'} onSelect={p.onTab} />}
-
-          {(tab === 'overview' || SHEET_TABS.includes(tab)) && <>
+          <>
             {p.inFlightText && <InFlightBanner text={p.inFlightText} />}
             <TotalHero
               total={p.total} privateBalance={p.privateBalance} publicBalance={p.publicBalance}
@@ -222,11 +223,14 @@ export default function WalletModalV2(p: WalletModalV2Props) {
             {/* The portfolio. One real asset today — see assets.tsx for why that is a presentation
                 and not a model. `onOpenAsset` is unset until the detail page exists, which is what
                 keeps the row from advertising a destination it cannot reach. */}
+            <MoveList entries={p.entries} lockedText={p.lockedText} lockedIsFlight={p.lockedIsFlight} />
             <AssetsPanel
               privateBalance={p.privateBalance} publicBalance={p.publicBalance}
               total={p.total} hidden={p.hidden} onOpen={p.onOpenAsset}
             />
-            <MoveList entries={p.entries} lockedText={p.lockedText} lockedIsFlight={p.lockedIsFlight} />
+            {p.activity && p.onTab && (
+              <RecentActivity rows={p.activity} onViewAll={() => p.onTab!('activity')} />
+            )}
             {p.faucet && <FaucetPanel {...p.faucet} />}
             {p.ons && <OnsPanel {...p.ons} />}
             {/* Faucet and name, side by side where there is room. `auto-fit` + a 280 floor does
@@ -237,13 +241,7 @@ export default function WalletModalV2(p: WalletModalV2Props) {
                 {p.overviewExtras}
               </div>
             )}
-          </>}
-
-          {tab === 'activity' && (
-            <ActivityPanel empty={p.activityEmpty ?? !p.activity} hidden={p.hidden} onToggleHidden={p.onToggleHidden}>
-              {p.activity}
-            </ActivityPanel>
-          )}
+          </>
         </Body>
       </ModalShell>
   )
@@ -266,6 +264,11 @@ export default function WalletModalV2(p: WalletModalV2Props) {
       {tab === 'receive' && p.receive && (
         <Sheet title="Receive" onClose={() => p.onTab?.('overview')}>
           <ReceivePanel {...p.receive} />
+        </Sheet>
+      )}
+      {tab === 'activity' && (
+        <Sheet title="Activity" onClose={() => p.onTab?.('overview')}>
+          <ActivityPanel rows={p.activity ?? []} />
         </Sheet>
       )}
       {m.step !== 'idle' && (

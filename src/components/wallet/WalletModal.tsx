@@ -121,6 +121,14 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
   } = useWallet()
 
   const [tab, setTab] = useState<WalletTab>('overview')
+  /**
+   * Whether the asset page is showing.
+   *
+   * A ROOT VIEW, not a sheet — somewhere you navigate to and come back from. It is deliberately NOT
+   * reset when a flow ends: finishing a shield started from the asset page should leave you on the
+   * asset page, which is where you were.
+   */
+  const [assetOpen, setAssetOpen] = useState(false)
   const [addrCopied, setAddrCopied] = useState(false)
 
   const [sendRecipient, setSendRecipient] = useState('')
@@ -880,6 +888,9 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
       onRetryMove={() => { setMoveStep('form'); setMoveError('') }}
       onCopyTx={t => { navigator.clipboard.writeText(t).catch(() => {}) }}
       onRetryBalance={handleRefresh}
+      assetOpen={assetOpen}
+      onOpenAsset={() => setAssetOpen(true)}
+      onCloseAsset={() => setAssetOpen(false)}
       faucet={undefined}
       overviewExtras={<><FaucetClaimPanel /><OnsRegisterPanel /></>}
       send={{

@@ -28,6 +28,7 @@ import {
   ActivityPanel, FaucetPanel, OnsPanel, ReceivePanel, RecentActivity, SendPanel, VerbatimBox,
   type FaucetPanelProps, type OnsPanelProps, type SendPanelProps,
 } from './panels'
+import { AssetDetail } from './AssetDetail'
 import { AssetsPanel } from './assets'
 import type { BalanceView } from './balances'
 import { TotalHero } from './TotalHero'
@@ -134,8 +135,12 @@ export interface WalletModalV2Props {
   onRetryMove: () => void
   onCopyTx: (txId: string) => void
   onRetryBalance?: () => void
-  /** Opens the asset detail page. Unset until that page exists (stage 9). */
+  /** Opens the asset detail page. The assets row is inert while this is unset. */
   onOpenAsset?: () => void
+  /** True while the asset page is the root view. Sheets still open over it. */
+  assetOpen?: boolean
+  /** Back to the wallet. */
+  onCloseAsset?: () => void
 
   // ── The areas beyond the balance card. Omit one and its tab renders nothing. ──
   tab?: WalletTab
@@ -189,6 +194,12 @@ export default function WalletModalV2(p: WalletModalV2Props) {
   // Every flow is a sheet over this, so the wallet a user is operating on stays visible behind the
   // thing they are doing to it. Before stage 5 the move flow REPLACED this view outright, which
   // meant shielding funds hid the balances the move was about.
+  //
+  // The asset page is a root view TOO, swapped in here rather than layered over — it is a place you
+  // navigate to and come back from, not something you do to the wallet. Every sheet below opens
+  // over it identically, which is what lets it reuse the flows rather than restate them.
+  const showAsset = !!p.assetOpen && !!p.onCloseAsset
+
   const root = (
       <ModalShell chrome={p.chrome}>
         <RootHeader chip={p.networkChip} chrome={p.chrome} right={<>
@@ -208,6 +219,17 @@ export default function WalletModalV2(p: WalletModalV2Props) {
           {p.onClose && <span role="button" tabIndex={0} onClick={p.onClose} onKeyDown={e => e.key === 'Enter' && p.onClose!()} style={iconBtn} aria-label="Close">✕</span>}
         </>} />
         <Body gap={14} chrome={p.chrome}>
+          {showAsset ? (
+            <AssetDetail
+              privateBalance={p.privateBalance} publicBalance={p.publicBalance}
+              total={p.total} hidden={p.hidden} entries={p.entries}
+              activity={p.activity ?? []}
+              onBack={p.onCloseAsset!}
+              onSend={() => p.onTab?.('send')}
+              onReceive={() => p.onTab?.('receive')}
+              onViewAllActivity={() => p.onTab?.('activity')}
+            />
+          ) : (
           <>
             {p.inFlightText && <InFlightBanner text={p.inFlightText} />}
             <TotalHero
@@ -242,6 +264,7 @@ export default function WalletModalV2(p: WalletModalV2Props) {
               </div>
             )}
           </>
+          )}
         </Body>
       </ModalShell>
   )

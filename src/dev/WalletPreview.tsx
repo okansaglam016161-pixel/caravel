@@ -123,6 +123,7 @@ function entriesFor(s: Scenario, onOpen: (d: Dir) => void): { entries: EntryProp
 function Drive() {
   /** Which surface to draw. The page layout is wide, so it is worth checking here too. */
   const [chrome, setChrome] = useState<'modal' | 'page'>('modal')
+  const [assetOpen, setAssetOpen] = useState(false)
   const [scenario, setScenario] = useState<Scenario>('both')
   const [hidden, setHidden] = useState(false)
   const [showFacts, setShowFacts] = useState(true)
@@ -204,6 +205,7 @@ function Drive() {
 
   const props: WalletModalV2Props = {
     chrome,
+    assetOpen, onOpenAsset: () => setAssetOpen(true), onCloseAsset: () => setAssetOpen(false),
     privateBalance: priv, publicBalance: pub, hidden, networkChip: 'Esmeralda testnet',
     total: computeTotal({
       privateBalance: priv, publicBalance: pub, privateGeneration: 1, publicGeneration: 1, settleLagged: false, privateIncomplete: incomplete,
@@ -375,6 +377,8 @@ function Drive() {
         <div style={{ display: 'flex', gap: 8 }}>
           <button onClick={() => setChrome('modal')} style={{ ...btn(chrome === 'modal'), width: 'auto', padding: '6px 14px' }}>Modal chrome</button>
           <button onClick={() => setChrome('page')} style={{ ...btn(chrome === 'page'), width: 'auto', padding: '6px 14px' }}>Page chrome</button>
+          <span style={{ width: 12 }} />
+          <button onClick={() => setAssetOpen(v => !v)} style={{ ...btn(assetOpen), width: 'auto', padding: '6px 14px' }}>Asset page</button>
         </div>
         {/* The page fills its container, so the harness gives it one the width of the real pane. */}
         <div style={chrome === 'page'
@@ -465,6 +469,10 @@ function Gallery() {
     { label: 'FAUCET · ALREADY HAS PLENTY', props: still(faucetAt('plenty')) },
     { label: 'FAUCET · UNAVAILABLE', props: still(faucetAt('error')) },
     { label: 'FAUCET · LOCKED', props: still(faucetAt('locked')) },
+
+    // ── The asset page ──
+    { label: 'ASSET · XTR', props: still({ assetOpen: true, onCloseAsset: noop, onOpenAsset: noop }) },
+    { label: 'ASSET · BALANCES HIDDEN', props: still({ assetOpen: true, hidden: true, onCloseAsset: noop, onOpenAsset: noop }) },
 
     // ── The @name entry card. The overview slot the app shows before the flow is opened. ──
     { label: 'NAME CARD · UNCLAIMED', props: still({ ons: undefined, overviewExtras: <NameCard claimedName={null} onClaim={noop} /> }) },

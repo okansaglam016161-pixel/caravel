@@ -39,84 +39,167 @@ export interface FaucetPanelProps {
   onRefresh: () => void
 }
 
-export function FaucetPanel({ phase, received, balance, message, onClaim, onRefresh }: FaucetPanelProps) {
-  const GRANT = '+1,000 XTR'
-
-  if (phase === 'done') {
-    return (
-      <Panel tone="teal" titleColor={C.bright} title={<><CheckDot />Funds received</>}>
-        <PanelText color={C.tealLabel}>
-          {message ?? (received !== undefined
-            ? `${XTR(received)} added. You can send it, make it public, or register a name.`
-            : 'Your balance has been updated.')}
-        </PanelText>
-        <Button tone="disabled">Claimed ✓</Button>
-      </Panel>
-    )
-  }
-
-  // NOT AN ERROR. The claim committed; only the balance display is behind.
-  if (phase === 'lagging') {
-    return (
-      <Panel tone="amber" title={<><span style={{ width: 8, height: 8, borderRadius: '50%', background: C.warn, animation: 'cv-pulse 1.6s ease-in-out infinite' }} />Funds sent, not visible yet</>}>
-        <PanelText>The faucet confirmed. Your balance hasn’t caught up — this can take a minute, and nothing is at risk.</PanelText>
-        <Button tone="neutral" onClick={onRefresh}>Refresh balance</Button>
-      </Panel>
-    )
-  }
-
-  if (phase === 'error') {
-    return (
-      <Panel tone="danger" titleColor={C.dangerText} title={<><Alert size={16} color={C.danger} />Faucet unavailable</>}>
-        <PanelText>{message ?? 'The faucet didn’t respond. Nothing was claimed.'}</PanelText>
-        <Button tone="neutral" onClick={onClaim}>Try again</Button>
-      </Panel>
-    )
-  }
-
-  if (phase === 'claiming' || phase === 'verifying') {
-    return (
-      <Panel title="Testnet faucet" meta={GRANT} metaColor={C.teal300}>
-        <PanelText>{phase === 'claiming' ? 'Asking the faucet for funds.' : 'Waiting for the funds to show up in your balance.'}</PanelText>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, padding: 12, borderRadius: 'var(--r-md)', background: C.inset, border: tealBorder(0.22), color: C.teal300, fontSize: 14, fontWeight: 600 }}>
-          <Spinner size={15} />{phase === 'claiming' ? 'Claiming…' : 'Checking…'}
-        </div>
-      </Panel>
-    )
-  }
-
-  if (phase === 'cooldown') {
-    return (
-      <Panel title="Testnet faucet" titleColor={C.muted} meta="just claimed">
-        <PanelText color={C.faint}>{message ?? 'You’ve already claimed. Try again shortly.'}</PanelText>
-        <Button tone="disabled">Claimed ✓</Button>
-      </Panel>
-    )
-  }
-
-  if (phase === 'plenty') {
-    return (
-      <Panel title="Testnet faucet" titleColor={C.muted} meta={balance !== undefined ? `balance ${fmt6(balance)}` : undefined}>
-        <PanelText color={C.faint}>You already have plenty. Leave the rest for other testers.</PanelText>
-        <Button tone="disabled">Claim funds</Button>
-      </Panel>
-    )
-  }
-
-  const locked = phase === 'locked'
+/**
+ * The extras-row card.
+ *
+ * ONE SHELL FOR BOTH the faucet and the @name entry, because the design draws them as a matched
+ * pair sitting side by side. A tile, two lines, and one control on the right — anything that needs
+ * more than that is not an entry point.
+ */
+function ExtraCard({ tile, title, sub, right, muted = false }: {
+  tile: ReactNode; title: ReactNode; sub: ReactNode; right?: ReactNode; muted?: boolean
+}) {
   return (
-    <Panel title="Testnet faucet" meta={GRANT} metaColor={C.teal300}>
-      <PanelText>Free test funds, signed here in your browser.{locked && ' Unlock your wallet to claim.'}</PanelText>
-      <Button tone={locked ? 'disabled' : 'primary'} onClick={locked ? undefined : onClaim}>Claim funds</Button>
-    </Panel>
+    <div style={{
+      border: '1px solid var(--border)', background: 'var(--surface)', borderRadius: 'var(--r-lg)',
+      padding: '16px 18px', display: 'flex', alignItems: 'center', gap: 12,
+      opacity: muted ? 0.75 : 1,
+    }}>
+      <span style={{
+        width: 34, height: 34, borderRadius: 'var(--r-md)', flexShrink: 0,
+        background: 'var(--accent-wash)', color: 'var(--accent-ink)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        fontSize: 14, fontWeight: 600,
+      }}>{tile}</span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 14, fontWeight: 600, color: C.primary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</div>
+        <div style={{ fontSize: 12.5, color: C.mutedDim, marginTop: 1, lineHeight: 1.45 }}>{sub}</div>
+      </div>
+      {right}
+    </div>
   )
 }
 
-const CheckDot = () => (
-  <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 22, height: 22, borderRadius: '50%', background: tealFill(0.16), flexShrink: 0 }}>
-    <Check size={13} color={C.teal} />
-  </span>
+/** The card's own small button. Accent for the one action worth taking, quiet for everything else. */
+function CardAction({ tone, onClick, children }: {
+  tone: 'primary' | 'quiet' | 'dead'; onClick?: () => void; children: ReactNode
+}) {
+  const dead = tone === 'dead'
+  return (
+    <span
+      role={dead ? undefined : 'button'} tabIndex={dead ? -1 : 0} aria-disabled={dead}
+      onClick={dead ? undefined : onClick}
+      onKeyDown={e => { if (!dead && e.key === 'Enter') onClick?.() }}
+      style={{
+        padding: '8px 14px', borderRadius: 9, fontSize: 12.5, fontWeight: 600,
+        flexShrink: 0, userSelect: 'none', whiteSpace: 'nowrap',
+        cursor: dead ? 'default' : 'pointer',
+        background: tone === 'primary' ? 'var(--accent-400)' : 'transparent',
+        color: tone === 'primary' ? '#FFFFFF' : dead ? C.mutedDim : C.primary,
+        border: tone === 'primary' ? 'none' : `1px solid var(--border${dead ? '' : '-strong'})`,
+      }}
+    >{children}</span>
+  )
+}
+
+const FAUCET_ICON = (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 3v12M12 15l-4-4M12 15l4-4" /><path d="M5 21h14" />
+  </svg>
 )
+
+/**
+ * The testnet faucet.
+ *
+ * A TEMPORARY CARD, DRAWN QUIETLY. It exists only while Caravel runs on Esmeralda, and the design
+ * asks for something that sits still rather than advertising itself. It is also the whole reason
+ * the extras slot is a slot: removing the faucet should be deleting a file and one line, not
+ * unpicking a layout. See crypto/faucet.ts for what else goes with it.
+ *
+ * `message` is the live text the claim itself emits, and it wins over the per-phase line below —
+ * the machine's own words about what it is doing beat a generic caption.
+ */
+export function FaucetPanel({ phase, received, balance, message, onClaim, onRefresh }: FaucetPanelProps) {
+  const spinning = phase === 'claiming' || phase === 'verifying' || phase === 'lagging'
+
+  const line = (): string => {
+    switch (phase) {
+      case 'idle': return 'Claim free test funds to try Caravel.'
+      case 'locked': return 'Unlock your wallet to claim.'
+      case 'claiming': return 'Requesting funds from the faucet.'
+      case 'verifying': return 'Confirming your claim on chain.'
+      case 'done': return received !== undefined ? `${XTR(received)} received.` : 'Funds received.'
+      // NOT AN ERROR. The claim committed; only the balance is behind.
+      case 'lagging': return 'Taking longer than usual. Your funds will arrive.'
+      case 'error': return 'The faucet did not respond. Nothing was claimed.'
+      // No countdown: the wallet does not track one, and inventing "3h 12m" would be a fiction.
+      case 'cooldown': return 'Just claimed. You can claim again shortly.'
+      case 'plenty': return balance !== undefined
+        ? `You have plenty to explore with for now (${fmt6(balance)} XTR).`
+        : 'You have plenty to explore with for now.'
+    }
+  }
+
+  const right = () => {
+    if (spinning) return <Spinner size={15} />
+    if (phase === 'done') {
+      return (
+        <span style={{
+          width: 26, height: 26, borderRadius: 'var(--r-pill)', flexShrink: 0,
+          background: 'rgba(var(--positive-rgb),0.12)', color: 'var(--positive)',
+          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        }}><Check size={13} color="currentColor" /></span>
+      )
+    }
+    if (phase === 'error') return <CardAction tone="quiet" onClick={onClaim}>Retry</CardAction>
+    if (phase === 'locked') return <CardAction tone="dead">Locked</CardAction>
+    if (phase === 'cooldown') return <CardAction tone="dead">Wait</CardAction>
+    if (phase === 'plenty') return <CardAction tone="quiet" onClick={onRefresh}>Refresh</CardAction>
+    return <CardAction tone="primary" onClick={onClaim}>Claim</CardAction>
+  }
+
+  return (
+    <ExtraCard
+      tile={FAUCET_ICON}
+      title="Testnet faucet"
+      sub={message ?? line()}
+      right={right()}
+      muted={phase === 'cooldown' || phase === 'plenty' || phase === 'locked'}
+    />
+  )
+}
+
+/**
+ * The @name entry point, collapsed.
+ *
+ * `claimed` is a FACT ABOUT THE CHAIN, not about this session: the card has to be able to say "you
+ * already have one" to somebody who registered months ago on another device, so the owning name is
+ * looked up rather than remembered. See OnsRegisterPanel.
+ */
+export function NameCard({ claimedName, onClaim, loading }: {
+  claimedName: string | null
+  onClaim: () => void
+  loading?: boolean
+}) {
+  if (claimedName) {
+    return (
+      <ExtraCard
+        tile="@"
+        title={`@${claimedName}`}
+        sub="Registered to this wallet."
+        right={
+          <span style={{
+            display: 'inline-flex', alignItems: 'center', gap: 6, padding: '5px 12px',
+            borderRadius: 'var(--r-pill)', background: 'rgba(var(--positive-rgb),0.12)',
+            color: 'var(--positive)', fontSize: 11.5, fontWeight: 600, flexShrink: 0,
+          }}>
+            <span style={{ width: 5, height: 5, borderRadius: 'var(--r-pill)', background: 'var(--positive)' }} />
+            Registered
+          </span>
+        }
+      />
+    )
+  }
+  return (
+    <ExtraCard
+      tile="@"
+      title="Claim your @name"
+      sub="One identity for payments and messages."
+      right={loading ? <Spinner size={15} /> : <CardAction tone="quiet" onClick={onClaim}>Claim</CardAction>}
+    />
+  )
+}
+
 
 // ══ SEND ══════════════════════════════════════════════════════════════════════
 
@@ -508,6 +591,15 @@ export interface OnsPanelProps {
   onReset: () => void
   onCopyTx: (t: string) => void
 }
+
+/** A small positive dot, for a success headline. Lived in the faucet card until it was reskinned. */
+const CheckDot = () => (
+  <span style={{
+    width: 18, height: 18, borderRadius: 'var(--r-pill)', flexShrink: 0,
+    background: 'rgba(var(--positive-rgb),0.12)', color: 'var(--positive)',
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+  }}><Check size={11} color="currentColor" /></span>
+)
 
 export function OnsPanel({ status, name, policyError, message, feeMicrotari, txId, onName, onCheck, onRegister, onConfirm, onReset, onCopyTx }: OnsPanelProps) {
   if (status === 'done') {

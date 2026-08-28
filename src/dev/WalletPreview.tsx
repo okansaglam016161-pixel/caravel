@@ -15,7 +15,7 @@
 
 import { useState } from 'react'
 import WalletModalV2, { WALLET_TABS, type MoveView, type WalletModalV2Props, type WalletTab } from '../components/wallet/v2/WalletModalV2'
-import { ActivityRowShell, type ActivityRowView, type FaucetPhase, type OnsStatus, type SendView } from '../components/wallet/v2/panels'
+import { ActivityRowShell, NameCard, type ActivityRowView, type FaucetPhase, type OnsStatus, type SendView } from '../components/wallet/v2/panels'
 import type { BalanceView } from '../components/wallet/v2/balances'
 import { computeTotal } from '../components/wallet/v2/total'
 import type { Dir, EntryProps } from '../components/wallet/v2/move'
@@ -464,6 +464,12 @@ function Gallery() {
     { label: 'FAUCET · ALREADY CLAIMED', props: still(faucetAt('cooldown')) },
     { label: 'FAUCET · ALREADY HAS PLENTY', props: still(faucetAt('plenty')) },
     { label: 'FAUCET · UNAVAILABLE', props: still(faucetAt('error')) },
+    { label: 'FAUCET · LOCKED', props: still(faucetAt('locked')) },
+
+    // ── The @name entry card. The overview slot the app shows before the flow is opened. ──
+    { label: 'NAME CARD · UNCLAIMED', props: still({ ons: undefined, overviewExtras: <NameCard claimedName={null} onClaim={noop} /> }) },
+    { label: 'NAME CARD · CLAIMED', props: still({ ons: undefined, overviewExtras: <NameCard claimedName="okz61" onClaim={noop} /> }) },
+    { label: 'NAME CARD · LOOKING UP', props: still({ ons: undefined, overviewExtras: <NameCard claimedName={null} loading onClaim={noop} /> }) },
 
     // ── Name (ONS) ──
     { label: 'NAME · IDLE', props: still(onsAt('idle', '')) },

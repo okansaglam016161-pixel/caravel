@@ -5,10 +5,10 @@
 //   busy handling are all untouched. Only the rendering moved onto v2's OnsPanel, so the card
 //   matches the rest of the modal.
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useWallet } from '../../context/WalletContext'
-import { validateOnsName, checkOnsAvailable, estimateOnsRegistration, registerOnsName, toOnsName } from '../../crypto/ons'
-import { OnsPanel, type OnsStatus } from './v2/panels'
+import { validateOnsName, checkOnsAvailable, estimateOnsRegistration, registerOnsName, toOnsName, ownedOnsNames } from '../../crypto/ons'
+import { NameCard, OnsPanel, type OnsStatus } from './v2/panels'
 import { plainError } from './v2/plainError'
 
 type Status = 'idle' | 'checking' | 'available' | 'taken' | 'estimating' | 'confirm' | 'registering' | 'done' | 'error'
@@ -21,6 +21,35 @@ export default function OnsRegisterPanel() {
   const [msg, setMsg] = useState<string | null>(null)
   const [txId, setTxId] = useState<string | null>(null)
   const [fee, setFee] = useState<bigint | null>(null)
+
+  // ── The card is COLLAPSED until asked ─────────────────────────────────────
+  //
+  // The design draws this slot as an entry point: a line saying what an @name is, and one control.
+  // The registration machine below is unchanged and still lives here — it simply does not occupy
+  // the overview until someone reaches for it.
+  const [open, setOpen] = useState(false)
+
+  /**
+   * The name this wallet already owns, if any.
+   *
+   * LOOKED UP, NOT REMEMBERED. "Claimed" is a fact about the chain, so a wallet that registered
+   * months ago on another device has to be told it already has one rather than being invited to
+   * claim again. This is the same read ProfilePanel uses, and it fails soft: an unreachable lookup
+   * leaves the card in its unclaimed state, which is the harmless way round — the register flow
+   * refuses a taken name anyway.
+   */
+  const [owned, setOwned] = useState<string | null>(null)
+  const [ownedLoading, setOwnedLoading] = useState(true)
+  useEffect(() => {
+    if (!wallet) { setOwnedLoading(false); return }
+    let cancelled = false
+    setOwnedLoading(true)
+    ownedOnsNames(wallet)
+      .then(r => { if (!cancelled) setOwned(r.ok && r.names?.length ? r.names[0].name : null) })
+      .catch(() => { /* leaves the card unclaimed — see above */ })
+      .finally(() => { if (!cancelled) setOwnedLoading(false) })
+    return () => { cancelled = true }
+  }, [wallet, status])
 
   const clean = toOnsName(name)
   const policyErr = clean ? validateOnsName(clean) : null
@@ -73,6 +102,11 @@ export default function OnsRegisterPanel() {
     : status === 'available' && !canAct ? 'idle'
     : status
 
+  // Collapsed: the design's entry card. Expanded: the flow that was always here.
+  if (!open && status === 'idle') {
+    return <NameCard claimedName={owned} loading={ownedLoading} onClaim={() => setOpen(true)} />
+  }
+
   return (
     <OnsPanel
       status={view}
@@ -85,7 +119,7 @@ export default function OnsRegisterPanel() {
       onCheck={check}
       onRegister={beginRegister}
       onConfirm={confirmRegister}
-      onReset={() => reset('idle')}
+      onReset={() => { reset('idle'); setOpen(false) }}
       onCopyTx={t => { navigator.clipboard.writeText(t).catch(() => {}) }}
     />
   )

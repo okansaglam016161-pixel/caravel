@@ -27,6 +27,7 @@ import {
   ActivityPanel, FaucetPanel, OnsPanel, ReceivePanel, SendPanel,
   type FaucetPanelProps, type OnsPanelProps, type SendPanelProps,
 } from './panels'
+import { AssetsPanel } from './assets'
 import type { BalanceView } from './balances'
 import { TotalHero } from './TotalHero'
 import type { TotalView } from './total'
@@ -107,6 +108,8 @@ export interface WalletModalV2Props {
   onRetryMove: () => void
   onCopyTx: (txId: string) => void
   onRetryBalance?: () => void
+  /** Opens the asset detail page. Unset until that page exists (stage 9). */
+  onOpenAsset?: () => void
 
   // ── The areas beyond the balance card. Omit one and its tab renders nothing. ──
   tab?: WalletTab
@@ -172,6 +175,13 @@ export default function WalletModalV2(p: WalletModalV2Props) {
                 UNDER the hero now rather than as a band beneath the header: it describes the read
                 that produced the numbers above it, and reads as a caption to them. */}
             {p.scanSummary && <ScanStrip scan={p.scanSummary} refreshing={p.refreshing} onRefresh={p.onRefresh} />}
+            {/* The portfolio. One real asset today — see assets.tsx for why that is a presentation
+                and not a model. `onOpenAsset` is unset until the detail page exists, which is what
+                keeps the row from advertising a destination it cannot reach. */}
+            <AssetsPanel
+              privateBalance={p.privateBalance} publicBalance={p.publicBalance}
+              total={p.total} hidden={p.hidden} onOpen={p.onOpenAsset}
+            />
             <MoveList entries={p.entries} lockedText={p.lockedText} lockedIsFlight={p.lockedIsFlight} />
             {p.faucet && <FaucetPanel {...p.faucet} />}
             {p.ons && <OnsPanel {...p.ons} />}

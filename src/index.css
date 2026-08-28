@@ -103,7 +103,39 @@
   --font-mono: "IBM Plex Mono", monospace;
   --font-ui: "Instrument Sans", -apple-system, sans-serif;
 
-  /* ══ DARK ROLE TOKENS — what ships ═════════════════════════════════════ */
+  /* ── Legacy aliases — DEPRECATED, do not use in new code ────────────────
+     296 call sites still name the teal-era tokens. Repointing them here keeps
+     this pass a reviewable colour change rather than a 296-site rename; the
+     rename is a separate mechanical commit. Every one of these resolves to
+     its v0.3 equivalent, so nothing reads teal any more. */
+  --teal-500: var(--accent-400);
+  --teal-300: var(--accent-300);
+  --teal-grad-top: var(--accent-300);
+  --teal-grad-bottom: var(--accent-500);
+  --teal-grad: var(--accent-400); /* was a gradient — the brand is flat now */
+  --teal-500-rgb: var(--accent-400-rgb);
+  --acc: var(--accent-400);
+  --accB: var(--accent-300);
+  --accD: var(--accent-500);
+  --accT: var(--accent-300);
+  --accOn: var(--ink-on-accent);
+  --accRGB: var(--accent-400-rgb);
+  --accL: var(--accent-300);
+
+  /* The teal-era --r-* and --space-* names are GONE rather than aliased: a
+     grep across src found zero consumers of either, and keeping --space-6
+     alive would have been actively harmful — it meant 6px here and means
+     6 × 4px = 24px in the foundation. A dead token with a changed meaning is
+     the one kind worth deleting outright. */
+}
+
+/* ══ DARK ROLE TOKENS — the app-wide default, and any opted-in subtree ═════
+   Matched on :root AND on [data-theme="dark"] so a subtree can be an
+   ALWAYS-DARK ISLAND inside a light page. The wallet's vault surfaces need
+   exactly that: the foundation keeps the balance hero and nav on navy in both
+   themes, so their contents must resolve the dark ramp whatever the page is. */
+:root,
+[data-theme="dark"] {
 
   /* Surfaces. Dark elevation = one surface step up (900 → 800) + the shadow. */
   --surface-void: var(--navy-950);
@@ -127,8 +159,6 @@
   --text-disabled: #46648A;
   --text-name: #F2F6FA;
   --text-note: #A3B4C8;
-  --text-accent-dim: #46648A;
-  --text-vault-label: var(--vault-label);
 
   /* Borders. `--border-rgb` is the tint triplet the app uses at 10–45% alpha
      throughout; `--border` / `--border-strong` are the foundation's solids. */
@@ -147,6 +177,12 @@
   --danger-rgb: 255, 138, 115;
 
   --ink-on-accent: #FFFFFF;
+
+  /* The accent as INK and as a WASH on a page surface. Theme-dependent because
+     the dark theme tints the lighter step — a .10 wash of 400 on navy barely
+     reads. The design calls these --tileInk / --tile. */
+  --accent-ink: var(--accent-300);
+  --accent-wash: rgba(var(--accent-300-rgb), 0.12);
 
   /* ── Composite surfaces ─────────────────────────────────────────────────
      Not scale entries — specific compositions built out of the scale. Every
@@ -178,33 +214,12 @@
   --avatar-moss-ink: #C7ECE2;
   --avatar-amber: linear-gradient(135deg, #4A3A14, #6E5A24);
   --avatar-amber-ink: #ECDFC7;
-
-  /* ── Legacy aliases — DEPRECATED, do not use in new code ────────────────
-     296 call sites still name the teal-era tokens. Repointing them here keeps
-     this pass a reviewable colour change rather than a 296-site rename; the
-     rename is a separate mechanical commit. Every one of these resolves to
-     its v0.3 equivalent, so nothing reads teal any more. */
-  --teal-500: var(--accent-400);
-  --teal-300: var(--accent-300);
-  --teal-grad-top: var(--accent-300);
-  --teal-grad-bottom: var(--accent-500);
-  --teal-grad: var(--accent-400); /* was a gradient — the brand is flat now */
-  --teal-500-rgb: var(--accent-400-rgb);
-  --text-teal-dim: var(--text-accent-dim);
-  --text-teal-label: var(--text-vault-label);
-  --acc: var(--accent-400);
-  --accB: var(--accent-300);
-  --accD: var(--accent-500);
-  --accT: var(--accent-300);
-  --accOn: var(--ink-on-accent);
-  --accRGB: var(--accent-400-rgb);
-  --accL: var(--accent-300);
-
-  /* The teal-era --r-* and --space-* names are GONE rather than aliased: a
-     grep across src found zero consumers of either, and keeping --space-6
-     alive would have been actively harmful — it meant 6px here and means
-     6 × 4px = 24px in the foundation. A dead token with a changed meaning is
-     the one kind worth deleting outright. */
+  /* Deprecated aliases whose targets are theme-dependent, so they must be
+     restated per theme rather than resolved once on :root. */
+  --text-accent-dim: #46648A;
+  --text-teal-dim: #46648A;
+  --text-vault-label: var(--vault-label);
+  --text-teal-label: var(--vault-label);
 }
 
 /* ══ LIGHT ROLE TOKENS ════════════════════════════════════════════════════
@@ -242,6 +257,12 @@
   --text-name: #0A1322;
   --text-note: #44566E;
   --text-accent-dim: #7C8CA0;
+  --text-teal-dim: #7C8CA0;
+  --text-vault-label: var(--vault-label);
+  --text-teal-label: var(--vault-label);
+
+  --accent-ink: var(--accent-500);
+  --accent-wash: rgba(var(--accent-400-rgb), 0.10);
 
   --border: #E3E9EF;
   --border-strong: #D6DEE6;
@@ -258,6 +279,7 @@
 
   --msg-received: var(--navy-50);
   --card-neutral: #FFFFFF;
+  --card-payment-border: var(--border);
   --card-warn: rgba(169, 107, 20, 0.10);
   --card-warn-border: rgba(169, 107, 20, 0.28);
   --card-danger: rgba(194, 70, 50, 0.10);
@@ -296,6 +318,10 @@ a:hover { color: var(--accent-200); }
 .cv-nav-item { transition: background 0.15s, color 0.15s; }
 .cv-nav-item:hover { background: rgba(255, 255, 255, 0.05); color: #F2F6FA; }
 .cv-nav-item[aria-current="page"]:hover { background: var(--nav-selected); }
+
+/* The shield / unshield entries on the wallet overview. */
+.cv-move-entry { transition: border-color 0.15s, background 0.15s; }
+.cv-move-entry:hover { border-color: var(--border-strong); background: var(--surface-raised); }
 
 /* Chat composer + the per-message hover affordances (M3/M4, replies v1, reactions C). Shared by
    BOTH chat views — the DM thread in ChatApp and the group thread in GroupThread — which is exactly

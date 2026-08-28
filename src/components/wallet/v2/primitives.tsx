@@ -35,13 +35,20 @@ export const iconBtn: CSSProperties = {
 export function RootHeader({ chip, right }: { chip?: string; right: ReactNode }) {
   return (
     <div style={headerBase}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <span style={{ fontSize: 17, fontWeight: 700, color: C.primary }}>Wallet</span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <span style={{ fontSize: 20, fontWeight: 600, letterSpacing: '-0.015em', color: C.primary }}>Wallet</span>
+        {/* The network is a STATEMENT OF FACT, not an accent: mono, quiet, with an amber dot. It
+            used to wear the brand colour, which read as a badge of approval for a testnet. */}
         {chip && (
           <span style={{
-            padding: '3px 10px', borderRadius: 'var(--r-pill)', fontSize: 11, fontWeight: 600,
-            color: C.tealLabel, background: tealFill(0.07), border: tealBorder(0.22),
-          }}>{chip}</span>
+            display: 'inline-flex', alignItems: 'center', gap: 6,
+            padding: '5px 12px', borderRadius: 'var(--r-pill)', border: '1px solid var(--border)',
+            fontFamily: MONO, fontSize: 10.5, letterSpacing: '0.08em',
+            color: 'var(--text-muted-dim)', whiteSpace: 'nowrap',
+          }}>
+            <span style={{ width: 5, height: 5, borderRadius: 'var(--r-pill)', background: 'var(--warn)' }} />
+            {chip}
+          </span>
         )}
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>{right}</div>
@@ -144,7 +151,7 @@ export function FeeRow({ fee, last = false }: { fee: string | null; last?: boole
           <Spinner size={12} /><span style={{ fontSize: 12.5, color: C.faint, fontFamily: 'inherit' }}>Pricing…</span>
         </span>
       } />
-    : <DetailRow label="Network fee" value={`${fee} TARI`} last={last} />
+    : <DetailRow label="Network fee" value={`${fee} XTR`} last={last} />
 }
 
 export function TxRow({ txId, onCopy }: { txId: string; onCopy?: () => void }) {
@@ -300,10 +307,10 @@ export function AmountField({ value, onChange, onMax, maxUsed, accent = 'teal', 
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
         <input
           value={value} onChange={e => onChange(e.target.value)} readOnly={readOnly}
-          inputMode="decimal" placeholder="0.000000" aria-label="Amount in TARI"
+          inputMode="decimal" placeholder="0.000000" aria-label="Amount in XTR"
           style={{ flex: 1, minWidth: 0, background: 'transparent', border: 'none', outline: 'none', padding: 0, fontFamily: MONO, fontSize: 26, fontWeight: 600, color: C.bright }}
         />
-        <span style={{ fontFamily: MONO, fontSize: 14, color: C.tealDim, flexShrink: 0 }}>TARI</span>
+        <span style={{ fontFamily: MONO, fontSize: 14, color: C.tealDim, flexShrink: 0 }}>XTR</span>
         {onMax && (
           <span role="button" tabIndex={0} onClick={onMax} onKeyDown={e => e.key === 'Enter' && onMax()} style={{
             padding: '5px 12px', borderRadius: 'var(--r-sm)', fontSize: 12, fontWeight: 600, cursor: 'pointer', flexShrink: 0, userSelect: 'none',
@@ -383,36 +390,51 @@ export interface ScanSummary {
 export function ScanStrip({ scan, refreshing, onRefresh }: {
   scan: ScanSummary; refreshing?: boolean; onRefresh: () => void
 }) {
-  const text = scan.status === 'scanning'
-    ? `${scan.progressScanned.toLocaleString('en-US')} UTXOs scanned…`
+  const scanning = scan.status === 'scanning'
+  const line = scanning
+    ? 'Scanning the chain for new activity'
     : scan.status === 'error'
-      ? 'Scan failed'
-      : scan.status === 'done' || scan.scanned > 0
-        // The literal figures, as they were before the redesign.
-        ? `${scan.scanned.toLocaleString('en-US')} UTXOs scanned · ${scan.owned.toLocaleString('en-US')} owned`
-        : ''
+      ? 'The scan could not finish'
+      : 'Up to date with the chain'
+
+  // The literal figures, kept. They are the only evidence of what a Refresh actually did, and the
+  // design's own strip carries a counter in this slot.
+  const counts = scanning
+    ? `${scan.progressScanned.toLocaleString('en-US')} scanned`
+    : scan.scanned > 0
+      ? `${scan.scanned.toLocaleString('en-US')} scanned · ${scan.owned.toLocaleString('en-US')} owned`
+      : ''
 
   return (
     <div style={{
-      display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
-      padding: '8px 22px', borderBottom: '1px solid var(--border)',
-      background: C.trough, flexShrink: 0,
+      display: 'flex', alignItems: 'center', gap: 10,
+      padding: '10px 14px', borderRadius: 11,
+      border: '1px solid var(--border)', background: 'var(--surface)',
     }}>
+      {(scanning || refreshing)
+        ? <Spinner size={13} />
+        : <span style={{
+            width: 13, height: 13, borderRadius: 'var(--r-pill)', flexShrink: 0,
+            background: scan.status === 'error' ? 'rgba(var(--danger-rgb),0.9)' : 'rgba(var(--positive-rgb),0.9)',
+          }} />}
       <span style={{
-        fontFamily: MONO, fontSize: 11, letterSpacing: '0.02em',
-        color: scan.status === 'error' ? C.dangerText : C.faintDim,
+        flex: 1, minWidth: 0, fontSize: 13,
+        color: scan.status === 'error' ? 'var(--danger-500)' : 'var(--text-body-dim)',
         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-      }}>{text}</span>
-      {refreshing ? (
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 700, color: C.tealDim, flexShrink: 0 }}>
-          <Spinner size={11} />Refreshing…
-        </span>
-      ) : (
-        <span role="button" tabIndex={0} onClick={onRefresh} onKeyDown={e => e.key === 'Enter' && onRefresh()}
-          style={{ fontSize: 12, fontWeight: 700, color: C.teal, cursor: 'pointer', userSelect: 'none', flexShrink: 0 }}>
-          Refresh
-        </span>
+      }}>{refreshing ? 'Refreshing your balances' : line}</span>
+      {counts && (
+        <span style={{ fontFamily: MONO, fontSize: 11.5, color: 'var(--text-muted-dim)', flexShrink: 0 }}>{counts}</span>
       )}
+      <span
+        role="button" tabIndex={refreshing ? -1 : 0} aria-disabled={refreshing}
+        onClick={refreshing ? undefined : onRefresh}
+        onKeyDown={e => { if (!refreshing && e.key === 'Enter') onRefresh() }}
+        style={{
+          fontSize: 12.5, fontWeight: 600, flexShrink: 0, userSelect: 'none',
+          color: refreshing ? 'var(--text-muted-dim)' : 'var(--accent-ink)',
+          cursor: refreshing ? 'default' : 'pointer',
+        }}
+      >Refresh</span>
     </div>
   )
 }

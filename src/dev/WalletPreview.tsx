@@ -536,15 +536,31 @@ const Caption = ({ children }: { children: React.ReactNode }) => (
 
 export default function WalletPreview() {
   const [mode, setMode] = useState<'drive' | 'gallery'>('drive')
+  /**
+   * THEME, IN THE HARNESS ONLY.
+   *
+   * The shipped shell has no theme switch yet — the app is dark until the app-wide light pass. But
+   * the wallet is built theme-aware NOW, and "theme-aware" is a claim that has to be checkable
+   * against the states that matter. This harness is already the place the wallet's unreachable
+   * states are driven from (settling, unavailable, disabled-with-reason), so it is the right place
+   * to cross them with both themes.
+   *
+   * Applied to this subtree, exactly as the landing page does it: the light block in index.css
+   * matches any element, not only :root. Dev-only — dev-wallet.html is never built.
+   */
+  const [theme, setTheme] = useState<'light' | 'dark'>('dark')
   return (
-    <div style={{ minHeight: '100vh', background: C.void, padding: '32px 36px 120px' }}>
+    <div data-theme={theme} style={{ minHeight: '100vh', background: 'var(--surface-void)', padding: '32px 36px 120px' }}>
       <header style={{ display: 'flex', alignItems: 'baseline', gap: 18, flexWrap: 'wrap', marginBottom: 8 }}>
         <h1 style={{ margin: 0, fontSize: 26, fontWeight: 700, letterSpacing: '-0.03em', color: C.primary }}>Wallet modal v2 — preview</h1>
         <span style={{ fontSize: 13.5, color: C.faint }}>Mock data only. No wallet, no network, no fund logic.</span>
       </header>
-      <div style={{ display: 'flex', gap: 8, margin: '18px 0 28px' }}>
+      <div style={{ display: 'flex', gap: 8, margin: '18px 0 28px', flexWrap: 'wrap' }}>
         <button onClick={() => setMode('drive')} style={{ ...btn(mode === 'drive'), width: 'auto', padding: '8px 18px' }}>Drive</button>
         <button onClick={() => setMode('gallery')} style={{ ...btn(mode === 'gallery'), width: 'auto', padding: '8px 18px' }}>Gallery</button>
+        <span style={{ width: 18 }} />
+        <button onClick={() => setTheme('dark')} style={{ ...btn(theme === 'dark'), width: 'auto', padding: '8px 18px' }}>Dark</button>
+        <button onClick={() => setTheme('light')} style={{ ...btn(theme === 'light'), width: 'auto', padding: '8px 18px' }}>Light</button>
       </div>
       {mode === 'drive' ? <Drive /> : <Gallery />}
     </div>

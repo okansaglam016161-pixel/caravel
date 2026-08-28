@@ -22,7 +22,7 @@ import {
 } from './primitives'
 import { fmt6 } from './format'
 
-const TARI = (n: bigint) => `${fmt6(n)} TARI`
+const XTR = (n: bigint) => `${fmt6(n)} XTR`
 
 // ══ FAUCET ════════════════════════════════════════════════════════════════════
 
@@ -40,14 +40,14 @@ export interface FaucetPanelProps {
 }
 
 export function FaucetPanel({ phase, received, balance, message, onClaim, onRefresh }: FaucetPanelProps) {
-  const GRANT = '+1,000 TARI'
+  const GRANT = '+1,000 XTR'
 
   if (phase === 'done') {
     return (
       <Panel tone="teal" titleColor={C.bright} title={<><CheckDot />Funds received</>}>
         <PanelText color={C.tealLabel}>
           {message ?? (received !== undefined
-            ? `${TARI(received)} added. You can send it, make it public, or register a name.`
+            ? `${XTR(received)} added. You can send it, make it public, or register a name.`
             : 'Your balance has been updated.')}
         </PanelText>
         <Button tone="disabled">Claimed ✓</Button>
@@ -225,8 +225,8 @@ function SourceToggle({ source, onSource }: { source: SendSource; onSource: (s: 
     <div>
       <FieldLabel>SPEND FROM</FieldLabel>
       <div style={{ display: 'flex', gap: 4, padding: 4, borderRadius: 'var(--r-md)', background: C.trough, border: '1px solid var(--border)' }}>
-        {opt('private', 'Private', Shield)}
-        {opt('public', 'Public', Eye)}
+        {opt('private', 'Shielded', Shield)}
+        {opt('public', 'Unshielded', Eye)}
       </div>
     </div>
   )
@@ -253,8 +253,8 @@ function PrivacyNote({ source }: { source: SendSource }) {
     }}>
       {isPrivate ? <Shield size={14} color={C.teal} /> : <Eye size={14} color={C.warn} />}
       {isPrivate
-        ? 'Private. The amount and your address stay hidden.'
-        : <span>They receive this privately — but <strong style={{ color: C.warn300, fontWeight: 600 }}>your spend is visible on-chain</strong>, because it comes out of your public balance.</span>}
+        ? 'Shielded. The amount and your address stay hidden.'
+        : <span>They receive this privately — but <strong style={{ color: C.warn300, fontWeight: 600 }}>your spend is visible on-chain</strong>, because it comes out of your unshielded balance.</span>}
     </div>
   )
 }
@@ -272,14 +272,14 @@ export function SendPanel({ view, hidden, onSource, onRecipient, onAmount, onNot
         <AmountField
           value={view.amount} onChange={onAmount} onMax={onMax}
           accent={isPrivate ? 'teal' : 'neutral'}
-          availableLabel={view.canChooseSource ? (isPrivate ? 'Private available' : 'Public available') : 'Available'}
+          availableLabel={view.canChooseSource ? (isPrivate ? 'Shielded available' : 'Unshielded available') : 'Available'}
           availableValue={hidden ? '••••••' : view.available !== null ? fmt6(view.available) : '—'}
           note={view.availabilityNote}
           error={view.error}
         />
         <div>
           <FieldLabel>PRIVATE NOTE · OPTIONAL</FieldLabel>
-          <TextField value={view.note} onChange={onNote} placeholder="Only your recipient sees this" mono={false} multiline ariaLabel="Private note" />
+          <TextField value={view.note} onChange={onNote} placeholder="Only your recipient sees this" mono={false} multiline ariaLabel="Note" />
         </div>
         <PrivacyNote source={view.source} />
         <Button tone={view.canReview ? 'primary' : 'disabled'} onClick={view.canReview ? onReview : undefined}>Review payment</Button>
@@ -293,12 +293,12 @@ export function SendPanel({ view, hidden, onSource, onRecipient, onAmount, onNot
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
         <DetailCard>
           <DetailRow label="To" value={shortAddr(view.recipient)} valueColor={C.body} />
-          <DetailRow label="From" value={view.source === 'private' ? 'Private balance' : 'Public balance'}
+          <DetailRow label="From" value={view.source === 'private' ? 'Shielded balance' : 'Unshielded balance'}
             valueColor={view.source === 'private' ? C.teal300 : C.bodyDim} />
-          <DetailRow label="Amount" value={TARI(view.amountMicrotari)} valueColor={C.bright} />
+          <DetailRow label="Amount" value={XTR(view.amountMicrotari)} valueColor={C.bright} />
           <DetailRow label="Network fee" last value={pricing
             ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><Spinner size={12} /><span style={{ fontFamily: 'inherit', fontSize: 12.5, color: C.faint }}>Pricing…</span></span>
-            : view.feeIsCeiling ? `up to ${TARI(view.feeMicrotari!)}` : TARI(view.feeMicrotari!)} />
+            : view.feeIsCeiling ? `up to ${XTR(view.feeMicrotari!)}` : XTR(view.feeMicrotari!)} />
         </DetailCard>
         <PrivacyNote source={view.source} />
         {view.note && (
@@ -320,7 +320,7 @@ export function SendPanel({ view, hidden, onSource, onRecipient, onAmount, onNot
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 18, padding: '34px 0 30px' }}>
         <Spinner size={34} ring={3} />
         <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
-          <span style={{ fontSize: 16, fontWeight: 700, color: C.bright, textAlign: 'center' }}>Sending {fmt6(view.amountMicrotari)} TARI</span>
+          <span style={{ fontSize: 16, fontWeight: 700, color: C.bright, textAlign: 'center' }}>Sending {fmt6(view.amountMicrotari)} XTR</span>
           <span style={{ fontSize: 13, color: C.mutedDim, textAlign: 'center', maxWidth: 300, lineHeight: 1.5 }}>{view.progress}</span>
         </span>
       </div>
@@ -336,10 +336,10 @@ export function SendPanel({ view, hidden, onSource, onRecipient, onAmount, onNot
           ring={{ fill: tealFill(0.1), border: tealBorder(0.35) }}
           icon={<Check color={C.teal} />}
           title="Sent"
-          sub={`${fmt6(view.amountMicrotari)} TARI to ${shortAddr(view.recipient)}. Your balance updates in about a minute.`}
+          sub={`${fmt6(view.amountMicrotari)} XTR to ${shortAddr(view.recipient)}. Your balance updates in about a minute.`}
         />
         <SettleBar caption="Updating your balance — the payment itself is finished." />
-        <DetailCard><DetailRow label="Network fee" value={TARI(view.feeMicrotari)} last /></DetailCard>
+        <DetailCard><DetailRow label="Network fee" value={XTR(view.feeMicrotari)} last /></DetailCard>
         <TxRow txId={view.txId} onCopy={() => onCopyTx(view.txId)} />
         <Button tone="neutral" onClick={onDone}>Done</Button>
       </div>
@@ -354,10 +354,10 @@ export function SendPanel({ view, hidden, onSource, onRecipient, onAmount, onNot
           icon={<Check color={C.teal} />}
           title="Sent"
           sub={view.lagged
-            ? `${fmt6(view.amountMicrotari)} TARI to ${shortAddr(view.recipient)}. Confirmed on the network — your balance hasn’t caught up yet, so tap Refresh in a moment. Nothing is at risk.`
-            : `${fmt6(view.amountMicrotari)} TARI to ${shortAddr(view.recipient)}`}
+            ? `${fmt6(view.amountMicrotari)} XTR to ${shortAddr(view.recipient)}. Confirmed on the network — your balance hasn’t caught up yet, so tap Refresh in a moment. Nothing is at risk.`
+            : `${fmt6(view.amountMicrotari)} XTR to ${shortAddr(view.recipient)}`}
         />
-        <DetailCard><DetailRow label="Network fee" value={TARI(view.feeMicrotari)} last /></DetailCard>
+        <DetailCard><DetailRow label="Network fee" value={XTR(view.feeMicrotari)} last /></DetailCard>
         <TxRow txId={view.txId} onCopy={() => onCopyTx(view.txId)} />
         <Button tone="primary" onClick={onDone}>Done</Button>
       </div>
@@ -498,7 +498,7 @@ export function OnsPanel({ status, name, policyError, message, feeMicrotari, txI
       <Panel title={`Register @${name}`}>
         <PanelText>This writes your name to the network so people can pay you by it.</PanelText>
         <div style={{ marginBottom: 12 }}>
-          <DetailCard><DetailRow label="Network fee" value={feeMicrotari !== undefined ? TARI(feeMicrotari) : '—'} last /></DetailCard>
+          <DetailCard><DetailRow label="Network fee" value={feeMicrotari !== undefined ? XTR(feeMicrotari) : '—'} last /></DetailCard>
         </div>
         <div style={{ display: 'flex', gap: 10 }}>
           <Button tone="neutral" flex={1} onClick={onReset}>Cancel</Button>

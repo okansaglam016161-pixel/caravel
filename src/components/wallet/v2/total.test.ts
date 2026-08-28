@@ -161,8 +161,8 @@ describe('loading', () => {
 
 describe('unreadableReasonText', () => {
   it.each([
-    ['public-unavailable', /public balance couldn’t be read/],
-    ['private-unavailable', /private balance couldn’t be read/],
+    ['public-unavailable', /unshielded balance couldn’t be read/],
+    ['private-unavailable', /shielded balance couldn’t be read/],
     ['both-unavailable', /Neither balance could be read/],
     ['private-incomplete', /a total would be too low/],
   ] as const)('%s explains which side and what to do', (reason, matcher) => {
@@ -197,7 +197,7 @@ describe('incompleteAvailableNote', () => {
     const note = incompleteAvailableNote()
     const total = unreadableReasonText('private-incomplete')
     // Both must name the cause — a private balance that could not be read in full.
-    for (const s of [note, total]) expect(s).toMatch(/couldn’t read all of your private balance/i)
+    for (const s of [note, total]) expect(s).toMatch(/couldn’t read all of your shielded balance/i)
   })
 
   it('does NOT withdraw the figure the way the total does', () => {

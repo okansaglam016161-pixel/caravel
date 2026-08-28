@@ -38,12 +38,12 @@ export function plainError(message: string): string {
   let out = message
 
   // 1 — "N µtTARI (X TARI)" → "X TARI". The module already did the conversion; keep only that.
-  out = out.replace(/[\d_]+\s*µtTARI\s*\((\d[\d.,]*)\s*TARI\)/gi, '$1 TARI')
+  out = out.replace(/[\d_]+\s*µtTARI\s*\((\d[\d.,]*)\s*TARI\)/gi, '$1 XTR')
 
   // 2 — a bare "N µtTARI" → the same figure in TARI.
   out = out.replace(/([\d_]+)\s*µtTARI/gi, (_m, digits: string) => {
     const n = digits.replace(/_/g, '')
-    try { return `${toTari(BigInt(n))} TARI` } catch { return _m }
+    try { return `${toTari(BigInt(n))} XTR` } catch { return _m }
   })
 
   // 3 — plumbing nouns the user has no model for. Narrow and literal on purpose; this is not a

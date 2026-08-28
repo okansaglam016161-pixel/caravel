@@ -48,7 +48,7 @@ export default function FaucetClaimPanel() {
       // The delta is measured by the loop, from the two readings it actually compared.
       setMsg(settle.delta === null
         ? 'Tokens received. You can now send them, make them public, or register a name.'
-        : `Added ${fmt2(settle.delta)} TARI. You can now send it, make it public, or register a name.`)
+        : `Added ${fmt2(settle.delta)} XTR. You can now send it, unshield it, or register a name.`)
       setCooldown(true)
       setTimeout(() => setCooldown(false), 60_000)
     } else {

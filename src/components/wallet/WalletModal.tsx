@@ -308,10 +308,10 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
 
     if (sendSource === 'public') {
       if (amountMicrotari < MIN_PUBLIC_SEND_MICROTARI) {
-        return `The smallest amount you can send from your public balance is ${toInput(MIN_PUBLIC_SEND_MICROTARI)} TARI.`
+        return `The smallest amount you can send from your unshielded balance is ${toInput(MIN_PUBLIC_SEND_MICROTARI)} XTR.`
       }
       if (amountMicrotari > publicSendCeiling) {
-        return `Not enough public balance — the fee comes out of it too. Most you can send now: ${toInput(publicSendCeiling)} TARI.`
+        return `Not enough unshielded balance — the fee comes out of it too. Most you can send now: ${toInput(publicSendCeiling)} XTR.`
       }
       return null
     }
@@ -322,8 +322,8 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
     // "Insufficient funds" failure after the user has confirmed.
     if (amountMicrotari > privateSendCeiling) {
       return privateSendCeiling === 0n
-        ? 'You have no private funds to send yet.'
-        : `The most you can send privately in one payment is ${toInput(privateSendCeiling)} TARI.`
+        ? 'You have no shielded funds to send yet.'
+        : `The most you can send in one shielded payment is ${toInput(privateSendCeiling)} XTR.`
     }
     return null
   }
@@ -485,7 +485,7 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
       } else {
         setMoveError(
           result.outcome === 'Reject'
-            ? `The network rejected the transaction. Nothing was ${movePrepared.dir === 'reveal' ? 'made public' : 'moved'}, and no fee was taken.`
+            ? `The network rejected the transaction. Nothing was ${movePrepared.dir === 'reveal' ? 'unshielded' : 'moved'}, and no fee was taken.`
             : 'The transaction didn’t reach a decision in time. It may still land — refresh your balances in a moment before trying again.',
         )
         setMoveStep('error')
@@ -697,10 +697,10 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
       step: 'form', dir: moveDir, amount: moveAmount, maxUsed: moveExact !== null,
       available: moveDir === 'conceal' ? revealedAmount : privateAmount,
       canReview: moveAmount !== '' && !belowMin && !overCeiling,
-      error: belowMin ? `The smallest amount you can move is ${toInput(minAmount)} TARI.`
+      error: belowMin ? `The smallest amount you can move is ${toInput(minAmount)} XTR.`
         : overCeiling ? (moveDir === 'reveal'
-            ? `More than you can make public — the fee comes out of your private balance too. Most you can move now: ${toInput(ceiling)} TARI.`
-            : 'More than your public balance.')
+            ? `More than you can unshield — the fee comes out of your shielded balance too. Most you can move now: ${toInput(ceiling)} XTR.`
+            : 'More than your unshielded balance.')
           : moveError || undefined,
       // Said BEFORE they notice it: a private balance that stops just short of zero after "move
       // everything" reads as a bug, or as funds gone astray on an irreversible action.
@@ -708,7 +708,7 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
       // the leftover explains the number, the incompleteness qualifies it.
       leftoverNote: moveDir === 'reveal' && moveExact !== null && privateAmount > ceiling
         ? [
-            `About ${toInput(privateAmount - ceiling)} TARI stays private to cover the fee. It’s still yours and still spendable.`,
+            `About ${toInput(privateAmount - ceiling)} XTR stays shielded to cover the fee. It’s still yours and still spendable.`,
             privateFiguresIncomplete ? incompleteAvailableNote() : '',
           ].filter(Boolean).join(' ')
         : moveDir === 'reveal' && privateFiguresIncomplete
@@ -756,9 +756,9 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
       dir: 'conceal',
       disabledReason:
         !wallet ? 'Unlock your wallet to move funds'
-        : revealed.status === 'unavailable' ? 'Your public balance is unavailable right now'
-        : revealed.status !== 'done' ? 'Checking your public balance…'
-        : revealedAmount <= 0n ? 'Nothing public to move'
+        : revealed.status === 'unavailable' ? 'Your unshielded balance is unavailable right now'
+        : revealed.status !== 'done' ? 'Checking your unshielded balance…'
+        : revealedAmount <= 0n ? 'Nothing unshielded to move'
         : undefined,
       onClick: () => { setMoveDir('conceal'); setMoveStep('form'); setMoveAmount(''); setMoveExact(null); setMoveError('') },
     },
@@ -766,11 +766,11 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
       dir: 'reveal',
       disabledReason:
         !wallet ? 'Unlock your wallet to move funds'
-        : status === 'error' ? 'Your private balance is unavailable right now'
-        : balance === null ? 'Checking your private balance…'
+        : status === 'error' ? 'Your shielded balance is unavailable right now'
+        : balance === null ? 'Checking your shielded balance…'
         // E2 — the trap the M4 report found. Named before an amount is typed, not after.
         : !hasAccount ? 'Still identifying this wallet’s account — try again in a moment'
-        : maxRevealable(outputValues) < MIN_REVEAL_MICROTARI ? 'Not enough private balance to cover an amount plus the fee'
+        : maxRevealable(outputValues) < MIN_REVEAL_MICROTARI ? 'Not enough shielded balance to cover an amount plus the fee'
         : undefined,
       onClick: () => { setMoveDir('reveal'); setMoveStep('form'); setMoveAmount(''); setMoveExact(null); setMoveError('') },
     },

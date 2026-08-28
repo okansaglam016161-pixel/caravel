@@ -7,6 +7,11 @@
 //   THE BALANCE HERE IS THE REAL ONE. It reads the same wallet state and the same computeTotal
 //   precedence as everything else via useWalletTotal, so it cannot disagree with the wallet it sits
 //   beside — including refusing to show a figure while a transaction is settling.
+//
+//   AN ALWAYS-DARK ISLAND, like the vault hero. The rail carries data-theme="dark" so its contents
+//   resolve the dark ramp whatever the page around it is, which is what lets it use ordinary role
+//   tokens instead of the white literals it would otherwise need. Same mechanism, same reason: the
+//   foundation keeps the nav on navy in both themes.
 
 import { useWallet } from '../../context/WalletContext'
 import { useWalletTotal } from '../../hooks/useWalletTotal'
@@ -52,7 +57,7 @@ export default function ServiceNav({ service, onSelect, onProfile }: {
   const total = useWalletTotal()
 
   return (
-    <nav style={{
+    <nav data-theme="dark" style={{
       width: 224, flexShrink: 0, background: 'var(--nav-ground)', borderRight: '1px solid var(--border)',
       padding: '18px 14px', display: 'flex', flexDirection: 'column', gap: 4,
     }}>
@@ -64,7 +69,7 @@ export default function ServiceNav({ service, onSelect, onProfile }: {
         }}>
           <img src="/logo-light.png" alt="" aria-hidden="true" style={{ height: 16, width: 'auto', display: 'block' }} />
         </span>
-        <span style={{ fontSize: 16, fontWeight: 600, color: '#FFFFFF' }}>Caravel</span>
+        <span style={{ fontSize: 16, fontWeight: 600, color: 'var(--text-bright)' }}>Caravel</span>
       </div>
 
       {/* Persistent balance. Muted whenever the figure is not a fact, so the rail never looks like
@@ -76,7 +81,7 @@ export default function ServiceNav({ service, onSelect, onProfile }: {
         <div style={{ fontSize: 11, fontWeight: 500, color: 'var(--vault-label)' }}>Total balance</div>
         <div style={{
           fontSize: 17, fontWeight: 600, fontFeatureSettings: "'tnum'", marginTop: 3,
-          color: balanceHidden || total.status === 'ready' ? '#FFFFFF' : 'var(--vault-label)',
+          color: balanceHidden || total.status === 'ready' ? 'var(--text-bright)' : 'var(--vault-label)',
         }}>
           {totalPillValue(total, balanceHidden)}
           {!balanceHidden && total.status === 'ready' && (
@@ -99,7 +104,7 @@ export default function ServiceNav({ service, onSelect, onProfile }: {
               borderRadius: 'var(--r-md)', border: 'none', width: '100%', textAlign: 'left',
               fontFamily: 'inherit', fontSize: 14, cursor: 'pointer',
               background: on ? 'var(--nav-selected)' : 'transparent',
-              color: on ? '#FFFFFF' : 'var(--navy-200)',
+              color: on ? 'var(--text-bright)' : 'var(--text-body-dim)',
               fontWeight: on ? 600 : 500,
             }}
           >
@@ -126,7 +131,7 @@ export default function ServiceNav({ service, onSelect, onProfile }: {
           display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 600, flexShrink: 0,
         }}>@</span>
         <span style={{
-          flex: 1, minWidth: 0, fontSize: 13, fontWeight: 600, color: '#F2F6FA',
+          flex: 1, minWidth: 0, fontSize: 13, fontWeight: 600, color: 'var(--text-primary)',
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
         }}>{nostrNpub ? shortNpub(nostrNpub) : 'Your profile'}</span>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--vault-label)" strokeWidth="2" strokeLinecap="round" style={{ flexShrink: 0 }}>

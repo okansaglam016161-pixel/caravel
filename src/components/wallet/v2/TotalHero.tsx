@@ -1,152 +1,187 @@
-// The combined balance, as the modal's headline.
+// The combined balance — the vault.
 //
-// THE HIERARCHY THIS ESTABLISHES. The total is the hero; private and public become the breakdown
-// beneath it. That is a deliberate reversal of the v2 design's original argument (private as hero,
-// public as a quiet exception) and it is the right one once value can move both ways: the first
-// question is "how much do I have", and the second is "how much of it is visible".
+// THE HIERARCHY THIS ESTABLISHES. The total is the hero; shielded and unshielded become the
+// breakdown beneath it. The first question is "how much do I have", and the second is "how much of
+// it is visible".
 //
-// WHAT THE BREAKDOWN IS FOR, beyond detail. When the total degrades to `—`, the two rows below are
-// the ONLY thing telling the user which half is the problem. A dash with no breakdown is a dead
-// end; a dash above "private 348.86 / public unavailable" is diagnosable at a glance. So the
-// breakdown renders in every state, including the ones where the total cannot.
+// WHAT THE BREAKDOWN IS FOR, beyond detail. When the total cannot be shown, the two cards below are
+// the ONLY thing telling the user which half is the problem. A missing total with no breakdown is a
+// dead end; one above "shielded 348.86 / unshielded unavailable" is diagnosable at a glance. So the
+// breakdown renders in EVERY state, including the ones where the total cannot.
+//
+// ── WHY THIS IS AN ALWAYS-DARK ISLAND ────────────────────────────────────────
+//
+// The foundation keeps the balance hero and the nav on navy 900–950 in BOTH themes. So this card
+// carries data-theme="dark" and its contents resolve the dark ramp regardless of the page around
+// it — white stays legible, the hairline stays navy, and the amber "Unavailable" pill stays the
+// light amber that reads on navy rather than the dark ochre that reads on white.
+//
+// That is why nothing in here is a literal. Hardcoding the dark values would render identically
+// today and rot silently the moment a token moves; the island declares its context once and then
+// uses ordinary role tokens like everywhere else.
 
-import { C, MONO, warnBorder, warnFill } from './tokens'
+import { C, MONO } from './tokens'
 import { Eye, Shield, Spinner } from './icons'
-import { MASK, fmt6 } from './format'
+import { MASK_SHORT, fmt6 } from './format'
 import { unreadableReasonText, type TotalView } from './total'
 import type { BalanceView } from './balances'
 
-const label = { fontSize: 11, fontWeight: 700, letterSpacing: '0.16em' } as const
+const cardStyle = {
+  background: 'var(--vault-card)',
+  borderRadius: 11,
+  padding: '12px 14px',
+} as const
+
+const num = { fontWeight: 600, color: C.bright, fontFeatureSettings: "'tnum'" } as const
 
 /**
- * One side of the breakdown. Keeps its own state — see the note above.
+ * One side of the breakdown.
  *
- * ── v0.3: THE TWO SIDES ARE NOT COLOUR-CODED ────────────────────────────────
+ * ── THE TWO SIDES ARE NOT COLOUR-CODED ──────────────────────────────────────
  *
- * Private used to be teal and public neutral, so colour alone carried the distinction. The
- * foundation is explicit that it must not: "Private vs public is icon + label, never color." So
- * both rows now share one ground, one label colour and one value colour, and the lock-vs-eye icon
- * plus the word PRIVATE/PUBLIC is what tells them apart. That is a deliberate trade — colour is
- * the faster read — and it is the right one for a wallet: a colour-only signal is invisible to a
- * colour-blind user and unreadable in a screenshot, on the one distinction the product is about.
+ * Shielded used to be teal and unshielded neutral, so colour alone carried the distinction. The
+ * foundation is explicit that it must not: "Private vs public is icon + label, never color." Both
+ * cards share one ground, one label colour and one value colour; the lock-vs-eye icon plus the word
+ * Shielded/Unshielded is what tells them apart. A deliberate trade — colour is the faster read —
+ * and the right one for a wallet: a colour-only signal is invisible to a colour-blind user and
+ * unreadable in a screenshot, on the one distinction the product is about.
  */
-function BreakdownRow({ kind, balance, hidden }: {
-  kind: 'private' | 'public'; balance: BalanceView; hidden: boolean
+function BreakdownCard({ kind, balance, hidden }: {
+  kind: 'shielded' | 'unshielded'; balance: BalanceView; hidden: boolean
 }) {
-  const isPrivate = kind === 'private'
-  const Icon = isPrivate ? Shield : Eye
-  const tint = C.mutedDim
+  const Icon = kind === 'shielded' ? Shield : Eye
 
   const value = () => {
-    if (hidden) return <span style={{ letterSpacing: '0.1em', color: C.bodyDim }}>••••••</span>
-    if (balance.status === 'loading') return <span style={{ fontSize: 12.5, color: C.faint, fontFamily: 'inherit' }}>checking…</span>
-    if (balance.status === 'unavailable') {
+    if (hidden) {
+      return <div style={{ fontFamily: MONO, fontSize: 13, color: C.bright, marginTop: 5 }}>{MASK_SHORT}</div>
+    }
+    if (balance.status === 'loading') {
       return (
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
-          <span style={{ fontFamily: MONO, color: C.faintDim }}>—</span>
-          <span style={{
-            padding: '2px 7px', borderRadius: 999, fontSize: 9.5, fontWeight: 700, letterSpacing: '0.08em',
-            color: C.warn300, background: warnFill(0.08), border: warnBorder(0.3), fontFamily: 'inherit',
-          }}>UNAVAILABLE</span>
-        </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 7 }}>
+          <Spinner size={12} /><span style={{ fontSize: 12.5, color: 'var(--vault-label)' }}>Checking</span>
+        </div>
       )
     }
-    return <span style={{ color: C.bright }}>{fmt6(balance.microtari)}</span>
+    // NEVER A ZERO. `unavailable` means the read failed, not that the balance is nothing, and the
+    // two are a world apart to someone looking at their own money.
+    if (balance.status === 'unavailable') {
+      return (
+        <div style={{ marginTop: 6 }}>
+          <span style={{
+            display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 9px',
+            borderRadius: 'var(--r-pill)', background: 'rgba(var(--warn-rgb),0.12)',
+            color: 'var(--warn)', fontSize: 11, fontWeight: 600,
+          }}>Unavailable</span>
+        </div>
+      )
+    }
+    return (
+      <div style={{ ...num, fontSize: 16, marginTop: 5 }}>
+        {fmt6(balance.microtari)}
+        <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--accent-300)', marginLeft: 5 }}>XTR</span>
+      </div>
+    )
   }
 
   return (
-    <div style={{
-      display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
-      padding: '11px 0', borderTop: '1px solid rgba(120,150,210,0.08)',
-    }}>
-      <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <Icon size={12} color={tint} />
-        <span style={{ ...label, fontSize: 10.5, color: C.mutedDim }}>
-          {isPrivate ? 'PRIVATE' : 'PUBLIC'}
+    <div style={cardStyle}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <Icon size={11} color="var(--vault-label)" />
+        <span style={{ fontSize: 11.5, fontWeight: 500, color: C.bodyDim }}>
+          {kind === 'shielded' ? 'Shielded' : 'Unshielded'}
         </span>
-      </span>
-      <span style={{ fontFamily: MONO, fontSize: 14, fontWeight: 500, textAlign: 'right' }}>{value()}</span>
+      </div>
+      {value()}
     </div>
   )
 }
 
-export function TotalHero({ total, privateBalance, publicBalance, hidden }: {
+export function TotalHero({ total, privateBalance, publicBalance, hidden, onRetry }: {
   total: TotalView
+  /** The SHIELDED balance. The prop keeps the name of the state it is derived from. */
   privateBalance: BalanceView
+  /** The UNSHIELDED balance. */
   publicBalance: BalanceView
   hidden: boolean
+  /** Offered on `unreadable` — the one state where waiting will not fix it. */
+  onRetry?: () => void
 }) {
-  // The headline, and the one line under it that says what kind of number it is.
   const headline = () => {
-    if (hidden) return <span style={{ letterSpacing: '0.08em' }}>{MASK}</span>
-    switch (total.status) {
-      case 'ready': return fmt6(total.microtari)
-      // NO NUMBER while settling. The balances are mid-transition, so any figure here is
-      // arithmetic across two different moments — which is how a confident 1100.207422 once
-      // appeared directly above the words "updating after your last move…". The caption below
-      // carries the whole message on its own.
-      case 'settling': return '···'
-      case 'loading': return '···'
-      case 'unreadable': return '—'
+    if (hidden) {
+      return <div style={{ fontFamily: MONO, fontSize: 24, fontWeight: 500, color: C.bright, marginTop: 8 }}>{MASK_SHORT}</div>
     }
-  }
-
-  const caption = () => {
-    if (hidden) return <span style={{ color: C.tealLabel }}>Hidden from view · tap the eye to show</span>
     switch (total.status) {
       case 'ready':
-        return <span style={{ color: C.tealLabel }}>Your balance, private and public together</span>
-      case 'settling':
-        // "Something IS happening and a correct number is coming on its own."
         return (
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, color: C.tealLabel }}>
-            <Spinner size={11} />updating after your last move…
-          </span>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginTop: 6, flexWrap: 'wrap' }}>
+            <span style={{ ...num, fontSize: 40, fontWeight: 700, letterSpacing: '-0.03em', lineHeight: 1.05 }}>
+              {fmt6(total.microtari)}
+            </span>
+            <span style={{ fontSize: 17, fontWeight: 600, color: 'var(--accent-300)' }}>XTR</span>
+          </div>
+        )
+      // NO NUMBER while settling — deliberately not even a faded one. The balances are
+      // mid-transition, so any figure here is arithmetic across two different moments, which is how
+      // a confident 1100.207422 once appeared directly above the words "updating after your move".
+      case 'settling':
+        return (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 12 }}>
+            <Spinner size={15} ring={2} />
+            <span style={{ fontSize: 13.5, color: C.bodyDim }}>Settling, this can take a moment</span>
+          </div>
         )
       case 'loading':
-        return <span style={{ color: C.tealLabel }}>Checking your balances…</span>
+        // A skeleton, not a zero and not a dash: nothing is wrong, we simply have no reading yet.
+        return <div style={{ width: 150, height: 30, borderRadius: 8, background: 'var(--vault-card)', marginTop: 10 }} />
       case 'unreadable':
-        // "Nothing is pending. We cannot read one side, and waiting will not fix it."
-        return <span style={{ color: C.warn300, lineHeight: 1.5 }}>{unreadableReasonText(total.reason)}</span>
+        return (
+          <div style={{ marginTop: 10 }}>
+            <div style={{ fontSize: 14, fontWeight: 500, color: C.primary }}>Balance unreadable right now</div>
+            <div style={{ fontSize: 12.5, color: 'var(--vault-label)', marginTop: 3, lineHeight: 1.5 }}>
+              {unreadableReasonText(total.reason)}
+              {onRetry && <>{' '}<span
+                role="button" tabIndex={0} onClick={onRetry}
+                onKeyDown={e => e.key === 'Enter' && onRetry()}
+                style={{ color: 'var(--accent-300)', cursor: 'pointer', fontWeight: 600 }}
+              >Retry</span></>}
+            </div>
+          </div>
+        )
     }
   }
 
-  const degraded = total.status === 'unreadable' && !hidden
+  // Said once, under the breakdown, when a side is the reason the total is missing. The cards above
+  // show WHICH half failed; this line says what that costs.
+  const unreadableSide =
+    !hidden && total.status === 'unreadable' && privateBalance.status === 'unavailable' ? 'shielded'
+    : !hidden && total.status === 'unreadable' && publicBalance.status === 'unavailable' ? 'unshielded'
+    : null
 
   return (
-    <div style={{
-      padding: '24px 22px 18px', borderRadius: 'var(--r-xl)',
-      background: degraded ? C.disabled : C.heroGrad,
-      border: degraded ? `1px dashed rgba(var(--warn-rgb),0.30)` : '1px solid var(--border)',
+    <div data-theme="dark" style={{
+      background: 'var(--nav-ground)', border: '1px solid var(--border)',
+      borderRadius: 18, padding: 24,
     }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 12 }}>
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={degraded ? C.mutedDim : C.tealLabel} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <rect x="2" y="6" width="20" height="13" rx="2.5" /><path d="M2 10h20" />
-        </svg>
-        <span style={{ ...label, color: degraded ? C.mutedDim : C.tealLabel }}>TOTAL BALANCE</span>
+      <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--vault-label)' }}>Total balance</span>
+
+      {headline()}
+
+      {/* Always rendered — when the total cannot be shown, this is the only thing that says why. */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 18 }}>
+        <BreakdownCard kind="shielded" balance={privateBalance} hidden={hidden} />
+        <BreakdownCard kind="unshielded" balance={publicBalance} hidden={hidden} />
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 9, flexWrap: 'wrap' }}>
-        <span style={{
-          fontSize: 40, fontWeight: 700, letterSpacing: '-0.03em',
-          fontFeatureSettings: "'tnum'", lineHeight: 1.05,
-          color: degraded ? C.faintDim : C.bright,
-        }}>{headline()}</span>
-        <span style={{ fontSize: 17, fontWeight: 600, color: C.teal300 }}>TARI</span>
-      </div>
-
-      <div style={{ fontSize: 12.5, marginTop: 8, minHeight: 18 }}>{caption()}</div>
-
-      {/* Always rendered — when the total is a dash, this is the only thing that says why. */}
-      <div style={{ marginTop: 14 }}>
-        <BreakdownRow kind="private" balance={privateBalance} hidden={hidden} />
-        <BreakdownRow kind="public" balance={publicBalance} hidden={hidden} />
-      </div>
+      {unreadableSide && (
+        <div style={{ fontSize: 11.5, color: 'var(--vault-label)', marginTop: 10, lineHeight: 1.5 }}>
+          The {unreadableSide} half could not be read, so the total is not shown.
+        </div>
+      )}
     </div>
   )
 }
 
-/** The main-screen pill's figure, as one string. Same rules, no layout. */
+/** The service rail's and the chat pill's figure, as one string. Same rules, no layout. */
 export function totalPillValue(total: TotalView, hidden: boolean): string {
   if (hidden) return '••••'
   switch (total.status) {

@@ -205,11 +205,11 @@ export function unreadableReasonText(reason: TotalUnreadableReason): string {
     case 'both-unavailable':
       return 'Neither balance could be read just now, so there’s no total to show. Tap Refresh to try again.'
     case 'private-unavailable':
-      return 'Your private balance couldn’t be read, so the total isn’t known. Your public balance below is unaffected.'
+      return 'Your shielded balance couldn’t be read, so the total isn’t known. Your unshielded balance below is unaffected.'
     case 'public-unavailable':
-      return 'Your public balance couldn’t be read, so the total isn’t known. Your private balance below is unaffected.'
+      return 'Your unshielded balance couldn’t be read, so the total isn’t known. Your shielded balance below is unaffected.'
     case 'private-incomplete':
-      return 'We couldn’t read all of your private balance, so a total would be too low. The figures below are what we can see.'
+      return 'We couldn’t read all of your shielded balance, so a total would be too low. The figures below are what we can see.'
     case 'settle-lagged':
       // Says what is true — the money moved, the figures have not caught up — and names the one
       // action that fixes it. Never "something went wrong": nothing did.
@@ -235,6 +235,6 @@ export function unreadableReasonText(reason: TotalUnreadableReason): string {
  * stated, which is the honest half of what the total is doing.
  */
 export function incompleteAvailableNote(): string {
-  return 'We couldn’t read all of your private balance, so this may be lower than your real maximum. It’s safe to send — there may simply be more.'
+  return 'We couldn’t read all of your shielded balance, so this may be lower than your real maximum. It’s safe to send — there may simply be more.'
 }
 

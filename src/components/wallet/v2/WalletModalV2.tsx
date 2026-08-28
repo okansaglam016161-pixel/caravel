@@ -139,7 +139,7 @@ export interface WalletModalV2Props {
   scanSummary?: ScanSummary
 }
 
-const TARI = (n: bigint) => `${fmt6(n)} TARI`
+const XTR = (n: bigint) => `${fmt6(n)} XTR`
 
 export default function WalletModalV2(p: WalletModalV2Props) {
   const m = p.move
@@ -159,21 +159,19 @@ export default function WalletModalV2(p: WalletModalV2Props) {
           </span>
           {p.onClose && <span role="button" tabIndex={0} onClick={p.onClose} onKeyDown={e => e.key === 'Enter' && p.onClose!()} style={iconBtn} aria-label="Close">✕</span>}
         </>} />
-        {p.scanSummary && <ScanStrip scan={p.scanSummary} refreshing={p.refreshing} onRefresh={p.onRefresh} />}
         <Body gap={14}>
           {p.onTab && <TabBar tabs={WALLET_TABS} active={tab} onSelect={p.onTab} />}
 
           {tab === 'overview' && <>
             {p.inFlightText && <InFlightBanner text={p.inFlightText} />}
-            <TotalHero total={p.total} privateBalance={p.privateBalance} publicBalance={p.publicBalance} hidden={p.hidden} />
-            {/* The design's own loading footer, shown whenever a read is actually in flight — so a
-                Refresh press is acknowledged even when the previous values are still on screen. */}
-            {(p.refreshing || p.privateBalance.status === 'loading' || p.publicBalance.status === 'loading') && (
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, padding: '2px 0 6px' }}>
-                <Spinner size={13} />
-                <span style={{ fontSize: 12.5, color: C.mutedDim }}>Checking your balances…</span>
-              </div>
-            )}
+            <TotalHero
+              total={p.total} privateBalance={p.privateBalance} publicBalance={p.publicBalance}
+              hidden={p.hidden} onRetry={p.onRetryBalance}
+            />
+            {/* The strip acknowledges a Refresh press and carries the literal scan figures. It sits
+                UNDER the hero now rather than as a band beneath the header: it describes the read
+                that produced the numbers above it, and reads as a caption to them. */}
+            {p.scanSummary && <ScanStrip scan={p.scanSummary} refreshing={p.refreshing} onRefresh={p.onRefresh} />}
             <MoveList entries={p.entries} lockedText={p.lockedText} lockedIsFlight={p.lockedIsFlight} />
             {p.faucet && <FaucetPanel {...p.faucet} />}
             {p.ons && <OnsPanel {...p.ons} />}
@@ -229,15 +227,15 @@ export default function WalletModalV2(p: WalletModalV2Props) {
             {/* THE NUMBER THE OLD REVIEW NEVER SHOWED. The M4 report's gap #10: users want to know
                 what they will be left with, not how the transaction is assembled. */}
             {m.resulting && <>
-              <DetailRow label="Private after" value={TARI(m.resulting.privateAfter)} valueColor={C.teal300} />
-              <DetailRow label="Public after" value={TARI(m.resulting.publicAfter)} last />
+              <DetailRow label="Shielded after" value={XTR(m.resulting.privateAfter)} valueColor={C.teal300} />
+              <DetailRow label="Unshielded after" value={XTR(m.resulting.publicAfter)} last />
             </>}
           </DetailCard>
           <Button
             tone={pricing ? 'disabled' : isReveal ? 'amber' : 'primary'}
             onClick={pricing ? undefined : p.onConfirm}
           >
-            {isReveal ? `Make ${fmt6(m.amountMicrotari)} TARI public` : 'Make private'}
+            {isReveal ? `Unshield ${fmt6(m.amountMicrotari)} XTR` : 'Shield'}
           </Button>
         </Body>
       </ModalShell>
@@ -253,7 +251,7 @@ export default function WalletModalV2(p: WalletModalV2Props) {
           <Spinner size={34} ring={3} />
           <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
             <span style={{ fontSize: 16, fontWeight: 700, color: C.bright, textAlign: 'center' }}>
-              Moving {fmt6(m.amountMicrotari)} TARI to {m.dir === 'conceal' ? 'private' : 'public'}
+              Moving {fmt6(m.amountMicrotari)} XTR to {m.dir === 'conceal' ? 'shielded' : 'unshielded'}
             </span>
             <span style={{ fontSize: 13, color: C.mutedDim, textAlign: 'center' }}>{m.progress}</span>
           </span>
@@ -272,7 +270,7 @@ export default function WalletModalV2(p: WalletModalV2Props) {
             ring={{ fill: tealFill(0.1), border: tealBorder(0.35) }}
             icon={<Check color={C.teal} />}
             title="Move complete"
-            sub={`${fmt6(m.amountMicrotari)} TARI is now ${m.dir === 'conceal' ? 'private' : 'public'}. Your balances update in about a minute.`}
+            sub={`${fmt6(m.amountMicrotari)} XTR is now ${m.dir === 'conceal' ? 'shielded' : 'unshielded'}. Your balances update in about a minute.`}
           />
           <SettleBar caption="Updating balances — the move itself is finished." />
           <TxRow txId={m.txId} onCopy={() => p.onCopyTx(m.txId)} />
@@ -291,15 +289,15 @@ export default function WalletModalV2(p: WalletModalV2Props) {
           <StatusBlock
             ring={{ fill: tealFill(0.1), border: tealBorder(0.35) }}
             icon={<Check color={C.teal} />}
-            title={`${fmt6(m.amountMicrotari)} TARI is now ${m.dir === 'conceal' ? 'private' : 'public'}`}
+            title={`${fmt6(m.amountMicrotari)} XTR is now ${m.dir === 'conceal' ? 'shielded' : 'unshielded'}`}
             sub={m.lagged
               ? 'Confirmed on the network. Your balances haven’t caught up yet — tap Refresh in a moment. Nothing is at risk.'
               : 'The move settled on the network.'}
           />
           {m.resulting && (
             <DetailCard>
-              <DetailRow label="Private" value={TARI(m.resulting.privateAfter)} valueColor={C.teal300} />
-              <DetailRow label="Public" value={TARI(m.resulting.publicAfter)} last />
+              <DetailRow label="Shielded" value={XTR(m.resulting.privateAfter)} valueColor={C.teal300} />
+              <DetailRow label="Unshielded" value={XTR(m.resulting.publicAfter)} last />
             </DetailCard>
           )}
           <TxRow txId={m.txId} onCopy={() => p.onCopyTx(m.txId)} />
@@ -344,7 +342,7 @@ function Headline({ amount, dir }: { amount: bigint; dir: Dir }): ReactNode {
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '14px 0 4px' }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 9, flexWrap: 'wrap', justifyContent: 'center' }}>
         <span style={{ fontSize: 30, fontWeight: 600, letterSpacing: '-0.02em', fontFeatureSettings: "'tnum'", color: C.bright }}>{fmt6(amount)}</span>
-        <span style={{ fontSize: 14, fontWeight: 600, color: C.teal300 }}>TARI</span>
+        <span style={{ fontSize: 14, fontWeight: 600, color: C.teal300 }}>XTR</span>
       </div>
       <span style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, fontWeight: 600, color: isReveal ? C.warn300 : C.tealLabel }}>
         {DIR[dir].verb}

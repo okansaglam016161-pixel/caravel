@@ -20,8 +20,14 @@ export type Dir = 'conceal' | 'reveal'
 
 /** Copy that differs by direction, in one place so the two can never disagree. */
 export const DIR = {
-  conceal: { title: 'Make private', from: 'Public', to: 'Private', verb: 'becomes private', avail: 'Public available' },
-  reveal: { title: 'Make public', from: 'Private', to: 'Public', verb: 'becomes public', avail: 'Private available' },
+  conceal: { title: 'Shield', from: 'Unshielded', to: 'Shielded', verb: 'becomes shielded', avail: 'Unshielded available' },
+  reveal: { title: 'Unshield', from: 'Shielded', to: 'Unshielded', verb: 'becomes unshielded', avail: 'Shielded available' },
+} as const
+
+/** The one-line explanation under each entry title. */
+const BLURB = {
+  conceal: 'Move unshielded funds into your shielded balance.',
+  reveal: 'Make shielded funds visible on chain. This cannot be undone.',
 } as const
 
 // ── Entry list ────────────────────────────────────────────────────────────────
@@ -43,24 +49,40 @@ function Entry({ dir, disabledReason, onClick }: EntryProps) {
       role="button" tabIndex={dead ? -1 : 0} aria-disabled={dead}
       onClick={dead ? undefined : onClick}
       onKeyDown={e => { if (!dead && e.key === 'Enter') onClick?.() }}
+      className={dead ? undefined : 'cv-move-entry'}
       style={{
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
-        padding: '14px 18px', borderRadius: 12, userSelect: 'none',
+        display: 'flex', alignItems: 'center', gap: 12,
+        padding: '14px 16px', borderRadius: 'var(--r-lg)', userSelect: 'none',
         cursor: dead ? 'not-allowed' : 'pointer',
-        background: dead ? C.disabled : isConceal ? tealFill(0.07) : C.raised,
-        border: dead ? border(0.08) : isConceal ? tealBorder(0.3) : border(0.16),
+        background: 'var(--surface)',
+        border: '1px solid var(--border)',
+        opacity: dead ? 0.6 : 1,
       }}
     >
-      <span style={{ display: 'flex', alignItems: 'center', gap: 11, minWidth: 0 }}>
-        <Icon size={15} color={dead ? C.ghost : isConceal ? C.teal : C.mutedDim} width={isConceal ? 2 : 1.9} />
-        <span style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
-          <span style={{ fontSize: 14, fontWeight: 700, color: dead ? C.ghost : isConceal ? C.bright : C.bodyDim }}>
-            {DIR[dir].title}
-          </span>
-          {disabledReason && <span style={{ fontSize: 12, color: C.ghost, lineHeight: 1.4 }}>{disabledReason}</span>}
+      {/* The direction tile. Amber on unshield — the irreversible one — blue on shield. Colour is
+          the SECOND signal here, never the only one: the icon and the word carry it too. */}
+      <span style={{
+        width: 34, height: 34, borderRadius: 'var(--r-md)', flexShrink: 0,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        background: isConceal ? 'var(--accent-wash)' : 'rgba(var(--warn-rgb),0.12)',
+        color: isConceal ? 'var(--accent-ink)' : 'var(--warn)',
+      }}>
+        <Icon size={15} color="currentColor" width={1.9} />
+      </span>
+      <span style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0, flex: 1 }}>
+        <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>{DIR[dir].title}</span>
+        {/* An absent control cannot explain itself, so a dead entry is SHOWN and states its reason
+            rather than being hidden — the design's "disabled action with a stated reason". */}
+        <span style={{ fontSize: 12.5, color: 'var(--text-muted-dim)', lineHeight: 1.45 }}>
+          {disabledReason ?? BLURB[dir]}
         </span>
       </span>
-      {!dead && <span style={{ color: isConceal ? C.teal : C.faint, fontSize: 15, flexShrink: 0 }}>›</span>}
+      {!dead && (
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)"
+          strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+          <path d="M9 18l6-6-6-6" />
+        </svg>
+      )}
     </span>
   )
 }
@@ -69,11 +91,12 @@ function Entry({ dir, disabledReason, onClick }: EntryProps) {
 function EntryLocked({ text, icon }: { text: string; icon?: ReactNode }) {
   return (
     <span style={{
-      display: 'flex', alignItems: 'center', gap: 11, padding: '14px 18px', borderRadius: 12,
-      background: C.disabled, border: border(0.08), cursor: 'not-allowed',
+      display: 'flex', alignItems: 'center', gap: 11, padding: '14px 16px',
+      borderRadius: 'var(--r-lg)', background: 'var(--surface)',
+      border: '1px solid var(--border)', cursor: 'not-allowed', opacity: 0.6,
     }}>
       {icon}
-      <span style={{ fontSize: 13, fontWeight: 600, color: C.ghost }}>{text}</span>
+      <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-muted-dim)' }}>{text}</span>
     </span>
   )
 }
@@ -85,7 +108,7 @@ export function MoveList({ entries, lockedText, lockedIsFlight }: {
   lockedIsFlight?: boolean
 }) {
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       <SectionLabel>MOVE BETWEEN BALANCES</SectionLabel>
       {lockedText
         ? <EntryLocked text={lockedText} icon={lockedIsFlight ? <Lock color={C.ghost} /> : undefined} />
@@ -127,7 +150,7 @@ export function DirectionChips({ dir }: { dir: Dir }) {
       color: active && kind === 'private' ? C.teal300 : C.muted,
     }}>
       {kind === 'private' ? <Shield color={active ? C.teal : C.mutedDim} /> : <Eye color={C.mutedDim} />}
-      {kind === 'private' ? 'Private' : 'Public'}
+      {kind === 'private' ? 'Shielded' : 'Unshielded'}
     </span>
   )
   return (

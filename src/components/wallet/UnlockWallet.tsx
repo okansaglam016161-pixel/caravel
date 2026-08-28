@@ -5,6 +5,7 @@
 
 import { useState } from 'react'
 import { useWallet } from '../../context/WalletContext'
+import { useTheme } from '../../hooks/useTheme'
 import { Logo, CryptoBusy } from '../primitives'
 import PasswordField from './PasswordField'
 import RestoreFlow from './RestoreFlow'
@@ -12,6 +13,9 @@ import { entryCard, pageShell, primaryBtn, disabledBtn } from './entryStyles'
 
 function UnlockScreen({ onRestore }: { onRestore: () => void }) {
   const { unlock } = useWallet()
+  // The gate follows the theme, so the mark has to as well: the navy mark on a light ground, the
+  // light mark on the vault. Without this the white mark renders white-on-white in light.
+  const { theme } = useTheme()
   const [pass, setPass] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -37,7 +41,7 @@ function UnlockScreen({ onRestore }: { onRestore: () => void }) {
   const hasError = !!error
   return (
     <div style={entryCard({ padding: '34px 26px 26px', border: `1px solid ${hasError ? 'rgba(var(--danger-rgb),0.3)' : 'rgba(var(--border-rgb),0.16)'}`, textAlign: 'center' })}>
-      <div style={{ marginBottom: 16 }}><Logo size={40} flat /></div>
+      <div style={{ marginBottom: 16 }}><Logo size={40} onLight={theme === 'light'} /></div>
       <div style={{ fontSize: 22, fontWeight: 700, color: 'var(--text-primary)', letterSpacing: '-0.02em', marginBottom: 8 }}>Welcome back</div>
       <div style={{ fontSize: 14, color: 'var(--text-muted)', lineHeight: 1.6, marginBottom: 22 }}>Enter your password to unlock this device.</div>
       <div style={{ marginBottom: hasError ? 9 : 14, textAlign: 'left' }}>

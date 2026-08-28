@@ -13,6 +13,8 @@ export default function AppRoute() {
   const { wallet, walletExists } = useWallet()
 
   if (wallet) return <AppShell />
+  // The gates follow the theme, so launching from a dark landing page arrives at a dark unlock
+  // screen rather than a light one. Their page backdrop reads role tokens now — see entryStyles.
   if (walletExists) return <UnlockWallet />
   return <CreateWallet />
 }

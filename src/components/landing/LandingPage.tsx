@@ -1,19 +1,13 @@
 //   Landing page — the public marketing page, built to the "Caravel Landing Page" design.
 //
-//   ── THEMING: WHY THE ATTRIBUTE IS ON THIS DIV AND NOT ON <html> ──────────────
+//   ── THEMING ──────────────────────────────────────────────────────────────────
 //
-//   This page ships a working light/dark toggle. The rest of the app does not yet: chat and the
-//   wallet containers still hold dark-only literals, so light tokens under them would render a
-//   half-broken screen.
+//   The toggle here drives the APP-WIDE theme, held by hooks/useTheme and written to <html>. The
+//   attribute on this page's root div is kept only so the scoped .cv-lp rules below can key off it;
+//   it mirrors the app's value rather than owning one.
 //
-//   src/index.css matches its light block on ANY element carrying data-theme="light", not only on
-//   :root. Custom properties inherit, so putting the attribute on this page's root div re-declares
-//   the role tokens for this subtree and nothing else. Switching to light here therefore cannot
-//   leak into /app — pressing "Launch Caravel" lands in the dark app either way, which is correct
-//   until the app-wide light pass lands.
-//
-//   The choice PERSISTS (localStorage, 'caravel-theme') so a returning visitor keeps their pick,
-//   and so the app-wide pass can read the same key rather than inventing a second one.
+//   The choice PERSISTS and is APP-WIDE (see hooks/useTheme): a visitor who picks dark here is still
+//   in dark at the unlock screen and in the wallet behind it.
 //
 //   ── RESPONSIVE ───────────────────────────────────────────────────────────────
 //
@@ -28,25 +22,10 @@
 //   blurry on the way down. Dropping the nav rail below 880 instead lets the right pane, which is
 //   already fluid, simply take the width. The rail is decoration here; the balance card is the point.
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-
-type Theme = 'light' | 'dark'
-
-const THEME_KEY = 'caravel-theme'
-
-/** The design's own default. Dark is one click away and remembered thereafter. */
-const DEFAULT_THEME: Theme = 'light'
-
-function readStoredTheme(): Theme {
-  try {
-    const t = localStorage.getItem(THEME_KEY)
-    return t === 'light' || t === 'dark' ? t : DEFAULT_THEME
-  } catch {
-    // Private mode / blocked storage. Not an error worth surfacing — take the default.
-    return DEFAULT_THEME
-  }
-}
+import { useTheme } from '../../hooks/useTheme'
+import ThemeToggle from '../primitives/ThemeToggle'
 
 // ── Icons ─────────────────────────────────────────────────────────────────────
 //
@@ -62,12 +41,6 @@ const svgBase = (size: number, color: string, strokeWidth: number) => ({
   style: { flexShrink: 0 },
 })
 
-const Sun = ({ size = 16, color = 'currentColor', strokeWidth = 2 }: IconProps) => (
-  <svg {...svgBase(size, color, strokeWidth)}><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></svg>
-)
-const Moon = ({ size = 16, color = 'currentColor', strokeWidth = 2 }: IconProps) => (
-  <svg {...svgBase(size, color, strokeWidth)}><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" /></svg>
-)
 const Wallet = ({ size = 16, color = 'currentColor', strokeWidth = 1.8 }: IconProps) => (
   <svg {...svgBase(size, color, strokeWidth)}><rect x="2.5" y="6" width="19" height="13" rx="2.5" /><path d="M2.5 10h19" /><path d="M15.5 14.5h2" /></svg>
 )
@@ -641,8 +614,6 @@ const LANDING_CSS = `
 
 .cv-lp-primary { transition: background 0.15s; }
 .cv-lp-primary:hover { background: var(--accent-hover) !important; }
-.cv-lp-icon-btn { transition: border-color 0.15s; }
-.cv-lp-icon-btn:hover { border-color: var(--border-strong); }
 
 /* ── ≤1024: the multi-column grids collapse; the rhythm tightens ── */
 @media (max-width: 1024px) {
@@ -678,7 +649,7 @@ const LANDING_CSS = `
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .cv-lp, .cv-lp-primary, .cv-lp-icon-btn { transition: none; }
+  .cv-lp, .cv-lp-primary, .cv-icon-btn { transition: none; }
 }
 `
 
@@ -686,54 +657,24 @@ const LANDING_CSS = `
 
 export default function LandingPage() {
   const navigate = useNavigate()
-  const [theme, setTheme] = useState<Theme>(readStoredTheme)
-  const rootRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    try { localStorage.setItem(THEME_KEY, theme) } catch { /* blocked storage — the pick just won't persist */ }
-  }, [theme])
-
-  /**
-   * Paint <body> to match this page's theme.
-   *
-   * The theme attribute is scoped to this subtree on purpose (see the header), which leaves <body>
-   * on the app-wide DARK token. The page div covers the viewport so that is invisible in normal
-   * scrolling — but not in overscroll bounce, and not in the browser chrome that samples the body
-   * colour on mobile. Both would flash navy under a light page.
-   *
-   * The value is READ BACK off this element rather than written as a literal, so it stays whatever
-   * --surface-void resolves to and cannot drift from the token. Cleared on unmount, which is what
-   * keeps it from following the user into /app.
-   */
-  useEffect(() => {
-    const el = rootRef.current
-    if (!el) return
-    const prev = document.body.style.background
-    document.body.style.background = getComputedStyle(el).backgroundColor
-    return () => { document.body.style.background = prev }
-  }, [theme])
+  // The APP's theme, not a second copy of it. This page used to hold its own state over the same
+  // storage key, and paint <body> by hand because the attribute was scoped to its own subtree. The
+  // provider puts data-theme on <html>, so <body> is already correct and the choice a visitor makes
+  // here is the one the gate screens and the wallet open in.
+  const { theme } = useTheme()
 
   const onOpenApp = useCallback(() => navigate('/app'), [navigate])
-  const toggleTheme = useCallback(() => setTheme(t => (t === 'dark' ? 'light' : 'dark')), [])
 
   return (
-    <div className="cv-lp" data-theme={theme} ref={rootRef}>
+    // The attribute stays for the scoped --lp-tile rules below; the value now comes from the app.
+    <div className="cv-lp" data-theme={theme}>
       <style>{LANDING_CSS}</style>
 
       {/* Top bar */}
       <div className="cv-lp-bar">
         <Lockup tile={32} mark={17} text={18} />
         <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-          <button
-            onClick={toggleTheme}
-            aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
-            className="cv-lp-icon-btn"
-            style={{
-              cursor: 'pointer', width: 36, height: 36, borderRadius: 'var(--r-md)',
-              border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text-body-dim)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-            }}
-          >{theme === 'dark' ? <Sun /> : <Moon />}</button>
+          <ThemeToggle />
           <LaunchButton onClick={onOpenApp} />
         </div>
       </div>

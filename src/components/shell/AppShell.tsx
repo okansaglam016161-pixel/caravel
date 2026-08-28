@@ -26,6 +26,7 @@ import { useState } from 'react'
 import { useWallet } from '../../context/WalletContext'
 import { avatarFor } from '../chat/chatDisplay'
 import ChatApp from '../chat/ChatApp'
+import DarkPin from './DarkPin'
 import ProfilePanel from '../wallet/ProfilePanel'
 import WalletPage from '../wallet/WalletPage'
 import NamePage from './NamePage'
@@ -53,11 +54,16 @@ export default function AppShell() {
           stands and gets its own design pass later; stripping its header now would mean editing
           2,300 lines we are otherwise not touching. */}
       <Pane show={service === 'wallet'}><WalletPage /></Pane>
-      <Pane show={service === 'chat'}><ChatApp /></Pane>
+      {/* Pinned dark until the chat redesign — see DarkPin. */}
+      <Pane show={service === 'chat'}>
+        <DarkPin style={{ display: 'flex', flex: 1, minWidth: 0, height: '100%' }}><ChatApp /></DarkPin>
+      </Pane>
       <Pane show={service === 'name'}><NamePage /></Pane>
 
       {profileOpen && (
-        <ProfilePanel onClose={() => setProfileOpen(false)} avatar={avatarFor(nostrPubkeyHex ?? '')} />
+        <DarkPin>
+          <ProfilePanel onClose={() => setProfileOpen(false)} avatar={avatarFor(nostrPubkeyHex ?? '')} />
+        </DarkPin>
       )}
     </div>
   )

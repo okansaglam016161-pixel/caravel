@@ -319,6 +319,11 @@ a:hover { color: var(--accent-200); }
 .cv-nav-item:hover { background: rgba(255, 255, 255, 0.05); color: #F2F6FA; }
 .cv-nav-item[aria-current="page"]:hover { background: var(--nav-selected); }
 
+/* The shared icon button (ThemeToggle). Was scoped to the landing page until the wallet header
+   needed the same control. */
+.cv-icon-btn { transition: border-color 0.15s; }
+.cv-icon-btn:hover { border-color: var(--border-strong); }
+
 /* The shield / unshield entries on the wallet overview. */
 .cv-move-entry { transition: border-color 0.15s, background 0.15s; }
 .cv-move-entry:hover { border-color: var(--border-strong); background: var(--surface-raised); }

@@ -17,6 +17,7 @@
 //     amount on a transient network failure.
 
 import type { ReactNode } from 'react'
+import ThemeToggle from '../../primitives/ThemeToggle'
 import { C, tealBorder, tealFill } from './tokens'
 import { Alert, Check, Eye, EyeOff, Spinner } from './icons'
 import {
@@ -195,6 +196,12 @@ export default function WalletModalV2(p: WalletModalV2Props) {
               : { ...iconBtn, background: 'transparent', border: 'none', width: 24 }}>
             {p.hidden ? <EyeOff color={C.teal} /> : <Eye size={17} color={C.tealDim} />}
           </span>
+          {/* Theme, beside the hide-balance eye — the two view controls the wallet has, together.
+              The SAME component the landing page's top bar uses, sized to match the eye.
+              PAGE ONLY: the in-chat wallet sits inside a subtree pinned dark until chat is
+              reskinned, so a toggle there would change the app theme while the screen holding it
+              stayed dark — a control that visibly does nothing. */}
+          {p.chrome === 'page' && <ThemeToggle size={30} />}
           {p.onClose && <span role="button" tabIndex={0} onClick={p.onClose} onKeyDown={e => e.key === 'Enter' && p.onClose!()} style={iconBtn} aria-label="Close">✕</span>}
         </>} />
         <Body gap={14} chrome={p.chrome}>

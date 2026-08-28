@@ -7,6 +7,7 @@
 
 import { useState } from 'react'
 import { useWallet } from '../../context/WalletContext'
+import { useTheme } from '../../hooks/useTheme'
 import { Logo, CryptoBusy } from '../primitives'
 import PasswordField from './PasswordField'
 import RestoreFlow from './RestoreFlow'
@@ -18,9 +19,11 @@ const QUIZ_POSITIONS = [5, 12, 20]
 // ── Step 1: Welcome ──────────────────────────────────────────────────────────
 
 function Welcome({ onCreate, onRestore, genError }: { onCreate: () => void; onRestore: () => void; genError?: string }) {
+  // See UnlockWallet: the mark swaps with the theme now that the gate does.
+  const { theme } = useTheme()
   return (
     <div style={entryCard({ padding: '34px 26px 26px', border: '1px solid rgba(var(--border-rgb),0.16)', textAlign: 'center' })}>
-      <div style={{ marginBottom: 18 }}><Logo size={46} flat /></div>
+      <div style={{ marginBottom: 18 }}><Logo size={46} onLight={theme === 'light'} /></div>
       <div style={{ fontSize: 24, fontWeight: 700, color: 'var(--text-primary)', letterSpacing: '-0.02em', marginBottom: 10 }}>Create your Caravel wallet</div>
       <div style={{ fontSize: 14, color: 'var(--text-muted)', lineHeight: 1.6, marginBottom: 24 }}>Your keys are generated here in your browser and never leave this device. We hold nothing.</div>
       {genError && <div style={{ fontSize: 12, color: 'var(--danger-300)', marginBottom: 12 }}>{genError}</div>}

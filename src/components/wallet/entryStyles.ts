@@ -14,14 +14,22 @@ export function entryCard(extra: CSSProperties = {}): CSSProperties {
     boxSizing: 'border-box',
     borderRadius: 'var(--r-xl)',
     background: 'var(--surface)',
+    // The card needs to lift off the backdrop in light, where both are near-white. Free in dark,
+    // where --e2 is a shadow nobody sees against navy.
+    boxShadow: 'var(--e2)',
     ...extra,
   }
 }
 
-// Full-viewport centred backdrop shared by every entry screen (kept from the current app).
+// Full-viewport centred backdrop shared by every entry screen.
+//
+// THE GRADIENT READS ROLE TOKENS, NOT THE NAVY SCALE. It used to be navy-800 → navy-950, which is
+// theme-independent by design and so stayed dark under a light theme — a light card marooned on a
+// navy field, which looks more broken than either theme alone. Surface tokens give the same quiet
+// lift from the centre in both.
 export const pageShell: CSSProperties = {
   minHeight: '100vh',
-  background: 'radial-gradient(900px 460px at 50% 0%, var(--navy-800), var(--navy-950) 70%)',
+  background: 'radial-gradient(900px 460px at 50% 0%, var(--surface-raised), var(--surface-void) 70%)',
   display: 'flex',
   flexDirection: 'column',
   alignItems: 'center',
@@ -50,18 +58,23 @@ export const primaryBtn: CSSProperties = {
 }
 
 // Disabled CTA — the design's explicit disabled treatment (not opacity).
+//
+// `--surface-inset`, NOT `--surface-raised`: in light both the card and `raised` resolve to white,
+// so a raised button on a card would be an invisible control. `inset` steps away from the card in
+// BOTH themes, which is the only property that matters here.
 export const disabledBtn: CSSProperties = {
   ...primaryBtn,
-  background: 'var(--surface-raised)',
+  background: 'var(--surface-inset)',
   border: '1px solid var(--border)',
   color: 'var(--text-disabled)',
   cursor: 'default',
 }
 
-// Secondary CTA — surface-raised with a strong hairline (Copy all / Fix word / Try again).
+// Secondary CTA — a step off the card with a strong hairline (Copy all / Fix word / Try again).
+// `inset` for the same reason as the disabled button: `raised` is the card's own colour in light.
 export const secondaryBtn: CSSProperties = {
   ...primaryBtn,
-  background: 'var(--surface-raised)',
+  background: 'var(--surface-inset)',
   border: '1px solid var(--border-strong)',
   color: 'var(--text-primary)',
 }

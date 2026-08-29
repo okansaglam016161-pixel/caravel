@@ -199,17 +199,22 @@ export function computeTotal(input: TotalInputs): TotalView {
  *
  * Says which side and what to do about it. "Unavailable" alone would leave the user with a dash and
  * no next step, which is most of the way back to just showing a wrong number.
+ *
+ * PRIVATE AND PUBLIC, not shielded and unshielded. These render on the balance hero, directly above
+ * a Privacy card whose two rows are labelled Private and Public — so a sentence naming a "shielded
+ * balance" would appear to be about some third figure. The words here have to be the words the
+ * screen around them uses.
  */
 export function unreadableReasonText(reason: TotalUnreadableReason): string {
   switch (reason) {
     case 'both-unavailable':
       return 'Neither balance could be read just now, so there’s no total to show. Tap Refresh to try again.'
     case 'private-unavailable':
-      return 'Your shielded balance couldn’t be read, so the total isn’t known. Your unshielded balance below is unaffected.'
+      return 'Your private balance couldn’t be read, so the total isn’t known. Your public balance below is unaffected.'
     case 'public-unavailable':
-      return 'Your unshielded balance couldn’t be read, so the total isn’t known. Your shielded balance below is unaffected.'
+      return 'Your public balance couldn’t be read, so the total isn’t known. Your private balance below is unaffected.'
     case 'private-incomplete':
-      return 'We couldn’t read all of your shielded balance, so a total would be too low. The figures below are what we can see.'
+      return 'We couldn’t read all of your private balance, so a total would be too low. The figures below are what we can see.'
     case 'settle-lagged':
       // Says what is true — the money moved, the figures have not caught up — and names the one
       // action that fixes it. Never "something went wrong": nothing did.
@@ -233,8 +238,19 @@ export function unreadableReasonText(reason: TotalUnreadableReason): string {
  * the amount is spendable — it is only possibly less than the true maximum. Refusing it would block
  * a working action to avoid understating a number. So the figure stays and the uncertainty is
  * stated, which is the honest half of what the total is doing.
+ *
+ * ── WHY THE NOUN IS A PARAMETER ──────────────────────────────────────────────
+ *
+ * One condition, two surfaces with different vocabularies. The V3 send flow says "private funds"
+ * from the source toggle through to the receipt, and a note reading "your shielded balance" in the
+ * middle of it would look like a different balance. The move sheets still say shielded, and are
+ * not being restyled this pass. Rather than pick a winner and leave one surface inconsistent, the
+ * caller supplies its own word — the SENTENCE is the shared thing, not the noun.
+ *
+ * The default is the send flow's, because that is the surface where mixed vocabulary is worst: the
+ * user picked "private funds" three fields earlier.
  */
-export function incompleteAvailableNote(): string {
-  return 'We couldn’t read all of your shielded balance, so this may be lower than your real maximum. It’s safe to send — there may simply be more.'
+export function incompleteAvailableNote(word: 'private' | 'shielded' = 'private'): string {
+  return `We couldn’t read all of your ${word} balance, so this may be lower than your real maximum. It’s safe to send — there may simply be more.`
 }
 

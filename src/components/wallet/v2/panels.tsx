@@ -14,11 +14,11 @@
 
 import type { ReactNode } from 'react'
 import { QRCodeSVG } from 'qrcode.react'
-import { C, MONO, tealBorder, tealFill, warnBorder, warnFill } from './tokens'
-import { Alert, Check, Clock, Copy, Eye, Shield, Spinner } from './icons'
+import { C, MONO, tealBorder } from './tokens'
+import { Alert, Check, Clock, Copy, Eye, Lock, Shield, Spinner } from './icons'
 import {
-  AmountField, Body, Button, DetailCard, DetailRow, FieldLabel, Panel, PanelText,
-  SettleBar, StatusBlock, SubHeader, TextField, TxRow,
+  Body, Button, DetailCard, DetailRow, Panel, PanelText,
+  SubHeader, TextField, TxRow,
 } from './primitives'
 import { fmt6 } from './format'
 
@@ -258,7 +258,8 @@ export type SendView =
        */
       feeIsCeiling?: boolean
     }
-  | { step: 'sending'; amountMicrotari: bigint; progress: string; source: SendSource }
+  /** `recipient` is display-only — the V3 frame names who the payment is going to while it runs. */
+  | { step: 'sending'; recipient: string; amountMicrotari: bigint; progress: string; source: SendSource }
   /**
    * BROADCAST AND COMMITTED — the balance has not caught up yet.
    *
@@ -294,15 +295,80 @@ export interface SendPanelProps {
   onRetry: () => void
   onCopyTx: (t: string) => void
   onViewActivity: () => void
+  /** Dismisses the whole sheet. The panel draws its own ✕, so it needs the sheet's close. */
+  onClose?: () => void
 }
 
 const shortAddr = (a: string) => (a.length > 26 ? `${a.slice(0, 14)}…${a.slice(-6)}` : a)
+
+// ── The send sheet's own chrome ───────────────────────────────────────────────
+//
+// The Send sheet renders `bare` (see Sheet): no title bar, no divider, no outer padding. The V3
+// frames draw one card with the title INSIDE it at 21px and a 28px close box on the same line —
+// and the five outcome frames draw no header at all, just a centred column. Neither shape fits a
+// fixed sheet header, so the panel owns its chrome and the Sheet keeps only what it is actually
+// good for: the backdrop, Esc, and refusing to close mid-broadcast.
+
+const CARD = { padding: 32 } as const
+const OUTCOME_CARD = { padding: '48px 32px', textAlign: 'center' as const }
+
+function SendHeader({ title, onClose }: { title: string; onClose?: () => void }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+      <span style={{ flex: 1, fontSize: 21, fontWeight: 600, letterSpacing: '-0.015em', color: C.primary }}>{title}</span>
+      {onClose && (
+        <button
+          onClick={onClose} aria-label="Close" className="cv-icon-btn"
+          style={{
+            cursor: 'pointer', width: 28, height: 28, borderRadius: 8,
+            border: '1px solid var(--border)', background: 'var(--surface)', color: C.mutedDim,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0, flexShrink: 0,
+          }}
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12" /></svg>
+        </button>
+      )}
+    </div>
+  )
+}
+
+/** A field label. Sentence case at 13px — the small-caps tracking of FieldLabel is the move flow's. */
+function Label({ children }: { children: ReactNode }) {
+  return <div style={{ fontSize: 13, fontWeight: 500, color: C.bodyDim }}>{children}</div>
+}
+
+/**
+ * A send input.
+ *
+ * Its own shell rather than TextField's: TextField sits on the recessed trough with 13px radius,
+ * which is the move flow's treatment and is not changing this pass. These sit on the CARD with a
+ * strong hairline, per the V3 frames. `.cv-field` carries the focus ring the design specifies.
+ */
+function SendInput({ value, onChange, placeholder, mono, ariaLabel, invalid }: {
+  value: string; onChange: (v: string) => void; placeholder: string
+  mono?: boolean; ariaLabel: string; invalid?: boolean
+}) {
+  return (
+    <input
+      value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder}
+      spellCheck={false} aria-label={ariaLabel} className="cv-field"
+      style={{
+        width: '100%', boxSizing: 'border-box', marginTop: 8,
+        border: invalid ? '1px solid var(--danger-500)' : '1px solid var(--border-strong)',
+        borderRadius: 10, padding: '12px 14px', outline: 'none',
+        fontFamily: mono ? MONO : 'inherit', fontSize: 13.5,
+        color: C.primary, background: 'var(--surface)',
+      }}
+    />
+  )
+}
 
 /**
  * "Spend from" — shown only when both balances can actually fund a payment.
  *
  * A toggle offering an option that cannot work is worse than no toggle, so when only one side is
- * funded the caller uses it silently and this never renders.
+ * funded the caller uses it silently and this never renders. EXPLICIT EITHER WAY: nothing here ever
+ * falls back to the other balance on its own, and the review screen restates which one was used.
  */
 function SourceToggle({ source, onSource }: { source: SendSource; onSource: (s: SendSource) => void }) {
   const opt = (kind: SendSource, label: string, Icon: typeof Shield) => {
@@ -311,25 +377,25 @@ function SourceToggle({ source, onSource }: { source: SendSource; onSource: (s: 
       <span role="radio" tabIndex={0} aria-checked={on}
         onClick={() => onSource(kind)} onKeyDown={e => e.key === 'Enter' && onSource(kind)}
         style={{
-          flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-          padding: '8px 4px', borderRadius: 8, cursor: 'pointer', userSelect: 'none',
-          fontSize: 12.5, fontWeight: 600,
+          flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
+          padding: '9px 6px', borderRadius: 8, cursor: 'pointer', userSelect: 'none',
+          fontSize: 13, fontWeight: on ? 600 : 500,
           background: on ? 'var(--accent-400)' : 'transparent',
-          color: on ? '#FFFFFF' : 'var(--text-body-dim)',
+          color: on ? '#FFFFFF' : C.bodyDim,
         }}>
-        <Icon size={11} color="currentColor" />{label}
+        <Icon size={12} color="currentColor" />{label}
       </span>
     )
   }
   return (
-    <div>
-      <FieldLabel>SPEND FROM</FieldLabel>
+    <div style={{ marginTop: 24 }}>
+      <Label>Spend from</Label>
       <div style={{
-        display: 'flex', gap: 3, padding: 3, borderRadius: 'var(--r-md)',
+        display: 'flex', gap: 3, padding: 3, borderRadius: 10, marginTop: 8,
         background: 'var(--surface-void)', border: '1px solid var(--border)',
       }}>
-        {opt('private', 'Shielded funds', Shield)}
-        {opt('public', 'Unshielded funds', Eye)}
+        {opt('private', 'Private funds', Lock)}
+        {opt('public', 'Public funds', Eye)}
       </div>
     </div>
   )
@@ -341,177 +407,378 @@ function SourceToggle({ source, onSource }: { source: SendSource; onSource: (s: 
  * THE RECIPIENT'S SIDE IS PRIVATE EITHER WAY — value lands as a confidential output at their
  * stealth address regardless of where it came from. What changes is the SENDER's side: spending
  * from the public balance is a plain `withdraw` naming this account and a readable amount, so an
- * observer learns this account paid out that much. Claiming otherwise would be the one dishonest
- * thing this screen could do, so the public case says it plainly rather than reusing the private
- * copy.
+ * observer learns this account paid out that much. Both lines say which of those is happening.
+ *
+ * ── TWO STATES, ONE TREATMENT ────────────────────────────────────────────────
+ *
+ * Identical length, identical colour, identical weight — only the icon and the noun change. The
+ * public line used to run three times longer and carry an amber emphasis, and that was a category
+ * error: the user has just chosen "Public funds" from a toggle giving both options equal weight,
+ * and answering that choice with a caution colour frames a deliberate, legitimate decision as a
+ * near-miss. Public is a STATE, not a warning.
+ *
+ * IT IS STILL A DISCLOSURE. "Visible on chain" is the whole of what a public spend reveals about
+ * the sender, said plainly. Nothing was softened to make it shorter — the long version's extra
+ * clauses were reassurance and mechanism, not the fact itself.
+ *
+ * The design only draws the private line; the public one is ours, built to the same measure.
  */
 function PrivacyNote({ source }: { source: SendSource }) {
   const isPrivate = source === 'private'
   return (
     <div style={{
-      display: 'flex', gap: 9, padding: '11px 13px', borderRadius: 'var(--r-md)', fontSize: 12, lineHeight: 1.5,
-      background: isPrivate ? tealFill(0.05) : warnFill(0.05),
-      border: isPrivate ? '1px solid var(--border-strong)' : warnBorder(0.28),
-      color: isPrivate ? C.teal300 : C.mutedDim,
+      display: 'flex', alignItems: 'center', gap: 8, marginTop: 24,
+      justifyContent: 'center', textAlign: 'center',
     }}>
-      {isPrivate ? <Shield size={14} color={C.teal} /> : <Eye size={14} color={C.warn} />}
       {isPrivate
-        ? 'Shielded. The amount and your address stay hidden.'
-        : <span>They receive this privately — but <strong style={{ color: C.warn300, fontWeight: 600 }}>your spend is visible on-chain</strong>, because it comes out of your unshielded balance.</span>}
+        ? <Shield size={12} color={C.mutedDim} />
+        : <Eye size={12} color={C.mutedDim} />}
+      <span style={{ fontSize: 12.5, color: C.mutedDim, lineHeight: 1.5, textWrap: 'pretty' }}>
+        {isPrivate
+          ? 'Private. The amount and your address stay hidden.'
+          : 'Public. Your spend is visible on chain.'}
+      </span>
     </div>
   )
 }
 
-export function SendPanel({ view, hidden, onSource, onRecipient, onAmount, onNote, onMax, onReview, onBack, onConfirm, onDone, onRetry, onCopyTx, onViewActivity }: SendPanelProps) {
+/** The full-width action at the foot of a card. */
+function SendButton({ tone, onClick, children, mt = 16 }: {
+  tone: 'primary' | 'quiet' | 'disabled'; onClick?: () => void; children: ReactNode; mt?: number
+}) {
+  const dead = tone === 'disabled'
+  return (
+    <span
+      role="button" tabIndex={dead ? -1 : 0} aria-disabled={dead}
+      onClick={dead ? undefined : onClick}
+      onKeyDown={e => { if (!dead && e.key === 'Enter') onClick?.() }}
+      className={tone === 'quiet' ? 'cv-quiet-btn' : undefined}
+      style={{
+        display: 'block', textAlign: 'center', marginTop: mt, padding: 13,
+        borderRadius: 10, fontSize: 14, fontWeight: 600,
+        cursor: dead ? 'not-allowed' : 'pointer', userSelect: 'none',
+        background: tone === 'primary' ? 'var(--accent-400)' : 'transparent',
+        border: tone === 'primary' ? '1px solid transparent' : '1px solid var(--border-strong)',
+        color: tone === 'primary' ? '#FFFFFF' : dead ? C.mutedDim : C.primary,
+        opacity: dead ? 0.55 : 1,
+      }}
+    >{children}</span>
+  )
+}
+
+/**
+ * The shape all five terminal states share: a circled emblem, a headline, a line of prose, and
+ * whatever that particular outcome can offer you next.
+ */
+function Outcome({ emblem, title, sub, children }: {
+  emblem: ReactNode; title: string; sub: ReactNode; children?: ReactNode
+}) {
+  return (
+    <div style={OUTCOME_CARD}>
+      {emblem}
+      <div style={{ fontSize: 17, fontWeight: 600, color: C.primary, marginTop: 16 }}>{title}</div>
+      <div style={{ fontSize: 13, color: C.mutedDim, marginTop: 6, lineHeight: 1.55, textWrap: 'pretty' }}>{sub}</div>
+      {children}
+    </div>
+  )
+}
+
+/** The circled emblem. `tone` is the only thing that separates a success from a failure here. */
+function Emblem({ tone, children }: { tone: 'positive' | 'accent' | 'danger'; children: ReactNode }) {
+  const skin = {
+    positive: { bg: 'rgba(var(--positive-rgb),0.12)', ink: 'var(--positive)' },
+    accent: { bg: 'var(--accent-wash)', ink: 'var(--accent-ink)' },
+    danger: { bg: 'rgba(var(--danger-rgb),0.12)', ink: 'var(--danger-500)' },
+  }[tone]
+  return (
+    <span style={{
+      width: 40, height: 40, borderRadius: '50%', background: skin.bg, color: skin.ink,
+      display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+    }}>{children}</span>
+  )
+}
+
+/** A monospace receipt line — the fee actually paid, and the transaction it was paid on. */
+function Receipt({ fee, txId, onCopy }: { fee: bigint; txId: string; onCopy: () => void }) {
+  const short = txId.length > 14 ? `${txId.slice(0, 6)}…${txId.slice(-6)}` : txId
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+      marginTop: 18, fontFamily: MONO, fontSize: 11, color: C.faint, flexWrap: 'wrap',
+    }}>
+      <span>fee {fmt6(fee)} XTR</span>
+      <span aria-hidden="true">·</span>
+      <span
+        role="button" tabIndex={0} onClick={onCopy} onKeyDown={e => e.key === 'Enter' && onCopy()}
+        aria-label="Copy transaction id"
+        style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer' }}
+      >tx {short}<Copy size={11} color="currentColor" /></span>
+    </div>
+  )
+}
+
+export function SendPanel({ view, hidden, onSource, onRecipient, onAmount, onNote, onMax, onReview, onBack, onConfirm, onDone, onRetry, onCopyTx, onViewActivity, onClose }: SendPanelProps) {
+  // ══ 2a · FORM ══════════════════════════════════════════════════════════════
   if (view.step === 'form') {
-    const isPrivate = view.source === 'private'
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-        <div>
-          <FieldLabel>TO</FieldLabel>
-          <TextField value={view.recipient} onChange={onRecipient} placeholder="otl_esm_… or @name" ariaLabel="Recipient" />
+      <div style={CARD}>
+        <SendHeader title="Send" onClose={onClose} />
+
+        <div style={{ marginTop: 28 }}>
+          <Label>To</Label>
+          <SendInput value={view.recipient} onChange={onRecipient} placeholder="@name or Ootle address" mono ariaLabel="Recipient" />
         </div>
+
         {view.canChooseSource && <SourceToggle source={view.source} onSource={onSource} />}
-        <AmountField
-          value={view.amount} onChange={onAmount} onMax={onMax}
-          accent={isPrivate ? 'teal' : 'neutral'}
-          availableLabel={view.canChooseSource ? (isPrivate ? 'Shielded available' : 'Unshielded available') : 'Available'}
-          availableValue={hidden ? '••••••' : view.available !== null ? fmt6(view.available) : '—'}
-          note={view.availabilityNote}
-          error={view.error}
-        />
-        <div>
-          <FieldLabel>PRIVATE NOTE · OPTIONAL</FieldLabel>
-          <TextField value={view.note} onChange={onNote} placeholder="Only your recipient sees this" mono={false} multiline ariaLabel="Note" />
+
+        <div style={{ marginTop: 24 }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12 }}>
+            <Label>Amount</Label>
+            <span style={{ fontSize: 12, color: C.mutedDim }}>
+              {/* NAMED ONLY WHEN THE TOGGLE IS NOT THERE TO NAME IT. With the segmented control
+                  directly above showing Private or Public selected, repeating the word here is the
+                  same fact twice; without it, this label is the only thing saying which balance
+                  the figure describes. */}
+              {view.canChooseSource ? 'Available' : view.source === 'private' ? 'Private available' : 'Public available'}{' '}
+              <span style={{ fontFamily: MONO }}>
+                {hidden ? '••••••' : view.available !== null ? `${fmt6(view.available)} XTR` : '—'}
+              </span>
+              {' · '}
+              <span role="button" tabIndex={0} onClick={onMax} onKeyDown={e => e.key === 'Enter' && onMax()}
+                style={{ fontWeight: 500, color: 'var(--accent-ink)', cursor: 'pointer', userSelect: 'none' }}>Max</span>
+            </span>
+          </div>
+          <div className="cv-field" style={{
+            display: 'flex', alignItems: 'baseline', gap: 10, marginTop: 8,
+            border: view.error ? '1px solid var(--danger-500)' : '1px solid var(--border-strong)',
+            borderRadius: 12, padding: '18px 16px',
+          }}>
+            <input
+              value={view.amount} onChange={e => onAmount(e.target.value)}
+              inputMode="decimal" placeholder="0.00" aria-label="Amount in XTR"
+              style={{
+                flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent', padding: 0,
+                fontFamily: 'inherit', fontSize: 32, fontWeight: 700, letterSpacing: '-0.02em',
+                fontFeatureSettings: "'tnum'", color: C.primary,
+              }}
+            />
+            <span style={{ fontSize: 14, fontWeight: 600, color: C.mutedDim, flexShrink: 0 }}>XTR</span>
+          </div>
+          {/* The two things that qualify the figure above. `availabilityNote` is MAX owning up to a
+              truncated scan — the total refuses to show a number on one, and MAX draws from the
+              same set. */}
+          {view.error
+            ? <div style={{ fontSize: 12, color: C.dangerText, marginTop: 8, lineHeight: 1.5 }}>{view.error}</div>
+            : view.availabilityNote
+              ? <div style={{ fontSize: 12, color: C.mutedDim, marginTop: 8, lineHeight: 1.5 }}>{view.availabilityNote}</div>
+              : null}
         </div>
+
+        <div style={{ marginTop: 24 }}>
+          <Label>Note <span style={{ fontWeight: 400, color: C.mutedDim }}>· optional, private</span></Label>
+          <SendInput value={view.note} onChange={onNote} placeholder="Only you and the recipient can see this" ariaLabel="Note" />
+        </div>
+
         <PrivacyNote source={view.source} />
-        <Button tone={view.canReview ? 'primary' : 'disabled'} onClick={view.canReview ? onReview : undefined}>Review payment</Button>
+
+        <SendButton tone={view.canReview ? 'primary' : 'disabled'} onClick={view.canReview ? onReview : undefined}>
+          Review payment
+        </SendButton>
       </div>
     )
   }
 
+  // ══ 2b · REVIEW ════════════════════════════════════════════════════════════
   if (view.step === 'review') {
     const pricing = view.feeMicrotari === null
+    const isPrivate = view.source === 'private'
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-        <DetailCard>
-          <DetailRow label="To" value={shortAddr(view.recipient)} valueColor={C.body} />
-          <DetailRow label="From" value={view.source === 'private' ? 'Shielded balance' : 'Unshielded balance'}
-            valueColor={view.source === 'private' ? C.teal300 : C.bodyDim} />
-          <DetailRow label="Amount" value={XTR(view.amountMicrotari)} valueColor={C.bright} />
-          <DetailRow label={view.feeIsCeiling ? 'Fee, at most' : 'Network fee'} last value={pricing
-            ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><Spinner size={12} /><span style={{ fontFamily: 'inherit', fontSize: 12.5, color: C.faint }}>Pricing…</span></span>
-            : XTR(view.feeMicrotari!)} />
-        </DetailCard>
-        {/* A CEILING IS NOT A MEASUREMENT. The shielded path dry-runs inside submission, so before
-            confirming there is no exact figure to give — and presenting the ceiling as though there
-            were would be a quieter kind of lie than showing no fee at all. */}
+      <div style={CARD}>
+        <SendHeader title="Review" onClose={onClose} />
+
+        <div style={{ textAlign: 'center', marginTop: 28 }}>
+          <div style={{ fontSize: 36, fontWeight: 700, letterSpacing: '-0.02em', fontFeatureSettings: "'tnum'", color: C.primary }}>
+            {fmt6(view.amountMicrotari)} <span style={{ fontSize: 16, fontWeight: 600, color: C.mutedDim }}>XTR</span>
+          </div>
+          <div style={{ fontSize: 13.5, color: C.bodyDim, marginTop: 8 }}>
+            to <span style={{ fontFamily: MONO, fontWeight: 500, color: C.primary, fontSize: 12 }}>{shortAddr(view.recipient)}</span>
+          </div>
+        </div>
+
+        <div style={{
+          display: 'flex', flexDirection: 'column', gap: 11, fontSize: 13.5,
+          marginTop: 28, paddingTop: 20, borderTop: '1px solid var(--border)',
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
+            <span style={{ color: C.mutedDim }}>From</span>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontWeight: 500, color: C.primary }}>
+              {isPrivate ? <Lock size={11} color="var(--accent-ink)" /> : <Eye size={11} color={C.mutedDim} />}
+              {isPrivate ? 'Private funds' : 'Public funds'}
+            </span>
+          </div>
+          {/* A CEILING IS NOT A MEASUREMENT. The private path dry-runs inside submission, so before
+              confirming there is no exact figure to give — and presenting the ceiling as though
+              there were would be a quieter kind of lie than showing no fee at all. The public path
+              prices itself before review, so it states the fee flatly. The LABEL carries the
+              difference; the note below spells it out. */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
+            <span style={{ color: C.mutedDim }}>{view.feeIsCeiling ? 'Fee, at most' : 'Network fee'}</span>
+            <span style={{ fontFamily: MONO, fontWeight: 500, color: C.primary }}>
+              {pricing
+                ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontFamily: 'inherit', color: C.faint }}><Spinner size={12} />Pricing…</span>
+                : `${fmt6(view.feeMicrotari!)} XTR`}
+            </span>
+          </div>
+        </div>
+
         {view.feeIsCeiling && !pricing && (
-          <div style={{ fontSize: 11.5, color: 'var(--text-muted-dim)', marginTop: -6, lineHeight: 1.5 }}>
-            Shielded sends show a fee ceiling. The exact fee is known once it settles.
+          <div style={{ fontSize: 12.5, color: C.mutedDim, marginTop: 12, textAlign: 'center' }}>
+            The exact fee is known once it settles.
           </div>
         )}
-        <PrivacyNote source={view.source} />
+
         {view.note && (
-          <div style={{ padding: '12px 14px', borderRadius: 'var(--r-md)', background: C.trough, border: '1px dashed var(--border-strong)' }}>
-            <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.12em', color: C.tealDim, marginBottom: 6 }}>PRIVATE NOTE</div>
+          <div style={{
+            marginTop: 16, padding: '12px 14px', borderRadius: 10,
+            background: 'var(--surface-void)', border: '1px dashed var(--border-strong)',
+          }}>
+            <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.12em', color: C.faintDim, marginBottom: 6 }}>PRIVATE NOTE</div>
             <div style={{ fontSize: 13, color: 'var(--text-note)', fontStyle: 'italic' }}>“{view.note}”</div>
           </div>
         )}
-        <div style={{ display: 'flex', gap: 10 }}>
-          <Button tone="neutral" flex={1} onClick={onBack}>Back</Button>
-          <Button tone={pricing ? 'disabled' : 'primary'} flex={2} onClick={pricing ? undefined : onConfirm}>Send</Button>
-        </div>
+
+        <SendButton tone={pricing ? 'disabled' : 'primary'} onClick={pricing ? undefined : onConfirm} mt={20}>Send</SendButton>
+        <SendButton tone="quiet" onClick={onBack} mt={8}>Back</SendButton>
       </div>
     )
   }
 
+  // ══ 2c · SENDING ═══════════════════════════════════════════════════════════
+  //
+  // The one state the sheet will not close over — see WalletModalV2. Nothing here can call a
+  // broadcast back, so there is no close control to offer.
   if (view.step === 'sending') {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 18, padding: '34px 0 30px' }}>
-        <Spinner size={34} ring={3} />
-        <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
-          <span style={{ fontSize: 16, fontWeight: 700, color: C.bright, textAlign: 'center' }}>Sending {fmt6(view.amountMicrotari)} XTR</span>
-          <span style={{ fontSize: 13, color: C.mutedDim, textAlign: 'center', maxWidth: 300, lineHeight: 1.5 }}>{view.progress}</span>
-        </span>
+      <div style={OUTCOME_CARD}>
+        <Spinner size={28} ring={3} />
+        <div style={{ fontSize: 17, fontWeight: 600, color: C.primary, marginTop: 18 }}>Sending</div>
+        <div style={{ fontSize: 13, color: C.mutedDim, marginTop: 6 }}>
+          {fmt6(view.amountMicrotari)} XTR to <span style={{ fontFamily: MONO, fontSize: 11.5 }}>{shortAddr(view.recipient)}</span>
+        </div>
+        {/* The builder's own words about which step it is on. Kept below the headline rather than
+            replacing it, so the screen does not appear to change state on every progress tick. */}
+        <div style={{ fontSize: 12, color: C.faint, marginTop: 14, lineHeight: 1.5 }}>{view.progress}</div>
       </div>
     )
   }
 
-  // The payment is FINISHED. This window is the index catching up — same treatment the move flow
-  // gives it, so the two never tell the user different stories about the same wait.
+  // ══ 2d · SETTLING ══════════════════════════════════════════════════════════
+  //
+  // NO AMOUNT, NO FEE, NO TX — a spinner and a caption, and that is the whole frame.
+  //
+  // The payment is FINISHED; what is behind is the index. This is the same window the move flow
+  // shows and the same rule the balance hero follows while settling: the screen says what is
+  // happening and stops there. Every figure it used to carry reappears intact on the success card
+  // one state later, which is where the payment is actually reported.
   if (view.step === 'settling') {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-        <StatusBlock
-          ring={{ fill: 'rgba(var(--positive-rgb),0.12)', border: '1px solid transparent' }}
-          icon={<Check color={C.positive} />}
-          title="Sent"
-          sub={`${fmt6(view.amountMicrotari)} XTR to ${shortAddr(view.recipient)}. Your balance updates in about a minute.`}
-        />
-        <SettleBar caption="Updating your balance — the payment itself is finished." />
-        <DetailCard><DetailRow label="Network fee" value={XTR(view.feeMicrotari)} last /></DetailCard>
-        <TxRow txId={view.txId} onCopy={() => onCopyTx(view.txId)} />
-        <Button tone="neutral" onClick={onDone}>Done</Button>
+      <div style={OUTCOME_CARD}>
+        <Spinner size={28} ring={3} />
+        <div style={{ fontSize: 17, fontWeight: 600, color: C.primary, marginTop: 18 }}>Settling</div>
+        <div style={{ fontSize: 13, color: C.mutedDim, marginTop: 6 }}>This can take a moment.</div>
       </div>
     )
   }
 
+  // ══ 2e · SENT ══════════════════════════════════════════════════════════════
   if (view.step === 'success') {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-        <StatusBlock
-          ring={{ fill: 'rgba(var(--positive-rgb),0.12)', border: '1px solid transparent' }}
-          icon={<Check color={C.positive} />}
-          title="Sent"
-          sub={view.lagged
-            ? `${fmt6(view.amountMicrotari)} XTR to ${shortAddr(view.recipient)}. Confirmed on the network — your balance hasn’t caught up yet, so tap Refresh in a moment. Nothing is at risk.`
-            : `${fmt6(view.amountMicrotari)} XTR to ${shortAddr(view.recipient)}`}
-        />
-        <DetailCard><DetailRow label="Network fee" value={XTR(view.feeMicrotari)} last /></DetailCard>
-        <TxRow txId={view.txId} onCopy={() => onCopyTx(view.txId)} />
-        <Button tone="primary" onClick={onDone}>Done</Button>
-      </div>
+      <Outcome
+        emblem={<Emblem tone="positive"><Check size={18} color="currentColor" /></Emblem>}
+        title="Sent"
+        sub={<>
+          <span style={{ fontFamily: MONO }}>{fmt6(view.amountMicrotari)} XTR</span> to{' '}
+          <span style={{ fontFamily: MONO, fontSize: 11.5 }}>{shortAddr(view.recipient)}</span>
+          {/* A passed settle deadline is STILL A SUCCESS. The payment committed; only the balance
+              behind this card is behind, so the extra sentence explains the stale figure rather
+              than casting doubt on the send. */}
+          {view.lagged && <><br />Confirmed on the network — your balance hasn’t caught up yet. Nothing is at risk.</>}
+        </>}
+      >
+        {/* THE OTHER HALF OF THE CEILING. Review could only promise "at most"; this is what was
+            actually paid, and dropping it would leave a private send with no place that ever
+            states its real fee. */}
+        <Receipt fee={view.feeMicrotari} txId={view.txId} onCopy={() => onCopyTx(view.txId)} />
+        <SendButton tone="quiet" onClick={onDone} mt={24}>Done</SendButton>
+      </Outcome>
     )
   }
 
+  // ══ 2f · UNCONFIRMED ═══════════════════════════════════════════════════════
+  //
+  // A NORMAL OUTCOME, NOT A FAILURE. Broadcast and undecided is ordinary on this network: the
+  // payment may still land, nothing has failed, and nothing needs re-sending. It wears the ACCENT
+  // wash and a clock. It must never take the danger tone — the red card is reserved for the one
+  // case where nothing left the wallet, and this is not that case.
   if (view.step === 'unconfirmed') {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-        {/* NORMAL, NOT AN ERROR. Broadcast and undecided is an ordinary outcome on this network:
-            the payment may still land, nothing has failed, and nothing needs re-sending. It wears
-            the ACCENT wash and a clock — the warning triangle and amber it used to carry read as
-            "something went wrong", which is the one thing this state is not. */}
-        <StatusBlock
-          ring={{ fill: 'var(--accent-wash)', border: '1px solid transparent' }}
-          icon={<Clock size={18} color="var(--accent-ink)" />}
-          title="Sent, not yet confirmed"
-          sub={view.message}
-        />
-        <TxRow txId={view.txId} onCopy={() => onCopyTx(view.txId)} />
-        <Button tone="neutral" onClick={onViewActivity}>View in Activity</Button>
-      </div>
+      <Outcome
+        emblem={<Emblem tone="accent"><Clock size={17} color="currentColor" /></Emblem>}
+        title="Sent, not yet confirmed"
+        sub="The recipient may need to come online. It will confirm on its own."
+      >
+        {/* The one identifier an undecided payment has. It must stay reachable from here — this
+            card is the last place the transaction is named before it becomes a row in Activity. */}
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+          marginTop: 18, fontFamily: MONO, fontSize: 11, color: C.faint,
+        }}>
+          <span
+            role="button" tabIndex={0} onClick={() => onCopyTx(view.txId)}
+            onKeyDown={e => e.key === 'Enter' && onCopyTx(view.txId)}
+            aria-label="Copy transaction id"
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer' }}
+          >tx {view.txId.length > 14 ? `${view.txId.slice(0, 6)}…${view.txId.slice(-6)}` : view.txId}<Copy size={11} color="currentColor" /></span>
+        </div>
+        <SendButton tone="quiet" onClick={onDone} mt={24}>Done</SendButton>
+        <span
+          role="button" tabIndex={0} onClick={onViewActivity} onKeyDown={e => e.key === 'Enter' && onViewActivity()}
+          style={{
+            display: 'block', marginTop: 12, fontSize: 12.5, fontWeight: 500,
+            color: 'var(--accent-ink)', cursor: 'pointer', userSelect: 'none',
+          }}
+        >View in Activity</span>
+      </Outcome>
     )
   }
 
+  // ══ 2g · ERROR ═════════════════════════════════════════════════════════════
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <StatusBlock
-        ring={{ fill: 'rgba(var(--danger-rgb),0.10)', border: '1px solid rgba(var(--danger-rgb),0.28)' }}
-        icon={<Alert color={C.danger} />}
-        title="The payment didn’t go through"
-        sub="Nothing left your wallet and no fee was taken."
-      />
-      <VerbatimBox>{view.message}</VerbatimBox>
-      <div style={{ display: 'flex', gap: 10 }}>
-        <Button tone="neutral" flex={1} onClick={onDone}>Close</Button>
-        <Button tone="primary" flex={2} onClick={onRetry}>Try again</Button>
+    <Outcome
+      emblem={<Emblem tone="danger">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12" /></svg>
+      </Emblem>}
+      title="Send failed"
+      sub="Nothing left your wallet."
+    >
+      {/* THE NETWORK'S OWN WORDS, VERBATIM. The frame does not draw this, and it stays anyway: a
+          paraphrased error is unreportable, and "Send failed" alone gives a user nothing to paste
+          into an issue. Set small and quiet so it explains without alarming. */}
+      <div style={{ marginTop: 18, textAlign: 'left' }}>
+        <VerbatimBox>{view.message}</VerbatimBox>
       </div>
-    </div>
+      <SendButton tone="primary" onClick={onRetry} mt={16}>Try again</SendButton>
+      <span
+        role="button" tabIndex={0} onClick={onDone} onKeyDown={e => e.key === 'Enter' && onDone()}
+        style={{
+          display: 'block', marginTop: 12, fontSize: 12.5, fontWeight: 500,
+          color: C.mutedDim, cursor: 'pointer', userSelect: 'none',
+        }}
+      >Close</span>
+    </Outcome>
   )
 }
 
-/** The network's own words, held legibly. Same treatment the move flow's failure card uses. */
 export function VerbatimBox({ children }: { children: ReactNode }) {
   return (
     <div style={{

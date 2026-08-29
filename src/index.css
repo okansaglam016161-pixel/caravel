@@ -346,6 +346,20 @@ a:hover { color: var(--accent-200); }
 .cv-privacy-action { transition: background 0.15s, border-color 0.15s; }
 .cv-privacy-action:hover { background: var(--surface-void); border-color: var(--text-faint-dim); }
 
+/* The send flow's fields. The design specifies a focus ring rather than a bare border change, and
+   `:focus-within` is what lets the AMOUNT box — an input inside a bordered shell with the unit
+   beside it — light up as one field rather than only around the text caret. */
+.cv-field { transition: border-color 0.15s, box-shadow 0.15s; }
+.cv-field:focus,
+.cv-field:focus-within {
+  border-color: var(--accent-400);
+  box-shadow: 0 0 0 3px rgba(var(--accent-400-rgb), 0.18);
+}
+
+/* The bordered secondary action — Done, Back. */
+.cv-quiet-btn { transition: background 0.15s; }
+.cv-quiet-btn:hover { background: var(--surface-void); }
+
 /* Chat composer + the per-message hover affordances (M3/M4, replies v1, reactions C). Shared by
    BOTH chat views — the DM thread in ChatApp and the group thread in GroupThread — which is exactly
    why they live here rather than in a <style> element inside one of them. They used to sit in

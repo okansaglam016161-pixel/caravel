@@ -293,7 +293,7 @@ function Drive() {
       onConfirm: () => setSend(s0 => {
         if (s0.step !== 'review') return s0
         setTimeout(() => setSend({ step: 'success', recipient: s0.recipient, amountMicrotari: s0.amountMicrotari, feeMicrotari: SEND_FEE, txId: TXID }), 1800)
-        return { step: 'sending', amountMicrotari: s0.amountMicrotari, progress: 'Building the payment and broadcasting. Don’t close this window.', source: s0.source }
+        return { step: 'sending', recipient: s0.recipient, amountMicrotari: s0.amountMicrotari, progress: 'Building the payment and broadcasting. Don’t close this window.', source: s0.source }
       }),
       onDone: () => setSend({ step: 'form', recipient: '', amount: '', note: '', available: privV, canReview: false, source: 'private', canChooseSource: true }),
       onRetry: () => setSend({ step: 'form', recipient: '', amount: '', note: '', available: privV, canReview: false, source: 'private', canChooseSource: true }),
@@ -348,7 +348,7 @@ function Drive() {
             ['Form', { step: 'form', recipient: '', amount: '', note: '', available: privV, canReview: false, source: 'private', canChooseSource: true }],
             ['Review · pricing', { step: 'review', recipient: ADDRESS, amountMicrotari: 1_500_000n, note: 'lunch', feeMicrotari: null, source: 'private' }],
             ['Review · priced', { step: 'review', recipient: ADDRESS, amountMicrotari: 1_500_000n, note: 'lunch', feeMicrotari: SEND_FEE, source: 'private' }],
-            ['Sending', { step: 'sending', amountMicrotari: 1_500_000n, progress: 'Building the payment and broadcasting. Don’t close this window.', source: 'private' }],
+            ['Sending', { step: 'sending', recipient: ADDRESS, amountMicrotari: 1_500_000n, progress: 'Building the payment and broadcasting. Don’t close this window.', source: 'private' }],
             ['Success', { step: 'success', recipient: ADDRESS, amountMicrotari: 1_500_000n, feeMicrotari: SEND_FEE, txId: TXID }],
             ['Unconfirmed', { step: 'unconfirmed', message: 'Broadcast, but the network hasn’t confirmed it yet. Don’t resend — it will appear in Activity.', txId: TXID }],
             ['Error · verbatim', { step: 'error', message: SEND_ERROR }],
@@ -497,13 +497,13 @@ function Gallery() {
 
     // ── Send ──
     { label: 'SEND · FORM', props: still(sendAt({ step: 'form', recipient: '', amount: '', note: '', available: PRIVATE, canReview: false, source: 'private', canChooseSource: true })) },
-    { label: 'SEND · SOURCE = PUBLIC (honest note)', props: still(sendAt({ step: 'form', recipient: '@okan', amount: '1.5', note: '', available: PUBLIC, canReview: true, source: 'public', canChooseSource: true })) },
+    { label: 'SEND · SOURCE = PUBLIC', props: still(sendAt({ step: 'form', recipient: '@okan', amount: '1.5', note: '', available: PUBLIC, canReview: true, source: 'public', canChooseSource: true })) },
     { label: 'SEND · REVIEW FROM PUBLIC', props: still(sendAt({ step: 'review', recipient: ADDRESS, amountMicrotari: 1_500_000n, note: 'lunch', feeMicrotari: 14_456n, source: 'public' })) },
     { label: 'SEND · SENT, INDEX LAGGING', props: still(sendAt({ step: 'success', recipient: ADDRESS, amountMicrotari: 1_500_000n, feeMicrotari: SEND_FEE, txId: TXID, lagged: true })) },
     { label: 'SEND · FORM, FILLED', props: still(sendAt({ step: 'form', recipient: '@okan', amount: '1.5', note: 'lunch', available: PRIVATE, canReview: true, source: 'private', canChooseSource: true })) },
     { label: 'SEND · REVIEW, PRICING', props: still(sendAt({ step: 'review', recipient: ADDRESS, amountMicrotari: 1_500_000n, note: 'lunch', feeMicrotari: null, source: 'private' })) },
     { label: 'SEND · REVIEW, PRICED', props: still(sendAt({ step: 'review', recipient: ADDRESS, amountMicrotari: 1_500_000n, note: 'lunch', feeMicrotari: SEND_FEE, source: 'private' })) },
-    { label: 'SEND · SENDING', props: still(sendAt({ step: 'sending', amountMicrotari: 1_500_000n, progress: 'Building the payment and broadcasting. Don’t close this window.', source: 'private' })) },
+    { label: 'SEND · SENDING', props: still(sendAt({ step: 'sending', recipient: ADDRESS, amountMicrotari: 1_500_000n, progress: 'Building the payment and broadcasting. Don’t close this window.', source: 'private' })) },
     { label: 'SEND · SENT', props: still(sendAt({ step: 'success', recipient: ADDRESS, amountMicrotari: 1_500_000n, feeMicrotari: SEND_FEE, txId: TXID })) },
     { label: 'SEND · NOT CONFIRMED YET', props: still(sendAt({ step: 'unconfirmed', message: 'Broadcast, but the network hasn’t confirmed it yet. Don’t resend — it will appear in Activity.', txId: TXID })) },
     { label: 'SEND · FAILED', props: still(sendAt({ step: 'error', message: SEND_ERROR })) },

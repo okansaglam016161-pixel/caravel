@@ -290,9 +290,19 @@ export default function WalletModalV2(p: WalletModalV2Props) {
       {tab === 'send' && p.send && (
         <Sheet
           title="Send"
+          bare
           dismissable={p.send.view.step !== 'sending'}
           onClose={() => { p.send!.onDone(); p.onTab?.('overview') }}
-        ><SendPanel {...p.send} /></Sheet>
+        >
+          {/* `onClose` is handed DOWN rather than drawn by the sheet: the V3 form and review frames
+              put the ✕ inside the card, and the five outcome frames have none at all. The panel is
+              the only thing that knows which state it is in.
+              It is withheld while sending — the same fact that makes the sheet undismissable. */}
+          <SendPanel
+            {...p.send}
+            onClose={p.send.view.step === 'sending' ? undefined : () => { p.send!.onDone(); p.onTab?.('overview') }}
+          />
+        </Sheet>
       )}
       {tab === 'receive' && p.receive && (
         <Sheet title="Receive" onClose={() => p.onTab?.('overview')}>

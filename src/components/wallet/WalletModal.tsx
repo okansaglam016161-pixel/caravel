@@ -315,10 +315,10 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
 
     if (sendSource === 'public') {
       if (amountMicrotari < MIN_PUBLIC_SEND_MICROTARI) {
-        return `The smallest amount you can send from your unshielded balance is ${toInput(MIN_PUBLIC_SEND_MICROTARI)} XTR.`
+        return `The smallest amount you can send from your public balance is ${toInput(MIN_PUBLIC_SEND_MICROTARI)} XTR.`
       }
       if (amountMicrotari > publicSendCeiling) {
-        return `Not enough unshielded balance — the fee comes out of it too. Most you can send now: ${toInput(publicSendCeiling)} XTR.`
+        return `Not enough public balance — the fee comes out of it too. Most you can send now: ${toInput(publicSendCeiling)} XTR.`
       }
       return null
     }
@@ -329,8 +329,8 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
     // "Insufficient funds" failure after the user has confirmed.
     if (amountMicrotari > privateSendCeiling) {
       return privateSendCeiling === 0n
-        ? 'You have no shielded funds to send yet.'
-        : `The most you can send in one shielded payment is ${toInput(privateSendCeiling)} XTR.`
+        ? 'You have no private funds to send yet.'
+        : `The most you can send in one private payment is ${toInput(privateSendCeiling)} XTR.`
     }
     return null
   }
@@ -714,10 +714,10 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
     moveDir === 'reveal' && moveExact !== null && privateAmount > ceiling
       ? [
           `About ${toInput(privateAmount - ceiling)} XTR stays shielded to cover the fee. It’s still yours and still spendable.`,
-          privateFiguresIncomplete ? incompleteAvailableNote() : '',
+          privateFiguresIncomplete ? incompleteAvailableNote('shielded') : '',
         ].filter(Boolean).join(' ')
       : moveDir === 'reveal' && privateFiguresIncomplete
-      ? incompleteAvailableNote()
+      ? incompleteAvailableNote('shielded')
       : undefined
 
   const moveView: MoveView =
@@ -816,7 +816,7 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
         : { feeMicrotari: MAX_FEE, feeIsCeiling: true }),
     }
     : sendStep === 'sending' ? {
-      step: 'sending', source: sendSource, amountMicrotari: sendAmountMicro,
+      step: 'sending', source: sendSource, recipient: sendRecipient, amountMicrotari: sendAmountMicro,
       progress: sendProgress || 'Building the payment and broadcasting. Don’t close this window.',
     }
     // Its OWN step now, not a success card shown early (M9 F6). The payment is finished either

@@ -161,8 +161,10 @@ describe('loading', () => {
 
 describe('unreadableReasonText', () => {
   it.each([
-    ['public-unavailable', /unshielded balance couldn’t be read/],
-    ['private-unavailable', /shielded balance couldn’t be read/],
+    // Distinct matchers, and now genuinely distinct: the old pair leaned on "unshielded"
+    // containing "shielded", so the private matcher would have passed on the public string.
+    ['public-unavailable', /public balance couldn’t be read/],
+    ['private-unavailable', /private balance couldn’t be read/],
     ['both-unavailable', /Neither balance could be read/],
     ['private-incomplete', /a total would be too low/],
   ] as const)('%s explains which side and what to do', (reason, matcher) => {
@@ -196,8 +198,11 @@ describe('incompleteAvailableNote', () => {
   it('says the same thing the total says about the same condition', () => {
     const note = incompleteAvailableNote()
     const total = unreadableReasonText('private-incomplete')
-    // Both must name the cause — a private balance that could not be read in full.
-    for (const s of [note, total]) expect(s).toMatch(/couldn’t read all of your shielded balance/i)
+    // Both must name the cause — a private balance that could not be read in full — and must name
+    // it in the SAME WORDS. The vocabulary is part of the invariant, not incidental to it: two
+    // strings agreeing on the fact while calling the balance different things is how a user ends
+    // up believing there are two balances.
+    for (const s of [note, total]) expect(s).toMatch(/couldn’t read all of your private balance/i)
   })
 
   it('does NOT withdraw the figure the way the total does', () => {

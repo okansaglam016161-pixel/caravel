@@ -66,10 +66,21 @@ export const iconBtn: CSSProperties = {
  * flow sets while a transaction is on the wire. Nothing here can cancel a broadcast, so offering a
  * gesture that looks like cancelling would be a lie about what it does.
  */
-export function Sheet({ title, onClose, dismissable = true, children }: {
+export function Sheet({ title, onClose, dismissable = true, bare = false, children }: {
   title: string
   onClose: () => void
   dismissable?: boolean
+  /**
+   * Drop the title bar and the content padding, and let the child own the whole card.
+   *
+   * The V3 send frames draw the title INSIDE the card at 21px on a line with a 28px close box, and
+   * the five outcome frames draw no header at all — just a centred column in a taller card. A
+   * fixed 15px title bar with a divider fits neither. `bare` keeps everything a sheet is actually
+   * for (the backdrop, Esc, and refusing to close mid-broadcast) and gives up only the chrome.
+   *
+   * `title` is still required, and still becomes the dialog's accessible name.
+   */
+  bare?: boolean
   children: ReactNode
 }) {
   useEffect(() => {
@@ -95,21 +106,23 @@ export function Sheet({ title, onClose, dismissable = true, children }: {
           position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
           zIndex: 301, width: `min(${MODAL_WIDTH}px, 94vw)`, maxHeight: '88vh',
           display: 'flex', flexDirection: 'column',
-          borderRadius: 16, background: 'var(--surface)',
+          borderRadius: bare ? 18 : 16, background: 'var(--surface)',
           border: '1px solid var(--border)', boxShadow: 'var(--e3)', overflow: 'hidden',
         }}
       >
-        <div style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          padding: '16px 20px', borderBottom: '1px solid var(--border)', flexShrink: 0,
-        }}>
-          <span style={{ fontSize: 15, fontWeight: 600, color: C.primary }}>{title}</span>
-          {dismissable && (
-            <span role="button" tabIndex={0} onClick={onClose} onKeyDown={e => e.key === 'Enter' && onClose()}
-              style={iconBtn} aria-label="Close">✕</span>
-          )}
-        </div>
-        <div style={{ padding: 20, overflowY: 'auto' }}>{children}</div>
+        {!bare && (
+          <div style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            padding: '16px 20px', borderBottom: '1px solid var(--border)', flexShrink: 0,
+          }}>
+            <span style={{ fontSize: 15, fontWeight: 600, color: C.primary }}>{title}</span>
+            {dismissable && (
+              <span role="button" tabIndex={0} onClick={onClose} onKeyDown={e => e.key === 'Enter' && onClose()}
+                style={iconBtn} aria-label="Close">✕</span>
+            )}
+          </div>
+        )}
+        <div style={{ padding: bare ? 0 : 20, overflowY: 'auto' }}>{children}</div>
       </div>
     </>
   )

@@ -1,14 +1,19 @@
-//   CryptoBusy — full-panel "please wait" card for the ~600k-iteration PBKDF2 waits
-//   (create / unlock / restore), which otherwise hang the form with no affordance (debt #9).
-//   Transcribed from the entry-flows design canvas: 48px accent spinner + title + reassurance +
-//   a mono "600,000 PBKDF2 iterations" pulse footer, in an xl-radius bordered card.
-//   Renders AS the card (own border/padding), so an entry screen swaps its form card for this.
+//   CryptoBusy — the "please wait" card for the ~600k-iteration PBKDF2 waits (create / unlock /
+//   restore), which would otherwise hang a form with no affordance.
+//
+//   V3 frame 8e: a spinner, a title, and one line saying how long. It used to carry a mono
+//   "600,000 PBKDF2 iterations" footer, which was a true and rather good detail and is dropped
+//   here with the rest of the entry reskin — the frames answer "how long" instead of "why", and on
+//   a screen someone meets before they have a wallet, the iteration count is our reassurance
+//   rather than theirs. `reassurance` still carries whatever the caller wants said.
+//
+//   Renders AS the card, so an entry screen swaps its form card for this one.
 
 import type { CSSProperties } from 'react'
 
 interface CryptoBusyProps {
   title: string
-  /** Sub-line reassuring the user the wait is expected. */
+  /** Sub-line saying what the wait is. Kept short — the frames use one sentence. */
   reassurance?: string
   style?: CSSProperties
 }
@@ -17,39 +22,26 @@ export default function CryptoBusy({ title, reassurance, style }: CryptoBusyProp
   return (
     <div
       style={{
-        width: '100%',
-        maxWidth: 428,
-        boxSizing: 'border-box',
-        padding: '44px 26px',
-        borderRadius: 'var(--r-xl)',
-        background: 'var(--surface)',
-        border: '1px solid var(--border-strong)',
-        textAlign: 'center',
+        width: '100%', maxWidth: 360, boxSizing: 'border-box',
+        padding: '48px 32px', borderRadius: 18,
+        background: 'var(--surface)', border: '1px solid var(--border)',
+        boxShadow: 'var(--e1)', textAlign: 'center',
         ...style,
       }}
     >
       <span
         style={{
-          display: 'inline-flex',
-          width: 48,
-          height: 48,
-          borderRadius: '50%',
-          border: '3px solid rgba(var(--accent-400-rgb), 0.20)',
-          borderTopColor: 'var(--accent-400)',
-          animation: 'cv-spin 0.9s linear infinite',
-          marginBottom: 22,
+          display: 'inline-block', width: 28, height: 28, borderRadius: '50%',
+          border: '3px solid var(--border)', borderTopColor: 'var(--accent-400)',
+          animation: 'cv-spin 1s linear infinite',
         }}
       />
-      <div style={{ fontSize: 18, fontWeight: 600, color: 'var(--text-bright)', marginBottom: 8 }}>{title}</div>
+      <div style={{ fontSize: 17, fontWeight: 600, color: 'var(--text-primary)', marginTop: 18 }}>{title}</div>
       {reassurance && (
-        <div style={{ fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.6, maxWidth: 300, margin: '0 auto 18px' }}>
+        <div style={{ fontSize: 13, color: 'var(--text-muted-dim)', marginTop: 6, lineHeight: 1.55, textWrap: 'pretty' }}>
           {reassurance}
         </div>
       )}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-teal-label)' }}>
-        <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--accent-400)', animation: 'cv-pulse 1.4s ease-in-out infinite' }} />
-        600,000 PBKDF2 iterations
-      </div>
     </div>
   )
 }

@@ -1,14 +1,23 @@
-//   Unlock flow — idle → unlocking (busy) → wrong-password. Reskinned to the entry-flows design
-//   canvas (transcribed element-for-element). Unlock logic is preserved verbatim, including the
-//   wrong-password distinction (AES-GCM auth failure → DOMException 'OperationError'); the added
-//   touch is the CryptoBusy wait. Restore is delegated to the shared RestoreFlow (debt #8).
+//   Unlock — V3 frames 7a idle, 7b unlocking, 7c wrong password.
+//
+//   UNLOCK LOGIC IS VERBATIM. `unlock(pass)` decrypts with the password, so a wrong one throws
+//   rather than returning anything — and the DOMException 'OperationError' that AES-GCM raises on
+//   an auth-tag failure is what distinguishes "wrong password" from a real fault. That distinction
+//   is the reason a derivation bug can never be reported as a wrong password, and it is unchanged.
+//
+//   7b IS INLINE, not a separate card. The frame keeps the lockup and the heading and replaces
+//   only the field and the button, so the screen does not appear to navigate somewhere while it
+//   waits — it is the same card, thinking.
+//
+//   Restore is delegated to the shared RestoreFlow.
 
 import { useState } from 'react'
 import { useWallet } from '../../context/WalletContext'
-import { CryptoBusy } from '../primitives'
-import PasswordField from './PasswordField'
 import RestoreFlow from './RestoreFlow'
-import { entryCard, logoTile, pageShell, primaryBtn, disabledBtn } from './entryStyles'
+import {
+  EntryButton, EntryCard, EntryError, EntryField, EntryLink, EntrySpinner, EntryTitle, Lockup,
+  entryShell,
+} from './entryUi'
 
 function UnlockScreen({ onRestore }: { onRestore: () => void }) {
   const { unlock } = useWallet()
@@ -22,42 +31,48 @@ function UnlockScreen({ onRestore }: { onRestore: () => void }) {
     setLoading(true)
     try {
       await unlock(pass)
-      // Success → context sets `wallet` → AppRoute swaps to ChatApp → this unmounts.
+      // Success → context sets `wallet` → AppRoute swaps to the shell → this unmounts.
     } catch (e) {
       // AES-GCM auth failure (wrong password) throws DOMException 'OperationError'. Any other error
-      // (e.g. a derivation bug) gets a distinct message so it isn't silently shown as "wrong password".
+      // (e.g. a derivation bug) gets a distinct message so it isn't silently shown as "wrong
+      // password" — a user retyping a correct password forever is the failure this prevents.
       const isWrongPassword = e instanceof DOMException && e.name === 'OperationError'
       setError(isWrongPassword ? 'Incorrect password. Try again.' : `Unlock failed: ${e instanceof Error ? e.message : String(e)}`)
       setLoading(false)
     }
   }
 
-  if (loading) return <CryptoBusy title="Unlocking your wallet" reassurance="Deriving your key from the password. This takes a few seconds by design." />
-
-  const hasError = !!error
   return (
-    <div style={entryCard({ padding: 22, textAlign: 'center', ...(hasError ? { border: '1px solid var(--danger-500)' } : {}) })}>
-      {/* The light mark on its accent tile — one lockup, both themes. */}
-      <span style={{ ...logoTile, width: 38, height: 38, borderRadius: 11 }}>
-        <img src="/logo-light.png" alt="" aria-hidden="true" style={{ height: 20, width: 'auto', display: 'block' }} />
-      </span>
-      <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)', marginTop: 10 }}>Welcome back</div>
-      <div style={{ fontSize: 12, color: 'var(--text-muted-dim)', marginTop: 3, marginBottom: 12 }}>Enter your password to unlock this device.</div>
-      <div style={{ marginBottom: hasError ? 9 : 10, textAlign: 'left' }}>
-        <PasswordField value={pass} onChange={v => { setPass(v); setError('') }} onKeyDown={e => { if (e.key === 'Enter' && pass) submit() }} invalid={hasError} autoFocus />
-      </div>
-      {hasError && (
-        <div style={{
-          padding: '8px 12px', borderRadius: 8, marginBottom: 10,
-          background: 'rgba(var(--danger-rgb),0.12)', color: 'var(--danger-500)',
-          fontSize: 12, fontWeight: 500, lineHeight: 1.5, textAlign: 'left',
-        }}>{error}</div>
+    <EntryCard centred>
+      <Lockup />
+      <EntryTitle mt={16}>Welcome back</EntryTitle>
+
+      {/* ══ 7b · UNLOCKING ══ */}
+      {loading ? (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, marginTop: 32, marginBottom: 8 }}>
+          <EntrySpinner size={16} ring={2.5} />
+          <span style={{ fontSize: 13.5, color: 'var(--text-body-dim)' }}>Unlocking</span>
+        </div>
+      ) : (
+        <>
+          {/* ══ 7a idle · 7c wrong password ══
+              The error is the field's border plus one calm line beneath it — no alert box and no
+              red card. A mistyped password is the most ordinary thing that happens on this screen. */}
+          <div style={{ textAlign: 'left' }}>
+            <EntryField
+              type="password" value={pass} autoFocus
+              onChange={v => { setPass(v); setError('') }}
+              onKeyDown={e => { if (e.key === 'Enter' && pass) void submit() }}
+              placeholder="Password" ariaLabel="Password"
+              invalid={!!error} mt={24}
+            />
+            {error && <EntryError>{error}</EntryError>}
+          </div>
+          <EntryButton tone="primary" mt={12} disabled={!pass} onClick={() => void submit()}>Unlock</EntryButton>
+          <EntryLink onClick={onRestore} mt={16}>Forgot password? Restore from recovery phrase</EntryLink>
+        </>
       )}
-      <button onClick={submit} disabled={!pass} style={{ ...(pass ? primaryBtn : disabledBtn), marginBottom: 12 }}>Unlock</button>
-      <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>
-        Forgot password? <span onClick={onRestore} style={{ color: 'var(--accent-ink)', fontWeight: 600, cursor: 'pointer' }}>Restore from recovery phrase</span>
-      </div>
-    </div>
+    </EntryCard>
   )
 }
 
@@ -65,7 +80,7 @@ export default function UnlockWallet() {
   const [mode, setMode] = useState<'unlock' | 'restore'>('unlock')
 
   return (
-    <div style={pageShell}>
+    <div style={entryShell}>
       {mode === 'unlock'
         ? <UnlockScreen onRestore={() => setMode('restore')} />
         : <RestoreFlow onBack={() => setMode('unlock')} />}

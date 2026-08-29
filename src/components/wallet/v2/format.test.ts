@@ -6,7 +6,7 @@
 // rather than in crypto.
 
 import { describe, expect, it } from 'vitest'
-import { fmt2, fmt6, toInput } from './format'
+import { fmt2, fmt6, toInput, formatCooldown } from './format'
 
 describe('fmt2', () => {
   it('formats an ordinary balance with grouping', () => {
@@ -55,5 +55,45 @@ describe('fmt2', () => {
     // is how the M2 MAX bug happened.
     expect(toInput(999_997_686n)).toBe('999.997686')
     expect(fmt2(999_997_686n)).toBe('1,000.00')
+  })
+})
+
+// ── The faucet cooldown countdown ────────────────────────────────────────────
+//
+// One rounding rule carries the weight here: the number must never reach zero while the control
+// it describes is still disabled. A countdown that sits on "0s" for a second reads as a stuck
+// wallet, and the fix — rounding up — is invisible unless something pins it.
+
+describe('formatCooldown', () => {
+  it('rounds UP, so it never shows 0s while the wait is still running', () => {
+    expect(formatCooldown(1)).toBe('1s')
+    expect(formatCooldown(999)).toBe('1s')
+    expect(formatCooldown(1_001)).toBe('2s')
+  })
+
+  it('shows 0s only when the wait is genuinely over', () => {
+    expect(formatCooldown(0)).toBe('0s')
+  })
+
+  it('never returns a negative time', () => {
+    // A clock that jumps, or a render one tick after the timeout fired.
+    expect(formatCooldown(-5_000)).toBe('0s')
+  })
+
+  it('counts plain seconds under a minute', () => {
+    expect(formatCooldown(42_000)).toBe('42s')
+    expect(formatCooldown(59_000)).toBe('59s')
+  })
+
+  it('adds minutes at and above a minute — the real 60s cooldown starts here', () => {
+    expect(formatCooldown(60_000)).toBe('1m 0s')
+    expect(formatCooldown(90_000)).toBe('1m 30s')
+  })
+
+  it('drops to hours and minutes for long waits, should the cooldown ever grow', () => {
+    // The unit ladder is general so the string stays correct if COOLDOWN_MS changes; today the
+    // wallet only ever reaches the seconds branch.
+    expect(formatCooldown(3_600_000)).toBe('1h 0m')
+    expect(formatCooldown(11_520_000)).toBe('3h 12m')
   })
 })

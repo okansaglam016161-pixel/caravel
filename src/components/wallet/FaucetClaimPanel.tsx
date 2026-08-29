@@ -17,6 +17,8 @@ import { fmt2 } from './v2/format'
 type Phase = 'idle' | 'claiming' | 'verifying' | 'done' | 'lagging' | 'error'
 
 const HIGH_BALANCE = 100_000_000n // 100 tTARI — "you already have plenty"
+/** Caravel's own re-claim throttle. Named so the timer and the timeout cannot drift apart. */
+const COOLDOWN_MS = 60_000
 // Was `Number(µt) / 1_000_000` — the same float-on-an-amount the rail forbids, hiding in a panel
 // rather than in crypto, which is why the C9 fix nearly stopped one site short. See fmt2.
 const shortTx = (t: string | null) => (t ? `${t.slice(0, 8)}…${t.slice(-6)}` : '')
@@ -28,6 +30,14 @@ export default function FaucetClaimPanel() {
   const [p, setPhase] = useState<Phase>('idle')
   const [msg, setMsg] = useState<string | null>(null)
   const [cooldown, setCooldown] = useState(false)
+  // ── THE COUNTDOWN IS DISPLAY-ONLY ──
+  //
+  // `cooldown` above is unchanged and still the thing that drives the phase. These two exist
+  // purely so 10g can show a number: `cooldownUntil` is when the boolean will flip back, and
+  // `nowTick` re-renders once a second while it matters. Nothing here can start, stop or extend a
+  // cooldown — it only reads the one already running.
+  const [cooldownUntil, setCooldownUntil] = useState<number | null>(null)
+  const [nowTick, setNowTick] = useState(() => Date.now())
   const lastTx = useRef<string | null>(null)
 
   const highBalance = balance !== null && balance >= HIGH_BALANCE
@@ -50,7 +60,8 @@ export default function FaucetClaimPanel() {
         ? 'Tokens received. You can now send them, make them public, or register a name.'
         : `Added ${fmt2(settle.delta)} XTR. You can now send it, unshield it, or register a name.`)
       setCooldown(true)
-      setTimeout(() => setCooldown(false), 60_000)
+      setCooldownUntil(Date.now() + COOLDOWN_MS)
+      setTimeout(() => { setCooldown(false); setCooldownUntil(null) }, COOLDOWN_MS)
     } else {
       setPhase('lagging')
       setMsg(`Claim committed on-chain (tx ${shortTx(settle.txId)}), but your balance hasn't updated yet. Tap Refresh in a moment.`)
@@ -100,6 +111,13 @@ export default function FaucetClaimPanel() {
     rescan()
   }
 
+  // One re-render a second while a cooldown is running, and none at any other time.
+  useEffect(() => {
+    if (!cooldown) return
+    const id = setInterval(() => setNowTick(Date.now()), 1000)
+    return () => clearInterval(id)
+  }, [cooldown])
+
   // ── PRESENTATION ──
   //
   // The phase machine above maps onto v2's FaucetPanel one state at a time. `cooldown` and
@@ -118,12 +136,11 @@ export default function FaucetClaimPanel() {
   return (
     <FaucetPanel
       phase={phase}
-      balance={balance ?? undefined}
       // The claim's own message already carries the delta; plainError is a no-op on it, and is
       // applied for the same reason it is everywhere else — a failure here can quote a fee.
       message={msg ? plainError(msg) : undefined}
       onClaim={claim}
-      onRefresh={rescan}
+      cooldownRemainingMs={cooldownUntil === null ? undefined : Math.max(0, cooldownUntil - nowTick)}
     />
   )
 }

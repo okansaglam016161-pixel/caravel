@@ -251,13 +251,12 @@ function Drive() {
       <FaucetPanel
         phase={faucet}
         received={1_000_000_000n}
-        balance={privV}
         onClaim={() => {
           setFaucet('claiming')
           setTimeout(() => setFaucet('verifying'), 1400)
           setTimeout(() => setFaucet('done'), 3200)
         }}
-        onRefresh={() => setFaucet('done')}
+        cooldownRemainingMs={faucet === 'cooldown' ? 42_000 : undefined}
       />
       <OnsPanel
         status={ons} name={onsName || 'yourname'} feeMicrotari={ONS_FEE} txId={TXID}
@@ -431,7 +430,8 @@ function still(over: Partial<WalletModalV2Props>): WalletModalV2Props {
 // The faucet and ONS are rendered NODES now rather than data props — the wallet stopped describing
 // them and started taking them pre-built, so the gallery builds them the same way the app does.
 const faucetAt = (phase: FaucetPhase): Partial<WalletModalV2Props> =>
-  ({ overviewExtras: <FaucetPanel phase={phase} received={1_000_000_000n} balance={250_000_000n} onClaim={noop} onRefresh={noop} /> })
+  // A live countdown on the cooldown case, so the gallery shows 10g as it actually renders.
+  ({ overviewExtras: <FaucetPanel phase={phase} received={1_000_000_000n} onClaim={noop} cooldownRemainingMs={phase === 'cooldown' ? 42_000 : undefined} /> })
 const onsAt = (status: OnsStatus, name = 'okan'): Partial<WalletModalV2Props> =>
   ({ overviewExtras: <OnsPanel status={status} name={name} feeMicrotari={ONS_FEE} txId={TXID} onName={noop} onCheck={noop} onRegister={noop} onConfirm={noop} onReset={noop} onCopyTx={noop} /> })
 const sendAt = (view: SendView) =>

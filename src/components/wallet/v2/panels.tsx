@@ -20,7 +20,7 @@ import {
   Body, Button, DetailCard, DetailRow, Panel, PanelText,
   SubHeader, TextField, TxRow,
 } from './primitives'
-import { fmt6 } from './format'
+import { fmt6, formatCooldown } from './format'
 
 const XTR = (n: bigint) => `${fmt6(n)} XTR`
 
@@ -48,21 +48,29 @@ export type FaucetPhase = 'idle' | 'locked' | 'claiming' | 'verifying' | 'done' 
 
 export interface FaucetPanelProps {
   phase: FaucetPhase
-  /** Shown on `done` — what actually landed. */
+  /** Shown on `done` when the landed amount is known. */
   received?: bigint
-  /** Shown on `plenty` — why the claim is discouraged. */
-  balance?: bigint
+  /** The claim's own words about what it is doing. Wins over the per-phase line below. */
   message?: string
   onClaim: () => void
-  onRefresh: () => void
+  /**
+   * Milliseconds left on the cooldown, for the countdown in 10g.
+   *
+   * OUR OWN THROTTLE, NOT THE FAUCET'S. Caravel declines to re-claim for 60s after a successful
+   * one; the faucet server has its own rate limit and we do not know it. So this counts down to
+   * when the CLAIM BUTTON returns, which is a fact about this app, and not to when the faucet will
+   * certainly serve — which nobody here knows. Undefined falls back to a line with no number, so a
+   * missing timer can never render a dangling "Next claim available in".
+   */
+  cooldownRemainingMs?: number
 }
 
 /**
  * The extras-row card.
  *
- * ONE SHELL FOR BOTH the faucet and the @name entry, because the design draws them as a matched
- * pair sitting side by side. A tile, two lines, and one control on the right — anything that needs
- * more than that is not an entry point.
+ * ONE SHELL FOR the @name entry — a tile, two lines, and one control on the right. The faucet had
+ * this shape too until V3 gave it its own frame; anything that needs more than this is not an
+ * entry point.
  */
 function ExtraCard({ tile, title, sub, right, muted = false }: {
   tile: ReactNode; title: ReactNode; sub: ReactNode; right?: ReactNode; muted?: boolean
@@ -111,69 +119,122 @@ function CardAction({ tone, onClick, children }: {
 }
 
 const FAUCET_ICON = (
-  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
     <path d="M12 3v12M12 15l-4-4M12 15l4-4" /><path d="M5 21h14" />
   </svg>
 )
 
 /**
- * The testnet faucet.
+ * The testnet faucet — V3 series 10, all phases in one card.
  *
- * A TEMPORARY CARD, DRAWN QUIETLY. It exists only while Caravel runs on Esmeralda, and the design
- * asks for something that sits still rather than advertising itself. It is also the whole reason
- * the extras slot is a slot: removing the faucet should be deleting a file and one line, not
- * unpicking a layout. See crypto/faucet.ts for what else goes with it.
+ * A TEMPORARY HELPER, DRAWN QUIETLY. It exists only while Caravel runs on Esmeralda, and it sits
+ * in the extras slot at the foot of the overview. One shell for every phase: the tile and the
+ * title never move, and only the line and the right-hand slot change — so the card never appears
+ * to become a different component while a claim runs.
  *
- * `message` is the live text the claim itself emits, and it wins over the per-phase line below —
- * the machine's own words about what it is doing beat a generic caption.
+ * NO PHASE IS AN ERROR EXCEPT `error`. `lagging` is a claim that committed and a balance that is
+ * behind; `cooldown` and `plenty` are the faucet declining, which is what a faucet is for. All
+ * three keep the same quiet card as `idle` — the design draws no dimming and none is added.
+ *
+ * `message` is the live text the claim itself emits, and it wins over the per-phase line: the
+ * machine's own words about what it is doing beat a generic caption.
  */
-export function FaucetPanel({ phase, received, balance, message, onClaim, onRefresh }: FaucetPanelProps) {
+export function FaucetPanel({ phase, received, message, onClaim, cooldownRemainingMs }: FaucetPanelProps) {
   const spinning = phase === 'claiming' || phase === 'verifying' || phase === 'lagging'
+  const counting = phase === 'cooldown' && cooldownRemainingMs !== undefined && cooldownRemainingMs > 0
 
   const line = (): string => {
     switch (phase) {
       case 'idle': return 'Claim free test funds to try Caravel.'
+      // The wallet is locked. Calm and buttonless — the line is the explanation, so there is no
+      // dead control needing one.
       case 'locked': return 'Unlock your wallet to claim.'
-      case 'claiming': return 'Requesting funds from the faucet.'
+      case 'claiming': return 'Claiming'
       case 'verifying': return 'Confirming your claim on chain.'
       case 'done': return received !== undefined ? `${XTR(received)} received.` : 'Funds received.'
       // NOT AN ERROR. The claim committed; only the balance is behind.
-      case 'lagging': return 'Taking longer than usual. Your funds will arrive.'
+      case 'lagging': return 'Taking longer than usual. Funds will arrive.'
+      // "Nothing was claimed" is kept over the frame's shorter line: on the one phase where
+      // something went wrong, whether it went wrong BEFORE or AFTER the money moved is the only
+      // thing the reader actually wants to know.
       case 'error': return 'The faucet did not respond. Nothing was claimed.'
-      // No countdown: the wallet does not track one, and inventing "3h 12m" would be a fiction.
-      case 'cooldown': return 'Just claimed. You can claim again shortly.'
-      case 'plenty': return balance !== undefined
-        ? `You have plenty to explore with for now (${fmt6(balance)} XTR).`
-        : 'You have plenty to explore with for now.'
+      // The fragment is completed by the countdown beside it, so it is only used when there IS one.
+      case 'cooldown': return counting ? 'Next claim available in' : 'Just claimed. You can claim again shortly.'
+      case 'plenty': return 'You already have plenty. Leave the rest for other testers.'
     }
   }
 
   const right = () => {
-    if (spinning) return <Spinner size={15} />
+    if (spinning) {
+      return <span style={{
+        width: 14, height: 14, borderRadius: '50%', flexShrink: 0,
+        border: '2px solid var(--border)', borderTopColor: 'var(--accent-400)',
+        animation: 'cv-spin 1s linear infinite',
+      }} />
+    }
     if (phase === 'done') {
       return (
         <span style={{
-          width: 26, height: 26, borderRadius: 'var(--r-pill)', flexShrink: 0,
+          width: 22, height: 22, borderRadius: '50%', flexShrink: 0,
           background: 'rgba(var(--positive-rgb),0.12)', color: 'var(--positive)',
           display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-        }}><Check size={13} color="currentColor" /></span>
+        }}><Check size={11} color="currentColor" /></span>
       )
     }
-    if (phase === 'error') return <CardAction tone="quiet" onClick={onClaim}>Retry</CardAction>
-    if (phase === 'locked') return <CardAction tone="dead">Locked</CardAction>
-    if (phase === 'cooldown') return <CardAction tone="dead">Wait</CardAction>
-    if (phase === 'plenty') return <CardAction tone="quiet" onClick={onRefresh}>Refresh</CardAction>
-    return <CardAction tone="primary" onClick={onClaim}>Claim</CardAction>
+    if (phase === 'error') return <FaucetAction tone="quiet" onClick={onClaim}>Retry</FaucetAction>
+    if (counting) {
+      return (
+        <span style={{ fontFamily: MONO, fontSize: 11.5, color: C.mutedDim, flexShrink: 0, whiteSpace: 'nowrap' }}>
+          {formatCooldown(cooldownRemainingMs!)}
+        </span>
+      )
+    }
+    // `plenty`, `locked` and a countdown-less `cooldown` offer nothing: the faucet is declining and
+    // the line says so. A disabled button would be a control that cannot be used and does not need
+    // to exist — the sentence beside it already carries the reason.
+    if (phase === 'idle') return <FaucetAction tone="primary" onClick={onClaim}>Claim</FaucetAction>
+    return null
   }
 
   return (
-    <ExtraCard
-      tile={FAUCET_ICON}
-      title="Testnet faucet"
-      sub={message ?? line()}
-      right={right()}
-      muted={phase === 'cooldown' || phase === 'plenty' || phase === 'locked'}
-    />
+    <div style={{
+      background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 14,
+      padding: '14px 16px', boxShadow: 'var(--e1)', boxSizing: 'border-box',
+      display: 'flex', alignItems: 'center', gap: 12, minHeight: 44,
+    }}>
+      <span style={{
+        width: 32, height: 32, borderRadius: 9, flexShrink: 0,
+        background: 'var(--accent-wash)', color: 'var(--accent-ink)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+      }}>{FAUCET_ICON}</span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: C.primary }}>Testnet faucet</div>
+        <div style={{ fontSize: 12, color: C.mutedDim, marginTop: 1, lineHeight: 1.45, textWrap: 'pretty' }}>
+          {message ?? line()}
+        </div>
+      </div>
+      {right()}
+    </div>
+  )
+}
+
+/** The faucet card's small action — V3 sizing, distinct from the @name card's CardAction. */
+function FaucetAction({ tone, onClick, children }: {
+  tone: 'primary' | 'quiet'; onClick: () => void; children: ReactNode
+}) {
+  const primary = tone === 'primary'
+  return (
+    <span
+      role="button" tabIndex={0} onClick={onClick} onKeyDown={e => e.key === 'Enter' && onClick()}
+      className={primary ? undefined : 'cv-quiet-btn'}
+      style={{
+        padding: '7px 14px', borderRadius: 8, fontSize: 12, fontWeight: 600,
+        flexShrink: 0, userSelect: 'none', whiteSpace: 'nowrap', cursor: 'pointer',
+        background: primary ? 'var(--accent-400)' : 'var(--surface)',
+        color: primary ? '#FFFFFF' : C.primary,
+        border: primary ? '1px solid transparent' : '1px solid var(--border-strong)',
+      }}
+    >{children}</span>
   )
 }
 

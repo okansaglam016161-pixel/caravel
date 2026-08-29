@@ -55,3 +55,20 @@ export function fmt2(microtari: bigint): string {
 /** Masked stand-in used when the hide toggle is on. Width roughly matches a real figure. */
 export const MASK = '••••••••'
 export const MASK_SHORT = '••••••'
+
+/**
+ * How long is left, as words.
+ *
+ * General in the units so it stays correct if the cooldown ever changes — today it is 60 seconds,
+ * so in practice this only ever shows seconds. Rounds UP, because a countdown that reads "0s"
+ * while the button is still disabled is the one number it must not show.
+ */
+export function formatCooldown(ms: number): string {
+  const total = Math.max(0, Math.ceil(ms / 1000))
+  const h = Math.floor(total / 3600)
+  const m = Math.floor((total % 3600) / 60)
+  const sec = total % 60
+  if (h > 0) return `${h}h ${m}m`
+  if (m > 0) return `${m}m ${sec}s`
+  return `${sec}s`
+}

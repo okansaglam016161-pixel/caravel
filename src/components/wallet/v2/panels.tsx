@@ -301,18 +301,18 @@ export interface SendPanelProps {
 
 const shortAddr = (a: string) => (a.length > 26 ? `${a.slice(0, 14)}…${a.slice(-6)}` : a)
 
-// ── The send sheet's own chrome ───────────────────────────────────────────────
+// ── The V3 sheet chrome ──────────────────────────────────────────────────────
 //
-// The Send sheet renders `bare` (see Sheet): no title bar, no divider, no outer padding. The V3
-// frames draw one card with the title INSIDE it at 21px and a 28px close box on the same line —
-// and the five outcome frames draw no header at all, just a centred column. Neither shape fits a
-// fixed sheet header, so the panel owns its chrome and the Sheet keeps only what it is actually
-// good for: the backdrop, Esc, and refusing to close mid-broadcast.
+// Send and Receive both render `bare` (see Sheet): no title bar, no divider, no outer padding. The
+// V3 frames draw one card with the title INSIDE it at 21px and a 28px close box on the same line —
+// and the five send-outcome frames draw no header at all, just a centred column. Neither shape
+// fits a fixed sheet header, so the panel owns its chrome and the Sheet keeps only what it is
+// actually good for: the backdrop, Esc, and refusing to close mid-broadcast.
 
 const CARD = { padding: 32 } as const
 const OUTCOME_CARD = { padding: '48px 32px', textAlign: 'center' as const }
 
-function SendHeader({ title, onClose }: { title: string; onClose?: () => void }) {
+function SheetHeader({ title, onClose }: { title: string; onClose?: () => void }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
       <span style={{ flex: 1, fontSize: 21, fontWeight: 600, letterSpacing: '-0.015em', color: C.primary }}>{title}</span>
@@ -522,7 +522,7 @@ export function SendPanel({ view, hidden, onSource, onRecipient, onAmount, onNot
   if (view.step === 'form') {
     return (
       <div style={CARD}>
-        <SendHeader title="Send" onClose={onClose} />
+        <SheetHeader title="Send" onClose={onClose} />
 
         <div style={{ marginTop: 28 }}>
           <Label>To</Label>
@@ -594,7 +594,7 @@ export function SendPanel({ view, hidden, onSource, onRecipient, onAmount, onNot
     const isPrivate = view.source === 'private'
     return (
       <div style={CARD}>
-        <SendHeader title="Review" onClose={onClose} />
+        <SheetHeader title="Review" onClose={onClose} />
 
         <div style={{ textAlign: 'center', marginTop: 28 }}>
           <div style={{ fontSize: 36, fontWeight: 700, letterSpacing: '-0.02em', fontFeatureSettings: "'tnum'", color: C.primary }}>
@@ -795,67 +795,91 @@ export function VerbatimBox({ children }: { children: ReactNode }) {
 /**
  * Receive.
  *
+ * ── TWO STATES, ONE CARD ─────────────────────────────────────────────────────
+ *
+ * `address` is null until the account is resolved after unlock, which is frame 3a; once it exists,
+ * 3b. Nothing here derives anything — the address arrives from WalletContext, already resolved by
+ * the same path the send review and the profile panel read. This file only draws it. The plate is
+ * 180 square in both states so the card does not jump when the address lands.
+ *
  * ── THE QR AND THE CLIPBOARD CARRY THE FULL ADDRESS ─────────────────────────
  *
  * The address is shown TRUNCATED, because 100-odd characters of base58 is not something anyone
  * reads and the design gives it one line. But truncation is a display concern and nothing else:
  * `QRCodeSVG` encodes `address` and the copy button copies `address`, both in full. A scannable
  * code or a clipboard holding an elided address would send funds nowhere recoverable, so the two
- * are deliberately fed from the value rather than from the label.
+ * are deliberately fed from the value rather than from the label — and the full string stays in
+ * `title` on the one span that elides it.
  *
- * The plate stays WHITE in both themes. A QR needs a guaranteed light ground with dark modules to
- * scan reliably, so this is one of the few places a literal is correct rather than lazy.
+ * The plate stays WHITE in both themes. A QR is read by contrast and its quiet zone has to be the
+ * light side of it; a dark-grounded code in dark mode is a code most scanners refuse. This is one
+ * of the few places where following the theme would break the thing the screen exists to do, so
+ * the literal is correct rather than lazy.
  */
-export function ReceivePanel({ address, copied, onCopy }: { address: string | null; copied: boolean; onCopy: () => void }) {
+export function ReceivePanel({ address, copied, onCopy, onClose }: {
+  address: string | null; copied: boolean; onCopy: () => void; onClose?: () => void
+}) {
   const plate: React.CSSProperties = {
-    width: 172, height: 172, borderRadius: 'var(--r-lg)', margin: '0 auto',
-    display: 'flex', alignItems: 'center', justifyContent: 'center', boxSizing: 'border-box',
+    width: 180, height: 180, borderRadius: 14, margin: '0 auto', boxSizing: 'border-box',
   }
 
+  const header = <SheetHeader title="Receive" onClose={onClose} />
+
+  // ══ 3a · PREPARING ═══════════════════════════════════════════════════════
   if (!address) {
     return (
-      <div style={{ textAlign: 'center' }}>
-        <div style={{ ...plate, background: 'var(--surface-void)', border: '1px solid var(--border)' }}>
-          <Spinner size={22} ring={2.5} />
-        </div>
-        <div style={{ fontSize: 12.5, color: 'var(--text-muted-dim)', marginTop: 14 }}>Preparing your address</div>
-        <div style={{ fontSize: 12, color: 'var(--text-muted-dim)', marginTop: 4, opacity: 0.8 }}>
-          This happens here, on your device.
+      <div style={CARD}>
+        {header}
+        <div style={{ textAlign: 'center', padding: '44px 0 28px' }}>
+          <div style={{
+            ...plate, background: 'var(--surface-void)', border: '1px solid var(--border)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>
+            <Spinner size={24} ring={3} />
+          </div>
+          <div style={{ fontSize: 14, fontWeight: 500, color: C.bodyDim, marginTop: 20 }}>
+            Preparing your address
+          </div>
         </div>
       </div>
     )
   }
 
+  // ══ 3b · READY ═══════════════════════════════════════════════════════════
   return (
-    <div style={{ textAlign: 'center' }}>
-      <div style={{ ...plate, background: '#FFFFFF', border: '1px solid var(--border)', padding: 12 }}>
-        <QRCodeSVG value={address} size={148} bgColor="#FFFFFF" fgColor="#0A1322" level="M" />
+    <div style={CARD}>
+      {header}
+      <div style={{ textAlign: 'center', padding: '28px 0 0' }}>
+        <div style={{ ...plate, background: '#FFFFFF', border: '1px solid var(--border)', padding: 14 }}>
+          <QRCodeSVG value={address} size={152} bgColor="#FFFFFF" fgColor="#0A1322" level="M" />
+        </div>
+        {/* Display only — see the header. The full value is one hover away and one press away. */}
+        <div title={address} style={{ fontFamily: MONO, fontSize: 12, color: C.bodyDim, marginTop: 18 }}>
+          {shortAddr(address)}
+        </div>
+        <span
+          role="button" tabIndex={0} onClick={onCopy} onKeyDown={e => e.key === 'Enter' && onCopy()}
+          className="cv-quiet-btn"
+          style={{
+            display: 'inline-flex', alignItems: 'center', gap: 7, marginTop: 14,
+            padding: '10px 20px', borderRadius: 10, fontSize: 13.5, fontWeight: 600,
+            border: '1px solid var(--border-strong)', color: C.primary,
+            cursor: 'pointer', userSelect: 'none',
+          }}
+        >
+          <Copy size={13} color="currentColor" />{copied ? 'Copied' : 'Copy address'}
+        </span>
+        {/* Set to the same measure as the send form's privacy line — same size, same colour, same
+            centred shield. The two sheets are a pair and should say their one true thing the same
+            way. This is also where "shielded" last survived in the receive UI. */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 7, justifyContent: 'center', marginTop: 18 }}>
+          <Shield size={12} color={C.mutedDim} />
+          <span style={{ fontSize: 12.5, color: C.mutedDim }}>Funds you receive arrive private by default.</span>
+        </div>
       </div>
-      <div
-        title={address}
-        style={{
-          fontFamily: MONO, fontSize: 11.5, color: 'var(--text-body-dim)',
-          marginTop: 14, lineHeight: 1.5, wordBreak: 'break-all',
-        }}
-      >{shortAddr(address)}</div>
-      <div style={{ fontSize: 12, color: 'var(--text-muted-dim)', marginTop: 8, lineHeight: 1.5 }}>
-        Share this to receive shielded payments. Nobody can see the amounts.
-      </div>
-      <span
-        role="button" tabIndex={0} onClick={onCopy} onKeyDown={e => e.key === 'Enter' && onCopy()}
-        style={{
-          display: 'inline-flex', alignItems: 'center', gap: 7, marginTop: 14,
-          padding: '9px 16px', borderRadius: 'var(--r-md)', fontSize: 12.5, fontWeight: 600,
-          border: '1px solid var(--border-strong)', color: C.primary,
-          cursor: 'pointer', userSelect: 'none',
-        }}
-      >
-        <Copy size={12} color="currentColor" />{copied ? 'Copied' : 'Copy address'}
-      </span>
     </div>
   )
 }
-
 
 // ══ ONS — register a name ═════════════════════════════════════════════════════
 

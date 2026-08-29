@@ -305,8 +305,11 @@ export default function WalletModalV2(p: WalletModalV2Props) {
         </Sheet>
       )}
       {tab === 'receive' && p.receive && (
-        <Sheet title="Receive" onClose={() => p.onTab?.('overview')}>
-          <ReceivePanel {...p.receive} />
+        // `bare` for the same reason Send is: the V3 receive frames put the title inside the card
+        // at 21px with its own close box. Nothing here is ever mid-flight, so the ✕ is always
+        // offered and the sheet stays dismissable throughout.
+        <Sheet title="Receive" bare onClose={() => p.onTab?.('overview')}>
+          <ReceivePanel {...p.receive} onClose={() => p.onTab?.('overview')} />
         </Sheet>
       )}
       {tab === 'activity' && (

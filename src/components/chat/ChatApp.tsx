@@ -2140,7 +2140,7 @@ export default function ChatApp() {
     </div>
 
     {walletOpen && <WalletModal onClose={() => setWalletOpen(false)} />}
-    {profileOpen && <ProfilePanel onClose={() => setProfileOpen(false)} avatar={selfAvatar} />}
+    {profileOpen && <ProfilePanel onClose={() => setProfileOpen(false)} />}
     {reinviteFor && (
       <ReinviteModal
         groupName={groups.find(g => g.id === reinviteFor)?.name?.trim() || 'this group'}

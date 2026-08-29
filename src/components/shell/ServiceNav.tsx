@@ -52,9 +52,21 @@ const ICON: Record<Service, React.ReactNode> = {
   ),
 }
 
-/** npub1abcd…wxyz. The footer identity until a registered @name is wired in (stage 7). */
-function shortNpub(npub: string): string {
-  return npub.length > 20 ? `${npub.slice(0, 10)}…${npub.slice(-4)}` : npub
+/**
+ * otl_esm_1t…8224p — the footer identity.
+ *
+ * THE WALLET ADDRESS, NOT THE NPUB. The row opens a panel that is wallet-only as of V3 series 6:
+ * the npub and the @names left it, so a row labelled with an npub was announcing an identity that
+ * is no longer behind it.
+ *
+ * DISPLAY ONLY, and nothing here copies. The rail is 210px wide with a tile and a lock beside the
+ * label, so this is aggressive — ten leading characters and five trailing, most of the leading run
+ * being the `otl_esm_1` network prefix every address on this chain shares. That is fine for what
+ * it is: a "this is you" marker, not something to check an address against. The full value is on
+ * the button's `title`, and the panel behind it has the real row with the real copy control.
+ */
+function shortAddress(a: string): string {
+  return a.length > 18 ? `${a.slice(0, 10)}…${a.slice(-5)}` : a
 }
 
 export default function ServiceNav({ service, onSelect, onProfile }: {
@@ -62,7 +74,7 @@ export default function ServiceNav({ service, onSelect, onProfile }: {
   onSelect: (s: Service) => void
   onProfile: () => void
 }) {
-  const { nostrNpub } = useWallet()
+  const { address } = useWallet()
 
   return (
     <nav data-theme="dark" style={{
@@ -105,10 +117,13 @@ export default function ServiceNav({ service, onSelect, onProfile }: {
 
       <div style={{ flex: 1, minHeight: 24 }} />
 
-      {/* Identity — opens the profile panel (npub, recovery phrase, lock). */}
+      {/* Identity — opens the profile panel (address, recovery phrase, lock). */}
       <button
         onClick={onProfile}
         className="cv-nav-item"
+        // The full address on hover — the label is elided in two directions and this is the only
+        // place in the rail the whole thing exists.
+        title={address ?? undefined}
         style={{
           display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px',
           borderTop: '1px solid var(--border)', borderLeft: 'none', borderRight: 'none', borderBottom: 'none',
@@ -121,9 +136,16 @@ export default function ServiceNav({ service, onSelect, onProfile }: {
           display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 600, flexShrink: 0,
         }}>@</span>
         <span style={{
-          flex: 1, minWidth: 0, fontSize: 13, fontWeight: 600, color: 'var(--text-primary)',
+          flex: 1, minWidth: 0, color: 'var(--text-primary)',
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-        }}>{nostrNpub ? shortNpub(nostrNpub) : 'Your profile'}</span>
+          // MONO, and a step down in size. Addresses are set in mono everywhere else in the app —
+          // the receive sheet, the review rows, the profile panel — and a base58 string in the UI
+          // face reads as a word that went wrong. The smaller size is what buys the extra
+          // characters back.
+          ...(address
+            ? { fontFamily: 'var(--font-mono)', fontSize: 11.5, fontWeight: 500 }
+            : { fontSize: 13, fontWeight: 600 }),
+        }}>{address ? shortAddress(address) : 'Your profile'}</span>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--vault-label)" strokeWidth="2" strokeLinecap="round" style={{ flexShrink: 0 }}>
           <rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" />
         </svg>

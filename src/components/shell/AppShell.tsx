@@ -23,8 +23,6 @@
 //   abstraction. The hidden subtree keeps its state and its effects, and pays no layout or paint.
 
 import { useState } from 'react'
-import { useWallet } from '../../context/WalletContext'
-import { avatarFor } from '../chat/chatDisplay'
 import ChatApp from '../chat/ChatApp'
 import DarkPin from './DarkPin'
 import ProfilePanel from '../wallet/ProfilePanel'
@@ -42,7 +40,6 @@ function Pane({ show, children }: { show: boolean; children: React.ReactNode }) 
 }
 
 export default function AppShell() {
-  const { nostrPubkeyHex } = useWallet()
   const [service, setService] = useState<Service>('wallet')
   const [profileOpen, setProfileOpen] = useState(false)
 
@@ -61,7 +58,7 @@ export default function AppShell() {
       <Pane show={service === 'name'}><NamePage /></Pane>
 
       {profileOpen && (
-        <ProfilePanel onClose={() => setProfileOpen(false)} avatar={avatarFor(nostrPubkeyHex ?? '')} />
+        <ProfilePanel onClose={() => setProfileOpen(false)} />
       )}
     </div>
   )

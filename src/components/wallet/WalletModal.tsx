@@ -121,14 +121,6 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
   } = useWallet()
 
   const [tab, setTab] = useState<WalletTab>('overview')
-  /**
-   * Whether the asset page is showing.
-   *
-   * A ROOT VIEW, not a sheet — somewhere you navigate to and come back from. It is deliberately NOT
-   * reset when a flow ends: finishing a shield started from the asset page should leave you on the
-   * asset page, which is where you were.
-   */
-  const [assetOpen, setAssetOpen] = useState(false)
   const [addrCopied, setAddrCopied] = useState(false)
 
   const [sendRecipient, setSendRecipient] = useState('')
@@ -898,9 +890,25 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
       onRetryMove={() => { setMoveStep('form'); setMoveError('') }}
       onCopyTx={t => { navigator.clipboard.writeText(t).catch(() => {}) }}
       onRetryBalance={handleRefresh}
-      assetOpen={assetOpen}
-      onOpenAsset={() => setAssetOpen(true)}
-      onCloseAsset={() => setAssetOpen(false)}
+      // ── THE ASSET PAGE IS DELIBERATELY NOT WIRED ────────────────────────────
+      //
+      // `assetOpen`, `onOpenAsset` and `onCloseAsset` are all still on WalletModalV2 and
+      // AssetDetail is still built and still rendered by the preview harness. Passing these three
+      // props again is the whole of turning it back on.
+      //
+      // WHY IT IS OFF. The page exists to answer questions a single-asset testnet wallet does not
+      // have: what else do I hold, and what has this one been doing. There is one asset, and its
+      // price is a fixed rate with no history — the chart is honestly a flat line, which is the
+      // best available drawing of a constant and still reads as a broken chart to anyone who has
+      // seen a price page before. A destination that restates the overview is worse than no
+      // destination.
+      //
+      // WHAT TURNS IT BACK ON: a real price feed, or a second asset. Either gives the page
+      // something to say that the row above it cannot.
+      //
+      // THE ROW GOES INERT BY ITSELF. AssetsPanel keys its chevron, pointer, hover, focus and
+      // click on whether `onOpen` was passed, so withholding it removes every affordance at once
+      // rather than leaving a control that looks live and does nothing.
       // The faucet is a quiet card in the extras slot. The @name card left the overview entirely —
       // ONS lives on the Name page, which is where OnsRegisterPanel is mounted and where its state
       // machine is untouched.

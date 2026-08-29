@@ -157,7 +157,13 @@ export interface WalletModalV2Props {
   onRetryMove: () => void
   onCopyTx: (txId: string) => void
   onRetryBalance?: () => void
-  /** Opens the asset detail page. The assets row is inert while this is unset. */
+  /**
+   * Opens the asset detail page. The assets row is inert while this is unset.
+   *
+   * UNSET BY THE APP as of the single-asset pass — see WalletModal for why, and for what turns it
+   * back on. The preview harness still passes it, so AssetDetail and this branch stay exercised
+   * rather than rotting as unreachable code.
+   */
   onOpenAsset?: () => void
   /** True while the asset page is the root view. Sheets still open over it. */
   assetOpen?: boolean

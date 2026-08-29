@@ -18,7 +18,8 @@ import WalletModalV2, { WALLET_TABS, type MoveView, type WalletModalV2Props, typ
 import { ActivityRowShell, FaucetPanel, NameCard, OnsPanel, type ActivityRowView, type FaucetPhase, type OnsStatus, type SendView } from '../components/wallet/v2/panels'
 import type { BalanceView } from '../components/wallet/v2/balances'
 import { computeTotal } from '../components/wallet/v2/total'
-import type { Dir, EntryProps } from '../components/wallet/v2/move'
+import type { EntryProps } from '../components/wallet/v2/move'
+import type { Dir } from '../components/wallet/v2/moveCopy'
 import { C, MONO, PAGE_MAX_WIDTH, border, tealBorder, tealFill } from '../components/wallet/v2/tokens'
 import { fmt6, toInput } from '../components/wallet/v2/format'
 
@@ -186,8 +187,8 @@ function Drive() {
       canReview: next !== '' && !belowMin && !over,
       error: belowMin ? 'Minimum 0.10 XTR.'
         : over ? (dir === 'reveal'
-            ? `More than you can unshield — the fee comes out of your shielded balance too. Most you can move now: ${fmt6(ceiling)} XTR.`
-            : 'More than your unshielded balance.')
+            ? `More than you can make public — the fee comes out of your private balance too. Most you can move now: ${fmt6(ceiling)} XTR.`
+            : 'More than your public balance.')
           : undefined,
       leftoverNote: dir === 'reveal' && usedMax
         ? `About ${fmt6(RESERVE)} TARI stays private to cover the fee. It’s still yours and still spendable.`
@@ -216,7 +217,7 @@ function Drive() {
       scanned: 1247, owned: 6, progressScanned: 812,
     },
     move, entries, lockedText: locked, lockedIsFlight: lockedFlight,
-    inFlightText: scenario === 'inFlight' ? 'Making 1.000000 TARI public' : undefined,
+    inFlightText: scenario === 'inFlight' ? 'Making 1.000000 XTR public' : undefined,
     onToggleHidden: () => setHidden(h => !h),
     refreshing,
     onRefresh: runRefresh,
@@ -361,18 +362,18 @@ function Drive() {
           <button onClick={() => { setAddrReady(false); setTab('receive') }} style={btn(!addrReady)}>Preparing address</button>
         </Group>
         <Group title="Jump to a move state" note="Bypasses the flow — for states that are hard to reach">
-          {jump('Form · shield', { step: 'form', dir: 'conceal', amount: '100', maxUsed: false, available: pubV, minMicrotari: 100_000n, maxMicrotari: pubV, canReview: true })}
-          {jump('Form · unshield', { step: 'form', dir: 'reveal', amount: '1', maxUsed: false, available: privV, minMicrotari: 100_000n, maxMicrotari: privV - RESERVE, canReview: true })}
-          {jump('Form · MAX pressed', { step: 'form', dir: 'reveal', amount: toInput(privV - RESERVE), maxUsed: true, available: privV, minMicrotari: 100_000n, maxMicrotari: privV - RESERVE, canReview: true, leftoverNote: `About ${fmt6(RESERVE)} XTR stays shielded to cover the fee. It’s still yours and still spendable.` })}
+          {jump('Form · make private', { step: 'form', dir: 'conceal', amount: '100', maxUsed: false, available: pubV, minMicrotari: 100_000n, maxMicrotari: pubV, canReview: true })}
+          {jump('Form · make public', { step: 'form', dir: 'reveal', amount: '1', maxUsed: false, available: privV, minMicrotari: 100_000n, maxMicrotari: privV - RESERVE, canReview: true })}
+          {jump('Form · MAX pressed', { step: 'form', dir: 'reveal', amount: toInput(privV - RESERVE), maxUsed: true, available: privV, minMicrotari: 100_000n, maxMicrotari: privV - RESERVE, canReview: true, leftoverNote: `${fmt6(RESERVE)} XTR stays private to cover the fee. It’s still yours and still spendable.` })}
           {jump('Form · below minimum', { step: 'form', dir: 'reveal', amount: '0.05', maxUsed: false, available: privV, minMicrotari: 100_000n, maxMicrotari: privV - RESERVE, canReview: false, error: 'Minimum 0.10 XTR.' })}
           {jump('Review · pricing', { step: 'review', dir: 'conceal', amountMicrotari: 100_000_000n, feeMicrotari: null, resulting: null })}
-          {jump('Review · shield', { step: 'review', dir: 'conceal', amountMicrotari: 100_000_000n, feeMicrotari: FEE, resulting: resulting(100_000_000n, 'conceal') })}
-          {jump('Review · unshield', { step: 'review', dir: 'reveal', amountMicrotari: 1_000_000n, feeMicrotari: FEE, resulting: resulting(1_000_000n, 'reveal') })}
-          {jump('Review · unshield MAX (leftover)', { step: 'review', dir: 'reveal', amountMicrotari: privV - RESERVE, feeMicrotari: FEE, resulting: resulting(privV - RESERVE, 'reveal'), leftoverNote: `About ${fmt6(RESERVE)} XTR stays shielded to cover the fee. It’s still yours and still spendable.` })}
+          {jump('Review · make private', { step: 'review', dir: 'conceal', amountMicrotari: 100_000_000n, feeMicrotari: FEE, resulting: resulting(100_000_000n, 'conceal') })}
+          {jump('Review · make public', { step: 'review', dir: 'reveal', amountMicrotari: 1_000_000n, feeMicrotari: FEE, resulting: resulting(1_000_000n, 'reveal') })}
+          {jump('Review · make public MAX (leftover)', { step: 'review', dir: 'reveal', amountMicrotari: privV - RESERVE, feeMicrotari: FEE, resulting: resulting(privV - RESERVE, 'reveal'), leftoverNote: `${fmt6(RESERVE)} XTR stays private to cover the fee. It’s still yours and still spendable.` })}
           {jump('Moving', { step: 'moving', dir: 'reveal', amountMicrotari: 1_000_000n, progress: 'Submitting to the network — a few seconds.' })}
           {jump('Settling', { step: 'settling', dir: 'reveal', amountMicrotari: 1_000_000n, txId: TXID })}
-          {jump('Success', { step: 'success', dir: 'reveal', amountMicrotari: 1_000_000n, txId: TXID, lagged: false, resulting: resulting(1_000_000n, 'reveal') })}
-          {jump('Success · index lagging', { step: 'success', dir: 'reveal', amountMicrotari: 1_000_000n, txId: TXID, lagged: true, resulting: null })}
+          {jump('Success', { step: 'success', dir: 'reveal', amountMicrotari: 1_000_000n, txId: TXID, lagged: false })}
+          {jump('Success · index lagging', { step: 'success', dir: 'reveal', amountMicrotari: 1_000_000n, txId: TXID, lagged: true })}
           {jump('Error · verbatim', { step: 'error', dir: 'reveal', message: REAL_ERROR, txId: TXID })}
           {jump('Idle', { step: 'idle' })}
         </Group>
@@ -450,19 +451,19 @@ function Gallery() {
     { label: 'LOADING', props: still({ privateBalance: LOADING, publicBalance: LOADING, entries: [], lockedText: 'Checking your balances…' }) },
     { label: 'UNAVAILABLE · NOT A ZERO', props: still({ privateBalance: UNAVAIL, publicBalance: UNAVAIL, entries: [], lockedText: 'Unavailable while balances are unknown' }) },
     { label: 'HIDDEN · ONE TOGGLE, EVERYTHING', props: still({ hidden: true }) },
-    { label: 'IN FLIGHT · LOCKED', props: still({ inFlightText: 'Unshielding 1.000000 XTR', entries: [], lockedText: 'Locked while a move is in flight', lockedIsFlight: true }) },
-    { label: 'FORM · SHIELD', props: still({ move: { step: 'form', dir: 'conceal', amount: '100', maxUsed: false, available: PUBLIC, minMicrotari: 100_000n, maxMicrotari: PUBLIC, canReview: true } }) },
-    { label: 'FORM · UNSHIELD, MAX', props: still({ move: { step: 'form', dir: 'reveal', amount: toInput(PRIVATE - RESERVE), maxUsed: true, available: PRIVATE, minMicrotari: 100_000n, maxMicrotari: PRIVATE - RESERVE, canReview: true, leftoverNote: `About ${fmt6(RESERVE)} XTR stays shielded to cover the fee. It’s still yours and still spendable.` } }) },
+    { label: 'IN FLIGHT · LOCKED', props: still({ inFlightText: 'Making 1.000000 XTR public', entries: [], lockedText: 'Locked while a move is in flight', lockedIsFlight: true }) },
+    { label: 'FORM · MAKE PRIVATE', props: still({ move: { step: 'form', dir: 'conceal', amount: '100', maxUsed: false, available: PUBLIC, minMicrotari: 100_000n, maxMicrotari: PUBLIC, canReview: true } }) },
+    { label: 'FORM · MAKE PUBLIC, MAX', props: still({ move: { step: 'form', dir: 'reveal', amount: toInput(PRIVATE - RESERVE), maxUsed: true, available: PRIVATE, minMicrotari: 100_000n, maxMicrotari: PRIVATE - RESERVE, canReview: true, leftoverNote: `${fmt6(RESERVE)} XTR stays private to cover the fee. It’s still yours and still spendable.` } }) },
     { label: 'FORM · BELOW MINIMUM', props: still({ move: { step: 'form', dir: 'reveal', amount: '0.05', maxUsed: false, available: PRIVATE, minMicrotari: 100_000n, maxMicrotari: PRIVATE - RESERVE, canReview: false, error: 'Minimum 0.10 XTR.' } }) },
     { label: 'REVIEW · PRICING', props: still({ move: { step: 'review', dir: 'conceal', amountMicrotari: 100_000_000n, feeMicrotari: null, resulting: null } }) },
-    { label: 'REVIEW · SHIELD', props: still({ move: { step: 'review', dir: 'conceal', amountMicrotari: 100_000_000n, feeMicrotari: FEE, resulting: r(100_000_000n, 'conceal') } }) },
-    { label: 'REVIEW · UNSHIELD', props: still({ move: { step: 'review', dir: 'reveal', amountMicrotari: 1_000_000n, feeMicrotari: FEE, resulting: r(1_000_000n, 'reveal') } }) },
-    { label: 'REVIEW · UNSHIELD MAX (fee remainder)', props: still({ move: { step: 'review', dir: 'reveal', amountMicrotari: PRIVATE - RESERVE, feeMicrotari: FEE, resulting: r(PRIVATE - RESERVE, 'reveal'), leftoverNote: `About ${fmt6(RESERVE)} XTR stays shielded to cover the fee. It’s still yours and still spendable.` } }) },
+    { label: 'REVIEW · MAKE PRIVATE', props: still({ move: { step: 'review', dir: 'conceal', amountMicrotari: 100_000_000n, feeMicrotari: FEE, resulting: r(100_000_000n, 'conceal') } }) },
+    { label: 'REVIEW · MAKE PUBLIC', props: still({ move: { step: 'review', dir: 'reveal', amountMicrotari: 1_000_000n, feeMicrotari: FEE, resulting: r(1_000_000n, 'reveal') } }) },
+    { label: 'REVIEW · MAKE PUBLIC MAX (fee remainder)', props: still({ move: { step: 'review', dir: 'reveal', amountMicrotari: PRIVATE - RESERVE, feeMicrotari: FEE, resulting: r(PRIVATE - RESERVE, 'reveal'), leftoverNote: `${fmt6(RESERVE)} XTR stays private to cover the fee. It’s still yours and still spendable.` } }) },
     { label: 'REVIEW · MAKE PUBLIC (no note — design as drawn)', props: still({ move: { step: 'review', dir: 'reveal', amountMicrotari: 1_000_000n, feeMicrotari: FEE, resulting: r(1_000_000n, 'reveal') } }) },
     { label: 'MOVING', props: still({ move: { step: 'moving', dir: 'conceal', amountMicrotari: 100_000_000n, progress: 'Submitting to the network — a few seconds.' } }) },
     { label: 'SETTLING · DONE, CATCHING UP', props: still({ move: { step: 'settling', dir: 'conceal', amountMicrotari: 100_000_000n, txId: TXID } }) },
-    { label: 'SUCCESS · SETTLED', props: still({ move: { step: 'success', dir: 'reveal', amountMicrotari: 1_000_000n, txId: TXID, lagged: false, resulting: r(1_000_000n, 'reveal') } }) },
-    { label: 'SUCCESS · INDEX LAGGING (still a success)', props: still({ move: { step: 'success', dir: 'reveal', amountMicrotari: 1_000_000n, txId: TXID, lagged: true, resulting: null } }) },
+    { label: 'SUCCESS · SETTLED', props: still({ move: { step: 'success', dir: 'reveal', amountMicrotari: 1_000_000n, txId: TXID, lagged: false } }) },
+    { label: 'SUCCESS · INDEX LAGGING (still a success)', props: still({ move: { step: 'success', dir: 'reveal', amountMicrotari: 1_000_000n, txId: TXID, lagged: true } }) },
     { label: 'ERROR · VERBATIM NETWORK TEXT', props: still({ move: { step: 'error', dir: 'reveal', message: REAL_ERROR, txId: TXID } }) },
 
     // ── Faucet ──

@@ -239,18 +239,13 @@ export function unreadableReasonText(reason: TotalUnreadableReason): string {
  * a working action to avoid understating a number. So the figure stays and the uncertainty is
  * stated, which is the honest half of what the total is doing.
  *
- * ── WHY THE NOUN IS A PARAMETER ──────────────────────────────────────────────
- *
- * One condition, two surfaces with different vocabularies. The V3 send flow says "private funds"
- * from the source toggle through to the receipt, and a note reading "your shielded balance" in the
- * middle of it would look like a different balance. The move sheets still say shielded, and are
- * not being restyled this pass. Rather than pick a winner and leave one surface inconsistent, the
- * caller supplies its own word — the SENTENCE is the shared thing, not the noun.
- *
- * The default is the send flow's, because that is the surface where mixed vocabulary is worst: the
- * user picked "private funds" three fields earlier.
+ * ONE WORDING, because there is now one vocabulary. This briefly took the noun as a parameter,
+ * while the send flow said "private" and the move sheets still said "shielded" — the sentence was
+ * shared and the noun was not. Both surfaces speak private and public now, so the knob has no
+ * caller and is gone: a parameter that can only be passed one value is a place for the two to
+ * drift apart again.
  */
-export function incompleteAvailableNote(word: 'private' | 'shielded' = 'private'): string {
-  return `We couldn’t read all of your ${word} balance, so this may be lower than your real maximum. It’s safe to send — there may simply be more.`
+export function incompleteAvailableNote(): string {
+  return 'We couldn’t read all of your private balance, so this may be lower than your real maximum. It’s safe to send — there may simply be more.'
 }
 

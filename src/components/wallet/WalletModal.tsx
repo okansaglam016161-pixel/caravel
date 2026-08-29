@@ -41,7 +41,8 @@ import { usePaymentResolution } from '../../hooks/usePaymentResolution'
 import WalletModalV2, { type MoveView, type Resulting, type WalletTab } from './v2/WalletModalV2'
 import { computeTotal, incompleteAvailableNote } from './v2/total'
 import type { BalanceView } from './v2/balances'
-import type { Dir, EntryProps } from './v2/move'
+import type { EntryProps } from './v2/move'
+import type { Dir } from './v2/moveCopy'
 import { ActivityRowShell, type ActivityStatus, type SendSource, type SendView } from './v2/panels'
 import { plainError } from './v2/plainError'
 import { resolveSendPath } from './v2/sendPath'
@@ -492,7 +493,7 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
       } else {
         setMoveError(
           result.outcome === 'Reject'
-            ? `The network rejected the transaction. Nothing was ${movePrepared.dir === 'reveal' ? 'unshielded' : 'moved'}, and no fee was taken.`
+            ? `The network rejected the transaction. Nothing was ${movePrepared.dir === 'reveal' ? 'made public' : 'moved'}, and no fee was taken.`
             : 'The transaction didn’t reach a decision in time. It may still land — refresh your balances in a moment before trying again.',
         )
         setMoveStep('error')
@@ -667,6 +668,14 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
    * qualifies at MAX; a projection is no place to make an exception. No projection is shown, and
    * the amount and fee above it are unaffected.
    */
+  /**
+   * The post-move split, PREDICTED — live balances plus the move's delta.
+   *
+   * REVIEW ONLY. It is a prediction, and it is only correct while the balances are still pre-move.
+   * The success step is reached after the settle loop has seen BOTH sides move, so calling this
+   * there double-counts the transaction — which it did, until the success variant of MoveView
+   * stopped having anywhere to put the answer.
+   */
   function resultingFor(m: PreparedMove): Resulting | null {
     if (balance === null || revealed.status !== 'done' || scan.incomplete) return null
     return m.dir === 'reveal'
@@ -713,11 +722,11 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
   const moveLeftoverNote =
     moveDir === 'reveal' && moveExact !== null && privateAmount > ceiling
       ? [
-          `About ${toInput(privateAmount - ceiling)} XTR stays shielded to cover the fee. It’s still yours and still spendable.`,
-          privateFiguresIncomplete ? incompleteAvailableNote('shielded') : '',
+          `${toInput(privateAmount - ceiling)} XTR stays private to cover the fee. It’s still yours and still spendable.`,
+          privateFiguresIncomplete ? incompleteAvailableNote() : '',
         ].filter(Boolean).join(' ')
       : moveDir === 'reveal' && privateFiguresIncomplete
-      ? incompleteAvailableNote('shielded')
+      ? incompleteAvailableNote()
       : undefined
 
   const moveView: MoveView =
@@ -733,8 +742,8 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
       canReview: moveAmount !== '' && !belowMin && !overCeiling,
       error: belowMin ? `The smallest amount you can move is ${toInput(minAmount)} XTR.`
         : overCeiling ? (moveDir === 'reveal'
-            ? `More than you can unshield — the fee comes out of your shielded balance too. Most you can move now: ${toInput(ceiling)} XTR.`
-            : 'More than your unshielded balance.')
+            ? `More than you can make public — the fee comes out of your private balance too. Most you can move now: ${toInput(ceiling)} XTR.`
+            : 'More than your public balance.')
           : moveError || undefined,
       // Said BEFORE they notice it: a private balance that stops just short of zero after "move
       // everything" reads as a bug, or as funds gone astray on an irreversible action.
@@ -765,10 +774,12 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
     : moveStep === 'settling' ? {
       step: 'settling', dir: moveDir, amountMicrotari: moveSettledAmount, txId: moveTxId,
     }
+    // NO `resulting` — the type no longer has the field. See MoveView's success variant: this
+    // step is reached only after both balances have moved, so `resultingFor` would be adding the
+    // move to figures that already contain it.
     : moveStep === 'success' ? {
       step: 'success', dir: moveDir, amountMicrotari: moveSettledAmount, txId: moveTxId,
       lagged: moveLagging,
-      resulting: movePrepared ? resultingFor(movePrepared) : null,
     }
     : moveStep === 'error' ? {
       step: 'error', dir: moveDir, message: moveError || 'Unknown error.', txId: moveTxId || undefined,
@@ -782,9 +793,9 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
       dir: 'conceal',
       disabledReason:
         !wallet ? 'Unlock your wallet to move funds'
-        : revealed.status === 'unavailable' ? 'Your unshielded balance is unavailable right now'
-        : revealed.status !== 'done' ? 'Checking your unshielded balance…'
-        : revealedAmount <= 0n ? 'Nothing unshielded to move'
+        : revealed.status === 'unavailable' ? 'Your public balance is unavailable right now'
+        : revealed.status !== 'done' ? 'Checking your public balance…'
+        : revealedAmount <= 0n ? 'Nothing public to make private'
         : undefined,
       onClick: () => { setMoveDir('conceal'); setMoveStep('form'); setMoveAmount(''); setMoveExact(null); setMoveError('') },
     },
@@ -792,11 +803,11 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
       dir: 'reveal',
       disabledReason:
         !wallet ? 'Unlock your wallet to move funds'
-        : status === 'error' ? 'Your shielded balance is unavailable right now'
-        : balance === null ? 'Checking your shielded balance…'
+        : status === 'error' ? 'Your private balance is unavailable right now'
+        : balance === null ? 'Checking your private balance…'
         // E2 — the trap the M4 report found. Named before an amount is typed, not after.
         : !hasAccount ? 'Still identifying this wallet’s account — try again in a moment'
-        : maxRevealable(outputValues) < MIN_REVEAL_MICROTARI ? 'Not enough shielded balance to cover an amount plus the fee'
+        : maxRevealable(outputValues) < MIN_REVEAL_MICROTARI ? 'Not enough private balance to cover an amount plus the fee'
         : undefined,
       onClick: () => { setMoveDir('reveal'); setMoveStep('form'); setMoveAmount(''); setMoveExact(null); setMoveError('') },
     },

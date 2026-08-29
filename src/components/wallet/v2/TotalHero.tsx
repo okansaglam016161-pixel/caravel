@@ -125,8 +125,8 @@ export function TotalHero({ total, privateBalance, publicBalance, hidden, onRetr
   // half failed; this line says what that costs — which is the one thing that card cannot say,
   // because it is a fact about the total rather than about either side.
   const unreadableSide =
-    !hidden && total.status === 'unreadable' && privateBalance.status === 'unavailable' ? 'shielded'
-    : !hidden && total.status === 'unreadable' && publicBalance.status === 'unavailable' ? 'unshielded'
+    !hidden && total.status === 'unreadable' && privateBalance.status === 'unavailable' ? 'private'
+    : !hidden && total.status === 'unreadable' && publicBalance.status === 'unavailable' ? 'public'
     : null
 
   // ── THE DESIGN'S LINE, SHOWN ONLY WHERE IT IS TRUE ──────────────────────────

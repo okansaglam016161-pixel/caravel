@@ -309,10 +309,10 @@ const shortAddr = (a: string) => (a.length > 26 ? `${a.slice(0, 14)}…${a.slice
 // fits a fixed sheet header, so the panel owns its chrome and the Sheet keeps only what it is
 // actually good for: the backdrop, Esc, and refusing to close mid-broadcast.
 
-const CARD = { padding: 32 } as const
-const OUTCOME_CARD = { padding: '48px 32px', textAlign: 'center' as const }
+export const CARD = { padding: 32 } as const
+export const OUTCOME_CARD = { padding: '48px 32px', textAlign: 'center' as const }
 
-function SheetHeader({ title, onClose }: { title: string; onClose?: () => void }) {
+export function SheetHeader({ title, onClose }: { title: string; onClose?: () => void }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
       <span style={{ flex: 1, fontSize: 21, fontWeight: 600, letterSpacing: '-0.015em', color: C.primary }}>{title}</span>
@@ -332,8 +332,8 @@ function SheetHeader({ title, onClose }: { title: string; onClose?: () => void }
   )
 }
 
-/** A field label. Sentence case at 13px — the small-caps tracking of FieldLabel is the move flow's. */
-function Label({ children }: { children: ReactNode }) {
+/** A field label. Sentence case at 13px, per the V3 frames. */
+export function Label({ children }: { children: ReactNode }) {
   return <div style={{ fontSize: 13, fontWeight: 500, color: C.bodyDim }}>{children}</div>
 }
 
@@ -442,8 +442,68 @@ function PrivacyNote({ source }: { source: SendSource }) {
   )
 }
 
+/**
+ * The amount field, as the V3 frames draw it: a label row carrying the available balance and a
+ * Max link, a tall bordered box with the figure at 32px, and one line beneath for whatever
+ * qualifies it.
+ *
+ * ONE COMPONENT FOR SEND AND FOR THE MOVE FLOW. The frames draw the same field in 2a, 4a and 5a,
+ * and the two flows sat side by side with hand-kept copies of it for exactly as long as it took to
+ * notice. What differs between them is the WORDS — "Available" versus "Available public" — which
+ * is what `availableLabel` is for.
+ *
+ * `note` and `error` share one slot and the error wins, because they answer the same question and
+ * an error is the more urgent answer. The move flow's fee-reserve remainder arrives as `note`.
+ */
+export function AmountBlock({ value, onChange, onMax, availableLabel, availableValue, note, error, readOnly, mt = 24 }: {
+  value: string
+  onChange: (v: string) => void
+  onMax: () => void
+  availableLabel: string
+  availableValue: ReactNode
+  note?: ReactNode
+  error?: ReactNode
+  readOnly?: boolean
+  mt?: number
+}) {
+  return (
+    <div style={{ marginTop: mt }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12 }}>
+        <Label>Amount</Label>
+        <span style={{ fontSize: 12, color: C.mutedDim, whiteSpace: 'nowrap' }}>
+          {availableLabel} <span style={{ fontFamily: MONO }}>{availableValue}</span>
+          {' · '}
+          <span role="button" tabIndex={0} onClick={onMax} onKeyDown={e => e.key === 'Enter' && onMax()}
+            style={{ fontWeight: 500, color: 'var(--accent-ink)', cursor: 'pointer', userSelect: 'none' }}>Max</span>
+        </span>
+      </div>
+      <div className="cv-field" style={{
+        display: 'flex', alignItems: 'baseline', gap: 10, marginTop: 8,
+        border: error ? '1px solid var(--danger-500)' : '1px solid var(--border-strong)',
+        borderRadius: 12, padding: '18px 16px',
+      }}>
+        <input
+          value={value} onChange={e => onChange(e.target.value)} readOnly={readOnly}
+          inputMode="decimal" placeholder="0.00" aria-label="Amount in XTR"
+          style={{
+            flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent', padding: 0,
+            fontFamily: 'inherit', fontSize: 32, fontWeight: 700, letterSpacing: '-0.02em',
+            fontFeatureSettings: "'tnum'", color: C.primary,
+          }}
+        />
+        <span style={{ fontSize: 14, fontWeight: 600, color: C.mutedDim, flexShrink: 0 }}>XTR</span>
+      </div>
+      {error
+        ? <div style={{ fontSize: 12, color: C.dangerText, marginTop: 10, lineHeight: 1.5 }}>{error}</div>
+        : note
+          ? <div style={{ fontSize: 12.5, color: C.mutedDim, marginTop: 10, lineHeight: 1.5 }}>{note}</div>
+          : null}
+    </div>
+  )
+}
+
 /** The full-width action at the foot of a card. */
-function SendButton({ tone, onClick, children, mt = 16 }: {
+export function ActionButton({ tone, onClick, children, mt = 16 }: {
   tone: 'primary' | 'quiet' | 'disabled'; onClick?: () => void; children: ReactNode; mt?: number
 }) {
   const dead = tone === 'disabled'
@@ -470,7 +530,7 @@ function SendButton({ tone, onClick, children, mt = 16 }: {
  * The shape all five terminal states share: a circled emblem, a headline, a line of prose, and
  * whatever that particular outcome can offer you next.
  */
-function Outcome({ emblem, title, sub, children }: {
+export function Outcome({ emblem, title, sub, children }: {
   emblem: ReactNode; title: string; sub: ReactNode; children?: ReactNode
 }) {
   return (
@@ -484,7 +544,7 @@ function Outcome({ emblem, title, sub, children }: {
 }
 
 /** The circled emblem. `tone` is the only thing that separates a success from a failure here. */
-function Emblem({ tone, children }: { tone: 'positive' | 'accent' | 'danger'; children: ReactNode }) {
+export function Emblem({ tone, children }: { tone: 'positive' | 'accent' | 'danger'; children: ReactNode }) {
   const skin = {
     positive: { bg: 'rgba(var(--positive-rgb),0.12)', ink: 'var(--positive)' },
     accent: { bg: 'var(--accent-wash)', ink: 'var(--accent-ink)' },
@@ -531,48 +591,19 @@ export function SendPanel({ view, hidden, onSource, onRecipient, onAmount, onNot
 
         {view.canChooseSource && <SourceToggle source={view.source} onSource={onSource} />}
 
-        <div style={{ marginTop: 24 }}>
-          <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12 }}>
-            <Label>Amount</Label>
-            <span style={{ fontSize: 12, color: C.mutedDim }}>
-              {/* NAMED ONLY WHEN THE TOGGLE IS NOT THERE TO NAME IT. With the segmented control
-                  directly above showing Private or Public selected, repeating the word here is the
-                  same fact twice; without it, this label is the only thing saying which balance
-                  the figure describes. */}
-              {view.canChooseSource ? 'Available' : view.source === 'private' ? 'Private available' : 'Public available'}{' '}
-              <span style={{ fontFamily: MONO }}>
-                {hidden ? '••••••' : view.available !== null ? `${fmt6(view.available)} XTR` : '—'}
-              </span>
-              {' · '}
-              <span role="button" tabIndex={0} onClick={onMax} onKeyDown={e => e.key === 'Enter' && onMax()}
-                style={{ fontWeight: 500, color: 'var(--accent-ink)', cursor: 'pointer', userSelect: 'none' }}>Max</span>
-            </span>
-          </div>
-          <div className="cv-field" style={{
-            display: 'flex', alignItems: 'baseline', gap: 10, marginTop: 8,
-            border: view.error ? '1px solid var(--danger-500)' : '1px solid var(--border-strong)',
-            borderRadius: 12, padding: '18px 16px',
-          }}>
-            <input
-              value={view.amount} onChange={e => onAmount(e.target.value)}
-              inputMode="decimal" placeholder="0.00" aria-label="Amount in XTR"
-              style={{
-                flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent', padding: 0,
-                fontFamily: 'inherit', fontSize: 32, fontWeight: 700, letterSpacing: '-0.02em',
-                fontFeatureSettings: "'tnum'", color: C.primary,
-              }}
-            />
-            <span style={{ fontSize: 14, fontWeight: 600, color: C.mutedDim, flexShrink: 0 }}>XTR</span>
-          </div>
-          {/* The two things that qualify the figure above. `availabilityNote` is MAX owning up to a
-              truncated scan — the total refuses to show a number on one, and MAX draws from the
-              same set. */}
-          {view.error
-            ? <div style={{ fontSize: 12, color: C.dangerText, marginTop: 8, lineHeight: 1.5 }}>{view.error}</div>
-            : view.availabilityNote
-              ? <div style={{ fontSize: 12, color: C.mutedDim, marginTop: 8, lineHeight: 1.5 }}>{view.availabilityNote}</div>
-              : null}
-        </div>
+        <AmountBlock
+          value={hidden ? '••••••' : view.amount} onChange={onAmount} readOnly={hidden}
+          // NAMED ONLY WHEN THE TOGGLE IS NOT THERE TO NAME IT. With the segmented control directly
+          // above showing Private or Public selected, repeating the word here is the same fact
+          // twice; without it, this label is the only thing saying which balance the figure is.
+          availableLabel={view.canChooseSource ? 'Available' : view.source === 'private' ? 'Private available' : 'Public available'}
+          availableValue={hidden ? '••••••' : view.available !== null ? `${fmt6(view.available)} XTR` : '—'}
+          onMax={onMax}
+          error={view.error}
+          // MAX owning up to a truncated scan — the total refuses to show a number on one, and MAX
+          // draws from the same set.
+          note={view.availabilityNote}
+        />
 
         <div style={{ marginTop: 24 }}>
           <Label>Note <span style={{ fontWeight: 400, color: C.mutedDim }}>· optional, private</span></Label>
@@ -581,9 +612,9 @@ export function SendPanel({ view, hidden, onSource, onRecipient, onAmount, onNot
 
         <PrivacyNote source={view.source} />
 
-        <SendButton tone={view.canReview ? 'primary' : 'disabled'} onClick={view.canReview ? onReview : undefined}>
+        <ActionButton tone={view.canReview ? 'primary' : 'disabled'} onClick={view.canReview ? onReview : undefined}>
           Review payment
-        </SendButton>
+        </ActionButton>
       </div>
     )
   }
@@ -647,8 +678,8 @@ export function SendPanel({ view, hidden, onSource, onRecipient, onAmount, onNot
           </div>
         )}
 
-        <SendButton tone={pricing ? 'disabled' : 'primary'} onClick={pricing ? undefined : onConfirm} mt={20}>Send</SendButton>
-        <SendButton tone="quiet" onClick={onBack} mt={8}>Back</SendButton>
+        <ActionButton tone={pricing ? 'disabled' : 'primary'} onClick={pricing ? undefined : onConfirm} mt={20}>Send</ActionButton>
+        <ActionButton tone="quiet" onClick={onBack} mt={8}>Back</ActionButton>
       </div>
     )
   }
@@ -709,7 +740,7 @@ export function SendPanel({ view, hidden, onSource, onRecipient, onAmount, onNot
             actually paid, and dropping it would leave a private send with no place that ever
             states its real fee. */}
         <Receipt fee={view.feeMicrotari} txId={view.txId} onCopy={() => onCopyTx(view.txId)} />
-        <SendButton tone="quiet" onClick={onDone} mt={24}>Done</SendButton>
+        <ActionButton tone="quiet" onClick={onDone} mt={24}>Done</ActionButton>
       </Outcome>
     )
   }
@@ -740,7 +771,7 @@ export function SendPanel({ view, hidden, onSource, onRecipient, onAmount, onNot
             style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer' }}
           >tx {view.txId.length > 14 ? `${view.txId.slice(0, 6)}…${view.txId.slice(-6)}` : view.txId}<Copy size={11} color="currentColor" /></span>
         </div>
-        <SendButton tone="quiet" onClick={onDone} mt={24}>Done</SendButton>
+        <ActionButton tone="quiet" onClick={onDone} mt={24}>Done</ActionButton>
         <span
           role="button" tabIndex={0} onClick={onViewActivity} onKeyDown={e => e.key === 'Enter' && onViewActivity()}
           style={{
@@ -767,7 +798,7 @@ export function SendPanel({ view, hidden, onSource, onRecipient, onAmount, onNot
       <div style={{ marginTop: 18, textAlign: 'left' }}>
         <VerbatimBox>{view.message}</VerbatimBox>
       </div>
-      <SendButton tone="primary" onClick={onRetry} mt={16}>Try again</SendButton>
+      <ActionButton tone="primary" onClick={onRetry} mt={16}>Try again</ActionButton>
       <span
         role="button" tabIndex={0} onClick={onDone} onKeyDown={e => e.key === 'Enter' && onDone()}
         style={{

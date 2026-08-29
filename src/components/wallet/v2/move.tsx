@@ -1,4 +1,8 @@
-// The move flow's own components: the entry list, the direction chips, and the amount card.
+// What is left of the move flow's own module: the entry shape, and the in-flight banner.
+//
+// THE DIRECTION COPY LIVES IN moveCopy.ts and the amount field is panels/AmountBlock, shared with
+// Send. Both left this file in the V3 pass — the copy so it could be tested as data without a
+// renderer, the field so the two flows could not draw the same control two ways.
 //
 // ENTRY AVAILABILITY IS A FIRST-CLASS STATE, not an absence. The M4 report's finding was that the
 // shipped modal hides an entry it cannot honour — so a wallet below the reveal floor, or one whose
@@ -12,34 +16,7 @@
 
 import { C, tealBorder, tealFill } from './tokens'
 import { Spinner } from './icons'
-import { MASK_SHORT, fmt6 } from './format'
-import { AmountField } from './primitives'
-
-export type Dir = 'conceal' | 'reveal'
-
-/** Copy that differs by direction, in one place so the two can never disagree. */
-/**
- * Copy that differs by direction, in ONE place so the two can never disagree.
- *
- * `done` and `pastTense` in particular: a success screen that says "Now shielded" after an unshield
- * is not a cosmetic slip, it is the wallet telling someone the opposite of what happened to their
- * privacy. Deriving both from this table means the two directions cannot be swapped or duplicated
- * by an edit to one branch.
- */
-export const DIR = {
-  conceal: {
-    title: 'Shield', from: 'Unshielded', to: 'Shielded',
-    verb: 'becomes shielded', avail: 'Unshielded available',
-    blurb: 'Move unshielded funds into your shielded balance.',
-    done: 'Now shielded', pastTense: 'shielded',
-  },
-  reveal: {
-    title: 'Unshield', from: 'Shielded', to: 'Unshielded',
-    verb: 'becomes unshielded', avail: 'Shielded available',
-    blurb: 'Make shielded funds visible on chain. This cannot be undone.',
-    done: 'Now unshielded', pastTense: 'unshielded',
-  },
-} as const
+import type { Dir } from './moveCopy'
 
 // ── Entry list ────────────────────────────────────────────────────────────────
 
@@ -69,39 +46,3 @@ export function InFlightBanner({ text }: { text: string }) {
 
 
 // ── Amount card ───────────────────────────────────────────────────────────────
-
-export interface AmountCardProps {
-  dir: Dir
-  /** The raw text in the field. Full precision, never a rounded display string. */
-  value: string
-  onChange: (v: string) => void
-  onMax: () => void
-  /** MAX has been pressed and not since typed over — the exact bigint is in play. */
-  maxUsed: boolean
-  /** The source balance, or null while hidden/unknown. */
-  available: bigint | null
-  hidden: boolean
-  /** Reveal + MAX: what stays behind. Shown inside the card, before they can wonder. */
-  leftoverNote?: string
-  /** Validation message, shown in place of the note. */
-  error?: string
-}
-
-export function AmountCard({ dir, value, onChange, onMax, maxUsed, available, hidden, leftoverNote, error }: AmountCardProps) {
-  return (
-    <AmountField
-      value={hidden ? MASK_SHORT : value}
-      onChange={onChange}
-      onMax={onMax}
-      maxUsed={maxUsed}
-      readOnly={hidden}
-      // Amber all the way through the irreversible direction, not only on the confirm button.
-      accent={dir === 'conceal' ? 'teal' : 'amber'}
-      availableLabel={hidden ? 'Available' : DIR[dir].avail}
-      availableValue={hidden ? MASK_SHORT : available !== null ? fmt6(available) : '—'}
-      note={leftoverNote}
-      error={error}
-    />
-  )
-}
-

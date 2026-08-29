@@ -25,12 +25,13 @@
 
 import type { ReactNode } from 'react'
 import { C, MONO } from './tokens'
-import { Eye, Shield, Spinner } from './icons'
+import { Eye, Lock, Spinner } from './icons'
 import { MASK_SHORT, fmt6 } from './format'
 import { RATE_LABEL, fiatForBalance, fiatForTotal } from './fiat'
 import type { BalanceView } from './balances'
 import type { TotalView } from './total'
-import { DIR, type EntryProps } from './move'
+import type { EntryProps } from './move'
+import { moveTitle } from './moveCopy'
 import { RecentActivity } from './panels'
 
 const TIMEFRAMES = ['1D', '1W', '1M', '1Y'] as const
@@ -53,12 +54,12 @@ export interface AssetDetailProps {
 
 /** One side of the holdings split, with the move that acts on it. */
 function HoldingSide({ kind, balance, hidden, entry }: {
-  kind: 'shielded' | 'unshielded'; balance: BalanceView; hidden: boolean; entry?: EntryProps
+  kind: 'private' | 'public'; balance: BalanceView; hidden: boolean; entry?: EntryProps
 }) {
-  const Icon = kind === 'shielded' ? Shield : Eye
-  // Shielded funds are what an UNSHIELD spends, and vice versa — the action on a card is the one
+  const Icon = kind === 'private' ? Lock : Eye
+  // Private funds are what a MAKE PUBLIC spends, and vice versa — the action on a card is the one
   // that moves the balance printed above it.
-  const isUnshield = kind === 'shielded'
+  const isMakePublic = kind === 'private'
   const dead = !entry || !!entry.disabledReason
 
   const value = () => {
@@ -97,7 +98,7 @@ function HoldingSide({ kind, balance, hidden, entry }: {
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         <Icon size={11} color="var(--vault-label)" />
         <span style={{ fontSize: 11.5, fontWeight: 500, color: C.bodyDim }}>
-          {kind === 'shielded' ? 'Shielded' : 'Unshielded'}
+          {kind === 'private' ? 'Private' : 'Public'}
         </span>
       </div>
       {value()}
@@ -112,12 +113,14 @@ function HoldingSide({ kind, balance, hidden, entry }: {
           fontSize: 12, fontWeight: 600, userSelect: 'none',
           cursor: dead ? 'not-allowed' : 'pointer',
           opacity: dead ? 0.5 : 1,
-          // Amber for the irreversible direction, blue for the routine one — the same pairing the
-          // overview entries and the move sheet use, so the colour means one thing throughout.
-          background: isUnshield ? 'var(--warn)' : 'var(--accent-400)',
-          color: isUnshield ? 'var(--nav-ground)' : '#FFFFFF',
+          // ONE COLOUR FOR BOTH DIRECTIONS. Make-public used to be amber here, matching an
+          // overview entry and a sheet that were also amber. All three have since dropped it:
+          // moving funds into the open is a legitimate choice, not a near-miss, and an entry point
+          // that colours it as a hazard has decided for the user before they have read anything.
+          background: 'var(--accent-400)',
+          color: '#FFFFFF',
         }}
-      >{isUnshield ? DIR.reveal.title : DIR.conceal.title}</span>
+      >{moveTitle(isMakePublic ? 'reveal' : 'conceal')}</span>
 
       {/* An absent control cannot explain itself, so a dead one states its reason here too. */}
       {entry?.disabledReason && (
@@ -241,8 +244,8 @@ export function AssetDetail(p: AssetDetailProps) {
         )}
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 16 }}>
-          <HoldingSide kind="shielded" balance={p.privateBalance} hidden={p.hidden} entry={reveal} />
-          <HoldingSide kind="unshielded" balance={p.publicBalance} hidden={p.hidden} entry={conceal} />
+          <HoldingSide kind="private" balance={p.privateBalance} hidden={p.hidden} entry={reveal} />
+          <HoldingSide kind="public" balance={p.publicBalance} hidden={p.hidden} entry={conceal} />
         </div>
       </div>
 

@@ -19,14 +19,13 @@
 import type { ReactNode } from 'react'
 import ThemeToggle from '../../primitives/ThemeToggle'
 import { C } from './tokens'
-import { Alert, Check, Eye, EyeOff, Refresh, Spinner } from './icons'
+import { Check, Copy, Eye, EyeOff, Lock, Refresh, Spinner } from './icons'
 import {
-  Body, Button, DetailCard, DetailRow, FeeRow, HeaderIcon, ModalShell, RootHeader, ScanLine,
-  SettleBar, Sheet, TxRow, type Chrome, type ScanSummary,
+  Body, HeaderIcon, ModalShell, RootHeader, ScanLine, Sheet, type Chrome, type ScanSummary,
 } from './primitives'
 import {
-  ActivityPanel, ReceivePanel, RecentActivity, SectionHead, SendPanel, VerbatimBox,
-  type SendPanelProps,
+  ActionButton, ActivityPanel, AmountBlock, CARD, Emblem, OUTCOME_CARD, Outcome, ReceivePanel,
+  RecentActivity, SectionHead, SendPanel, SheetHeader, VerbatimBox, type SendPanelProps,
 } from './panels'
 import { AssetDetail } from './AssetDetail'
 import { AssetsPanel } from './assets'
@@ -34,11 +33,13 @@ import { PrivacyCard } from './PrivacyCard'
 import type { BalanceView } from './balances'
 import { TotalHero } from './TotalHero'
 import type { TotalView } from './total'
+import { InFlightBanner, type EntryProps } from './move'
 import {
-  AmountCard, DIR, InFlightBanner,
-  type Dir, type EntryProps,
-} from './move'
-import { fmt6 } from './format'
+  DIR, moveAvailLabel, moveBlurb, moveDirectionRow, moveDone, moveMovedTo, moveMovingTo, moveTitle,
+  type Dir,
+} from './moveCopy'
+import { MASK_SHORT, fmt6 } from './format'
+import { MONO } from './tokens'
 
 /**
  * Top-level areas. The design canvas navigates by pushing sub-views and draws no tab bar, but the
@@ -91,11 +92,31 @@ export type MoveView =
     }
   | { step: 'moving'; dir: Dir; amountMicrotari: bigint; progress: string }
   | { step: 'settling'; dir: Dir; amountMicrotari: bigint; txId: string }
+  /**
+   * NO `resulting` HERE, DELIBERATELY — and the field is absent rather than optional.
+   *
+   * A success card once showed a predicted post-move split, computed as `live balance + the move's
+   * delta`. That is correct at REVIEW, where the balances are still pre-move. It is wrong on this
+   * step: `settling` does not end until both sides have actually moved, so by the time success
+   * renders the balances already contain the move and adding the delta counts it twice. The card
+   * read `private 1,678.586190 · public 280.984345` over a wallet holding `1,668.600647 /
+   * 290.984345` — a confident figure, off by exactly one move.
+   *
+   * It was also inverted by failure: on the `lagged` branch the balances have NOT caught up, so
+   * the same arithmetic came out right. Wrong when everything worked, right when the index fell
+   * behind.
+   *
+   * Removing the FIELD rather than the render makes it unrepresentable, the same way TotalView's
+   * settling variant carries no microtari. There is no way to put a predicted balance on this card
+   * without changing this type, which is the point.
+   *
+   * THE REAL SPLIT IS ONE LAYER DOWN. The overview behind this sheet reads the settled balance
+   * from the same source the card was guessing at, so nothing is lost by not restating it here.
+   */
   | {
       step: 'success'; dir: Dir; amountMicrotari: bigint; txId: string
       /** The settle deadline passed. STILL A SUCCESS — different copy, same shape. */
       lagged: boolean
-      resulting: Resulting | null
     }
   | { step: 'error'; dir: Dir; message: string; txId?: string }
 
@@ -185,8 +206,6 @@ export interface WalletModalV2Props {
    */
   chrome?: Chrome
 }
-
-const XTR = (n: bigint) => `${fmt6(n)} XTR`
 
 export default function WalletModalV2(p: WalletModalV2Props) {
   const m = p.move
@@ -318,11 +337,16 @@ export default function WalletModalV2(p: WalletModalV2Props) {
         </Sheet>
       )}
       {m.step !== 'idle' && (
+        // `bare` like Send and Receive: the V3 move frames put the title inside the card at 21px
+        // with its own close box. `dismissable` is false while MOVING — nothing here can call a
+        // broadcast back, so a close control would misdescribe what it does; the sheet reopens to
+        // the outcome instead. `onClose` is withheld from the panel for the same reason.
         <Sheet
-          title={DIR[m.dir].title}
+          title={moveTitle(m.dir)}
+          bare
           dismissable={m.step !== 'moving'}
           onClose={p.onDone}
-        ><MoveBody m={m} p={p} /></Sheet>
+        ><MoveBody m={m} p={p} onClose={m.step === 'moving' ? undefined : p.onDone} /></Sheet>
       )}
     </>
   )
@@ -342,166 +366,253 @@ export default function WalletModalV2(p: WalletModalV2Props) {
 // sentence and the button label each say it independently, because a colour-only signal is
 // invisible to a colour-blind user and this is the one screen where that matters most.
 
-function MoveBody({ m, p }: { m: Exclude<MoveView, { step: 'idle' }>; p: WalletModalV2Props }) {
-  const isUnshield = m.dir === 'reveal'
-  const accent = isUnshield ? 'var(--warn)' : 'var(--accent-400)'
-
+/**
+ * Both directions of the move flow — V3 frames 4a–4f (make private) and 5a–5f (make public).
+ *
+ * ── ONE COMPONENT, TWO SERIES, AND WHY THAT IS SAFE ──────────────────────────
+ *
+ * The frames are drawn as two independent series and they are IDENTICAL in every visual respect:
+ * same card, same accent, same spinner, same emblems. Nothing about make-public is styled as a
+ * caution any more. The only thing that varies is the words, and every word comes from moveCopy —
+ * derived from a single {from, to} pair, so there is no branch here that could put one direction's
+ * copy on the other's screen. See moveCopy.ts for why the table is two words long.
+ *
+ * ── THE OLD BUG, AND WHERE IT CANNOT COME BACK ───────────────────────────────
+ *
+ * The success headline reads `moveDone(m.dir)`. `m.dir` is the direction carried on the VIEW — the
+ * move that was prepared and submitted — not a component-level notion of which button was pressed.
+ * The header, the confirm button, the direction row and the confirmation all read the same value,
+ * so they agree by construction rather than by review.
+ *
+ * ── MAKE PUBLIC IS NOT A WARNING ─────────────────────────────────────────────
+ *
+ * It used to carry amber from the amount field through to the confirm button, plus a bordered
+ * alert. That framing treated a legitimate choice as a near-miss: you cannot pay an exchange from
+ * a private balance, and the user has already chosen this from a card offering both directions
+ * equal weight. The disclosure survives as a plain sentence on review, above the confirm button.
+ */
+function MoveBody({ m, p, onClose }: {
+  m: Exclude<MoveView, { step: 'idle' }>
+  p: WalletModalV2Props
+  onClose?: () => void
+}) {
+  // ══ 4a / 5a · FORM ═════════════════════════════════════════════════════════
   if (m.step === 'form') {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-        <div style={{ fontSize: 12.5, color: C.mutedDim, lineHeight: 1.5 }}>{DIR[m.dir].blurb}</div>
+      <div style={CARD}>
+        <SheetHeader title={moveTitle(m.dir)} onClose={onClose} />
+        <div style={{ fontSize: 13, color: C.mutedDim, marginTop: 6 }}>{moveBlurb(m.dir)}</div>
 
-        <AmountCard
-          dir={m.dir} value={m.amount} onChange={p.onAmountChange} onMax={p.onMax}
-          maxUsed={m.maxUsed} available={m.available} hidden={p.hidden}
-          leftoverNote={m.leftoverNote} error={m.error}
+        <AmountBlock
+          mt={28}
+          value={p.hidden ? MASK_SHORT : m.amount}
+          onChange={p.onAmountChange}
+          readOnly={p.hidden}
+          onMax={p.onMax}
+          availableLabel={p.hidden ? 'Available' : moveAvailLabel(m.dir)}
+          availableValue={p.hidden ? MASK_SHORT : m.available !== null ? `${fmt6(m.available)} XTR` : '—'}
+          error={m.error}
+          // THE REMAINDER, WHEN THERE IS ONE. Set only where MAX genuinely held something back for
+          // the fee, and it names the figure. The floor takes the slot otherwise: the builder
+          // enforces a minimum, and being told it beats typing under it and being refused.
+          note={m.leftoverNote ?? `Minimum ${fmt6(m.minMicrotari)} XTR`}
         />
 
-        {/* The two figures that decide whether the amount is even allowed, stated up front rather
-            than discovered by typing and being refused. */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, fontSize: 11.5, color: C.mutedDim }}>
-          <span>Min {fmt6(m.minMicrotari)} XTR</span>
-          <span>
-            Max {p.hidden ? '••••••' : fmt6(m.maxMicrotari)} XTR{' · '}
-            <span role="button" tabIndex={0} onClick={p.onMax} onKeyDown={e => e.key === 'Enter' && p.onMax()}
-              style={{ color: 'var(--accent-ink)', cursor: 'pointer', fontWeight: 600 }}>Use max</span>
-          </span>
-        </div>
-
-        <Button tone={m.canReview ? (isUnshield ? 'amber' : 'primary') : 'disabled'} onClick={m.canReview ? p.onReview : undefined}>
+        <ActionButton mt={28} tone={m.canReview ? 'primary' : 'disabled'} onClick={m.canReview ? p.onReview : undefined}>
           Review
-        </Button>
+        </ActionButton>
       </div>
     )
   }
 
+  // ══ 4b / 5b · REVIEW ═══════════════════════════════════════════════════════
   if (m.step === 'review') {
     const pricing = m.feeMicrotari === null
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-        {/* BEFORE THE NUMBERS AND BEFORE THE BUTTON. Someone who confirms without reading has still
-            been told; someone who reads has been told first. */}
-        {isUnshield && (
-          <div style={{
-            display: 'flex', alignItems: 'flex-start', gap: 8, padding: '10px 12px',
-            borderRadius: 'var(--r-md)', background: 'rgba(var(--warn-rgb),0.12)',
-            color: 'var(--warn)', fontSize: 12.5, lineHeight: 1.5,
-          }}>
-            <Alert size={13} color="currentColor" />
-            <span>Unshielding makes funds visible on chain. This cannot be undone.</span>
+      <div style={CARD}>
+        <SheetHeader title="Review" onClose={onClose} />
+
+        <div style={{ textAlign: 'center', marginTop: 28 }}>
+          <div style={{ fontSize: 36, fontWeight: 700, letterSpacing: '-0.02em', fontFeatureSettings: "'tnum'", color: C.primary }}>
+            {fmt6(m.amountMicrotari)} <span style={{ fontSize: 16, fontWeight: 600, color: C.mutedDim }}>XTR</span>
+          </div>
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 13.5, color: C.bodyDim, marginTop: 8 }}>
+            <MoveSide word={DIR[m.dir].from} />
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={C.mutedDim} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M5 12h14M13 6l6 6-6 6" />
+            </svg>
+            <MoveSide word={DIR[m.dir].to} />
+          </div>
+        </div>
+
+        <div style={{
+          display: 'flex', flexDirection: 'column', gap: 11, fontSize: 13.5,
+          marginTop: 28, paddingTop: 20, borderTop: '1px solid var(--border)',
+        }}>
+          <MoveRow label="Direction" value={moveDirectionRow(m.dir)} />
+          <MoveRow label="Network fee" mono value={pricing
+            ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontFamily: 'inherit', color: C.faint }}><Spinner size={12} />Pricing…</span>
+            : `${fmt6(m.feeMicrotari!)} XTR`} />
+          {/* WHAT YOU ARE LEFT WITH. The frames stop at the fee; this is the figure a person
+              actually wants before confirming, and it is the only thing on the screen that answers
+              "and then what do I have". Drawn as two more rows in the same block, so it costs the
+              layout nothing. */}
+          {m.resulting && <>
+            <MoveRow label="Private after" mono value={`${fmt6(m.resulting.privateAfter)} XTR`} />
+            <MoveRow label="Public after" mono value={`${fmt6(m.resulting.publicAfter)} XTR`} />
+          </>}
+        </div>
+
+        {/* CALM AND FACTUAL, above the confirm button. Someone who confirms without reading has
+            still been told; someone who reads has been told first. It is a plain muted sentence
+            rather than the amber alert this screen used to carry — the fact has not changed, only
+            the claim that it is a mistake. */}
+        {m.dir === 'reveal' && (
+          <div style={{ fontSize: 12.5, color: C.mutedDim, marginTop: 12, textAlign: 'center' }}>
+            Public funds are visible on chain.
           </div>
         )}
 
-        <DetailCard>
-          <DetailRow label="Amount" value={XTR(m.amountMicrotari)} valueColor={C.bright} />
-          <DetailRow label="Direction" value={`${DIR[m.dir].from} to ${DIR[m.dir].to}`} valueColor={C.bodyDim} />
-          <FeeRow fee={m.feeMicrotari === null ? null : fmt6(m.feeMicrotari)} last={!m.resulting} />
-          {/* What you are left with — the figure a person actually wants before confirming. */}
-          {m.resulting && <>
-            <DetailRow label="Shielded after" value={XTR(m.resulting.privateAfter)} valueColor={C.body} />
-            <DetailRow label="Unshielded after" value={XTR(m.resulting.publicAfter)} last />
-          </>}
-        </DetailCard>
-
         {m.leftoverNote && (
-          <div style={{ fontSize: 11.5, color: C.mutedDim, lineHeight: 1.5 }}>{m.leftoverNote}</div>
+          <div style={{ fontSize: 12.5, color: C.mutedDim, marginTop: 12, textAlign: 'center', lineHeight: 1.5 }}>
+            {m.leftoverNote}
+          </div>
         )}
 
-        <div style={{ display: 'flex', gap: 10 }}>
-          <Button tone="neutral" flex={1} onClick={p.onBack}>Back</Button>
-          <Button
-            tone={pricing ? 'disabled' : isUnshield ? 'amber' : 'primary'} flex={2}
-            onClick={pricing ? undefined : p.onConfirm}
-          >{isUnshield ? 'Unshield' : 'Shield'}</Button>
-        </div>
+        <ActionButton mt={m.dir === 'reveal' || m.leftoverNote ? 16 : 20} tone={pricing ? 'disabled' : 'primary'} onClick={pricing ? undefined : p.onConfirm}>
+          {moveTitle(m.dir)}
+        </ActionButton>
+        <ActionButton mt={8} tone="quiet" onClick={p.onBack}>Back</ActionButton>
       </div>
     )
   }
 
+  // ══ 4c / 5c · MOVING ═══════════════════════════════════════════════════════
+  //
+  // The one state the sheet will not close over. Nothing here can call a broadcast back, so no
+  // close control is offered — see the Sheet's `dismissable`.
   if (m.step === 'moving') {
     return (
-      <MoveStatus
-        icon={<Spinner size={26} ring={3} />}
-        title="Moving funds"
-        sub={m.progress || 'Then settling on the Ootle. This can take a moment.'}
-      />
+      <div style={OUTCOME_CARD}>
+        <Spinner size={28} ring={3} />
+        <div style={{ fontSize: 17, fontWeight: 600, color: C.primary, marginTop: 18 }}>Moving funds</div>
+        <div style={{ fontSize: 13, color: C.mutedDim, marginTop: 6 }}>
+          {fmt6(m.amountMicrotari)} XTR {moveMovingTo(m.dir)}
+        </div>
+        {m.progress && (
+          <div style={{ fontSize: 12, color: C.faint, marginTop: 14, lineHeight: 1.5 }}>{m.progress}</div>
+        )}
+      </div>
     )
   }
 
-  // The transaction is FINISHED. This window is the index catching up, and it says so.
+  // ══ 4d / 5d · SETTLING ═════════════════════════════════════════════════════
+  //
+  // NO AMOUNT, NO FEE, NO TX — a spinner and a caption, and that is the whole frame.
+  //
+  // The move is FINISHED; what is behind is the index. Same window and same rule as the send flow
+  // and the balance hero: the screen says what is happening and stops. Every figure reappears on
+  // the success card one state later, which is where the move is actually reported.
   if (m.step === 'settling') {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-        <MoveStatus
-          ring={{ bg: 'rgba(var(--positive-rgb),0.12)', ink: C.positive }}
-          icon={<Check size={16} color="currentColor" />}
-          title={DIR[m.dir].done}
-          sub={`${fmt6(m.amountMicrotari)} XTR ${DIR[m.dir].pastTense}. Your balances update in about a minute.`}
-        />
-        <SettleBar caption="Updating balances — the move itself is finished." />
-        <TxRow txId={m.txId} onCopy={() => p.onCopyTx(m.txId)} />
-        <Button tone="neutral" onClick={p.onDone}>Done</Button>
+      <div style={OUTCOME_CARD}>
+        <Spinner size={28} ring={3} />
+        <div style={{ fontSize: 17, fontWeight: 600, color: C.primary, marginTop: 18 }}>Settling</div>
+        <div style={{ fontSize: 13, color: C.mutedDim, marginTop: 6 }}>This can take a moment.</div>
       </div>
     )
   }
 
+  // ══ 4e / 5e · SUCCESS ══════════════════════════════════════════════════════
   if (m.step === 'success') {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-        <MoveStatus
-          ring={{ bg: 'rgba(var(--positive-rgb),0.12)', ink: C.positive }}
-          icon={<Check size={16} color="currentColor" />}
-          title={DIR[m.dir].done}
-          sub={m.lagged
-            // A PASSED DEADLINE IS STILL A SUCCESS. The transaction committed; only the index is
-            // behind, and telling someone their funds did not move when they demonstrably did is
-            // the worst outcome available here.
-            ? `${fmt6(m.amountMicrotari)} XTR ${DIR[m.dir].pastTense}. Confirmed on the network — your balances haven’t caught up yet, so tap Refresh in a moment. Nothing is at risk.`
-            : `${fmt6(m.amountMicrotari)} XTR ${DIR[m.dir].pastTense}.`}
-        />
-        {m.resulting && (
-          <DetailCard>
-            <DetailRow label="Shielded" value={XTR(m.resulting.privateAfter)} valueColor={C.body} />
-            <DetailRow label="Unshielded" value={XTR(m.resulting.publicAfter)} last />
-          </DetailCard>
-        )}
-        <TxRow txId={m.txId} onCopy={() => p.onCopyTx(m.txId)} />
-        <Button tone="primary" onClick={p.onDone}>Done</Button>
-      </div>
+      <Outcome
+        emblem={<Emblem tone="positive"><Check size={18} color="currentColor" /></Emblem>}
+        // THE STRING THE OLD BUG GOT WRONG — derived from the direction of the move that ran.
+        title={moveDone(m.dir)}
+        sub={<>
+          <span style={{ fontFamily: MONO }}>{fmt6(m.amountMicrotari)} XTR</span> {moveMovedTo(m.dir)}
+          {/* A PASSED DEADLINE IS STILL A SUCCESS. The transaction committed; only the index is
+              behind, and telling someone their funds did not move when they demonstrably did is
+              the worst outcome available here. */}
+          {m.lagged && <><br />Confirmed on the network — your balances haven’t caught up yet. Nothing is at risk.</>}
+        </>}
+      >
+        {/* NO BALANCE SPLIT. See the success variant of MoveView — this card confirms what
+            happened; the overview behind it states what you now hold. */}
+        {/* The move's one identifier. The frames omit it; it stays, because a settled transaction
+            with no id is one the user cannot look up or report. */}
+        <MoveTx txId={m.txId} onCopy={() => p.onCopyTx(m.txId)} />
+        <ActionButton mt={24} tone="quiet" onClick={p.onDone}>Done</ActionButton>
+      </Outcome>
     )
   }
 
+  // ══ 4f / 5f · ERROR ════════════════════════════════════════════════════════
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <MoveStatus
-        ring={{ bg: 'rgba(var(--danger-rgb),0.12)', ink: C.danger }}
-        icon={<Alert size={16} color="currentColor" />}
-        title="Something went wrong"
-        sub="Your funds are untouched."
-      />
-      <VerbatimBox>{m.message}</VerbatimBox>
-      {m.txId && <TxRow txId={m.txId} onCopy={() => p.onCopyTx(m.txId!)} />}
-      <div style={{ display: 'flex', gap: 10 }}>
-        <Button tone="neutral" flex={1} onClick={p.onDone}>Close</Button>
-        <Button tone={accent === 'var(--warn)' ? 'amber' : 'primary'} flex={2} onClick={p.onRetryMove}>Try again</Button>
+    <Outcome
+      emblem={<Emblem tone="danger">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12" /></svg>
+      </Emblem>}
+      title="Something went wrong"
+      sub="Your funds are untouched."
+    >
+      {/* THE NETWORK'S OWN WORDS, VERBATIM. The frame does not draw this and it stays anyway: a
+          paraphrased error is unreportable, and the headline alone gives nobody anything to paste
+          into an issue. */}
+      <div style={{ marginTop: 18, textAlign: 'left' }}>
+        <VerbatimBox>{m.message}</VerbatimBox>
       </div>
+      {m.txId && <MoveTx txId={m.txId} onCopy={() => p.onCopyTx(m.txId!)} />}
+      <ActionButton mt={16} tone="primary" onClick={p.onRetryMove}>Try again</ActionButton>
+      <span
+        role="button" tabIndex={0} onClick={p.onDone} onKeyDown={e => e.key === 'Enter' && p.onDone()}
+        style={{
+          display: 'block', marginTop: 12, fontSize: 12.5, fontWeight: 500,
+          color: C.mutedDim, cursor: 'pointer', userSelect: 'none',
+        }}
+      >Close</span>
+    </Outcome>
+  )
+}
+
+/**
+ * One end of the direction line on review.
+ *
+ * THE LOCK MARKS THE PRIVATE SIDE, whichever end it is on — so make-private reads
+ * `public → 🔒 private` and make-public reads `🔒 private → public`. The emphasis follows the
+ * balance, not the direction of travel, which is what lets a glance at the arrow answer "which way
+ * am I going" without reading either word.
+ */
+function MoveSide({ word }: { word: 'private' | 'public' }) {
+  if (word !== 'private') return <span>{word}</span>
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontWeight: 600, color: C.primary }}>
+      <Lock size={11} color="var(--accent-ink)" />private
+    </span>
+  )
+}
+
+/** A review row: muted label, value on the right. */
+function MoveRow({ label, value, mono = false }: { label: string; value: ReactNode; mono?: boolean }) {
+  return (
+    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
+      <span style={{ color: C.mutedDim }}>{label}</span>
+      <span style={{ fontWeight: 500, color: C.primary, ...(mono ? { fontFamily: MONO } : {}) }}>{value}</span>
     </div>
   )
 }
 
-/** The centred icon-over-title block the design uses for every move outcome. */
-function MoveStatus({ ring, icon, title, sub }: {
-  ring?: { bg: string; ink: string }; icon: ReactNode; title: string; sub: string
-}) {
+/** The transaction id, copyable, in the same quiet register as the send receipt. */
+function MoveTx({ txId, onCopy }: { txId: string; onCopy: () => void }) {
+  const short = txId.length > 14 ? `${txId.slice(0, 6)}…${txId.slice(-6)}` : txId
   return (
-    <div style={{ textAlign: 'center', padding: '10px 0 4px' }}>
-      <span style={{
-        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-        width: 34, height: 34, borderRadius: 'var(--r-pill)',
-        background: ring?.bg ?? 'transparent', color: ring?.ink ?? 'inherit',
-      }}>{icon}</span>
-      <div style={{ fontSize: 14, fontWeight: 600, color: C.primary, marginTop: 12 }}>{title}</div>
-      <div style={{ fontSize: 12.5, color: C.mutedDim, marginTop: 3, lineHeight: 1.5 }}>{sub}</div>
+    <div style={{ display: 'flex', justifyContent: 'center', marginTop: 16 }}>
+      <span
+        role="button" tabIndex={0} onClick={onCopy} onKeyDown={e => e.key === 'Enter' && onCopy()}
+        aria-label="Copy transaction id"
+        style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontFamily: MONO, fontSize: 11, color: C.faint, cursor: 'pointer' }}
+      >tx {short}<Copy size={11} color="currentColor" /></span>
     </div>
   )
 }

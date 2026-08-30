@@ -42,6 +42,7 @@ import {
 import { IndexerProvider } from '@tari-project/ootle-indexer'
 import { nextMaxEpoch } from './epoch'
 import { dryRunFee, withFeeMargin } from './feeProbe'
+import { readOutputSubstateIds } from './outputIds'
 // The owned-UTXO scan lives in stealthUtxos.ts so the send and reveal paths share ONE input
 // discovery. It was moved out of this file unchanged; nothing about the behaviour here differs.
 import {
@@ -79,6 +80,17 @@ export interface SendResult {
   // Actual fee paid (µtTARI), read from the committed tx's fee receipt. Undefined if the poll
   // timed out or the receipt didn't carry it; callers fall back to the estimate.
   feeMicrotari?: bigint
+  /**
+   * Substate ids of the outputs this send creates FOR US — the change output, if there is one.
+   *
+   * READ-ONLY REPORTING. Nothing about the transaction changes; this surfaces a commitment the
+   * build already computes and previously discarded. The activity journal records it so receive
+   * reconciliation can later subtract our own outputs from the scan. See outputIds.ts.
+   *
+   * `[]` means exact cover — no change output exists. `undefined` means the statement could not be
+   * read, which the journal stores as a hole rather than as "none".
+   */
+  selfOutputIds?: string[]
 }
 
 export interface SendParams {
@@ -196,6 +208,11 @@ export async function sendConfidential(
       if (commitmentHex) recipientUtxoId = `utxo_${RESOURCE_HEX}_${commitmentHex}`
     } catch { /* leave undefined — caller treats a missing id as "cannot announce this payment" */ }
 
+    // OUR side of the same statement. specs[0] is the recipient's output, so everything after it
+    // is change back to us — one entry when there is change, none on exact cover.
+    const allOutputIds = readOutputSubstateIds(outsStmt)
+    const selfOutputIds = allOutputIds === null ? undefined : allOutputIds.slice(1)
+
     // EVERY selected input, in one statement. Commitment order and mask order must match, which is
     // why both map over the same `selection.inputs` array.
     const insStmt = await crypto.buildInputsStatement(selection.inputs.map(u => new StealthInput(u.commitment)), 0n)
@@ -235,7 +252,7 @@ export async function sendConfidential(
     // `dry_run` must ride INSIDE the sealed envelope — the dry-run endpoint refuses anything else.
     const toSign  = dryRun ? { ...unsignedTx, dry_run: true } : unsignedTx
     const signed  = await signTransaction([ootleWallet, new StaticSigner(oneTimeSigs)], toSign, sealKP)
-    return { envelope: sealTransaction(signed), recipientUtxoId }
+    return { envelope: sealTransaction(signed), recipientUtxoId, selfOutputIds }
   }
 
   log('Estimating network fee…')
@@ -259,7 +276,7 @@ export async function sendConfidential(
   }
   log(`Network fee: ${fee} µtTARI`)
 
-  const { envelope, recipientUtxoId } = await buildEnvelope(fee, false)
+  const { envelope, recipientUtxoId, selfOutputIds } = await buildEnvelope(fee, false)
 
   log('Submitting transaction…')
   const sub = await provider.submitTransaction(envelope)
@@ -269,7 +286,7 @@ export async function sendConfidential(
   const { outcome, feeMicrotari } = await pollOutcome(txId)
   provider.stopWatcher?.()
 
-  return { txId, outcome, recipientUtxoId, feeMicrotari }
+  return { txId, outcome, recipientUtxoId, feeMicrotari, selfOutputIds }
 }
 
 // ── The fund-critical arithmetic, isolated so it can be tested ────────────────

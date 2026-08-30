@@ -32,6 +32,7 @@ import { IndexerProvider } from '@tari-project/ootle-indexer'
 import { extractAccountAddress } from './accountAddress'
 import { nextMaxEpoch } from './epoch'
 import { dryRunFee, withFeeMargin } from './feeProbe'
+import { readOutputSubstateIds } from './outputIds'
 import type { SecretKeyWallet } from '@tari-project/ootle-secret-key-wallet'
 
 const INDEXER_URL = 'https://ootle-indexer-a.tari.com'
@@ -58,6 +59,25 @@ export interface ClaimResult {
   outcome: ClaimOutcome
   /** The confidential amount deposited (µtTARI) if committed. */
   amount: bigint
+  /**
+   * Fee this claim paid (µtTARI).
+   *
+   * The faucet covers it out of the same payout, so it never affected what the user receives and
+   * was not worth returning before. The journal records it because a fee is knowable only at
+   * action time — the receipt is not retrievable later.
+   */
+  feeMicrotari?: bigint
+  /**
+   * Substate ids of the outputs this transaction creates FOR US.
+   *
+   * READ-ONLY REPORTING — nothing about the transaction changes. It surfaces commitments the build
+   * already computes and previously discarded, so the activity journal can record them and receive
+   * reconciliation can later subtract our own outputs from the scan. See outputIds.ts.
+   *
+   * `[]` means the transaction genuinely creates none. `undefined` means the statement could not be
+   * read, which the journal stores as a hole rather than as "none".
+   */
+  selfOutputIds?: string[]
   /**
    * The wallet's Ootle ACCOUNT COMPONENT address, read out of the committed result's up-substates.
    *
@@ -149,7 +169,7 @@ export async function claimFaucet(
     const unsigned = builder.buildUnsignedTransaction()
     // `dry_run` must ride INSIDE the sealed envelope — the dry-run endpoint refuses anything else.
     const signed = await signTransaction([wallet], dryRun ? { ...unsigned, dry_run: true } : unsigned)
-    return { envelope: sealTransaction(signed), stealthAmount }
+    return { envelope: sealTransaction(signed), stealthAmount, selfOutputIds: readOutputSubstateIds(outputsStatement) ?? undefined }
   }
 
   log('Estimating network fee…')
@@ -171,7 +191,7 @@ export async function claimFaucet(
   log('Confirming on-chain…')
   const { outcome, accountAddress } = await pollOutcome(txId, ownerPkHex)
   provider.stopWatcher?.()
-  return { txId, outcome, amount: stealthAmount, accountAddress }
+  return { txId, outcome, amount: stealthAmount, feeMicrotari: fee, accountAddress, selfOutputIds: real.selfOutputIds }
 }
 
 // The instruction recipe, lifted out so the pricing build and the real build are provably the same

@@ -109,6 +109,7 @@ import { extractAccountAddress } from './accountAddress'
 import { loadAccountAddress, saveAccountAddress } from './accountStore'
 import { nextMaxEpoch } from './epoch'
 import { dryRunFee, withFeeMargin } from './feeProbe'
+import { readOutputSubstateIds } from './outputIds'
 import { probeFeeFor } from './confidentialSend'
 import {
   StaticSigner, reachableTotal, scanOwnedUtxos, selectStealthInputs, type OwnedUtxo,
@@ -171,6 +172,17 @@ export interface RevealResult {
   feeMicrotari: bigint
   /** Stealth change returned to the wallet (µtTARI). */
   changeAmount: bigint
+  /**
+   * Substate ids of the outputs this transaction creates FOR US.
+   *
+   * READ-ONLY REPORTING — nothing about the transaction changes. It surfaces commitments the build
+   * already computes and previously discarded, so the activity journal can record them and receive
+   * reconciliation can later subtract our own outputs from the scan. See outputIds.ts.
+   *
+   * `[]` means the transaction genuinely creates none. `undefined` means the statement could not be
+   * read, which the journal stores as a hole rather than as "none".
+   */
+  selfOutputIds?: string[]
   /** Account address read from the committed result — the free capture for pre-M1 wallets. */
   accountAddress?: string
 }
@@ -547,7 +559,7 @@ export async function prepareReveal(
 
     const toSign = dryRun ? { ...unsignedTx, dry_run: true } : unsignedTx
     const signed = await signTransaction([ootleWallet, new StaticSigner(oneTimeSigs)], toSign, sealKP)
-    return { envelope: sealTransaction(signed), split }
+    return { envelope: sealTransaction(signed), split, selfOutputIds: readOutputSubstateIds(outsStmt) ?? undefined }
   }
 
   log('Estimating network fee…')
@@ -620,6 +632,7 @@ export async function prepareReveal(
         feeMicrotari: fee,
         changeAmount: real.split.changeAmount,
         accountAddress: confirmedAccount,
+        selfOutputIds: real.selfOutputIds,
       }
     },
   }

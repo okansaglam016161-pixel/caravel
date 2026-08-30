@@ -48,6 +48,7 @@ import { extractAccountAddress } from './accountAddress'
 import { loadAccountAddress, saveAccountAddress } from './accountStore'
 import { nextMaxEpoch } from './epoch'
 import { dryRunFee, withFeeMargin } from './feeProbe'
+import { readOutputSubstateIds } from './outputIds'
 
 const INDEXER_URL = 'https://ootle-indexer-a.tari.com'
 
@@ -78,6 +79,17 @@ export interface ConcealResult {
   concealedAmount: bigint
   /** Fee actually reserved for this transaction (µtTARI). */
   feeMicrotari: bigint
+  /**
+   * Substate ids of the outputs this transaction creates FOR US.
+   *
+   * READ-ONLY REPORTING — nothing about the transaction changes. It surfaces commitments the build
+   * already computes and previously discarded, so the activity journal can record them and receive
+   * reconciliation can later subtract our own outputs from the scan. See outputIds.ts.
+   *
+   * `[]` means the transaction genuinely creates none. `undefined` means the statement could not be
+   * read, which the journal stores as a hole rather than as "none".
+   */
+  selfOutputIds?: string[]
   /** Account address read from the committed result — the free capture for pre-M1 wallets. */
   accountAddress?: string
 }
@@ -293,7 +305,7 @@ export async function prepareConceal(
     // declaration above that makes the transaction work, not this.
     const unsigned = await resolveTransaction(provider, builder.buildUnsignedTransaction())
     const signed = await signTransaction([wallet], dryRun ? { ...unsigned, dry_run: true } : unsigned)
-    return { envelope: sealTransaction(signed), split }
+    return { envelope: sealTransaction(signed), split, selfOutputIds: readOutputSubstateIds(outputsStatement) ?? undefined }
   }
 
   log('Estimating network fee\u2026')
@@ -335,7 +347,7 @@ export async function prepareConceal(
       // from a claim gets one here. saveAccountAddress is first-write-wins, so a repeat is a no-op.
       if (confirmedAccount) saveAccountAddress(ownerAddress, confirmedAccount)
 
-      return { txId, outcome, concealedAmount: real.split.stealthAmount, feeMicrotari: fee, accountAddress: confirmedAccount }
+      return { txId, outcome, concealedAmount: real.split.stealthAmount, feeMicrotari: fee, accountAddress: confirmedAccount, selfOutputIds: real.selfOutputIds }
     },
   }
 }

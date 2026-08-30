@@ -10,6 +10,7 @@ import { useEffect, useState, useRef } from 'react'
 import { useWallet } from '../../context/WalletContext'
 import { claimFaucet, type ClaimResult } from '../../crypto/faucet'
 import { saveAccountAddress } from '../../crypto/accountStore'
+import { beginEntry, settleEntry } from '../../crypto/journalStore'
 import { FaucetPanel, type FaucetPhase } from './v2/panels'
 import { plainError } from './v2/plainError'
 import { fmt2 } from './v2/format'
@@ -73,14 +74,40 @@ export default function FaucetClaimPanel() {
     if (!wallet || !address) return
     setPhase('claiming')
     setMsg('Requesting test tokens (self-signed, no daemon)…')
+
+    // A claim deposits a confidential output into this wallet, and a later scan cannot tell that
+    // output apart from a payment somebody else sent — it carries no sender either. Journalled
+    // before submission so the attempt survives a throw, and so the output it creates is on record.
+    const journalId = beginEntry(address, {
+      kind: 'faucet',
+      amountMicrotari: null,      // the payout is only known once the claim returns
+      feeMicrotari: null,
+      from: 'external',
+      to: 'private',
+      counterparty: { kind: 'faucet', value: 'esmeralda-faucet' },
+      note: null,
+      source: 'local-journal',
+      selfOutputIds: null,
+    }).entry.id
+
     let r: ClaimResult
     try {
       r = await claimFaucet(wallet, address, m => setMsg(m))
     } catch (e) {
+      settleEntry(address, journalId, { outcome: 'failed' })
       setPhase('error')
       setMsg((e as Error).message || 'Claim failed.')
       return
     }
+    settleEntry(address, journalId, {
+      outcome: r.outcome === 'Commit' ? 'committed' : r.outcome === 'Reject' ? 'rejected' : 'timeout',
+      txId: r.txId,
+      // The amount and the output only exist on a committed claim; on any other outcome they stay
+      // null rather than being recorded as zero.
+      amountMicrotari: r.outcome === 'Commit' ? r.amount : null,
+      feeMicrotari: r.feeMicrotari ?? null,
+      selfOutputIds: r.outcome === 'Commit' ? r.selfOutputIds ?? null : null,
+    })
     lastTx.current = r.txId
     // The claim is the only transaction Caravel runs that creates an account component, so this is
     // the one place its address can be learned (it is not derivable client-side — see

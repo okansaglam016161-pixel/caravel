@@ -37,6 +37,8 @@ import {
 } from '../../crypto/publicSend'
 import { parseOotleAddress } from '@tari-project/ootle-wasm'
 import { buildActivity, type ActivityRow } from '../../crypto/activity'
+import { beginEntry, settleEntry } from '../../crypto/journalStore'
+import type { JournalOutcome } from '../../crypto/journal'
 import { usePaymentResolution } from '../../hooks/usePaymentResolution'
 import WalletModalV2, { type MoveView, type Resulting, type WalletTab } from './v2/WalletModalV2'
 import { computeTotal, incompleteAvailableNote } from './v2/total'
@@ -67,6 +69,19 @@ type PreparedMove =
  * it is NOT a failure — see the settle loop's onDeadline.
  */
 const MOVE_SETTLE_MS = 150_000
+
+/**
+ * The builders' outcome vocabulary, mapped to the journal's.
+ *
+ * One table so the three call sites cannot disagree — and so a 'Timeout' can never be recorded as
+ * a failure. A timed-out broadcast may still land; calling it failed in a permanent record is the
+ * same lie the send flow's `unconfirmed` state exists to avoid.
+ */
+const JOURNAL_OUTCOME: Record<'Commit' | 'Reject' | 'Timeout', JournalOutcome> = {
+  Commit: 'committed',
+  Reject: 'rejected',
+  Timeout: 'timeout',
+}
 
 // ── Activity rows ─────────────────────────────────────────────────────────────
 //
@@ -428,12 +443,35 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
   }
 
   async function handleConfirmMove() {
-    if (!movePrepared) return
+    if (!movePrepared || !address) return
     setMoveStep('moving')
     setMoveProgress('')
     setMoveError('')
+
+    // The move flow journalled NOTHING before this — not the direction, not the amount, not the
+    // fee, and not the output it creates for us, which is the one a later scan cannot tell apart
+    // from a stranger's payment. Written before submission, for the same reason the send is.
+    const isReveal = movePrepared.dir === 'reveal'
+    const journalId = beginEntry(address, {
+      kind: isReveal ? 'make-public' : 'make-private',
+      amountMicrotari: isReveal ? movePrepared.p.revealedAmount : movePrepared.p.concealedAmount,
+      feeMicrotari: movePrepared.p.feeMicrotari,   // priced at review; known before submitting
+      from: isReveal ? 'private' : 'public',
+      to: isReveal ? 'public' : 'private',
+      counterparty: { kind: 'self', value: address },
+      note: null,
+      source: 'local-journal',
+      selfOutputIds: null,
+    }).entry.id
+
     try {
       const result = await movePrepared.p.submit(setMoveProgress)
+      settleEntry(address, journalId, {
+        outcome: JOURNAL_OUTCOME[result.outcome],
+        txId: result.txId,
+        feeMicrotari: result.feeMicrotari,
+        selfOutputIds: result.selfOutputIds ?? null,
+      })
       setMoveTxId(result.txId)
       if (result.outcome === 'Commit') {
         setMoveLanded('revealedAmount' in result ? result.revealedAmount : result.concealedAmount)
@@ -491,6 +529,7 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
         setMoveStep('error')
       }
     } catch (e) {
+      settleEntry(address, journalId, { outcome: 'failed' })
       setMoveError(plainError(e instanceof Error ? e.message : String(e)))
       setMoveStep('error')
     }
@@ -503,6 +542,25 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
     setSendProgress('Connecting…')
     setSendTxId('')
     setSendError('')
+
+    // ── THE JOURNAL, WRITTEN BEFORE ANYTHING IS SUBMITTED ──
+    //
+    // This is the half that closes the hole. `recordSent` below still runs on the paths it always
+    // ran on, but it sits AFTER the await — so a send that threw, or a tab closed mid-broadcast,
+    // left no trace at all of real money possibly moving. The journal row exists from the moment
+    // the user commits to the action and is patched with whatever the network turns out to say.
+    const journalId = beginEntry(address, {
+      kind: 'send',
+      amountMicrotari,
+      feeMicrotari: null,               // not known until the receipt comes back
+      from: sendSource === 'public' ? 'public' : 'private',
+      to: 'external',
+      counterparty: { kind: 'address', value: sendRecipient },   // FULL address, never truncated
+      note: sendNote || null,
+      source: 'local-journal',
+      selfOutputIds: null,              // not known until the outputs statement is built
+    }).entry.id
+
     try {
       // NO FALLBACK. resolveSendPath refuses rather than quietly spending the other balance — see
       // v2/sendPath.ts for why this is a function and not a ternary.
@@ -523,6 +581,17 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
       setSendTxId(result.txId)
       setSendFee(result.feeMicrotari ?? null)
       setSendOutcome(result.outcome)
+      settleEntry(address, journalId, {
+        outcome: JOURNAL_OUTCOME[result.outcome],
+        txId: result.txId,
+        feeMicrotari: result.feeMicrotari ?? null,
+        // A PUBLIC send provably creates no output for us: it withdraws from the vault and puts a
+        // single stealth output at the RECIPIENT's address (see publicSend.ts). `[]` is a positive
+        // claim of "none", which reconciliation may subtract; `null` would be a hole.
+        selfOutputIds: path.kind === 'public'
+          ? []
+          : 'selfOutputIds' in result ? result.selfOutputIds ?? null : null,
+      })
       recordSent({
         recipient: sendRecipient,
         amountMicrotari,
@@ -555,6 +624,9 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
         setSendStep('error')
       }
     } catch (e) {
+      // The throw path. Previously this recorded NOTHING — the user saw an error over a history
+      // that said nothing had been attempted. The row already exists; this closes it honestly.
+      settleEntry(address, journalId, { outcome: 'failed' })
       setSendError(plainError(e instanceof Error ? e.message : String(e)))
       setSendStep('error')
     }

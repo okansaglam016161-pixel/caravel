@@ -1117,34 +1117,55 @@ export interface ActivityRowView {
 }
 
 /**
+ * The PILL palette. Three tones, and which one a status takes is the whole honesty story.
+ *
+ * NEUTRAL IS THE DEFAULT FOR EVERY UNSETTLED STATE, and red is reserved for `failed` alone —
+ * the one case where the network actually told us it refused. Broadcast-and-undecided, an amount
+ * still resolving, and an action whose end we never learned are all ORDINARY on this network:
+ * nothing is wrong, nothing needs re-sending, and colouring them as faults would train the user to
+ * ignore the one colour that means something.
+ */
+const PILL: Record<'warn' | 'neutral' | 'danger', { bg: string; ink: string }> = {
+  warn:    { bg: 'rgba(var(--warn-rgb),0.12)',   ink: 'var(--warn)' },
+  neutral: { bg: 'var(--surface-void)',          ink: C.mutedDim },
+  danger:  { bg: 'rgba(var(--danger-rgb),0.12)', ink: 'var(--danger-500)' },
+}
+
+/**
  * How each status is drawn.
  *
  * `signed` is the one that carries meaning rather than decoration: it says whether this row
  * represents value that actually moved. A failed send has an amount — the one that was attempted —
  * but nothing left the wallet, so it renders muted and WITHOUT a +/− rather than as an outflow that
  * happened. Inventing a sign there would be the same class of lie as inventing the figure.
+ *
+ * `settled` governs whether a pill appears at all; `tone` and `clock` govern how, when it does.
  */
 const STATUS: Record<ActivityStatus, {
   label: string
-  ink: string
-  wash: string
+  tone: 'warn' | 'neutral' | 'danger'
+  /** A clock beside the label. V3 gives it to `unconfirmed` only — the state that resolves itself. */
+  clock: boolean
   signed: boolean
   settled: boolean
 }> = {
-  confirmed:   { label: 'Confirmed',   ink: 'var(--positive)',      wash: 'rgba(var(--positive-rgb),0.12)', signed: true,  settled: true },
-  received:    { label: 'Received',    ink: 'var(--positive)',      wash: 'rgba(var(--positive-rgb),0.12)', signed: true,  settled: true },
-  sent:        { label: 'Sent',        ink: 'var(--accent-ink)',    wash: 'var(--accent-wash)',             signed: true,  settled: true },
-  checking:    { label: 'Checking',    ink: 'var(--accent-ink)',    wash: 'var(--accent-wash)',             signed: false, settled: false },
-  // AMBER, NOT RED, for both. Broadcast-and-undecided and waiting-to-settle are ordinary outcomes
-  // on this network: nothing failed, and nothing needs re-sending.
-  unconfirmed: { label: 'Unconfirmed', ink: 'var(--warn)',          wash: 'rgba(var(--warn-rgb),0.12)',     signed: true,  settled: false },
-  pending:     { label: 'Pending',     ink: 'var(--warn)',          wash: 'rgba(var(--warn-rgb),0.12)',     signed: true,  settled: false },
-  failed:      { label: 'Failed',      ink: 'var(--danger-500)',    wash: 'rgba(var(--danger-rgb),0.12)',   signed: false, settled: false },
-  spent:       { label: 'Spent',       ink: 'var(--text-muted-dim)', wash: 'var(--surface-void)',           signed: false, settled: false },
-  unreadable:  { label: 'Unreadable',  ink: 'var(--text-muted-dim)', wash: 'var(--surface-void)',           signed: false, settled: false },
-  // NEUTRAL, deliberately sharing the muted treatment rather than the amber or the red. `signed`
-  // is false because an attempt whose outcome is unknown must not be drawn as value that moved.
-  attempted:   { label: 'Attempted',   ink: 'var(--text-muted-dim)', wash: 'var(--surface-void)',           signed: false, settled: false },
+  confirmed:   { label: 'Confirmed',   tone: 'neutral', clock: false, signed: true,  settled: true },
+  received:    { label: 'Received',    tone: 'neutral', clock: false, signed: true,  settled: true },
+  sent:        { label: 'Sent',        tone: 'neutral', clock: false, signed: true,  settled: true },
+  // AMBER AND A CLOCK. Broadcast-and-undecided is not a fault: these self-correct once the settle
+  // watch sees the balance move (see settleVerdict.ts), so the row is calm and says "not yet".
+  unconfirmed: { label: 'Unconfirmed', tone: 'warn',    clock: true,  signed: true,  settled: false },
+  // NEUTRAL, not amber: an amount still resolving is machinery, not news.
+  pending:     { label: 'Pending',     tone: 'neutral', clock: false, signed: true,  settled: false },
+  checking:    { label: 'Checking',    tone: 'neutral', clock: false, signed: false, settled: false },
+  spent:       { label: 'Spent',       tone: 'neutral', clock: false, signed: false, settled: false },
+  unreadable:  { label: 'Unreadable',  tone: 'neutral', clock: false, signed: false, settled: false },
+  // THE ONLY RED IN THE LIST. A rejection we actually saw.
+  failed:      { label: 'Failed',      tone: 'danger',  clock: false, signed: false, settled: false },
+  // NEUTRAL. `signed` is false because an attempt whose outcome is unknown must not be drawn as
+  // value that moved — the V3 frame shows this row signed, and it is the one place this
+  // implementation deliberately departs from it.
+  attempted:   { label: 'Attempted',   tone: 'neutral', clock: false, signed: false, settled: false },
 }
 
 /**
@@ -1168,39 +1189,52 @@ const UNKNOWN_AMOUNT: Record<ActivityStatus, string> = {
   attempted:   'Started — outcome unknown',
 }
 
-/** The glyph in the row's tile. Direction for the ordinary cases, state for the rest. */
-function RowGlyph({ row }: { row: ActivityRowView }) {
-  const st = STATUS[row.status]
-  const stroke = st.ink
+/**
+ * The tile, keyed on DIRECTION rather than status — V3's rule, and a better one.
+ *
+ * The tile answers "which way did value move", the pill answers "did it land". Keying the tile on
+ * status too meant a failed send wore a red tile AND a red pill, and an unconfirmed one turned
+ * amber end to end, which is how an ordinary outcome comes to look like a fault.
+ *
+ * `out` is deliberately the quiet one. An outflow is not a warning, and it does not need the
+ * accent — it is the most common thing in the list.
+ */
+const TILE: Record<ActivityRowView['direction'], { bg: string; ink: string; bordered: boolean }> = {
+  in:       { bg: 'rgba(var(--positive-rgb),0.12)', ink: 'var(--positive)',   bordered: false },
+  out:      { bg: 'var(--surface-void)',            ink: C.mutedDim,          bordered: true },
+  internal: { bg: 'var(--accent-wash)',             ink: 'var(--accent-ink)', bordered: false },
+}
+
+/** The glyph in the row's tile. Direction only — the pill carries state. */
+function RowGlyph({ direction }: { direction: ActivityRowView['direction'] }) {
+  const t = TILE[direction]
   const icon =
-    row.status === 'failed'
-      ? <path d="M18 6L6 18M6 6l12 12" />
-    : row.status === 'checking' || row.status === 'pending' || row.status === 'unconfirmed'
-      ? <><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 3" /></>
-    : row.status === 'unreadable'
-      ? <><circle cx="12" cy="12" r="9" /><path d="M12 16h.01M9.8 9.3a2.3 2.3 0 1 1 2.9 3.1V14" /></>
     // TWO ARROWS, NOT ONE. The in/out arrows say value crossed the wallet's boundary; a swap moves
     // it between two balances inside. Reusing either would say the wrong thing before a single
     // word is read.
-    : row.direction === 'internal'
-      ? <><path d="M4 8h13l-3-3" /><path d="M20 16H7l3 3" /></>
-    : row.direction === 'in'
+    direction === 'internal'
+      ? <><path d="M4 7h13M14 4l3 3-3 3" /><path d="M20 17H7M10 14l-3 3 3 3" /></>
+    : direction === 'in'
       ? <><path d="M17 7L7 17" /><path d="M15 17H7V9" /></>
       : <><path d="M7 17L17 7" /><path d="M9 7h8v8" /></>
 
   return (
     <span style={{
-      width: 34, height: 34, borderRadius: 'var(--r-md)', flexShrink: 0,
+      width: 34, height: 34, borderRadius: 10, flexShrink: 0, boxSizing: 'border-box',
       display: 'flex', alignItems: 'center', justifyContent: 'center',
-      background: st.wash, color: st.ink,
+      background: t.bg, color: t.ink,
+      // The out tile shares its ground with the row's hover, so without this it vanishes under the
+      // cursor. Same treatment the V3 empty-state tile uses.
+      border: t.bordered ? '1px solid var(--border)' : '1px solid transparent',
     }}>
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={stroke} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{icon}</svg>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{icon}</svg>
     </span>
   )
 }
 
 export function ActivityRowShell({ row, hidden }: { row: ActivityRowView; hidden: boolean }) {
   const st = STATUS[row.status]
+  const pill = PILL[st.tone]
 
   // A MISSING AMOUNT IS A DASH, NEVER A ZERO AND NEVER A GUESS. It is genuinely unknown here for a
   // send from another device and for an inflow still being resolved, and both are ordinary.
@@ -1233,30 +1267,43 @@ export function ActivityRowShell({ row, hidden }: { row: ActivityRowView; hidden
   return (
     <div className="cv-activity-row" style={{
       display: 'flex', alignItems: 'center', gap: 12,
-      padding: '11px 12px', borderRadius: 9,
+      padding: '11px 13px', borderRadius: 9,
     }}>
-      <RowGlyph row={row} />
+      <RowGlyph direction={row.direction} />
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div title={row.titleAttr} style={{ fontSize: 13.5, fontWeight: 600, color: C.primary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {row.title}
+        {/* THE PILL SITS BESIDE THE TITLE, not out by the amount. V3 moved it here and it reads
+            better for the reason it exists: it qualifies what this row IS, so it belongs with the
+            words, not floating between the sentence and the figure it does not describe. */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span title={row.titleAttr} style={{
+            fontSize: 13.5, fontWeight: 600, color: C.primary, minWidth: 0,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>{row.title}</span>
+          {/* THE PILL IS FOR EXCEPTIONS ONLY.
+              A settled send already says "Sent to otl_esm_1t…f4a2" on the title line, with an
+              outward arrow in its tile and a signed amount on the right. A "Sent" pill between them
+              is the fourth restatement of one fact, and when every row carries one the colour stops
+              meaning anything — which is a real cost, because the rows that DO need it
+              (unconfirmed, failed, still checking) are the ones a user is scanning for. */}
+          {!st.settled && (
+            <span style={{
+              display: 'inline-flex', alignItems: 'center', gap: 5, flexShrink: 0,
+              padding: '2px 8px', borderRadius: 'var(--r-pill)',
+              background: pill.bg, color: pill.ink, fontSize: 10.5, fontWeight: 600,
+            }}>
+              {st.clock && (
+                <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+                  <circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" />
+                </svg>
+              )}
+              {st.label}
+            </span>
+          )}
         </div>
         <div style={{ fontSize: 12, color: C.mutedDim, marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {row.note || (row.amountMicrotari === null && !hidden ? UNKNOWN_AMOUNT[row.status] : st.label)}
         </div>
       </div>
-      {/* THE PILL IS FOR EXCEPTIONS ONLY.
-          A settled send already says "Sent to otl_esm_1t…f4a2" on the title line, with an outward
-          arrow in its tile and a signed amount on the right. A "Sent" pill between them is the
-          fourth restatement of one fact, and when every row carries one the colour stops meaning
-          anything — which is a real cost, because the rows that DO need it (unconfirmed, failed,
-          still checking) are the ones a user is scanning for. So the ordinary outcomes drop it and
-          the exceptional ones keep it, and now it reads as a flag rather than a decoration. */}
-      {!st.settled && (
-        <span style={{
-          display: 'inline-flex', alignItems: 'center', padding: '3px 9px', borderRadius: 'var(--r-pill)',
-          background: st.wash, color: st.ink, fontSize: 10.5, fontWeight: 600, flexShrink: 0,
-        }}>{st.label}</span>
-      )}
       <span style={{
         fontFamily: MONO, fontSize: 12.5, fontWeight: 500, textAlign: 'right',
         flexShrink: 0, minWidth: 104, color: amountColor,
@@ -1269,17 +1316,22 @@ export function ActivityRowShell({ row, hidden }: { row: ActivityRowView; hidden
 export function ActivityEmpty({ compact = false }: { compact?: boolean }) {
   return (
     <div style={{ textAlign: 'center', padding: compact ? '26px 20px' : '40px 24px' }}>
+      {/* NEUTRAL, not the accent. An empty list is not an event, and V3 gives it the quiet
+          bordered tile rather than the cobalt wash the accent tiles use. */}
       <span style={{
-        width: 40, height: 40, borderRadius: 12, background: 'var(--accent-wash)', color: 'var(--accent-ink)',
+        width: 36, height: 36, borderRadius: 11, boxSizing: 'border-box',
+        background: 'var(--surface-void)', border: '1px solid var(--border)', color: C.mutedDim,
         display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
       }}>
-        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
           <path d="M3 12h4l3-8 4 16 3-8h4" />
         </svg>
       </span>
-      <div style={{ fontSize: 14.5, fontWeight: 600, color: C.primary, marginTop: 14 }}>No activity yet</div>
+      <div style={{ fontSize: 13.5, fontWeight: 600, color: C.primary, marginTop: 12 }}>No activity yet</div>
+      {/* "swaps", not "shields" — the last of that vocabulary in the wallet surfaces. The flow is
+          called Make private / Make public everywhere the user can see it. */}
       <div style={{ fontSize: 12.5, color: C.mutedDim, marginTop: 4, lineHeight: 1.5, textWrap: 'pretty' }}>
-        Your sends, receives, and shields will appear here.
+        Your sends, receives, and swaps will appear here.
       </div>
     </div>
   )

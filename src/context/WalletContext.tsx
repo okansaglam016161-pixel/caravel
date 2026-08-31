@@ -774,11 +774,50 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   // the timer. With frequent re-renders that is a poll loop that never polls.
   const rescanRef = useRef(rescan)
   rescanRef.current = rescan
+
+  // ── WHY THE POLL SKIPS A SCAN ALREADY IN FLIGHT ─────────────────────────────
+  //
+  // startScan ABORTS whatever is running before it begins, and an aborted scan writes nothing —
+  // both its .then and its .catch return early on `signal.aborted`. So the state left behind is the
+  // one the NEW scan just set: balance null, status 'scanning'.
+  //
+  // A scan can take far longer than this interval. The fetch alone allows FETCH_TIMEOUT_MS ×
+  // FETCH_RETRIES plus backoff — around 47s against a slow indexer — before it even throws, and the
+  // trial-decrypt runs after that. Polling an 8s rescan into a 47s scan aborted and restarted it
+  // about six times over, so it never once finished: the balance stayed null and the wallet sat on
+  // "scanning" until the deadline. Worse, the watch NEEDS that balance to settle — settleAction
+  // requires `balance !== null` — so the poll was destroying the very reading it was polling for.
+  //
+  // This is the residue of a fix already made. settle.ts records that the hook version ran three
+  // loops "each firing the global rescan() on its own timer, so scans overlapped and invalidated one
+  // another"; collapsing them to one loop cut the RATE of thrashing but not the mechanism, and one
+  // loop still outruns one slow scan.
+  //
+  // Skipping is safe because the guard can only ever be temporarily true: a scan that is not
+  // aborted always leaves 'scanning' — .then sets 'done', .catch sets 'error', and the retry loop
+  // terminates inside scanWallet. setScan re-renders, the ref updates, the next tick rescans.
+  //
+  // It also self-paces, which is why there is no backoff here: the cadence becomes scan-duration +
+  // up to SETTLE_POLL_MS, so a slow indexer stretches the interval on its own. The scan's measured
+  // latency is the backoff.
+  //
+  // READ THROUGH A REF, because neither alternative works. Reading `scan.status` directly captures
+  // it in the interval's closure — if it read 'scanning' when the effect ran it reads 'scanning'
+  // forever and the settle never confirms. Listing it as a dependency re-creates the interval on
+  // every status change, resetting the timer: the poll loop that never polls, described above.
+  const scanStatusRef = useRef(scan.status)
+  scanStatusRef.current = scan.status
+
   useEffect(() => {
     if (!isSettling) return
     const iv = setInterval(() => {
+      // UNGUARDED, deliberately: the deadline must resolve even if scans stall completely. The
+      // guard below suppresses a network call, never the passage of time.
       setSettles(prev => advanceAll(prev, settleBalances, Date.now()))
-      rescanRef.current()
+      // Only the POLL is guarded. A user's Refresh/Retry and the post-commit rescans still abort
+      // and restart — those are deliberate requests for fresh state now, and silently doing nothing
+      // because a slow scan happens to be running would be its own bug.
+      if (scanStatusRef.current !== 'scanning') rescanRef.current()
     }, SETTLE_POLL_MS)
     return () => clearInterval(iv)
   }, [isSettling, settleBalances])

@@ -140,6 +140,11 @@ function fromJournal(e: JournalEntry): ActivityRow | null {
     // Written by nothing yet — the reconciliation phase's output. Ignored rather than guessed at.
     case 'receive':
       return null
+    // RECORDED, NOT DISPLAYED. A chat payment is journalled so its change output can be subtracted
+    // during reconciliation and never mistaken for a receive. Wallet Activity shows wallet actions;
+    // chat payments belong to chat. Recording is not displaying.
+    case 'chat-payment':
+      return null
   }
 }
 
@@ -174,6 +179,10 @@ export function buildActivity(
   // FIRST, so it wins every collision below.
   for (const e of journal) {
     const row = fromJournal(e)
+    // ORDER MATTERS: a kind that renders nothing claims nothing either. A `chat-payment` entry is
+    // recorded only so its change output can be subtracted later, and it names the same txId the
+    // chat message does — so claiming it here would silently delete the chat row that legitimately
+    // renders that payment. A non-displayed entry must never suppress a displayed one.
     if (!row) continue
     if (e.txId !== null) claimedTxIds.add(e.txId)
     rows.push(row)

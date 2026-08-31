@@ -21,8 +21,19 @@
 // 2. `[]` AND `null` MEAN DIFFERENT THINGS on `selfOutputIds`, and the difference is the whole
 //    value of the field. See its doc comment.
 
-/** What the user did. `receive` is written by nothing yet — it is the reconciliation phase's output. */
-export type JournalKind = 'send' | 'receive' | 'make-private' | 'make-public' | 'faucet'
+/**
+ * What the user did.
+ *
+ * `receive` is written by nothing yet — it is the reconciliation phase's output.
+ *
+ * `chat-payment` is RECORDED BUT NEVER DISPLAYED in wallet Activity. It exists because a chat
+ * payment creates a change output back to this wallet, and an output nobody recorded reads later
+ * as money from a stranger. Recording it is bookkeeping; showing it would be the compartment leak
+ * we are deliberately not making. See activity.ts, which returns no row for it.
+ */
+export type JournalKind =
+  | 'send' | 'receive' | 'make-private' | 'make-public' | 'faucet'
+  | 'chat-payment'
 
 /**
  * How it ended.

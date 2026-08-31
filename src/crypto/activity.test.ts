@@ -76,6 +76,49 @@ describe('the journalled kinds reach the list', () => {
   })
 })
 
+describe('a chat payment is RECORDED but never DISPLAYED', () => {
+  // The compartment boundary, pinned. Wallet Activity shows wallet actions; a chat payment is
+  // journalled solely so its change output can be subtracted during reconciliation and never
+  // mistaken for a stranger's payment. Recording is not displaying.
+
+  it('produces no row at all', () => {
+    expect(buildActivity([journalled({ kind: 'chat-payment' })], [], [])).toEqual([])
+  })
+
+  it('produces no row even when it committed and carries self-outputs', () => {
+    const rows = buildActivity([
+      journalled({ kind: 'chat-payment', outcome: 'committed', txId: 'tx_chat', selfOutputIds: ['utxo_change'] }),
+    ], [], [])
+    expect(rows).toEqual([])
+  })
+
+  it('does not hide the chat-ref row for the same payment — SAME txId on both', () => {
+    // The real shape: one payment, two records of it. The wallet journalled it for subtraction and
+    // chat announced it, and both name the same transaction. A non-displayed entry must not claim
+    // that txId, or dedupe would silently delete the row that legitimately renders the payment —
+    // the wallet would go quiet about a payment the user really made.
+    const rows = buildActivity(
+      [journalled({ kind: 'chat-payment', txId: 'tx_chat', selfOutputIds: ['utxo_change'] })],
+      [],
+      [chatSend({ localPayment: { amountMicrotari: '8000000', txId: 'tx_chat' } })],
+    )
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ kind: 'sent', source: 'chat-ref' })
+  })
+
+  it('still lets a DISPLAYED journal send claim its txId and win the dedupe', () => {
+    // The counterpart, so the rule above cannot be over-applied: a wallet send does render, so it
+    // does claim, and the legacy store's copy of it is correctly dropped.
+    const rows = buildActivity(
+      [journalled({ kind: 'send', txId: 'tx_wallet' })],
+      [legacySend({ id: 'tx_wallet', txHash: 'tx_wallet' })],
+      [],
+    )
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ source: 'local-journal' })
+  })
+})
+
 describe('amounts are never invented', () => {
   it('keeps a null amount null', () => {
     const [row] = buildActivity([journalled({ amountMicrotari: null })], [], [])

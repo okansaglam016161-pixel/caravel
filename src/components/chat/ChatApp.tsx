@@ -21,6 +21,7 @@ import PendingBubble, { type PendingSend } from './PendingBubble'
 import { loadNicknames, setNickname, MAX_NICKNAME_LEN, type NicknameMap } from '../../messaging/nicknameStore'
 import { loadAddressSent, markAddressSent, clearAddressSent, type AddressSentMap } from '../../messaging/addressSentStore'
 import { sendConfidential, tariToMicrotari, MAX_FEE } from '../../crypto/confidentialSend'
+import { beginEntry, settleEntry } from '../../crypto/journalStore'
 import { resolveOnsNameToHex, toOnsName, type OnsResolveErrorKind } from '../../crypto/ons'
 import { ConnectionIndicator, RelayHealthPanel } from './ConnectionStatus'
 import { usePaymentResolution } from '../../hooks/usePaymentResolution'
@@ -1027,11 +1028,53 @@ export default function ChatApp() {
 
     setPayBusy(true)
     setPayProgress('Starting payment…')
+
+    // ── JOURNALLED FOR SUBTRACTION, NOT FOR DISPLAY ──
+    //
+    // A chat payment spends this wallet's confidential UTXOs and hands back a change output at our
+    // own stealth address. That output carries no sender, exactly like a payment from a stranger,
+    // so a later scan cannot tell the two apart — and reconciliation would report our own change
+    // as money somebody sent us. Recording its commitment is what stops that.
+    //
+    // IT NEVER BECOMES A WALLET ACTIVITY ROW. activity.ts returns no row for `chat-payment`, the
+    // same way it returns none for `receive`. Compartmentalisation is about the display, and this
+    // is bookkeeping.
+    //
+    // WHAT IS DELIBERATELY NOT RECORDED: the peer and the note. Those are chat's, they already
+    // live in the message store, and copying them into the wallet's plaintext journal would widen
+    // the disclosure for no gain — subtraction needs the commitments and nothing else. The amount
+    // and fee ARE recorded: that is this wallet's own money moving, which is its business.
+    const journalId = beginEntry(address, {
+      kind: 'chat-payment',
+      amountMicrotari: amountMicro,
+      feeMicrotari: null,
+      from: 'private',
+      to: 'external',
+      counterparty: null,
+      note: null,
+      source: 'local-journal',
+      selfOutputIds: null,
+    }).entry.id
+
     try {
       const result = await sendConfidential(wallet, address, {
         recipient: recipientAddr,
         amountMicrotari: amountMicro,
         onProgress: (m) => setPayProgress(m),
+      })
+
+      // BEFORE THE BRANCHING, AND THAT IS THE POINT. Every exit below — rejected, timed out, no
+      // recipient id, no provider, and the orphan where the payment lands but the message does not
+      // — happens after the transaction was already submitted. One settle here covers all of them,
+      // where a write inside each branch would be five chances to miss the one that matters most.
+      settleEntry(address, journalId, {
+        outcome: result.outcome === 'Commit' ? 'committed'
+          : result.outcome === 'Reject' ? 'rejected'
+          : 'timeout',
+        txId: result.txId,
+        feeMicrotari: result.feeMicrotari ?? null,
+        // A rejected transaction created nothing, so there is nothing of ours on chain to subtract.
+        selfOutputIds: result.outcome === 'Reject' ? [] : result.selfOutputIds ?? null,
       })
 
       if (result.outcome === 'Reject') {
@@ -1081,6 +1124,9 @@ export default function ChatApp() {
         setPaymentMode(false)
       }
     } catch (e) {
+      // The throw path. The row already exists, so an exception mid-broadcast leaves a record that
+      // the attempt happened rather than nothing at all.
+      settleEntry(address, journalId, { outcome: 'failed' })
       setPayError(e instanceof Error ? e.message : String(e))
     } finally {
       setPayBusy(false)

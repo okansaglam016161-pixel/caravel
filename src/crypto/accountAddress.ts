@@ -56,7 +56,14 @@ function obj(v: unknown): Record<string, unknown> | null {
  * caller should not have to know which endpoint its JSON came from. A rejected transaction has
  * `Reject` instead of `Accept` under either nesting and correctly yields nothing.
  */
-function upSubstates(resultJson: unknown): unknown[] {
+/**
+ * The substates a transaction CREATED, as `[substateId, substate]` pairs.
+ *
+ * Exported so txOutputs.ts can read created UTXOs out of the same structure rather than
+ * re-implementing the two nestings below — the committed and dry-run shapes differ, and one parser
+ * getting that wrong while the other stays right is how they would drift.
+ */
+export function upSubstates(resultJson: unknown): unknown[] {
   const root = obj(resultJson)
   const result = obj(root?.result)
 

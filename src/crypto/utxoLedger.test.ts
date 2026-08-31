@@ -10,6 +10,7 @@ import {
   __resetLedgerSessionForTests,
   captureBaseline, firstSeenAt, isPreEpoch, loadLedger, recordCompleteScan,
 } from './utxoLedger'
+import { OUTPUT_CREATING_ACTIONS, journalCovers, type JournalEpoch } from './journal'
 
 let failWrites = false
 function memoryStorage(): Storage {
@@ -202,5 +203,66 @@ describe('a lost write is recorded, never swallowed', () => {
     failWrites = true
     expect(captureBaseline(ADDR, complete([A]), 3_000).captured).toBe(false)
     expect(loadLedger(ADDR).degradedAt).toBe(3_000)
+  })
+})
+
+describe('the full conjunction — when a UTXO finally becomes classifiable', () => {
+  // Both halves of the guard together, as reconciliation will compose them. The epoch half
+  // (journalCovers) compares timestamps; the ledger half (isPreEpoch) compares set membership. A
+  // timestamp can be fooled by an app that was closed or a truncated scan — both make an old UTXO
+  // look new — and the set cannot. Each test breaks exactly one condition.
+
+  const NEW = 'utxo_0101_new'
+
+  function setup() {
+    // Coverage completes at 5_000, the baseline freezes what was already owned, and one genuinely
+    // new UTXO turns up afterwards.
+    captureBaseline(ADDR, complete([A, B]), 5_000)
+    recordCompleteScan(ADDR, complete([A, B, NEW]), 6_000)
+    return {
+      ledger: loadLedger(ADDR),
+      epoch: {
+        startedAt: 1_000,
+        degradedAt: null,
+        covers: [...OUTPUT_CREATING_ACTIONS],
+        coverageCompleteAt: 5_000,
+      } as JournalEpoch,
+    }
+  }
+
+  const classifiable = (ledger: ReturnType<typeof loadLedger>, epoch: JournalEpoch, id: string) =>
+    !isPreEpoch(ledger, id) && journalCovers(epoch, firstSeenAt(ledger, id) ?? 0)
+
+  it('classifies a UTXO that is new AND post-coverage AND fully covered AND healthy', () => {
+    const { ledger, epoch } = setup()
+    expect(classifiable(ledger, epoch, NEW)).toBe(true)
+  })
+
+  it('refuses one that was already owned when coverage completed', () => {
+    const { ledger, epoch } = setup()
+    expect(classifiable(ledger, epoch, A)).toBe(false)
+    expect(classifiable(ledger, epoch, B)).toBe(false)
+  })
+
+  it('refuses everything while coverage is incomplete', () => {
+    const { ledger, epoch } = setup()
+    expect(classifiable(ledger, { ...epoch, covers: [], coverageCompleteAt: null }, NEW)).toBe(false)
+  })
+
+  it('refuses everything once the journal is degraded', () => {
+    const { ledger, epoch } = setup()
+    expect(classifiable(ledger, { ...epoch, degradedAt: 7_000 }, NEW)).toBe(false)
+  })
+
+  it('refuses everything while no baseline has been taken', () => {
+    // The state every wallet is in until stage D runs: nothing is known to be new.
+    recordCompleteScan(OTHER, complete([NEW]), 6_000)
+    const ledger = loadLedger(OTHER)
+    const epoch: JournalEpoch = {
+      startedAt: 1_000, degradedAt: null,
+      covers: [...OUTPUT_CREATING_ACTIONS], coverageCompleteAt: 5_000,
+    }
+    expect(ledger.baseline).toBeNull()
+    expect(classifiable(ledger, epoch, NEW)).toBe(false)
   })
 })

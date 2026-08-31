@@ -8,6 +8,8 @@
 import { useEffect, useState } from 'react'
 import { useWallet } from '../../context/WalletContext'
 import { validateOnsName, checkOnsAvailable, estimateOnsRegistration, registerOnsName, toOnsName, ownedOnsNames } from '../../crypto/ons'
+import { beginEntry, markDegraded, settleEntry } from '../../crypto/journalStore'
+import { fetchCreatedUtxoIds } from '../../crypto/txOutputs'
 import { NameCard, OnsPanel, type OnsStatus } from './v2/panels'
 import { plainError } from './v2/plainError'
 
@@ -84,11 +86,62 @@ export default function OnsRegisterPanel() {
     if (!wallet || !address || !nostrNpub || fee === null) return
     setStatus('registering')
     setMsg(`Writing @${clean} to the Tari network.`)
+
+    // ── JOURNALLED FOR SUBTRACTION, NOT FOR DISPLAY ──
+    //
+    // A registration spends one confidential UTXO and returns the remainder as a change output at
+    // this wallet's own stealth address. That output carries no sender, so a later scan cannot
+    // tell it from a payment somebody sent us — and reconciliation would report our own change as
+    // money from a stranger. Recording its commitment is what stops that.
+    //
+    // The entry is also HOW THE txId PERSISTS. It used to live in component state and vanish on
+    // unmount, which left nothing to read the output back from if the capture below did not finish.
+    const journalId = beginEntry(address, {
+      kind: 'ons-register',
+      amountMicrotari: null,      // nothing is sent; the fee is the whole cost
+      feeMicrotari: null,
+      from: 'private',
+      to: 'private',              // the change comes straight back to us
+      counterparty: { kind: 'self', value: address },
+      note: null,
+      source: 'local-journal',
+      selfOutputIds: null,
+    }).entry.id
+
     const r = await registerOnsName(wallet, address, clean, nostrNpub, fee)
-    if (!r.ok) { setStatus('error'); setMsg(r.error ?? 'Registration failed.'); return }
+    if (!r.ok) {
+      settleEntry(address, journalId, { outcome: 'failed' })
+      setStatus('error'); setMsg(r.error ?? 'Registration failed.'); return
+    }
+
+    settleEntry(address, journalId, {
+      outcome: 'committed',
+      txId: r.txId ?? null,
+      feeMicrotari: r.fee ?? null,
+    })
     setStatus('done')
     setTxId(r.txId ?? null)
     setMsg('People can now find you by name.')
+
+    // ── READ BACK WHAT IT CREATED ──
+    //
+    // The ONS client builds the transaction internally and returns no commitment, so the output is
+    // recovered from the transaction result instead — see txOutputs. Deliberately AFTER the UI has
+    // been told the registration succeeded: it has, and a slow indexer must not make it look
+    // otherwise.
+    //
+    // A FAILURE HERE IS NOT SILENT AND IS NOT FATAL. The entry stays `selfOutputIds: null`, which
+    // `unresolvedOutputs` reads as a hole and reconciliation refuses to classify against — so an
+    // unrecorded output cannot become a phantom receive. Because the result stays fetchable, that
+    // is repairable rather than permanent, which is why it does not degrade the epoch.
+    if (r.txId) {
+      const created = await fetchCreatedUtxoIds(r.txId)
+      if (created !== null) settleEntry(address, journalId, { outcome: 'committed', selfOutputIds: created })
+    } else {
+      // Committed with no transaction id: there is nothing left to read the output back FROM, so
+      // this hole is permanent rather than repairable. The one case that earns a degradation.
+      markDegraded(address)
+    }
   }
 
   // ── PRESENTATION ──

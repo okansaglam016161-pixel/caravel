@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   OUTPUT_CREATING_ACTIONS, applyPatch, coverageComplete, draftToEntry, journalCovers, newJournalId,
+  outputsFullyAccounted, unresolvedOutputs,
   type JournalDraft, type JournalEntry, type JournalEpoch,
 } from './journal'
 
@@ -167,5 +168,54 @@ describe('journalCovers — the guard reconciliation leans on', () => {
   it('is true ONLY under the full conjunction', () => {
     expect(journalCovers(epoch(), 2_000)).toBe(true)
     expect(journalCovers(epoch(), 9_999)).toBe(true)
+  })
+})
+
+describe('unresolvedOutputs — the hole the data shows by itself', () => {
+  // An action that committed made whatever outputs it made, whether or not we wrote them down. A
+  // committed entry with no recorded outputs is therefore an output of OURS sitting in the owned
+  // set with nothing to subtract it — which is exactly what a later scan reads as a payment from
+  // a stranger. Derived rather than flagged, so a repair clears it and nobody has to remember to
+  // set anything.
+
+  const committed = (over: Partial<JournalEntry> = {}): JournalEntry =>
+    ({ ...draftToEntry(DRAFT), outcome: 'committed', selfOutputIds: [], ...over })
+
+  it('is clean when every committed action recorded its outputs', () => {
+    const journal = [committed({ selfOutputIds: ['utxo_a'] }), committed({ selfOutputIds: [] })]
+    expect(unresolvedOutputs(journal)).toEqual([])
+    expect(outputsFullyAccounted(journal)).toBe(true)
+  })
+
+  it('flags a committed entry that never recorded what it created', () => {
+    // The @name capture that failed, or a tab closed before the read finished.
+    const hole = committed({ kind: 'ons-register', selfOutputIds: null })
+    expect(unresolvedOutputs([committed(), hole])).toEqual([hole])
+    expect(outputsFullyAccounted([committed(), hole])).toBe(false)
+  })
+
+  it('treats [] as accounted, not as a hole', () => {
+    // The distinction the whole field exists for: [] is a positive "this made nothing for us".
+    expect(outputsFullyAccounted([committed({ selfOutputIds: [] })])).toBe(true)
+  })
+
+  it('does not flag actions that never committed', () => {
+    // Neither is known to have landed, so neither is known to have created anything. If one later
+    // turns out to have landed, the baseline is what covers its output.
+    for (const outcome of ['pending', 'rejected', 'timeout', 'failed'] as const) {
+      expect(outputsFullyAccounted([committed({ outcome, selfOutputIds: null })])).toBe(true)
+    }
+  })
+
+  it('does not flag a receive — somebody else made that output', () => {
+    expect(outputsFullyAccounted([committed({ kind: 'receive', selfOutputIds: null })])).toBe(true)
+  })
+
+  it('clears once the entry is repaired', () => {
+    // Why this is derived instead of degrading the epoch: the transaction result stays fetchable,
+    // so the failure is a network blip rather than a lost fact, and a retry fixes it.
+    const hole = committed({ kind: 'ons-register', selfOutputIds: null })
+    expect(outputsFullyAccounted([hole])).toBe(false)
+    expect(outputsFullyAccounted([{ ...hole, selfOutputIds: ['utxo_change'] }])).toBe(true)
   })
 })

@@ -33,7 +33,7 @@
  */
 export type JournalKind =
   | 'send' | 'receive' | 'make-private' | 'make-public' | 'faucet'
-  | 'chat-payment'
+  | 'chat-payment' | 'ons-register'
 
 /**
  * How it ended.
@@ -211,6 +211,42 @@ export function journalCovers(epoch: JournalEpoch | null, observedAt: number): b
   // The stricter of the two thresholds. Anything first seen before coverage completed may be the
   // change output of an action nobody was recording at the time.
   return observedAt >= epoch.coverageCompleteAt
+}
+
+/**
+ * Entries that COMMITTED but never recorded what they created.
+ *
+ * ── A HOLE THE DATA SHOWS BY ITSELF ─────────────────────────────────────────
+ *
+ * An action that landed on chain made whatever outputs it made whether or not we managed to write
+ * them down. `selfOutputIds: null` on a committed entry is therefore not a missing detail — it is
+ * an output of ours somewhere in the owned set with nothing to subtract it, which is precisely
+ * what a later scan reads as money from a stranger.
+ *
+ * WHY THIS RATHER THAN DEGRADING THE EPOCH. Degradation is permanent and deliberately so, which
+ * makes it the wrong tool for a condition that can be repaired: the @name capture reads its
+ * outputs from a transaction result that stays fetchable, so a failure there is a network blip,
+ * not a lost fact. Deriving the hole from the journal means a retry that fills the entry in
+ * clears the guard by itself, and a tab closed mid-read is caught on the next load without needing
+ * to have been caught at the time. It also cannot be forgotten at a call site — there is no flag
+ * anyone has to remember to set.
+ *
+ * `pending` and `timeout` entries are NOT holes. Neither is known to have committed, so neither is
+ * known to have created anything; if one later turns out to have landed, the UTXO it produced is
+ * unaccounted and the baseline is what covers it.
+ */
+export function unresolvedOutputs(journal: readonly JournalEntry[]): JournalEntry[] {
+  return journal.filter(e =>
+    e.outcome === 'committed' &&
+    e.selfOutputIds === null &&
+    // A receive is somebody else's output; it never had self-outputs to record.
+    e.kind !== 'receive',
+  )
+}
+
+/** Is every committed action's output set accounted for? Reconciliation requires this. */
+export function outputsFullyAccounted(journal: readonly JournalEntry[]): boolean {
+  return unresolvedOutputs(journal).length === 0
 }
 
 /** A local id. `randomUUID` where available, with a fallback for older/insecure contexts. */

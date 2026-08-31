@@ -145,6 +145,10 @@ function fromJournal(e: JournalEntry): ActivityRow | null {
     // chat payments belong to chat. Recording is not displaying.
     case 'chat-payment':
       return null
+    // Same: an @name registration is journalled so its change output can be subtracted, and it is
+    // not a wallet money-movement the user would look for in Activity.
+    case 'ons-register':
+      return null
   }
 }
 

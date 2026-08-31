@@ -48,6 +48,7 @@ import type { Dir } from './v2/moveCopy'
 import { ActivityRowShell, type ActivityStatus, type SendSource, type SendView } from './v2/panels'
 import { useJournal } from '../../hooks/useJournal'
 import { useUtxoLedger } from '../../hooks/useUtxoLedger'
+import { useJournalCoverage } from '../../hooks/useJournalCoverage'
 import { plainError } from './v2/plainError'
 import { resolveSendPath } from './v2/sendPath'
 import { GenerationGuard } from './v2/generation'
@@ -199,6 +200,10 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
   // phase can ask "was this UTXO already here before the journal covered everything", which is the
   // question that stops the user's own change being reported as a stranger's payment.
   useUtxoLedger(address, scan)
+
+  // Declares that this build records every output-creating action, then freezes the set of UTXOs
+  // that predate it. Both are one-time per wallet and invisible — see useJournalCoverage.
+  useJournalCoverage(address, scan)
 
   const [tab, setTab] = useState<WalletTab>('overview')
   const [addrCopied, setAddrCopied] = useState(false)

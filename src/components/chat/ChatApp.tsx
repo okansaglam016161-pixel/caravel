@@ -1125,8 +1125,9 @@ export default function ChatApp() {
       }
     } catch (e) {
       // The throw path. The row already exists, so an exception mid-broadcast leaves a record that
-      // the attempt happened rather than nothing at all.
-      settleEntry(address, journalId, { outcome: 'failed' })
+      // the attempt happened rather than nothing at all — and records it as ATTEMPTED, because a
+      // throw can land either side of the money moving and proves neither.
+      settleEntry(address, journalId, { outcome: 'pending' })
       setPayError(e instanceof Error ? e.message : String(e))
     } finally {
       setPayBusy(false)

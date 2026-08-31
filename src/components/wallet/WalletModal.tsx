@@ -55,6 +55,7 @@ import { loadEpoch } from '../../crypto/journalStore'
 import { loadLedger } from '../../crypto/utxoLedger'
 import { plainError } from './v2/plainError'
 import { resolveSendPath } from './v2/sendPath'
+import { settleVerdict, journalOutcomeFor, type SettleStartedBy } from './v2/settleVerdict'
 import { GenerationGuard } from './v2/generation'
 import { firstSeenLabel, toInput } from './v2/format'
 
@@ -283,6 +284,21 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
    */
   const [sendExact, setSendExact] = useState<bigint | null>(null)
   const [sendLagging, setSendLagging] = useState(false)
+  // ── WHAT THE SETTLE EFFECTS NEED THAT THE HANDLERS HOLD ─────────────────────
+  //
+  // A settle now finishes long after its handler has returned, and it has to correct the journal
+  // row that handler opened — so the row's id has to outlive the call. It is STATE rather than a
+  // ref because the effect must re-run when it arrives; a ref would leave a settle that resolved
+  // first with nothing to patch.
+  //
+  // `startedBy` is the opposite case and is deliberately a REF: it is read inside the effect, never
+  // rendered, and re-running on it would be meaningless. See settleVerdict.ts for why the verdict
+  // cannot be computed without it.
+  const [sendJournalId, setSendJournalId] = useState<string | null>(null)
+  const sendStartedBy = useRef<SettleStartedBy>('Commit')
+
+  const [moveJournalId, setMoveJournalId] = useState<string | null>(null)
+  const moveStartedBy = useRef<SettleStartedBy>('Commit')
 
   const [moveStep, setMoveStep] = useState<MoveStep>('idle')
   const [moveDir, setMoveDir] = useState<Dir>('conceal')
@@ -353,18 +369,40 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
   const moveSettle = settles.find(e => e.txId === moveTxId && e.kind === 'move')
   const sendSettle = settles.find(e => e.txId === sendTxId && e.kind === 'send')
 
+  // Both effects fork through settleVerdict rather than reading the status directly. The comment
+  // that used to sit here — "a passed deadline is STILL A SUCCESS" — was true only while watches
+  // began exclusively from a Commit receipt. They no longer do, so the premise is now an input.
   useEffect(() => {
     if (!moveSettle || moveSettle.status === 'settling') return
-    // A passed deadline is STILL A SUCCESS — the transaction committed, only the index is behind.
-    setMoveLagging(moveSettle.status === 'lagged')
-    setMoveStep(step => (step === 'settling' ? 'success' : step))
-  }, [moveSettle])
+    const verdict = settleVerdict(moveStartedBy.current, moveSettle.status)
+    if (verdict.kind === 'confirmed') {
+      setMoveLagging(verdict.lagged)
+      setMoveStep(step => (step === 'settling' ? 'success' : step))
+    } else {
+      setMoveError('We couldn’t confirm this move. Your balances are unchanged on screen — refresh in a moment to see where it landed.')
+      setMoveStep(step => (step === 'settling' ? 'error' : step))
+    }
+    const outcome = journalOutcomeFor(verdict)
+    if (outcome && address && moveJournalId) settleEntry(address, moveJournalId, { outcome })
+  }, [moveSettle, address, moveJournalId])
 
   useEffect(() => {
     if (!sendSettle || sendSettle.status === 'settling') return
-    setSendLagging(sendSettle.status === 'lagged')
-    setSendStep(step => (step === 'settling' ? 'success' : step))
-  }, [sendSettle])
+    const verdict = settleVerdict(sendStartedBy.current, sendSettle.status)
+    if (verdict.kind === 'confirmed') {
+      setSendLagging(verdict.lagged)
+      setSendStep(step => (step === 'settling' ? 'success' : step))
+    } else {
+      // Never "Sent". Nothing was observed twice — say that, and point at Activity rather than
+      // inviting a resend of a payment that may well have landed.
+      setSendError('Broadcast, but the network hasn’t confirmed it yet. Don’t resend — it will appear in Activity if it lands.')
+      setSendStep(step => (step === 'settling' ? 'error' : step))
+    }
+    // Only ever a correction UPWARD to 'committed'. An unknown verdict returns null and writes
+    // nothing, so the row keeps saying `timeout` — see journalOutcomeFor.
+    const outcome = journalOutcomeFor(verdict)
+    if (outcome && address && sendJournalId) settleEntry(address, sendJournalId, { outcome })
+  }, [sendSettle, address, sendJournalId])
 
   // ── Refresh feedback ────────────────────────────────────────────────────────
   //
@@ -578,6 +616,20 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
       source: 'local-journal',
       selfOutputIds: null,
     }).entry.id
+    setMoveJournalId(journalId)
+
+    // ── THE BASELINES, READ BEFORE SUBMITTING ────────────────────────────────
+    //
+    // A watch measures movement AWAY FROM a baseline, so the baseline has to predate the change it
+    // is looking for. Read after the await, these are whatever the settle poll's rescans have
+    // already written — and on the Timeout path the submit can take 30s, which is ample time for a
+    // rescan to land the very movement we are about to watch for. The watch would then compare the
+    // new balance against itself and wait out its whole deadline against a transaction that had
+    // already arrived.
+    //
+    // No `?? 0n`: an unknown baseline stays null and settle.ts refuses to judge against it.
+    const privateBefore = balance
+    const publicBefore = publicNow
 
     try {
       const result = await movePrepared.p.submit(setMoveProgress)
@@ -588,7 +640,15 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
         selfOutputIds: result.selfOutputIds ?? null,
       })
       setMoveTxId(result.txId)
-      if (result.outcome === 'Commit') {
+      // ── TIMEOUT IS NOT A VERDICT ──────────────────────────────────────────
+      //
+      // It is the builder's poll giving up at ~30s against a documented 60–90s indexer lag, so it
+      // says nothing about whether the move landed — and most of them do. Both outcomes now hand
+      // off to the settle loop, which watches the balances themselves; `startedBy` carries the
+      // difference to the fork that reads it. Only a Reject is a real answer, and it is the only
+      // thing left in the else.
+      if (result.outcome === 'Commit' || result.outcome === 'Timeout') {
+        moveStartedBy.current = result.outcome
         setMoveLanded('revealedAmount' in result ? result.revealedAmount : result.concealedAmount)
         // Committed, but not yet VISIBLE — hand the transaction to the context's settle loop rather
         // than declaring success against a balance the indexer has not caught up to. The baselines
@@ -623,12 +683,12 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
           deadlineAt: Date.now() + MOVE_SETTLE_MS,
           watches: movePrepared.dir === 'reveal'
             ? [
-                { side: 'public', direction: 'rise', before: publicNow },
-                { side: 'private', direction: 'fall', before: balance },
+                { side: 'public', direction: 'rise', before: publicBefore },
+                { side: 'private', direction: 'fall', before: privateBefore },
               ]
             : [
-                { side: 'private', direction: 'rise', before: balance },
-                { side: 'public', direction: 'fall', before: publicNow },
+                { side: 'private', direction: 'rise', before: privateBefore },
+                { side: 'public', direction: 'fall', before: publicBefore },
               ],
         })
         setMoveLagging(false)
@@ -636,15 +696,14 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
         // Kick both reads now — each side lags differently and neither is worth waiting a poll for.
         rescan()
       } else {
-        setMoveError(
-          result.outcome === 'Reject'
-            ? `The network rejected the transaction. Nothing was ${movePrepared.dir === 'reveal' ? 'made public' : 'moved'}, and no fee was taken.`
-            : 'The transaction didn’t reach a decision in time. It may still land — refresh your balances in a moment before trying again.',
-        )
+        setMoveError(`The network rejected the transaction. Nothing was ${movePrepared.dir === 'reveal' ? 'made public' : 'moved'}, and no fee was taken.`)
         setMoveStep('error')
       }
     } catch (e) {
-      settleEntry(address, journalId, { outcome: 'failed' })
+      // ATTEMPTED, not failed. The throw may have come from anywhere — including after the
+      // transaction was accepted — so 'failed' asserted something this catch cannot know. 'pending'
+      // says what is true: it was attempted and we never heard the end of it.
+      settleEntry(address, journalId, { outcome: 'pending' })
       setMoveError(plainError(e instanceof Error ? e.message : String(e)))
       setMoveStep('error')
     }
@@ -675,6 +734,13 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
       source: 'local-journal',
       selfOutputIds: null,              // not known until the outputs statement is built
     }).entry.id
+    setSendJournalId(journalId)
+
+    // Read before submitting, for the reason spelled out in handleConfirmMove: on the Timeout path
+    // the submit can run 30s, and a settle-poll rescan landing inside that window would move the
+    // ground the watch measures against.
+    const privateBefore = balance
+    const publicBefore = publicNow
 
     try {
       // NO FALLBACK. resolveSendPath refuses rather than quietly spending the other balance — see
@@ -714,34 +780,35 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
         txHash: result.txId,
         outcome: result.outcome,
       })
-      if (result.outcome === 'Commit') {
-        // Committed, but the spend is not VISIBLE until the index catches up — the same 60–90s lag
-        // the move flow has. A send has no rise to watch, so the watch is on the spent-from balance
-        // FALLING instead. It stays SINGLE-SIDED because a send genuinely moves one balance: the
+      // Commit AND Timeout — see handleConfirmMove. This is the path the mislabelling came from:
+      // a slow-but-successful send returned Timeout, dead-ended in the else below, and told the
+      // user it was unconfirmed while the money was already gone. It now waits for the balance.
+      if (result.outcome === 'Commit' || result.outcome === 'Timeout') {
+        sendStartedBy.current = result.outcome
+        // The spend is not VISIBLE until the index catches up — the same 60–90s lag the move flow
+        // has. A send has no rise to watch, so the watch is on the spent-from balance FALLING
+        // instead. It stays SINGLE-SIDED because a send genuinely moves one balance: the
         // recipient's output is theirs, not ours, so there is no second side to wait for.
         beginSettle({
           txId: result.txId,
           kind: 'send',
           deadlineAt: Date.now() + MOVE_SETTLE_MS,
           watches: [sendSource === 'public'
-            ? { side: 'public', direction: 'fall', before: publicNow }
-            : { side: 'private', direction: 'fall', before: balance }],
+            ? { side: 'public', direction: 'fall', before: publicBefore }
+            : { side: 'private', direction: 'fall', before: privateBefore }],
         })
         setSendLagging(false)
         setSendStep('settling')
         rescan()
       } else {
-        setSendError(
-          result.outcome === 'Reject'
-            ? 'The network rejected this payment. Nothing left your wallet and no fee was taken.'
-            : 'Broadcast, but the network hasn’t confirmed it yet. Don’t resend — it will appear in Activity.',
-        )
+        setSendError('The network rejected this payment. Nothing left your wallet and no fee was taken.')
         setSendStep('error')
       }
     } catch (e) {
       // The throw path. Previously this recorded NOTHING — the user saw an error over a history
-      // that said nothing had been attempted. The row already exists; this closes it honestly.
-      settleEntry(address, journalId, { outcome: 'failed' })
+      // that said nothing had been attempted. The row already exists; this closes it as ATTEMPTED:
+      // a throw after submission is not proof that nothing happened.
+      settleEntry(address, journalId, { outcome: 'pending' })
       setSendError(plainError(e instanceof Error ? e.message : String(e)))
       setSendStep('error')
     }

@@ -11,6 +11,7 @@ import { useWallet } from '../../context/WalletContext'
 import { claimFaucet, type ClaimResult } from '../../crypto/faucet'
 import { saveAccountAddress } from '../../crypto/accountStore'
 import { beginEntry, settleEntry } from '../../crypto/journalStore'
+import { settleVerdict, journalOutcomeFor, type SettleStartedBy } from './v2/settleVerdict'
 import { FaucetPanel, type FaucetPhase } from './v2/panels'
 import { plainError } from './v2/plainError'
 import { fmt2 } from './v2/format'
@@ -40,6 +41,10 @@ export default function FaucetClaimPanel() {
   const [cooldownUntil, setCooldownUntil] = useState<number | null>(null)
   const [nowTick, setNowTick] = useState(() => Date.now())
   const lastTx = useRef<string | null>(null)
+  // How the watch began, and the row it must correct. Both refs: the effect reads them, nothing
+  // renders them. See settleVerdict.ts.
+  const startedBy = useRef<SettleStartedBy>('Commit')
+  const journalIdRef = useRef<string | null>(null)
 
   const highBalance = balance !== null && balance >= HIGH_BALANCE
   const busy = p === 'claiming' || p === 'verifying'
@@ -54,7 +59,8 @@ export default function FaucetClaimPanel() {
   const settle = settles.find(e => e.txId === lastTx.current && e.kind === 'faucet')
   useEffect(() => {
     if (!settle || settle.status === 'settling') return
-    if (settle.status === 'settled') {
+    const verdict = settleVerdict(startedBy.current, settle.status)
+    if (verdict.kind === 'confirmed' && !verdict.lagged) {
       setPhase('done')
       // The delta is measured by the loop, from the two readings it actually compared.
       setMsg(settle.delta === null
@@ -63,12 +69,23 @@ export default function FaucetClaimPanel() {
       setCooldown(true)
       setCooldownUntil(Date.now() + COOLDOWN_MS)
       setTimeout(() => { setCooldown(false); setCooldownUntil(null) }, COOLDOWN_MS)
-    } else {
+    } else if (verdict.kind === 'confirmed') {
+      // Lagged, but the claim DID commit — the receipt said so. 'lagging' spins and promises the
+      // funds will arrive, which is only sayable on this branch.
       setPhase('lagging')
       setMsg(`Claim committed on-chain (tx ${shortTx(settle.txId)}), but your balance hasn't updated yet. Tap Refresh in a moment.`)
+    } else {
+      // Nothing observed, twice. This must NOT spin and must NOT promise arrival — but it also
+      // must not repeat the old line's claim that no tokens were added, which nobody verified.
+      setPhase('error')
+      setMsg(`We couldn't confirm this claim (tx ${shortTx(settle.txId)}). If the tokens landed they'll show in your balance — tap Refresh in a moment before claiming again.`)
     }
+    // The journal row corrects with the screen. Null on an unknown verdict, so it keeps saying
+    // `timeout` rather than gaining an outcome nobody established.
+    const outcome = journalOutcomeFor(verdict)
+    if (outcome && address && journalIdRef.current) settleEntry(address, journalIdRef.current, { outcome })
     acknowledgeSettle(settle.txId)
-  }, [settle, acknowledgeSettle])
+  }, [settle, acknowledgeSettle, address])
 
   async function claim() {
     if (!wallet || !address) return
@@ -89,12 +106,19 @@ export default function FaucetClaimPanel() {
       source: 'local-journal',
       selfOutputIds: null,
     }).entry.id
+    journalIdRef.current = journalId
+
+    // Read BEFORE the claim is made. A rise watch compares against this, and a settle-poll rescan
+    // landing between the request and the response would otherwise fold the payout into the
+    // baseline — leaving the watch waiting for a rise that had already happened.
+    const privateBefore = balance
 
     let r: ClaimResult
     try {
       r = await claimFaucet(wallet, address, m => setMsg(m))
     } catch (e) {
-      settleEntry(address, journalId, { outcome: 'failed' })
+      // Attempted, not failed: a throw is not proof the faucet did nothing.
+      settleEntry(address, journalId, { outcome: 'pending' })
       setPhase('error')
       setMsg((e as Error).message || 'Claim failed.')
       return
@@ -115,25 +139,34 @@ export default function FaucetClaimPanel() {
     // as soon as it exists: `accountAddress` is set exclusively on a committed result, and the store
     // ignores an empty value, so a failed claim writes nothing.
     if (r.accountAddress) saveAccountAddress(address, r.accountAddress)
-    if (r.outcome !== 'Commit') {
+    // ── ONLY A REJECT IS AN ANSWER ────────────────────────────────────────────
+    //
+    // This branch used to catch Timeout too and say "no tokens added" — a claim nobody had checked,
+    // on the path where the tokens usually DO arrive. A Timeout means the poll gave up at ~30s
+    // against a 60–90s indexer lag; the balance watch below is what can actually tell.
+    if (r.outcome === 'Reject') {
       setPhase('error')
-      setMsg(`Claim did not land on-chain (${r.outcome}) — no tokens added.`)
+      setMsg('The network rejected the claim — no tokens were added.')
       return
     }
-    // Committed — verify the balance actually rises before declaring success.
+    startedBy.current = r.outcome
+    // Verify the balance actually rises before declaring success.
     //
     // NOT `?? 0n` on the baseline. This is a RISE watch, and zero is below any real balance, so an
     // unknown baseline would satisfy the comparison on the very first poll and report "Tokens
     // received" before the faucet's output had landed. That is not theoretical here: a claim is the
     // flow a brand-new wallet runs, and its first scan is often still in flight at this moment.
     setPhase('verifying')
-    setMsg('Claim confirmed on-chain — updating your balance…')
+    // Only the Commit path may say "confirmed" — a Timeout has no receipt to say it from.
+    setMsg(r.outcome === 'Commit'
+      ? 'Claim confirmed on-chain — updating your balance…'
+      : 'Broadcast. Waiting to see the tokens arrive…')
     beginSettle({
       txId: r.txId,
       kind: 'faucet',
       // /utxos indexing can lag ~60-90s after the claim commits.
       deadlineAt: Date.now() + 150_000,
-      watches: [{ side: 'private', direction: 'rise', before: balance }],
+      watches: [{ side: 'private', direction: 'rise', before: privateBefore }],
     })
     rescan()
   }

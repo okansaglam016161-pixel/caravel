@@ -109,8 +109,12 @@ export default function OnsRegisterPanel() {
     }).entry.id
 
     const r = await registerOnsName(wallet, address, clean, nostrNpub, fee)
+    // ATTEMPTED, not failed. `ok: false` is registerOnsName's own catch block converting a throw
+    // (see ons.ts) — so it covers a throw during submission, which proves nothing about whether the
+    // registration landed. It also covers a pre-submission policy refusal, where nothing did
+    // happen; the panel cannot tell them apart, so it claims the lesser of the two.
     if (!r.ok) {
-      settleEntry(address, journalId, { outcome: 'failed' })
+      settleEntry(address, journalId, { outcome: 'pending' })
       setStatus('error'); setMsg(r.error ?? 'Registration failed.'); return
     }
 

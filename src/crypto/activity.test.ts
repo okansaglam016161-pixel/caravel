@@ -10,6 +10,7 @@ import { buildActivity, type ActivityRow } from './activity'
 import { draftToEntry, type JournalEntry } from './journal'
 import type { SentEntry } from './txHistory'
 import type { CaravelMessage } from '../messaging/types'
+import type { ReconciledReceive } from './reconcile'
 
 const ADDRESS = 'otl_esm_1tnay4uzgpe0cvu4tzwfmhdhtvc3pq97szrnteetuz2dvqmjk2ecwq34fnsm8hz7tk43xrur8d2y6mye4w3shjq4qj5sm7xvpq7yqqngs8224p'
 
@@ -243,3 +244,66 @@ function chatReceived(over: Partial<CaravelMessage> = {}): CaravelMessage {
     ...over,
   } as CaravelMessage
 }
+
+describe('reconciled receives reach the list, saying only what is known', () => {
+  const inferred: ReconciledReceive = {
+    utxoId: 'utxo_0101_in', amountMicrotari: 12_500_000n, firstSeenAt: 7_000,
+    confidence: 'inferred', message: null, payRef: null,
+  }
+
+  it('emits a row for a reconciled receive', () => {
+    const rows = buildActivity([], [], [], [inferred])
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({
+      kind: 'received-unattributed', amountMicrotari: 12_500_000n, source: 'chain',
+    })
+  })
+
+  it('HAS NOWHERE TO PUT A SENDER — the field does not exist', () => {
+    // The point of a separate variant. An invented sender is unrepresentable rather than merely
+    // unwritten, the same way the settling total carries no figure.
+    const [row] = buildActivity([], [], [], [inferred])
+    expect(row).not.toHaveProperty('counterparty')
+    expect(row).not.toHaveProperty('counterpartyValue')
+  })
+
+  it('carries the first-seen as its timestamp, not a send time', () => {
+    const [row] = buildActivity([], [], [], [inferred])
+    expect(row.timestamp).toBe(7_000)
+  })
+
+  it('surfaces the sender’s words when they left any', () => {
+    const [row] = buildActivity([], [], [], [
+      { ...inferred, confidence: 'memo', message: 'for lunch' },
+    ])
+    expect(row).toMatchObject({ confidence: 'memo', message: 'for lunch' })
+  })
+
+  it('keeps an attributed chat receive distinguishable from an unattributed one', () => {
+    // The two kinds are what the display keys off: one can name a person, the other cannot.
+    const rows = buildActivity([], [], [chatReceived({ timestamp: 8_000 })], [inferred])
+    expect(rows.map(r => r.kind)).toEqual(['received', 'received-unattributed'])
+    expect(rows[0]).toMatchObject({ source: 'chat-ref' })
+    expect(rows[1]).toMatchObject({ source: 'chain' })
+  })
+
+  it('sorts a reconciled receive into the list by its first-seen', () => {
+    const rows = buildActivity(
+      [journalled({ timestamp: 9_000 })],
+      [],
+      [],
+      [inferred],
+    )
+    expect(rows.map(r => r.timestamp)).toEqual([9_000, 7_000])
+  })
+
+  it('emits nothing when reconciliation vouched for nothing', () => {
+    // Suppressed UTXOs are deliberately invisible: the balance is already correct and an "you may
+    // have hidden receives" line would be noise.
+    expect(buildActivity([], [], [], [])).toEqual([])
+  })
+
+  it('still emits no row for a journalled `receive` kind — those are derived, not stored', () => {
+    expect(buildActivity([journalled({ kind: 'receive' })], [], [], [])).toEqual([])
+  })
+})

@@ -24,7 +24,7 @@
 //   #3  No base units reach the screen. Fund-module errors pass through plainError at this
 //       boundary; the modules keep their exact wording for logs and tests. See ./v2/plainError.
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { useWallet } from '../../context/WalletContext'
 import { MIN_CONCEAL_MICROTARI, prepareConceal, type PreparedConceal } from '../../crypto/conceal'
 import { MIN_REVEAL_MICROTARI, maxRevealable, prepareReveal, type PreparedReveal } from '../../crypto/reveal'
@@ -50,10 +50,13 @@ import { useJournal } from '../../hooks/useJournal'
 import { useUtxoLedger } from '../../hooks/useUtxoLedger'
 import { useJournalCoverage } from '../../hooks/useJournalCoverage'
 import { useReconcileDevtools } from '../../hooks/useReconcileDevtools'
+import { reconcile } from '../../crypto/reconcile'
+import { loadEpoch } from '../../crypto/journalStore'
+import { loadLedger } from '../../crypto/utxoLedger'
 import { plainError } from './v2/plainError'
 import { resolveSendPath } from './v2/sendPath'
 import { GenerationGuard } from './v2/generation'
-import { toInput } from './v2/format'
+import { firstSeenLabel, toInput } from './v2/format'
 
 // The PUBLIC ↔ PRIVATE move. Its own state machine rather than SendStep's: a move has no recipient,
 // prices itself before review, and its terminal states carry different information.
@@ -167,6 +170,41 @@ function ReceivedRowV2({ row, hidden }: { row: Extract<ActivityRow, { kind: 'rec
   }} />
 }
 
+/**
+ * Money that arrived from somebody this wallet cannot name.
+ *
+ * ── WHAT IT SAYS, AND WHAT IT REFUSES TO ────────────────────────────────────
+ *
+ * The amount is exact — decrypted from the UTXO by the scan — and it is money in, so it keeps its
+ * `+` and its positive treatment. This is good news and reads as good news.
+ *
+ * There is NO SENDER, and the row cannot accidentally imply one: the variant it renders has no
+ * counterparty field at all, so there is nothing to put in a title. It says "Received" where an
+ * attributed receive says "Received from @someone", and the line beneath states the absence rather
+ * than leaving the reader to notice it. That difference IS the visible distinction between the two
+ * kinds — no badge, no colour, just the plain fact that one can name a person and the other cannot.
+ *
+ * THE DATE IS A FIRST-SEEN. It is labelled "first seen" every time it appears and rendered without
+ * a time of day, because nothing is observed while the app is closed and the gap between arriving
+ * and being seen can be days. It must never read as when the payment was made.
+ *
+ * A MEMO IS THE SENDER'S OWN WORDS — the only account of this payment that exists anywhere. It is
+ * shown in quotes and does not displace the sender-unknown qualifier: words prove the output is
+ * not ours, they do not say who wrote them.
+ */
+function UnattributedReceiveRowV2({ row, hidden }: {
+  row: Extract<ActivityRow, { kind: 'received-unattributed' }>; hidden: boolean
+}) {
+  const seen = `first seen ${firstSeenLabel(row.timestamp)}`
+  const note = row.message !== null
+    ? `“${row.message}” · sender unknown · ${seen}`
+    : `Sender unknown · ${seen}`
+  return <ActivityRowShell hidden={hidden} row={{
+    id: row.id, direction: 'in', title: 'Received', note,
+    status: 'received', amountMicrotari: row.amountMicrotari,
+  }} />
+}
+
 /** One row, whichever kind it is. */
 function ActivityRowFor({ row, hidden }: { row: ActivityRow; hidden: boolean }) {
   switch (row.kind) {
@@ -174,6 +212,7 @@ function ActivityRowFor({ row, hidden }: { row: ActivityRow; hidden: boolean }) 
     case 'swap': return <SwapRowV2 row={row} hidden={hidden} />
     case 'faucet': return <FaucetRowV2 row={row} hidden={hidden} />
     case 'received': return <ReceivedRowV2 row={row} hidden={hidden} />
+    case 'received-unattributed': return <UnattributedReceiveRowV2 row={row} hidden={hidden} />
   }
 }
 
@@ -1002,9 +1041,29 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
       error: sendValidationError || undefined,
     }
 
+  // ── RECONCILED RECEIVES ──
+  //
+  // The one place the wallet says money arrived without a message to prove it. Everything the
+  // guards refuse stays out: reconcile returns `receives: []` whenever the journal cannot be
+  // reasoned from, and suppressed UTXOs are deliberately NOT surfaced — a balance that is already
+  // correct needs no apology, and "you may have hidden receives" would be noise.
+  //
+  // `knownReceiveUtxoIds` is what stops a chat payment appearing twice: those UTXOs are owned and
+  // are not our own outputs, so without this they would be classified as unattributed receives and
+  // shown beside the chat row that already names the sender.
+  const reconciled = useMemo(() => reconcile({
+    owned: scan.utxos,
+    journal,
+    ledger: loadLedger(address ?? ''),
+    epoch: loadEpoch(address ?? ''),
+    knownReceiveUtxoIds: messages
+      .filter(m => m.direction === 'received' && m.payment?.utxoId)
+      .map(m => m.payment!.utxoId),
+  }).receives, [scan.utxos, journal, address, messages])
+
   // Live, without a reload: the journal is written straight to localStorage by the send, move and
   // faucet paths, and useJournal subscribes to it. See hooks/useJournal.
-  const activity = buildActivity(journal, txHistory, messages)
+  const activity = buildActivity(journal, txHistory, messages, reconciled)
 
   const body = (
     <WalletModalV2

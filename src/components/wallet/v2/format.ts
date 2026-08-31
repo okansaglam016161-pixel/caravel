@@ -72,3 +72,24 @@ export function formatCooldown(ms: number): string {
   if (m > 0) return `${m}m ${sec}s`
   return `${sec}s`
 }
+
+/**
+ * The date a UTXO was first observed — DATE ONLY, and deliberately so.
+ *
+ * ── WHY THERE IS NO TIME OF DAY ──────────────────────────────────────────────
+ *
+ * This labels when a complete scan first REPORTED an output, not when anybody sent it. Those can
+ * be far apart: nothing is observed while the app is closed, so a payment made on Tuesday and
+ * first seen on Friday is dated Friday. Rendering "14:32" beside it would claim a precision the
+ * number does not have and would read as the moment the payment happened — which is the one thing
+ * a first-seen must never be mistaken for. A bare date is honest about its own resolution.
+ *
+ * The year appears only when it is not the current one, so the common case stays short.
+ */
+export function firstSeenLabel(ts: number, now = Date.now()): string {
+  const d = new Date(ts)
+  const sameYear = d.getFullYear() === new Date(now).getFullYear()
+  return d.toLocaleDateString([], sameYear
+    ? { day: 'numeric', month: 'short' }
+    : { day: 'numeric', month: 'short', year: 'numeric' })
+}

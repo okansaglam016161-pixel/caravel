@@ -6,7 +6,7 @@
 // rather than in crypto.
 
 import { describe, expect, it } from 'vitest'
-import { fmt2, fmt6, toInput, formatCooldown } from './format'
+import { fmt2, fmt6, toInput, formatCooldown, firstSeenLabel } from './format'
 
 describe('fmt2', () => {
   it('formats an ordinary balance with grouping', () => {
@@ -95,5 +95,37 @@ describe('formatCooldown', () => {
     // wallet only ever reaches the seconds branch.
     expect(formatCooldown(3_600_000)).toBe('1h 0m')
     expect(formatCooldown(11_520_000)).toBe('3h 12m')
+  })
+})
+
+// ── The first-seen date ───────────────────────────────────────────────────────
+//
+// This labels when a scan first REPORTED an output, not when anybody sent it. Nothing is observed
+// while the app is closed, so the two can be days apart — which is why there is no time of day
+// here. A "14:32" beside a first-seen claims a precision the number does not have and reads as the
+// moment the payment happened, which is the one thing it must never be mistaken for.
+
+describe('firstSeenLabel', () => {
+  const AUG_31_2026 = new Date(2026, 7, 31, 14, 32).getTime()
+
+  it('renders a bare date — never a time of day', () => {
+    const label = firstSeenLabel(AUG_31_2026, AUG_31_2026)
+    expect(label).not.toMatch(/\d{1,2}:\d{2}/)
+    expect(label).toMatch(/31/)
+  })
+
+  it('omits the year in the current year, and includes it otherwise', () => {
+    const nowIn2026 = new Date(2026, 11, 1).getTime()
+    expect(firstSeenLabel(AUG_31_2026, nowIn2026)).not.toMatch(/2026/)
+    const nowIn2027 = new Date(2027, 0, 5).getTime()
+    expect(firstSeenLabel(AUG_31_2026, nowIn2027)).toMatch(/2026/)
+  })
+
+  it('shows the same date whatever the time of day it was seen', () => {
+    // The resolution the value actually has: a UTXO seen at 00:05 and one seen at 23:55 are both
+    // just "that day" as far as anything knowable is concerned.
+    const early = new Date(2026, 7, 31, 0, 5).getTime()
+    const late = new Date(2026, 7, 31, 23, 55).getTime()
+    expect(firstSeenLabel(early, AUG_31_2026)).toBe(firstSeenLabel(late, AUG_31_2026))
   })
 })

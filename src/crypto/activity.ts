@@ -16,6 +16,7 @@
 import { sortKey, type CaravelMessage } from '../messaging/types'
 import type { SentEntry } from './txHistory'
 import type { JournalEntry, JournalOutcome } from './journal'
+import type { ReconciledReceive } from './reconcile'
 import * as nip19 from 'nostr-tools/nip19'
 
 // npub1abcd…wxyz — never throws (blank/invalid hex falls back to a raw prefix).
@@ -40,8 +41,14 @@ function shortAddr(addr: string): string {
  */
 export type ActivityOutcome = JournalOutcome | 'unknown'
 
-/** Where a row's knowledge came from. Different sources deserve different trust — see the sort. */
-export type ActivitySource = 'local-journal' | 'chat-ref'
+/**
+ * Where a row's knowledge came from. Different sources deserve different trust — see the sort.
+ *
+ * `chain` is the weakest and the most careful: an output we own that nothing accounts for. It can
+ * state an amount and a first-seen and nothing else, because nothing else is knowable — see the
+ * `received-unattributed` row.
+ */
+export type ActivitySource = 'local-journal' | 'chat-ref' | 'chain'
 
 export type ActivityRow =
   | {
@@ -99,6 +106,34 @@ export type ActivityRow =
       source: ActivitySource
       txId: string | null
     }
+  /**
+   * Money that arrived from somebody this wallet cannot name.
+   *
+   * ── IT HAS NO COUNTERPARTY FIELD, AND THAT IS THE POINT ─────────────────────
+   *
+   * A confidential output carries no sender. This row is what reconciliation produces after
+   * subtracting every output we made ourselves and everything another source already attributed —
+   * so it is genuinely a payment, and genuinely from nobody we can identify. Giving the variant
+   * nowhere to put a sender makes an invented one unrepresentable rather than merely unwritten,
+   * the same way the settling total carries no figure.
+   *
+   * `timestamp` IS A FIRST-SEEN, not a send time. Nothing is observed while the app is closed, so
+   * the two can be days apart — see firstSeenLabel, which renders it without a time of day for
+   * exactly that reason.
+   */
+  | {
+      kind: 'received-unattributed'
+      id: string
+      /** When a complete scan first reported this output. NEVER when it was sent. */
+      timestamp: number
+      /** Decrypted from the UTXO by the scan. Exact. */
+      amountMicrotari: bigint
+      /** The sender's own words, if they left any. The only account of this payment that exists. */
+      message: string | null
+      /** `memo` when the sender wrote something — proof it is not our own output. */
+      confidence: 'memo' | 'inferred'
+      source: ActivitySource
+    }
 
 /** txHistory's outcome vocabulary, normalised onto the journal's. One table, one direction. */
 const LEGACY_OUTCOME: Record<'Commit' | 'Reject' | 'Timeout', JournalOutcome> = {
@@ -137,7 +172,10 @@ function fromJournal(e: JournalEntry): ActivityRow | null {
       return { kind: 'swap', ...common, to: 'public' }
     case 'faucet':
       return { kind: 'faucet', ...common }
-    // Written by nothing yet — the reconciliation phase's output. Ignored rather than guessed at.
+    // NOT PRODUCED FROM THE JOURNAL. A reconciled receive is DERIVED — recomputed from the current
+    // scan, journal, ledger and epoch on every render — rather than written down, because a stored
+    // one would go stale the moment its UTXO is spent or a guard changes. It reaches the list via
+    // `reconciled` below instead. The kind stays in the union as the record of that decision.
     case 'receive':
       return null
     // RECORDED, NOT DISPLAYED. A chat payment is journalled so its change output can be subtracted
@@ -176,6 +214,12 @@ export function buildActivity(
   journal: JournalEntry[],
   sent: SentEntry[],
   messages: CaravelMessage[],
+  /**
+   * Receives reconciliation could vouch for. Already stripped of our own outputs and of anything
+   * chat attributed, so nothing here can collide with a row from another source — a reconciled
+   * receive has no txId to dedupe on anyway; it is a UTXO, not a transaction we made.
+   */
+  reconciled: readonly ReconciledReceive[] = [],
 ): ActivityRow[] {
   const rows: ActivityRow[] = []
   const claimedTxIds = new Set<string>()
@@ -209,6 +253,21 @@ export function buildActivity(
       outcome: LEGACY_OUTCOME[e.outcome],
       source: 'local-journal',
       txId: e.txHash,
+    })
+  }
+
+  // Reconciled receives. Deliberately NOT deduped against anything: reconcile already removed our
+  // own outputs and every UTXO chat had attributed, so what arrives here is by construction not
+  // represented by any other row.
+  for (const r of reconciled) {
+    rows.push({
+      kind: 'received-unattributed',
+      id: r.utxoId,
+      timestamp: r.firstSeenAt,
+      amountMicrotari: r.amountMicrotari,
+      message: r.message,
+      confidence: r.confidence,
+      source: 'chain',
     })
   }
 

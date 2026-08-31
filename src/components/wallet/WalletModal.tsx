@@ -49,6 +49,7 @@ import { ActivityRowShell, type ActivityStatus, type SendSource, type SendView }
 import { useJournal } from '../../hooks/useJournal'
 import { useUtxoLedger } from '../../hooks/useUtxoLedger'
 import { useJournalCoverage } from '../../hooks/useJournalCoverage'
+import { useReconcileDevtools } from '../../hooks/useReconcileDevtools'
 import { plainError } from './v2/plainError'
 import { resolveSendPath } from './v2/sendPath'
 import { GenerationGuard } from './v2/generation'
@@ -204,6 +205,11 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
   // Declares that this build records every output-creating action, then freezes the set of UTXOs
   // that predate it. Both are one-time per wallet and invisible — see useJournalCoverage.
   useJournalCoverage(address, scan)
+
+  // Dev only, and compiled out of a production build: exposes window.__caravelReconcile() so the
+  // pure reconciliation can be run against this wallet's real state from the console. Nothing in
+  // the app calls reconcile yet — the display is stage F.
+  useReconcileDevtools(address, scan, messages)
 
   const [tab, setTab] = useState<WalletTab>('overview')
   const [addrCopied, setAddrCopied] = useState(false)

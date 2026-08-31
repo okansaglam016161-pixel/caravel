@@ -47,6 +47,7 @@ import type { EntryProps } from './v2/move'
 import type { Dir } from './v2/moveCopy'
 import { ActivityRowShell, type ActivityStatus, type SendSource, type SendView } from './v2/panels'
 import { useJournal } from '../../hooks/useJournal'
+import { useUtxoLedger } from '../../hooks/useUtxoLedger'
 import { plainError } from './v2/plainError'
 import { resolveSendPath } from './v2/sendPath'
 import { GenerationGuard } from './v2/generation'
@@ -193,6 +194,11 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
   // The journal, live. Subscribed rather than held in context: it is written to localStorage by
   // the call sites below, none of which pass through React state on the way.
   const journal = useJournal(address)
+
+  // Records what each completed scan saw. Invisible in this phase — the ledger exists so a later
+  // phase can ask "was this UTXO already here before the journal covered everything", which is the
+  // question that stops the user's own change being reported as a stranger's payment.
+  useUtxoLedger(address, scan)
 
   const [tab, setTab] = useState<WalletTab>('overview')
   const [addrCopied, setAddrCopied] = useState(false)

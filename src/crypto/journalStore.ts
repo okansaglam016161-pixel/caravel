@@ -25,8 +25,9 @@
 // password already exist in walletCrypto.ts; the cost is a journal unreadable while locked.
 
 import {
-  applyPatch, draftToEntry,
+  applyPatch, coverageComplete, draftToEntry,
   type JournalDraft, type JournalEntry, type JournalEpoch, type JournalPatch,
+  type OutputCreatingAction,
 } from './journal'
 
 // ── Serialization ─────────────────────────────────────────────────────────────
@@ -103,9 +104,17 @@ export function loadEpoch(walletAddress: string): JournalEpoch | null {
   try {
     const raw = localStorage.getItem(epochKey(walletAddress))
     if (raw) {
-      const parsed = JSON.parse(raw) as JournalEpoch
+      const parsed = JSON.parse(raw) as Partial<JournalEpoch>
       if (typeof parsed?.startedAt === 'number') {
-        stored = { startedAt: parsed.startedAt, degradedAt: parsed.degradedAt ?? null }
+        stored = {
+          startedAt: parsed.startedAt,
+          degradedAt: parsed.degradedAt ?? null,
+          // MIGRATION, AND IT IS A NO-OP BY DESIGN. An epoch written before coverage tracking
+          // existed reads back as covering nothing, which classifies nothing — the safe default.
+          // There is no rewrite and no version bump: absence already means the right thing.
+          covers: Array.isArray(parsed.covers) ? parsed.covers : [],
+          coverageCompleteAt: typeof parsed.coverageCompleteAt === 'number' ? parsed.coverageCompleteAt : null,
+        }
       }
     }
   } catch { stored = null }
@@ -127,9 +136,37 @@ function saveEpoch(walletAddress: string, epoch: JournalEpoch): void {
 export function ensureEpoch(walletAddress: string, now = Date.now()): JournalEpoch {
   const existing = loadEpoch(walletAddress)
   if (existing) return existing
-  const fresh: JournalEpoch = { startedAt: now, degradedAt: null }
+  const fresh: JournalEpoch = { startedAt: now, degradedAt: null, covers: [], coverageCompleteAt: null }
   saveEpoch(walletAddress, fresh)
   return fresh
+}
+
+/**
+ * Declare that the journal now records these output-creating actions.
+ *
+ * NO CALLER YET. Stage D calls it, once the chat and @name capture actually ship — declaring
+ * coverage before the recording exists would be the one lie this whole apparatus is built to
+ * prevent, so the ordering is the guard.
+ *
+ * `coverageCompleteAt` is stamped the first time the set becomes complete and never moves after.
+ * It is the threshold every classification is measured against, so a later re-declaration must not
+ * be able to slide it forward and quietly re-admit UTXOs that arrived in between.
+ */
+export function recordCoverage(
+  walletAddress: string,
+  actions: readonly OutputCreatingAction[],
+  now = Date.now(),
+): JournalEpoch {
+  const epoch = ensureEpoch(walletAddress, now)
+  const covers = [...new Set([...epoch.covers, ...actions])]
+  const nowComplete = coverageComplete(covers)
+  const next: JournalEpoch = {
+    ...epoch,
+    covers,
+    coverageCompleteAt: epoch.coverageCompleteAt ?? (nowComplete ? now : null),
+  }
+  saveEpoch(walletAddress, next)
+  return next
 }
 
 /**

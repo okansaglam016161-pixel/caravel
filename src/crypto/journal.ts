@@ -115,38 +115,91 @@ export interface JournalPatch {
 }
 
 /**
+ * Every action that can create a UTXO this wallet owns.
+ *
+ * ── A LIST, NOT A BOOLEAN, AND THAT IS THE POINT ─────────────────────────────
+ *
+ * "Is coverage complete" could have been one flag. It is a set of names measured against this
+ * array because the failure this guards against is a FUTURE one: someone adds a sixth way to
+ * create an owned output and does not journal it. With a flag, every existing epoch keeps claiming
+ * completeness and the new action's change output silently becomes a phantom receive. With this,
+ * adding a member here instantly makes every stored epoch incomplete — the wallet stops
+ * classifying until the new action is actually recorded, which is the safe direction and requires
+ * no migration to get right.
+ *
+ * `send` covers both paths deliberately. The private path creates change; the public path creates
+ * nothing for us. They are one action either way, and journalled by one call site.
+ */
+export const OUTPUT_CREATING_ACTIONS = [
+  'send',
+  'make-private',
+  'make-public',
+  'faucet',
+  /** A payment sent from chat. Recorded for subtraction only, never displayed in wallet Activity. */
+  'chat-payment',
+  /** An @name registration. Spends one UTXO and returns exactly one change output to us. */
+  'ons-register',
+] as const
+
+export type OutputCreatingAction = (typeof OUTPUT_CREATING_ACTIONS)[number]
+
+/** Does this set name every way an owned output can come into existence? */
+export function coverageComplete(covers: readonly OutputCreatingAction[]): boolean {
+  return OUTPUT_CREATING_ACTIONS.every(a => covers.includes(a))
+}
+
+/**
  * The journal's coverage window.
  *
- * ── WHAT THIS IS ACTUALLY FOR ───────────────────────────────────────────────
+ * ── TWO DIFFERENT QUESTIONS, AND BOTH MUST BE YES ───────────────────────────
  *
- * The reconciliation phase may only call a leftover UTXO a "receive" if the journal is known to
- * have recorded every output this wallet made for itself. That is not true of a wallet that
- * transacted before journalling existed, of a restored wallet on a new device, of a second device,
- * or of a wallet whose storage was cleared. In all of those the journal is simply younger than the
- * funds, and classifying against it would report the user's own change as money from a stranger —
- * which is exactly the failure that got the previous scan-derived Activity reverted.
+ * HEALTH — `startedAt` and `degradedAt` — asks whether the journal recorded what it was ASKED to
+ * record. A wallet that transacted before journalling existed, one restored on a new device, a
+ * second device, or one whose storage was cleared all fail this, and classifying against any of
+ * them would report the user's own change as money from a stranger.
  *
- * `startedAt` handles the young-journal cases. `degradedAt` handles the dangerous one: every store
- * in this app swallows quota errors, so a write can fail in silence and leave a hole with no other
- * trace. The first failed write stamps this permanently and reconciliation must refuse thereafter.
+ * COVERAGE — `covers` and `coverageCompleteAt` — asks whether it was asked to record EVERYTHING.
+ * A perfectly healthy journal that was never told about chat payments or @name registrations
+ * reports full health while missing their change outputs, which is exactly the failure mode. That
+ * is why the two are separate fields and not one.
+ *
+ * `coverageCompleteAt` is the moment the second became true, and it is the threshold the guard
+ * actually uses — it is always at or after `startedAt`, so it is the stricter of the two.
  */
 export interface JournalEpoch {
   /** When journalling began for this wallet. Nothing older than this may be reasoned about. */
   startedAt: number
   /** First moment a journal write failed. Non-null means the record has a hole in it. */
   degradedAt: number | null
+  /**
+   * Which output-creating actions this journal records.
+   *
+   * Empty on every epoch written before coverage tracking existed — which is the correct default
+   * and the safe direction: no coverage, nothing classifiable, no migration required.
+   */
+  covers: OutputCreatingAction[]
+  /** When `covers` first became complete. Null while it is not. */
+  coverageCompleteAt: number | null
 }
 
 /**
- * Is the journal trustworthy enough to classify an observation made at `observedAt`?
+ * May an observation made at `observedAt` be reasoned about?
  *
- * Phase 1 records the epoch and calls this nowhere; the reconciliation phase is its only consumer.
- * It lives here, with the type, so the rule is written down once next to what it reasons about.
+ * The epoch half of the classification guard: healthy, complete, and after completeness. The other
+ * half is set membership — `isPreEpoch` in utxoLedger — and reconciliation requires BOTH. That is
+ * deliberate rather than redundant: this one compares timestamps, and a timestamp can be fooled by
+ * an app that was closed or a scan that came back truncated, both of which make an old UTXO look
+ * new. The baseline set cannot be fooled that way. Two independent guards, failing in the same
+ * direction.
  */
 export function journalCovers(epoch: JournalEpoch | null, observedAt: number): boolean {
-  if (epoch === null) return false          // never journalled — nothing may be claimed
-  if (epoch.degradedAt !== null) return false  // a known hole — refuse rather than guess
-  return observedAt >= epoch.startedAt
+  if (epoch === null) return false               // never journalled — nothing may be claimed
+  if (epoch.degradedAt !== null) return false    // a known hole — refuse rather than guess
+  if (!coverageComplete(epoch.covers)) return false
+  if (epoch.coverageCompleteAt === null) return false
+  // The stricter of the two thresholds. Anything first seen before coverage completed may be the
+  // change output of an action nobody was recording at the time.
+  return observedAt >= epoch.coverageCompleteAt
 }
 
 /** A local id. `randomUUID` where available, with a fallback for older/insecure contexts. */

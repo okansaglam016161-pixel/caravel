@@ -8,10 +8,10 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
   __resetSessionDegradationsForTests,
-  beginEntry, ensureEpoch, journalSnapshot, loadEpoch, loadJournal, markDegraded, settleEntry,
-  subscribeJournal,
+  beginEntry, ensureEpoch, journalSnapshot, loadEpoch, loadJournal, markDegraded, recordCoverage,
+  settleEntry, subscribeJournal,
 } from './journalStore'
-import { journalCovers, type JournalDraft } from './journal'
+import { OUTPUT_CREATING_ACTIONS, journalCovers, type JournalDraft } from './journal'
 
 // localStorage does not exist under Vitest's node environment — the same in-memory Storage the
 // other crypto specs use, with a switch that makes writes start failing on demand.
@@ -145,6 +145,22 @@ describe('the two-phase write — the throwing-action hole', () => {
 })
 
 describe('the epoch', () => {
+  it('starts covering NOTHING — the safe default', () => {
+    // Stage B adds the field and the guard; it declares no coverage. Nothing is classifiable until
+    // the chat and @name capture actually ship and Stage D says so.
+    ensureEpoch(ADDR, 1_000)
+    expect(loadEpoch(ADDR)).toMatchObject({ covers: [], coverageCompleteAt: null })
+  })
+
+  it('migrates a pre-coverage epoch to covering nothing, without rewriting it', () => {
+    // What every wallet in the wild holds right now: a Phase 1 epoch with no coverage fields.
+    localStorage.setItem('caravel.journal.epoch.v1.' + ADDR,
+      JSON.stringify({ startedAt: 1_000, degradedAt: null }))
+    const epoch = loadEpoch(ADDR)
+    expect(epoch).toMatchObject({ startedAt: 1_000, covers: [], coverageCompleteAt: null })
+    expect(journalCovers(epoch, 9_999)).toBe(false)
+  })
+
   it('is absent until the first write, then fixed', () => {
     expect(loadEpoch(ADDR)).toBeNull()
     const first = beginEntry(ADDR, DRAFT).entry.timestamp
@@ -260,5 +276,47 @@ describe('the React snapshot', () => {
     unsubscribe()
     beginEntry(ADDR, DRAFT)
     expect(calls).toBe(2)
+  })
+})
+
+describe('recordCoverage — the writer stage D will call', () => {
+  it('accumulates action types rather than replacing them', () => {
+    recordCoverage(ADDR, ['send', 'faucet'], 1_000)
+    const epoch = recordCoverage(ADDR, ['make-private'], 2_000)
+    expect(epoch.covers).toEqual(expect.arrayContaining(['send', 'faucet', 'make-private']))
+  })
+
+  it('does not stamp a completion moment while the set is partial', () => {
+    const epoch = recordCoverage(ADDR, ['send', 'faucet'], 1_000)
+    expect(epoch.coverageCompleteAt).toBeNull()
+    expect(journalCovers(epoch, 9_999)).toBe(false)
+  })
+
+  it('stamps the moment the set becomes complete, and only then', () => {
+    recordCoverage(ADDR, OUTPUT_CREATING_ACTIONS.slice(0, -1), 1_000)
+    expect(loadEpoch(ADDR)?.coverageCompleteAt).toBeNull()
+    const done = recordCoverage(ADDR, [OUTPUT_CREATING_ACTIONS.at(-1)!], 5_000)
+    expect(done.coverageCompleteAt).toBe(5_000)
+    expect(journalCovers(done, 5_000)).toBe(true)
+  })
+
+  it('never slides the completion moment forward on a re-declaration', () => {
+    // The threshold every classification is measured against. Moving it would quietly re-admit
+    // every UTXO that arrived between the real completion and the re-declaration.
+    recordCoverage(ADDR, OUTPUT_CREATING_ACTIONS, 5_000)
+    const again = recordCoverage(ADDR, OUTPUT_CREATING_ACTIONS, 9_000)
+    expect(again.coverageCompleteAt).toBe(5_000)
+  })
+
+  it('does not un-degrade a holed journal', () => {
+    markDegraded(ADDR, 2_000)
+    const epoch = recordCoverage(ADDR, OUTPUT_CREATING_ACTIONS, 5_000)
+    expect(epoch.degradedAt).toBe(2_000)
+    expect(journalCovers(epoch, 9_999)).toBe(false)
+  })
+
+  it('is per wallet', () => {
+    recordCoverage(ADDR, OUTPUT_CREATING_ACTIONS, 5_000)
+    expect(loadEpoch(OTHER)).toBeNull()
   })
 })

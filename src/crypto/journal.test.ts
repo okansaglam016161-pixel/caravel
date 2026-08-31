@@ -6,8 +6,8 @@
 
 import { describe, expect, it } from 'vitest'
 import {
-  applyPatch, draftToEntry, journalCovers, newJournalId,
-  type JournalDraft, type JournalEntry,
+  OUTPUT_CREATING_ACTIONS, applyPatch, coverageComplete, draftToEntry, journalCovers, newJournalId,
+  type JournalDraft, type JournalEntry, type JournalEpoch,
 } from './journal'
 
 const DRAFT: JournalDraft = {
@@ -85,27 +85,87 @@ describe('applyPatch — only ever adds knowledge', () => {
   })
 })
 
-describe('journalCovers — the guard the reconciliation phase will lean on', () => {
+/** A fully healthy, fully covered epoch. Each test below breaks exactly one thing. */
+function epoch(over: Partial<JournalEpoch> = {}): JournalEpoch {
+  return {
+    startedAt: 1_000,
+    degradedAt: null,
+    covers: [...OUTPUT_CREATING_ACTIONS],
+    coverageCompleteAt: 2_000,
+    ...over,
+  }
+}
+
+describe('coverageComplete', () => {
+  it('is false for an epoch that covers nothing', () => {
+    expect(coverageComplete([])).toBe(false)
+  })
+
+  it('is false while any single action is missing', () => {
+    // The property that matters for the future: add a seventh way to create an owned output and
+    // every stored epoch goes incomplete at once, with no migration and no silent assumption.
+    for (const missing of OUTPUT_CREATING_ACTIONS) {
+      expect(coverageComplete(OUTPUT_CREATING_ACTIONS.filter(a => a !== missing))).toBe(false)
+    }
+  })
+
+  it('is true only with the whole set', () => {
+    expect(coverageComplete([...OUTPUT_CREATING_ACTIONS])).toBe(true)
+  })
+
+  it('names chat payments and @name registrations — the two that were missing', () => {
+    // Both create an owned change output and neither was journalled before Phase 3. Naming them
+    // here is what stops a healthy-but-blind journal claiming completeness.
+    expect(OUTPUT_CREATING_ACTIONS).toContain('chat-payment')
+    expect(OUTPUT_CREATING_ACTIONS).toContain('ons-register')
+  })
+})
+
+describe('journalCovers — the guard reconciliation leans on', () => {
   it('claims nothing when there is no journal at all', () => {
     // A wallet that transacted before journalling existed. Every UTXO it holds is unexplained, and
     // classifying any of them would report the user's own change as a stranger's payment.
     expect(journalCovers(null, 5_000)).toBe(false)
   })
 
-  it('claims nothing about anything older than the journal', () => {
-    expect(journalCovers({ startedAt: 1_000, degradedAt: null }, 999)).toBe(false)
+  it('claims nothing while coverage is empty — today’s state for every wallet', () => {
+    expect(journalCovers(epoch({ covers: [], coverageCompleteAt: null }), 9_999)).toBe(false)
   })
 
-  it('covers an observation made after journalling began', () => {
-    expect(journalCovers({ startedAt: 1_000, degradedAt: null }, 1_000)).toBe(true)
-    expect(journalCovers({ startedAt: 1_000, degradedAt: null }, 9_999)).toBe(true)
+  it('claims nothing while ANY output-creating action is unrecorded', () => {
+    // A perfectly HEALTHY journal that was never asked about chat payments still misses their
+    // change outputs. Health and coverage are different questions and both must be yes.
+    for (const missing of OUTPUT_CREATING_ACTIONS) {
+      const partial = OUTPUT_CREATING_ACTIONS.filter(a => a !== missing)
+      expect(journalCovers(epoch({ covers: partial }), 9_999)).toBe(false)
+    }
+  })
+
+  it('claims nothing if the set is complete but the moment was never stamped', () => {
+    expect(journalCovers(epoch({ coverageCompleteAt: null }), 9_999)).toBe(false)
   })
 
   it('refuses EVERYTHING once a write has been lost, however recent', () => {
-    // The dangerous case: a dropped write leaves a hole with no other trace, and a hole turns our
-    // own output into a fabricated receive. One failure disqualifies the whole record.
-    const holed = { startedAt: 1_000, degradedAt: 2_000 }
-    expect(journalCovers(holed, 9_999)).toBe(false)
-    expect(journalCovers(holed, 1_500)).toBe(false)
+    // A dropped write leaves a hole with no other trace, and a hole turns our own output into a
+    // fabricated receive. One failure disqualifies the whole record.
+    expect(journalCovers(epoch({ degradedAt: 3_000 }), 9_999)).toBe(false)
+    expect(journalCovers(epoch({ degradedAt: 3_000 }), 2_500)).toBe(false)
+  })
+
+  it('claims nothing about anything first seen BEFORE coverage completed', () => {
+    // The output of an action nobody was recording at the time.
+    expect(journalCovers(epoch(), 1_999)).toBe(false)
+    expect(journalCovers(epoch(), 1_500)).toBe(false)   // after startedAt, before coverage
+  })
+
+  it('measures against coverageCompleteAt, not startedAt — the stricter threshold', () => {
+    const e = epoch({ startedAt: 1_000, coverageCompleteAt: 5_000 })
+    expect(journalCovers(e, 2_000)).toBe(false)   // journalling had begun, coverage had not
+    expect(journalCovers(e, 5_000)).toBe(true)
+  })
+
+  it('is true ONLY under the full conjunction', () => {
+    expect(journalCovers(epoch(), 2_000)).toBe(true)
+    expect(journalCovers(epoch(), 9_999)).toBe(true)
   })
 })

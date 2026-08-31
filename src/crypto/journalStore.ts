@@ -151,6 +151,49 @@ export function markDegraded(walletAddress: string, now = Date.now()): JournalEp
   return next
 }
 
+// ── Reading it from React ─────────────────────────────────────────────────────
+//
+// The journal is written straight to localStorage by the call sites, with no React state in
+// between — which is right for a ledger and useless for a list that has to update. These three
+// give `useSyncExternalStore` what it needs: a subscription, and a snapshot.
+//
+// ── THE SNAPSHOT MUST BE REFERENTIALLY STABLE ────────────────────────────────
+//
+// `loadJournal` parses JSON and returns a NEW array every call. Handing that to
+// useSyncExternalStore re-renders forever: React compares snapshots by identity, sees a different
+// array each time, and re-reads. So the parsed result is cached and only invalidated by a write.
+// Two calls with no write between them return the identical array, and there is a test for it.
+
+const listeners = new Set<() => void>()
+
+let cachedAddress: string | null = null
+let cachedEntries: JournalEntry[] = []
+let cacheValid = false
+
+/** Shared empty array, so a caller with no wallet also gets a stable reference. */
+const NO_ENTRIES: JournalEntry[] = []
+
+export function subscribeJournal(onChange: () => void): () => void {
+  listeners.add(onChange)
+  return () => { listeners.delete(onChange) }
+}
+
+/** The current journal, cached. Same array back until something writes. */
+export function journalSnapshot(walletAddress: string | null): JournalEntry[] {
+  if (walletAddress === null) return NO_ENTRIES
+  if (cacheValid && cachedAddress === walletAddress) return cachedEntries
+  cachedEntries = loadJournal(walletAddress)
+  cachedAddress = walletAddress
+  cacheValid = true
+  return cachedEntries
+}
+
+/** Invalidate and notify. Called by every write below — there is no other way to mutate. */
+function emitChange(): void {
+  cacheValid = false
+  for (const l of listeners) l()
+}
+
 // ── Mutation ──────────────────────────────────────────────────────────────────
 
 /**
@@ -170,6 +213,7 @@ export function beginEntry(
   const next = [entry, ...loadJournal(walletAddress)]
   const ok = save(walletAddress, next)
   if (!ok) markDegraded(walletAddress, now)
+  emitChange()
   return { entry, ok }
 }
 
@@ -197,10 +241,14 @@ export function settleEntry(
   if (!found) return { ok: false, found: false }
   const ok = save(walletAddress, next)
   if (!ok) markDegraded(walletAddress, now)
+  emitChange()
   return { ok, found: true }
 }
 
 /** Test seam only — clears the in-session degradation record. Never called by the app. */
 export function __resetSessionDegradationsForTests(): void {
   sessionDegradations.clear()
+  cacheValid = false
+  cachedAddress = null
+  cachedEntries = []
 }

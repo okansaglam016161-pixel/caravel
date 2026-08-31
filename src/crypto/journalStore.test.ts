@@ -8,7 +8,8 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
   __resetSessionDegradationsForTests,
-  beginEntry, ensureEpoch, loadEpoch, loadJournal, markDegraded, settleEntry,
+  beginEntry, ensureEpoch, journalSnapshot, loadEpoch, loadJournal, markDegraded, settleEntry,
+  subscribeJournal,
 } from './journalStore'
 import { journalCovers, type JournalDraft } from './journal'
 
@@ -206,5 +207,58 @@ describe('the epoch', () => {
     markDegraded(ADDR, 8_000)
     beginEntry(ADDR, DRAFT)
     expect(loadEpoch(ADDR)?.degradedAt).toBe(2_000)
+  })
+})
+
+describe('the React snapshot', () => {
+  // useSyncExternalStore compares snapshots BY IDENTITY. `loadJournal` parses JSON and returns a
+  // fresh array every call, so handing it over unmemoised re-renders forever: React sees a new
+  // array, re-reads, sees another new array, and never settles. These pin the cache that prevents
+  // it — and pin that a write still invalidates it, or the list would never update.
+
+  it('returns the IDENTICAL array when nothing has been written', () => {
+    beginEntry(ADDR, DRAFT)
+    const a = journalSnapshot(ADDR)
+    const b = journalSnapshot(ADDR)
+    expect(a).toBe(b)                 // reference equality, not deep equality
+  })
+
+  it('returns a different array after a write', () => {
+    const a = journalSnapshot(ADDR)
+    beginEntry(ADDR, DRAFT)
+    expect(journalSnapshot(ADDR)).not.toBe(a)
+  })
+
+  it('invalidates on a settle too, not only on a begin', () => {
+    const { entry } = beginEntry(ADDR, DRAFT)
+    const a = journalSnapshot(ADDR)
+    settleEntry(ADDR, entry.id, { outcome: 'committed' })
+    const b = journalSnapshot(ADDR)
+    expect(b).not.toBe(a)
+    expect(b[0].outcome).toBe('committed')
+  })
+
+  it('re-reads when the wallet changes', () => {
+    beginEntry(ADDR, DRAFT)
+    const mine = journalSnapshot(ADDR)
+    expect(journalSnapshot(OTHER)).toEqual([])
+    expect(journalSnapshot(ADDR)).not.toBe(mine)   // cache is per address, so this re-parses
+  })
+
+  it('gives a stable empty array when there is no wallet', () => {
+    // The locked case. A fresh [] each call would re-render forever just as surely.
+    expect(journalSnapshot(null)).toBe(journalSnapshot(null))
+    expect(journalSnapshot(null)).toEqual([])
+  })
+
+  it('notifies subscribers on every write, and stops after unsubscribe', () => {
+    let calls = 0
+    const unsubscribe = subscribeJournal(() => { calls++ })
+    const { entry } = beginEntry(ADDR, DRAFT)
+    settleEntry(ADDR, entry.id, { outcome: 'committed' })
+    expect(calls).toBe(2)
+    unsubscribe()
+    beginEntry(ADDR, DRAFT)
+    expect(calls).toBe(2)
   })
 })

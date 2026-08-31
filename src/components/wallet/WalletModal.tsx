@@ -36,7 +36,7 @@ import {
   type PreparedPublicSend,
 } from '../../crypto/publicSend'
 import { parseOotleAddress } from '@tari-project/ootle-wasm'
-import { buildActivity, type ActivityRow } from '../../crypto/activity'
+import { buildActivity, type ActivityOutcome, type ActivityRow } from '../../crypto/activity'
 import { beginEntry, settleEntry } from '../../crypto/journalStore'
 import type { JournalOutcome } from '../../crypto/journal'
 import { usePaymentResolution } from '../../hooks/usePaymentResolution'
@@ -46,6 +46,7 @@ import type { BalanceView } from './v2/balances'
 import type { EntryProps } from './v2/move'
 import type { Dir } from './v2/moveCopy'
 import { ActivityRowShell, type ActivityStatus, type SendSource, type SendView } from './v2/panels'
+import { useJournal } from '../../hooks/useJournal'
 import { plainError } from './v2/plainError'
 import { resolveSendPath } from './v2/sendPath'
 import { GenerationGuard } from './v2/generation'
@@ -89,15 +90,58 @@ const JOURNAL_OUTCOME: Record<'Commit' | 'Reject' | 'Timeout', JournalOutcome> =
 // sends with message-linked payments and deliberately ignores the balance scan — a private output
 // carries no sender, so the scan cannot tell an incoming payment from our own change.
 
+/**
+ * The one place an outcome becomes a visual status.
+ *
+ * ONE TABLE, because three sources feed this list and a second mapping is where a `timeout` starts
+ * being drawn as a failure in one of them. A timeout is broadcast-and-undecided: it may still
+ * land, so it takes the calm amber `unconfirmed`, never the red.
+ */
+const STATUS_FOR: Record<ActivityOutcome, ActivityStatus> = {
+  committed: 'confirmed',
+  rejected: 'failed',
+  timeout: 'unconfirmed',
+  failed: 'failed',
+  // Journalled before submission and never closed — see ActivityStatus.
+  pending: 'attempted',
+  // A chat send: the message went out, and nothing here ever learned what the chain did.
+  unknown: 'sent',
+}
+
 function SentRowV2({ row, hidden }: { row: Extract<ActivityRow, { kind: 'sent' }>; hidden: boolean }) {
-  const status: ActivityStatus =
-    row.outcome === 'Reject' ? 'failed'
-    : row.outcome === 'Timeout' ? 'unconfirmed'
-    : row.outcome === null ? 'sent'      // a chat send — outcome not tracked
-    : 'confirmed'
   return <ActivityRowShell hidden={hidden} row={{
     id: row.id, direction: 'out', title: row.counterparty, note: row.note,
-    status, amountMicrotari: row.amountMicrotari,
+    status: STATUS_FOR[row.outcome], amountMicrotari: row.amountMicrotari,
+    titleAttr: row.counterpartyValue ?? undefined,
+  }} />
+}
+
+/**
+ * A move between the user's own balances — make private, or make public.
+ *
+ * `direction: 'internal'` is doing the load-bearing work: it suppresses the +/− sign, because the
+ * figure is what MOVED between two balances rather than a change in what the user holds. Only the
+ * fee actually left. See ActivityRowView.
+ *
+ * The wording comes from the structured `to`, not from a stored label, so the two directions
+ * cannot be swapped by an edit to either one — the same discipline the move flow's own copy holds.
+ */
+function SwapRowV2({ row, hidden }: { row: Extract<ActivityRow, { kind: 'swap' }>; hidden: boolean }) {
+  const from = row.to === 'private' ? 'public' : 'private'
+  return <ActivityRowShell hidden={hidden} row={{
+    id: row.id, direction: 'internal',
+    title: row.to === 'private' ? 'Made private' : 'Made public',
+    note: `${from} → ${row.to}`,
+    status: STATUS_FOR[row.outcome], amountMicrotari: row.amountMicrotari,
+  }} />
+}
+
+/** A faucet claim. A real inflow — value the wallet did not hold before — so it keeps its `+`. */
+function FaucetRowV2({ row, hidden }: { row: Extract<ActivityRow, { kind: 'faucet' }>; hidden: boolean }) {
+  return <ActivityRowShell hidden={hidden} row={{
+    id: row.id, direction: 'in', title: 'Received', note: 'Testnet faucet claim',
+    status: row.outcome === 'committed' ? 'received' : STATUS_FOR[row.outcome],
+    amountMicrotari: row.amountMicrotari,
   }} />
 }
 
@@ -116,7 +160,18 @@ function ReceivedRowV2({ row, hidden }: { row: Extract<ActivityRow, { kind: 'rec
   return <ActivityRowShell hidden={hidden} row={{
     id: row.id, direction: 'in', title: row.counterparty, note: row.note, status,
     amountMicrotari: state.kind === 'resolved' ? BigInt(state.amountMicrotari) : null,
+    titleAttr: row.counterpartyValue ?? undefined,
   }} />
+}
+
+/** One row, whichever kind it is. */
+function ActivityRowFor({ row, hidden }: { row: ActivityRow; hidden: boolean }) {
+  switch (row.kind) {
+    case 'sent': return <SentRowV2 row={row} hidden={hidden} />
+    case 'swap': return <SwapRowV2 row={row} hidden={hidden} />
+    case 'faucet': return <FaucetRowV2 row={row} hidden={hidden} />
+    case 'received': return <ReceivedRowV2 row={row} hidden={hidden} />
+  }
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -134,6 +189,10 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
     balanceHidden, setBalanceHidden,
     settles, isSettling, settleLagged, beginSettle, acknowledgeSettle,
   } = useWallet()
+
+  // The journal, live. Subscribed rather than held in context: it is written to localStorage by
+  // the call sites below, none of which pass through React state on the way.
+  const journal = useJournal(address)
 
   const [tab, setTab] = useState<WalletTab>('overview')
   const [addrCopied, setAddrCopied] = useState(false)
@@ -926,7 +985,9 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
       error: sendValidationError || undefined,
     }
 
-  const activity = buildActivity(txHistory, messages)
+  // Live, without a reload: the journal is written straight to localStorage by the send, move and
+  // faucet paths, and useJournal subscribes to it. See hooks/useJournal.
+  const activity = buildActivity(journal, txHistory, messages)
 
   const body = (
     <WalletModalV2
@@ -1004,9 +1065,7 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
         onViewActivity: () => { resetSend(); setTab('activity') },
       }}
       receive={{ address, copied: addrCopied, onCopy: copyAddr }}
-      activity={activity.map(row => row.kind === 'sent'
-    ? <SentRowV2 key={row.id} row={row} hidden={balanceHidden} />
-    : <ReceivedRowV2 key={row.id} row={row} hidden={balanceHidden} />)}
+      activity={activity.map(row => <ActivityRowFor key={row.id} row={row} hidden={balanceHidden} />)}
     />
   )
 

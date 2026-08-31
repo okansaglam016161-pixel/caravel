@@ -1087,16 +1087,33 @@ export function OnsPanel({ status, name, policyError, message, feeMicrotari, txI
 export type ActivityStatus =
   | 'confirmed' | 'sent' | 'failed' | 'unconfirmed'          // outflows
   | 'received' | 'checking' | 'spent' | 'unreadable' | 'pending'  // inflows
+  /**
+   * The action started and this wallet never learned how it ended.
+   *
+   * The journal writes a row BEFORE submitting, so a throw, a crash or a closed tab all leave one
+   * of these. NEUTRAL, NEVER RED: nothing is known to have gone wrong, and a permanent record that
+   * called an unknown outcome a failure would be its own lie. Distinct from `failed`, which is a
+   * network rejection we actually saw, and from `checking`, which is an amount still resolving.
+   */
+  | 'attempted'
 
 export interface ActivityRowView {
   id: string
-  direction: 'out' | 'in'
+  /**
+   * `internal` is a move between the user's OWN balances, and it exists so the amount can be shown
+   * WITHOUT a sign. Making 50 XTR public does not reduce holdings by 50 — it moves them, and the
+   * only value that leaves is the fee. A `−50` there would be a confident wrong figure of exactly
+   * the class this wallet refuses everywhere else.
+   */
+  direction: 'out' | 'in' | 'internal'
   /** "Sent to otl_esm_1t…f4a2", "Received from npub1abcd…wxyz". Already shortened by the caller. */
   title: string
   note: string
   status: ActivityStatus
   /** null when the amount is not known here — another device's send, or still being checked. */
   amountMicrotari: bigint | null
+  /** Full address/npub, for hover. The title line is abbreviated; this is not. */
+  titleAttr?: string
 }
 
 /**
@@ -1125,6 +1142,9 @@ const STATUS: Record<ActivityStatus, {
   failed:      { label: 'Failed',      ink: 'var(--danger-500)',    wash: 'rgba(var(--danger-rgb),0.12)',   signed: false, settled: false },
   spent:       { label: 'Spent',       ink: 'var(--text-muted-dim)', wash: 'var(--surface-void)',           signed: false, settled: false },
   unreadable:  { label: 'Unreadable',  ink: 'var(--text-muted-dim)', wash: 'var(--surface-void)',           signed: false, settled: false },
+  // NEUTRAL, deliberately sharing the muted treatment rather than the amber or the red. `signed`
+  // is false because an attempt whose outcome is unknown must not be drawn as value that moved.
+  attempted:   { label: 'Attempted',   ink: 'var(--text-muted-dim)', wash: 'var(--surface-void)',           signed: false, settled: false },
 }
 
 /**
@@ -1145,6 +1165,7 @@ const UNKNOWN_AMOUNT: Record<ActivityStatus, string> = {
   unconfirmed: 'Sent, not yet confirmed',
   failed:      'Nothing left your wallet',
   received:    'Amount not known here',
+  attempted:   'Started — outcome unknown',
 }
 
 /** The glyph in the row's tile. Direction for the ordinary cases, state for the rest. */
@@ -1158,6 +1179,11 @@ function RowGlyph({ row }: { row: ActivityRowView }) {
       ? <><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 3" /></>
     : row.status === 'unreadable'
       ? <><circle cx="12" cy="12" r="9" /><path d="M12 16h.01M9.8 9.3a2.3 2.3 0 1 1 2.9 3.1V14" /></>
+    // TWO ARROWS, NOT ONE. The in/out arrows say value crossed the wallet's boundary; a swap moves
+    // it between two balances inside. Reusing either would say the wrong thing before a single
+    // word is read.
+    : row.direction === 'internal'
+      ? <><path d="M4 8h13l-3-3" /><path d="M20 16H7l3 3" /></>
     : row.direction === 'in'
       ? <><path d="M17 7L7 17" /><path d="M15 17H7V9" /></>
       : <><path d="M7 17L17 7" /><path d="M9 7h8v8" /></>
@@ -1186,7 +1212,12 @@ export function ActivityRowShell({ row, hidden }: { row: ActivityRowView; hidden
   const amount = () => {
     if (hidden) return '••••'
     if (row.amountMicrotari === null) return '—'
-    const sign = st.signed ? (row.direction === 'in' ? '+' : '−') : ''
+    // NO SIGN ON AN INTERNAL MOVE. The figure is what moved between the user's own balances, not a
+    // change in what they hold — that changed only by the fee. `st.signed` still governs the other
+    // two directions, so a failed or unresolved row stays unsigned as well.
+    const sign = st.signed && row.direction !== 'internal'
+      ? (row.direction === 'in' ? '+' : '−')
+      : ''
     return `${sign}${fmt6(row.amountMicrotari)}`
   }
 
@@ -1194,6 +1225,8 @@ export function ActivityRowShell({ row, hidden }: { row: ActivityRowView; hidden
     hidden ? C.bodyDim
     : row.amountMicrotari === null ? C.mutedDim
     : !st.signed ? C.mutedDim
+    // Neutral ink too: green reads as "you gained", and a swap is not a gain.
+    : row.direction === 'internal' ? C.primary
     : row.direction === 'in' ? 'var(--positive)'
     : C.primary
 
@@ -1204,7 +1237,7 @@ export function ActivityRowShell({ row, hidden }: { row: ActivityRowView; hidden
     }}>
       <RowGlyph row={row} />
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 13.5, fontWeight: 600, color: C.primary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <div title={row.titleAttr} style={{ fontSize: 13.5, fontWeight: 600, color: C.primary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {row.title}
         </div>
         <div style={{ fontSize: 12, color: C.mutedDim, marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>

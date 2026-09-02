@@ -310,7 +310,11 @@ a:hover { color: var(--accent-200); }
    two (the alternative is threading hover state through every call site). */
 .cv-btn-primary:hover { background: var(--accent-hover) !important; }
 .cv-step:hover { border-color: rgba(var(--accent-400-rgb), 0.4) !important; }
-.cv-conv:hover { background: var(--surface-row-selected); }
+/* Conversation rows. --surface-row-selected is #F3F6F9 against a #F6F8FA pane — a hover nobody
+   could see once Stage 2 put the list on the page ground. The design hovers rows to the CARD
+   surface, which separates from the pane in both themes: white on #F6F8FA, navy-900 on navy-950.
+   The SELECTED row is not this: it takes the accent wash, inline in the row. */
+.cv-conv:hover { background: var(--surface); }
 
 /* Service rail rows. The rail sits on navy in both themes, so its hover is a light wash rather
    than a surface token — the same treatment the foundation draws on the nav. Lives here for the

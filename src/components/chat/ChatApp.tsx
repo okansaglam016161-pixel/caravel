@@ -1,16 +1,10 @@
-import { Fragment, useState, useEffect, useCallback, useLayoutEffect, useMemo, useRef, type ReactNode } from 'react'
-import { Link } from 'react-router-dom'
+import { Fragment, useState, useEffect, useCallback, useLayoutEffect, useMemo, useRef, type CSSProperties, type ReactNode } from 'react'
 import * as nip19 from 'nostr-tools/nip19'
 import Logo from '../primitives/Logo'
 import { useWallet } from '../../context/WalletContext'
-import WalletModal from '../wallet/WalletModal'
 import { assertValidRecipient } from '../../crypto/publicSend'
 import { parseOotleAddress } from '@tari-project/ootle-wasm'
-import { unreadableReasonText } from '../wallet/v2/total'
 import { plainError } from '../wallet/v2/plainError'
-import { totalPillValue } from '../wallet/v2/TotalHero'
-import { useWalletTotal } from '../../hooks/useWalletTotal'
-import ProfilePanel from '../wallet/ProfilePanel'
 import { compareMessages, sortKey, type CaravelMessage, type Group } from '../../messaging/types'
 import GroupThread from './GroupThread'
 import CreateGroupModal, { type GroupContactOption } from './CreateGroupModal'
@@ -43,6 +37,62 @@ import { groupGlyph } from './groupGlyph'
 import EmojiPicker from './EmojiPicker'
 import { insertAtCursor } from './composerInsert'
 import { useTheme } from '../../hooks/useTheme'
+
+// ── Sidebar section headers ─────────────────────────────────────────────────────
+//
+// REQUESTS / GROUP INVITES / GROUPS / DIRECT, all four to one spec so they cannot drift. V3 sets
+// them quieter than the teal-era caps did — 10.5px at .08em rather than 11px at .14em, and muted
+// rather than faint — because on a light pane the old tracking read as a banner rather than a
+// label. The count beside REQUESTS and GROUP INVITES is not in the design; it is real information
+// about work waiting for you, so it stays, at the label's own size and in accent ink.
+
+const SECTION_ROW: CSSProperties = { display: 'flex', alignItems: 'center', gap: 7, padding: '10px 6px 4px' }
+const SECTION_LABEL: CSSProperties = { fontSize: 10.5, fontWeight: 600, letterSpacing: '0.08em', color: 'var(--text-muted-dim)' }
+const SECTION_COUNT: CSSProperties = { fontSize: 10.5, fontWeight: 600, letterSpacing: '0.08em', color: 'var(--accent-ink)' }
+
+// ── Conversation rows ───────────────────────────────────────────────────────────
+//
+// One spec for group and DM rows; only the avatar's shape and the preview's ink differ. V3 takes
+// the row from ~72px to ~54px (36px avatar, 9px padding, was 46 and 13), which is most of a screen
+// more conversations on a long list.
+//
+// SELECTION IS THE ACCENT WASH AND NOTHING ELSE. The teal-era row stacked three cues — a tinted
+// background, a 1px border and a 3px left bar — on a state that is never ambiguous, because
+// exactly one row is selected and the thread beside it says which. The wash reads in both themes
+// and the name goes accent-ink with it. Hover is .cv-conv in index.css, which lifts the row to
+// --surface; the two never collide, since a selected row is not hovered into a different state.
+
+const CONV_ROW: CSSProperties = {
+  display: 'flex', alignItems: 'center', gap: 10, padding: '9px 10px',
+  borderRadius: 10, cursor: 'pointer', marginBottom: 2,
+}
+const CONV_NAME: CSSProperties = {
+  flex: 1, minWidth: 0, fontSize: 13.5, fontWeight: 600,
+  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+}
+const CONV_TIME: CSSProperties = { fontSize: 11, color: 'var(--text-muted-dim)', flexShrink: 0 }
+const CONV_PREVIEW: CSSProperties = {
+  fontSize: 12, marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+}
+
+// ── Request / invite cards ──────────────────────────────────────────────────────
+//
+// V3 draws these as ORDINARY CARDS — surface, hairline, one step of elevation — where the teal era
+// tinted the whole frame with the accent and modulated that tint through the accepting / declining
+// states. The accent now belongs to the Accept button alone, which is the thing being asked about;
+// a frame that changed colour three ways was spending the loudest colour on the container.
+//
+// The busy states did not go anywhere: the head dims to 0.6 and the pressed button becomes its own
+// spinner, which is where a decision in flight is actually legible.
+
+const REQUEST_CARD: CSSProperties = {
+  background: 'var(--surface)', border: '1px solid var(--border)',
+  borderRadius: 12, padding: '12px 13px', boxShadow: 'var(--e1)',
+}
+const CARD_BTN: CSSProperties = {
+  flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
+  padding: 7, borderRadius: 8, fontSize: 12, fontWeight: 600, fontFamily: 'inherit',
+}
 
 // ── Conversation derivation ─────────────────────────────────────────────────────
 
@@ -237,18 +287,11 @@ function PaymentMessageCard({ message, lid, flashed }: { message: CaravelMessage
 // ── Component ────────────────────────────────────────────────────────────────────
 
 export default function ChatApp() {
-  const { wallet, address, scan, messages, nostrPubkeyHex, messagingStatus, contacts, acceptContact, contactAddresses, setManualTariAddress, createMessagingProvider, recordSentMessage, deleteConversation, editMessage, reactMessage, getRelayStates, reconnectAll, balanceHidden, setBalanceHidden, groups, createGroup, acceptGroup, declineGroup, leaveGroup, reinviteGroup } = useWallet()
-  // The combined balance for the sidebar pill — one shared derivation, see useWalletTotal.
-  const walletTotal = useWalletTotal()
+  const { wallet, address, scan, messages, nostrPubkeyHex, messagingStatus, contacts, acceptContact, contactAddresses, setManualTariAddress, createMessagingProvider, recordSentMessage, deleteConversation, editMessage, reactMessage, getRelayStates, reconnectAll, groups, createGroup, acceptGroup, declineGroup, leaveGroup, reinviteGroup } = useWallet()
   // Logo has no theme awareness of its own — `onLight` is a manual prop. Both marks in this view
   // sit on surfaces that are now light in the light theme, so the white mark would vanish.
   const { theme } = useTheme()
   const onLight = theme === 'light'
-  const [walletOpen, setWalletOpen] = useState(false)
-  const [profileOpen, setProfileOpen] = useState(false)
-  // The user's own generated avatar (deterministic gradient from their pubkey hash) — used for the
-  // sidebar profile button and the Profile panel's identity block.
-  const selfAvatar = avatarFor(nostrPubkeyHex ?? '')
   const [sidebarQuery, setSidebarQuery] = useState('')
   const [relayPanelOpen, setRelayPanelOpen] = useState(false)
 
@@ -1275,130 +1318,73 @@ export default function ChatApp() {
       <div style={{ display: 'flex', width: '100%', height: '100%' }}>
 
         {/* LEFT: sidebar */}
-        <div style={{ width: 380, flexShrink: 0, borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', background: 'var(--surface-base)', position: 'relative' }}>
+        <div style={{ width: 340, flexShrink: 0, borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', background: 'var(--surface-base)', position: 'relative' }}>
 
           {relayPanelOpen && <RelayHealthPanel getRelayStates={getRelayStates} reconnectAll={reconnectAll} onClose={() => setRelayPanelOpen(false)} />}
 
-          {/* Sidebar header */}
-          <div style={{ padding: '20px 20px 16px', borderBottom: '1px solid var(--border)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18 }}>
-              <Link to="/" style={{ display: 'flex', alignItems: 'center', gap: 11, cursor: 'pointer', opacity: 1, transition: 'opacity 0.15s' }} onMouseEnter={e => (e.currentTarget.style.opacity = '0.75')} onMouseLeave={e => (e.currentTarget.style.opacity = '1')}>
-                <Logo size={26} onLight={onLight} />
-                <span style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-primary)' }}>Caravel</span>
-              </Link>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <button
-                  onClick={() => setProfileOpen(true)}
-                  title="Your profile"
-                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 34, height: 34, borderRadius: 9, border: 'none', background: selfAvatar.grad, cursor: 'pointer', padding: 0 }}
-                >
-                  <svg width={17} height={17} viewBox="0 0 24 24" fill="none" stroke={selfAvatar.color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg>
-                </button>
-                <button
-                  onClick={() => { setComposeNpub(''); setComposeRes({ s: 'idle' }); setComposeOpen(true) }}
-                  title="Start a new conversation"
-                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 34, height: 34, borderRadius: 9, border: '1px solid var(--border)', background: 'transparent', cursor: 'pointer', padding: 0 }}
-                >
-                  <svg width={17} height={17} viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth={2} strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>
-                </button>
-                <button
-                  onClick={() => setCreateGroupOpen(true)}
-                  title="New group"
-                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 34, height: 34, borderRadius: 9, border: '1px solid var(--border)', background: 'transparent', cursor: 'pointer', padding: 0 }}
-                >
-                  <svg width={17} height={17} viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx={9} cy={7} r={4} /><path d="M19 8v6M22 11h-6" /></svg>
-                </button>
-              </div>
-            </div>
+          {/* ── Search, and the two list actions ────────────────────────────────────────────
+              V3 opens the pane at the search field: no lockup, no profile control, no balance.
+              All three left with the wallet — the spine carries the mark and the identity tile,
+              and the balance belongs to the Wallet service (the payment composer still prints an
+              `available` line where it is actually load-bearing).
 
-            {/* Balance widget — click to open wallet panel */}
-            {(() => {
-              // THE TOTAL, not just the private balance — and computed by the SHARED hook, which
-              // is the same derivation the service nav uses. This pill used to hold its own
-              // transcription of computeTotal's six inputs; a third copy arriving with the shell
-              // is where hand-kept duplicates start to drift. See useWalletTotal for the one
-              // input the wallet modal's own hero legitimately differs on.
-              const isScanning = scan.status === 'scanning'
-              const total = walletTotal
-              const balanceValue = totalPillValue(total, balanceHidden)
-              // Bright only when the figure is a fact. A dash or an ellipsis stays muted so the
-              // pill never looks like it is reporting a balance it cannot vouch for.
-              const balanceColor = balanceHidden || total.status === 'ready'
-                ? 'var(--text-bright)'
-                : 'var(--text-muted-dim)'
-              const pillTitle = total.status === 'unreadable'
-                ? unreadableReasonText(total.reason)
-                : 'Open wallet'
-              return (
-                <div
-                  onClick={() => setWalletOpen(true)}
-                  title={pillTitle}
-                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '13px 15px', borderRadius: 12, background: 'linear-gradient(140deg, rgba(var(--accent-400-rgb),0.1), rgba(var(--accent-400-rgb),0.04))', border: '1px solid rgba(var(--accent-400-rgb),0.22)', cursor: 'pointer', transition: 'border-color 0.15s' }}
-                  onMouseEnter={e => (e.currentTarget.style.borderColor = 'rgba(var(--teal-500-rgb),0.45)')}
-                  onMouseLeave={e => (e.currentTarget.style.borderColor = 'rgba(var(--accent-400-rgb),0.22)')}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    <svg width={17} height={17} viewBox="0 0 24 24" fill="none" stroke="var(--accent-400)" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round"><rect x={2} y={6} width={20} height={13} rx={2.5} /><path d="M2 10h20" /></svg>
-                    <span style={{ fontSize: 13, color: 'var(--text-muted)', fontWeight: 500 }}>Balance</span>
-                    {isScanning && (
-                      <svg width={11} height={11} viewBox="0 0 24 24" fill="none" stroke="var(--text-faint-dim)" strokeWidth={2.5} strokeLinecap="round" style={{ animation: 'spin 1s linear infinite', flexShrink: 0 }}>
-                        <path d="M21 12a9 9 0 1 1-6.219-8.56" />
-                      </svg>
-                    )}
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 16, fontWeight: 500, color: balanceColor, letterSpacing: '0.08em', transition: 'color 0.2s' }}>
-                      {balanceValue}
-                    </span>
-                    <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--accent-400)' }}>TARI</span>
-                    {/* Eye toggle — stops propagation so the wallet panel doesn't open */}
-                    <button
-                      onClick={e => { e.stopPropagation(); setBalanceHidden(v => !v) }}
-                      title={balanceHidden ? 'Show balance' : 'Hide balance'}
-                      style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'none', border: 'none', cursor: 'pointer', padding: 2, color: 'var(--text-teal-dim)', flexShrink: 0 }}
-                    >
-                      {balanceHidden
-                        ? <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" /><circle cx={12} cy={12} r={3} /><path d="M4 4l16 16" /></svg>
-                        : <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" /><circle cx={12} cy={12} r={3} /></svg>
-                      }
-                    </button>
-                    <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="var(--text-teal-dim)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M9 18l6-6-6-6" /></svg>
-                  </div>
-                </div>
-              )
-            })()}
-            <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-            {/* Ambient connection indicator — click opens the relay-health panel */}
-            {(() => {
-              const rs = getRelayStates()
-              const total = rs.length
-              const connected = rs.filter(s => s.status === 'connected').length
-              return (
-                <div style={{ marginTop: 14 }}>
-                  <ConnectionIndicator status={messagingStatus} connected={connected} total={total} onClick={() => setRelayPanelOpen(v => !v)} />
-                </div>
-              )
-            })()}
-          </div>
-
-          {/* Search — filters conversations + requests live */}
-          <div style={{ padding: '14px 16px 8px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 13px', borderRadius: 10, background: 'var(--surface-raised)', border: `1px solid ${sidebarQuery ? 'rgba(var(--teal-500-rgb),0.45)' : 'var(--border)'}`, boxShadow: sidebarQuery ? '0 0 0 3px rgba(var(--teal-500-rgb),0.09)' : 'none' }}>
-              <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="var(--text-faint-dim)" strokeWidth={2} strokeLinecap="round"><circle cx={11} cy={11} r={7} /><path d="M21 21l-4-4" /></svg>
+              NEW CONVERSATION AND NEW GROUP RIDE THE SEARCH ROW. They are the only two controls
+              the emptied header held that have nowhere else to go, and a header strip containing
+              nothing but two icons is more chrome than they are worth. */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '14px 12px 8px' }}>
+            <div style={{
+              flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 9,
+              padding: '9px 12px', borderRadius: 10, background: 'var(--surface)',
+              border: `1px solid ${sidebarQuery ? 'var(--accent-400)' : 'var(--border)'}`,
+              boxShadow: sidebarQuery ? '0 0 0 3px rgba(var(--accent-400-rgb),0.18)' : 'none',
+            }}>
+              <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth={2} strokeLinecap="round" style={{ flexShrink: 0 }}><circle cx={11} cy={11} r={7} /><path d="M21 21l-4-4" /></svg>
               <input
                 type="text"
                 value={sidebarQuery}
                 onChange={e => setSidebarQuery(e.target.value)}
                 placeholder="Search conversations"
-                style={{ flex: 1, minWidth: 0, background: 'transparent', border: 'none', outline: 'none', color: 'var(--text-body)', fontSize: 14, fontFamily: 'inherit', padding: 0 }}
+                className="cv-composer"
+                style={{ flex: 1, minWidth: 0, background: 'transparent', border: 'none', outline: 'none', color: 'var(--text-body)', fontSize: 13, fontFamily: 'inherit', padding: 0 }}
               />
               {sidebarQuery && (
-                <span onClick={() => setSidebarQuery('')} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 18, height: 18, borderRadius: '50%', background: 'rgba(var(--border-rgb),0.14)', cursor: 'pointer', flexShrink: 0 }}>
-                  <svg width={10} height={10} viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth={3} strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
+                <span onClick={() => setSidebarQuery('')} title="Clear search" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 17, height: 17, borderRadius: '50%', background: 'var(--surface-inset)', cursor: 'pointer', flexShrink: 0 }}>
+                  <svg width={9} height={9} viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth={3} strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
                 </span>
               )}
             </div>
+            <button
+              onClick={() => { setComposeNpub(''); setComposeRes({ s: 'idle' }); setComposeOpen(true) }}
+              title="Start a new conversation"
+              aria-label="Start a new conversation"
+              className="cv-icon-btn"
+              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 34, height: 34, flexShrink: 0, borderRadius: 10, border: '1px solid var(--border)', background: 'var(--surface)', cursor: 'pointer', padding: 0, color: 'var(--text-muted-dim)' }}
+            >
+              <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>
+            </button>
+            <button
+              onClick={() => setCreateGroupOpen(true)}
+              title="New group"
+              aria-label="New group"
+              className="cv-icon-btn"
+              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 34, height: 34, flexShrink: 0, borderRadius: 10, border: '1px solid var(--border)', background: 'var(--surface)', cursor: 'pointer', padding: 0, color: 'var(--text-muted-dim)' }}
+            >
+              <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx={9} cy={7} r={4} /><path d="M19 8v6M22 11h-6" /></svg>
+            </button>
           </div>
+
+          {/* Ambient connection strip — click opens the relay-health panel. BELOW the search now,
+              where V3 draws it, rather than above it in a header that no longer exists. */}
+          {(() => {
+            const rs = getRelayStates()
+            const total = rs.length
+            const connected = rs.filter(s => s.status === 'connected').length
+            return (
+              <div style={{ padding: '0 12px 6px' }}>
+                <ConnectionIndicator status={messagingStatus} connected={connected} total={total} onClick={() => setRelayPanelOpen(v => !v)} />
+              </div>
+            )
+          })()}
 
           {/* Requests (M9.0c) — pending peers who messaged first. Distinct from conversations; no
               reply is possible until accepted. Payment previews here deliberately do NOT resolve the
@@ -1406,10 +1392,10 @@ export default function ChatApp() {
               fetches on their behalf before I choose to engage (network work + unsolicited contact).
               The note always renders as inert, auto-escaped text (M10.0 guarantee, no HTML/markdown). */}
           {filteredRequests.length > 0 && (
-            <div style={{ padding: '10px 10px 4px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px 8px' }}>
-                <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.14em', color: 'var(--text-faint-dim)' }}>REQUESTS</span>
-                <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: 18, height: 18, padding: '0 5px', borderRadius: 100, background: 'rgba(var(--teal-500-rgb),0.14)', border: '1px solid rgba(var(--teal-500-rgb),0.3)', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, fontWeight: 600, color: 'var(--teal-300)' }}>{filteredRequests.length}</span>
+            <div style={{ padding: '2px 8px 0' }}>
+              <div style={SECTION_ROW}>
+                <span style={SECTION_LABEL}>REQUESTS</span>
+                <span style={SECTION_COUNT}>{filteredRequests.length}</span>
               </div>
               {filteredRequests.map(req => {
                 const av = avatarFor(req.peerHex)
@@ -1417,29 +1403,19 @@ export default function ChatApp() {
                 const pay = req.lastMessage?.payment     // stranger payment — never resolved (privacy)
                 const note = req.lastMessage?.plaintext ?? ''
                 const busy = busyRequest?.peerHex === req.peerHex ? busyRequest.kind : null
-                // Card frame: teal at rest, teal-stronger while accepting, neutral while declining.
-                const frame = busy === 'decline'
-                  ? { background: 'rgba(var(--border-rgb),0.03)', border: '1px solid var(--border)' }
-                  : { background: 'rgba(var(--teal-500-rgb),0.04)', border: `1px solid rgba(var(--teal-500-rgb),${busy === 'accept' ? 0.26 : 0.18})` }
+                // One frame for every state — see REQUEST_CARD. The decision in flight shows in the
+                // dimmed head and the button that became a spinner, not in the container's colour.
+                const frame = REQUEST_CARD
                 return (
-                  <div key={req.peerHex} style={{ padding: 16, borderRadius: 14, marginBottom: 5, ...frame }}>
+                  <div key={req.peerHex} style={{ ...frame, marginBottom: 6 }}>
                     {/* Header: avatar + name/npub + relative age. Dimmed while a decision is in flight. */}
-                    <div style={{ display: 'flex', gap: 12, marginBottom: 12, opacity: busy ? 0.6 : 1 }}>
-                      <div style={{ width: 40, height: 40, borderRadius: 12, background: av.grad, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, fontWeight: 700, color: av.color, flexShrink: 0 }}>{initialsFor(nick)}</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 10, opacity: busy ? 0.6 : 1 }}>
+                      <div style={{ width: 30, height: 30, borderRadius: 99, background: av.grad, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 600, color: av.color, flexShrink: 0 }}>{initialsFor(nick)}</div>
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        {nick ? (
-                          <>
-                            <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-name)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{nick}</div>
-                            <div style={{ fontFamily: MONO, fontSize: 11, color: 'var(--text-muted-dim)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{truncNpub(req.peerHex)}</div>
-                          </>
-                        ) : (
-                          <>
-                            <div style={{ fontFamily: MONO, fontSize: 14, fontWeight: 500, color: 'var(--text-name)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{truncNpub(req.peerHex)}</div>
-                            <div style={{ fontSize: 11, color: 'var(--text-muted-dim)', marginTop: 3 }}>No @name registered</div>
-                          </>
-                        )}
+                        <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-name)', fontFamily: nick ? undefined : MONO, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{nick || truncNpub(req.peerHex)}</div>
+                        <div style={{ fontSize: 11.5, color: 'var(--text-muted-dim)', fontFamily: nick ? MONO : undefined, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{nick ? truncNpub(req.peerHex) : 'Contact request'}</div>
                       </div>
-                      {!busy && req.lastMessage && <span style={{ fontFamily: MONO, fontSize: 11, color: 'var(--text-muted-dim)' }}>{ageShort(req.lastMessage.timestamp)}</span>}
+                      {!busy && req.lastMessage && <span style={{ fontSize: 11, color: 'var(--text-muted-dim)', flexShrink: 0 }}>{ageShort(req.lastMessage.timestamp)}</span>}
                     </div>
 
                     {pay ? (
@@ -1478,24 +1454,25 @@ export default function ChatApp() {
 
                     {/* Accept / Decline — inline. A click sets a local in-flight guard (Flag 2) that
                         disables both buttons; the handlers themselves are unchanged. */}
-                    <div style={{ display: 'flex', gap: 9 }}>
+                    <div style={{ display: 'flex', gap: 8 }}>
                       {busy === 'accept' ? (
-                        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 10, borderRadius: 10, background: 'var(--surface-inset)', border: '1px solid rgba(var(--teal-500-rgb),0.2)', color: 'var(--teal-300)', fontSize: 13, fontWeight: 700 }}>
-                          <span style={{ width: 13, height: 13, borderRadius: '50%', border: '2px solid rgba(var(--teal-500-rgb),0.2)', borderTopColor: 'var(--teal-500)', animation: 'cv-spin 0.8s linear infinite' }} />Accepting
+                        <div style={{ ...CARD_BTN, background: 'var(--surface-inset)', color: 'var(--accent-ink)' }}>
+                          <span style={{ width: 11, height: 11, borderRadius: '50%', border: '2px solid var(--border-strong)', borderTopColor: 'var(--accent-400)', animation: 'cv-spin 0.8s linear infinite' }} />Accepting
                         </div>
                       ) : (
                         <button onClick={() => { setBusyRequest({ peerHex: req.peerHex, kind: 'accept' }); acceptRequest(req.peerHex) }} disabled={!!busy}
-                          style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 10, borderRadius: 10, border: 'none', background: busy ? 'var(--surface-inset)' : 'var(--teal-grad)', color: busy ? 'var(--text-faint-dim)' : 'var(--ink-on-accent)', fontSize: 13, fontWeight: 700, cursor: busy ? 'default' : 'pointer', fontFamily: 'inherit' }}>
+                          className={busy ? undefined : 'cv-btn-primary'}
+                          style={{ ...CARD_BTN, border: 'none', background: busy ? 'var(--surface-inset)' : 'var(--accent-400)', color: busy ? 'var(--text-disabled)' : 'var(--ink-on-accent)', cursor: busy ? 'default' : 'pointer' }}>
                           Accept
                         </button>
                       )}
                       {busy === 'decline' ? (
-                        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 10, borderRadius: 10, border: '1px solid var(--border)', color: 'var(--text-muted)', fontSize: 13, fontWeight: 600 }}>
-                          <span style={{ width: 13, height: 13, borderRadius: '50%', border: '2px solid rgba(var(--border-rgb),0.18)', borderTopColor: 'var(--text-muted-dim)', animation: 'cv-spin 0.8s linear infinite' }} />Declining
+                        <div style={{ ...CARD_BTN, border: '1px solid var(--border-strong)', color: 'var(--text-muted-dim)' }}>
+                          <span style={{ width: 11, height: 11, borderRadius: '50%', border: '2px solid var(--border-strong)', borderTopColor: 'var(--text-muted-dim)', animation: 'cv-spin 0.8s linear infinite' }} />Declining
                         </div>
                       ) : (
                         <button onClick={() => { setBusyRequest({ peerHex: req.peerHex, kind: 'decline' }); declineRequest(req.peerHex) }} disabled={!!busy}
-                          style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 10, borderRadius: 10, border: `1px solid rgba(var(--border-rgb),${busy ? 0.1 : 0.2})`, background: 'transparent', color: busy ? 'var(--text-faint-dim)' : 'var(--text-muted)', fontSize: 13, fontWeight: 600, cursor: busy ? 'default' : 'pointer', fontFamily: 'inherit' }}>
+                          style={{ ...CARD_BTN, border: `1px solid ${busy ? 'var(--border)' : 'var(--border-strong)'}`, background: 'transparent', color: busy ? 'var(--text-disabled)' : 'var(--text-body-dim)', cursor: busy ? 'default' : 'pointer' }}>
                           Decline
                         </button>
                       )}
@@ -1507,7 +1484,7 @@ export default function ChatApp() {
           )}
 
           {/* Conversation list */}
-          <div style={{ flex: 1, overflowY: 'auto', padding: '6px 10px 10px' }}>
+          <div style={{ flex: 1, overflowY: 'auto', padding: '2px 8px 10px' }}>
             {/* Group invites (A-M2) — pending groups render as accept/decline cards, NOT open-thread
                 rows. Mirrors the DM REQUESTS card (same frame/tokens/spinner), adapted to a group:
                 Avatar glyph, group name, member/roster subtitle. Placed above active group rows so
@@ -1520,48 +1497,46 @@ export default function ChatApp() {
               if (invites.length === 0) return null
               return (
                 <div style={{ padding: '0 0 4px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px 8px' }}>
-                    <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.14em', color: 'var(--text-faint-dim)' }}>GROUP INVITES</span>
-                    <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: 18, height: 18, padding: '0 5px', borderRadius: 100, background: 'rgba(var(--teal-500-rgb),0.14)', border: '1px solid rgba(var(--teal-500-rgb),0.3)', fontFamily: MONO, fontSize: 10, fontWeight: 600, color: 'var(--teal-300)' }}>{invites.length}</span>
+                  <div style={SECTION_ROW}>
+                    <span style={SECTION_LABEL}>GROUP INVITES</span>
+                    <span style={SECTION_COUNT}>{invites.length}</span>
                   </div>
                   {invites.map(g => {
                     const title = g.name.trim() || `Group ${g.id.slice(0, 6)}…`
                     const sub = g.members.length ? `${g.members.length} members` : 'roster pending…'
                     const busy = busyInvite?.groupId === g.id ? busyInvite.kind : null
-                    // Card frame: teal at rest, teal-stronger while accepting, neutral while declining
-                    // — identical treatment to the DM request card.
-                    const frame = busy === 'decline'
-                      ? { background: 'rgba(var(--border-rgb),0.03)', border: '1px solid var(--border)' }
-                      : { background: 'rgba(var(--teal-500-rgb),0.04)', border: `1px solid rgba(var(--teal-500-rgb),${busy === 'accept' ? 0.26 : 0.18})` }
+                    // Identical treatment to the DM request card — see REQUEST_CARD.
+                    const frame = REQUEST_CARD
                     return (
-                      <div key={g.id} style={{ padding: 16, borderRadius: 14, marginBottom: 5, ...frame }}>
+                      <div key={g.id} style={{ ...frame, marginBottom: 6 }}>
                         {/* Header: glyph avatar + name/subtitle. Dimmed while a decision is in flight. */}
-                        <div style={{ display: 'flex', gap: 12, marginBottom: 12, alignItems: 'center', opacity: busy ? 0.6 : 1 }}>
-                          <Avatar icon={groupGlyph} size={40} radius={12} />
+                        <div style={{ display: 'flex', gap: 9, marginBottom: 10, alignItems: 'center', opacity: busy ? 0.6 : 1 }}>
+                          <Avatar icon={groupGlyph} size={30} radius={9} bg="var(--accent-wash)" fg="var(--accent-ink)" />
                           <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-name)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</div>
-                            <div style={{ fontSize: 11, color: 'var(--text-muted-dim)', marginTop: 2 }}>{sub}</div>
+                            <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-name)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</div>
+                            <div style={{ fontSize: 11.5, color: 'var(--text-muted-dim)' }}>{sub}</div>
                           </div>
                         </div>
                         {/* Accept / Decline — same markup/tokens/spinner as the DM request card. */}
-                        <div style={{ display: 'flex', gap: 9 }}>
+                        <div style={{ display: 'flex', gap: 8 }}>
                           {busy === 'accept' ? (
-                            <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 10, borderRadius: 10, background: 'var(--surface-inset)', border: '1px solid rgba(var(--teal-500-rgb),0.2)', color: 'var(--teal-300)', fontSize: 13, fontWeight: 700 }}>
-                              <span style={{ width: 13, height: 13, borderRadius: '50%', border: '2px solid rgba(var(--teal-500-rgb),0.2)', borderTopColor: 'var(--teal-500)', animation: 'cv-spin 0.8s linear infinite' }} />Accepting
+                            <div style={{ ...CARD_BTN, background: 'var(--surface-inset)', color: 'var(--accent-ink)' }}>
+                              <span style={{ width: 11, height: 11, borderRadius: '50%', border: '2px solid var(--border-strong)', borderTopColor: 'var(--accent-400)', animation: 'cv-spin 0.8s linear infinite' }} />Accepting
                             </div>
                           ) : (
                             <button onClick={() => { setBusyInvite({ groupId: g.id, kind: 'accept' }); acceptInvite(g.id) }} disabled={!!busy}
-                              style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 10, borderRadius: 10, border: 'none', background: busy ? 'var(--surface-inset)' : 'var(--teal-grad)', color: busy ? 'var(--text-faint-dim)' : 'var(--ink-on-accent)', fontSize: 13, fontWeight: 700, cursor: busy ? 'default' : 'pointer', fontFamily: 'inherit' }}>
+                              className={busy ? undefined : 'cv-btn-primary'}
+                              style={{ ...CARD_BTN, border: 'none', background: busy ? 'var(--surface-inset)' : 'var(--accent-400)', color: busy ? 'var(--text-disabled)' : 'var(--ink-on-accent)', cursor: busy ? 'default' : 'pointer' }}>
                               Accept
                             </button>
                           )}
                           {busy === 'decline' ? (
-                            <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 10, borderRadius: 10, border: '1px solid var(--border)', color: 'var(--text-muted)', fontSize: 13, fontWeight: 600 }}>
-                              <span style={{ width: 13, height: 13, borderRadius: '50%', border: '2px solid rgba(var(--border-rgb),0.18)', borderTopColor: 'var(--text-muted-dim)', animation: 'cv-spin 0.8s linear infinite' }} />Declining
+                            <div style={{ ...CARD_BTN, border: '1px solid var(--border-strong)', color: 'var(--text-muted-dim)' }}>
+                              <span style={{ width: 11, height: 11, borderRadius: '50%', border: '2px solid var(--border-strong)', borderTopColor: 'var(--text-muted-dim)', animation: 'cv-spin 0.8s linear infinite' }} />Declining
                             </div>
                           ) : (
                             <button onClick={() => { setBusyInvite({ groupId: g.id, kind: 'decline' }); declineInvite(g.id) }} disabled={!!busy}
-                              style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 10, borderRadius: 10, border: `1px solid rgba(var(--border-rgb),${busy ? 0.1 : 0.2})`, background: 'transparent', color: busy ? 'var(--text-faint-dim)' : 'var(--text-muted)', fontSize: 13, fontWeight: 600, cursor: busy ? 'default' : 'pointer', fontFamily: 'inherit' }}>
+                              style={{ ...CARD_BTN, border: `1px solid ${busy ? 'var(--border)' : 'var(--border-strong)'}`, background: 'transparent', color: busy ? 'var(--text-disabled)' : 'var(--text-body-dim)', cursor: busy ? 'default' : 'pointer' }}>
                               Decline
                             </button>
                           )}
@@ -1569,7 +1544,7 @@ export default function ChatApp() {
                       </div>
                     )
                   })}
-                  <div style={{ height: 1, background: 'rgba(var(--border-rgb),0.07)', margin: '6px 8px 10px' }} />
+                  <div style={{ height: 1, background: 'var(--border)', margin: '8px 6px 4px' }} />
                 </div>
               )
             })()}
@@ -1582,8 +1557,8 @@ export default function ChatApp() {
               if (rows.length === 0) return null
               return (
                 <>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 8px 10px' }}>
-                    <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.14em', color: 'var(--text-faint-dim)' }}>GROUPS</span>
+                  <div style={SECTION_ROW}>
+                    <span style={SECTION_LABEL}>GROUPS</span>
                   </div>
                   {rows.map(gr => {
                     const g = gr.group
@@ -1594,32 +1569,33 @@ export default function ChatApp() {
                       ? (g.members.length ? `${g.members.length} members` : 'New group')
                       : lm.direction === 'sent' ? `You: ${lm.plaintext}` : `${displayName(lm.senderPubkeyHex)}: ${lm.plaintext}`
                     return (
-                      <div key={g.id} onClick={() => selectGroup(g.id)} className="cv-conv" style={{ display: 'flex', gap: 13, padding: 13, borderRadius: 12, position: 'relative', background: active ? 'var(--surface-row-selected)' : 'transparent', border: active ? '1px solid rgba(var(--teal-500-rgb),0.18)' : '1px solid transparent', cursor: 'pointer', marginBottom: 4 }}>
-                        {active && <span style={{ position: 'absolute', left: 0, top: 14, bottom: 14, width: 3, borderRadius: '0 3px 3px 0', background: 'var(--teal-500)' }} />}
-                        <Avatar icon={groupGlyph} size={46} radius={13} />
+                      <div key={g.id} onClick={() => selectGroup(g.id)} className="cv-conv" style={{ ...CONV_ROW, background: active ? 'var(--accent-wash)' : 'transparent' }}>
+                        {/* The group tile is QUIET, not accent — V3 reserves the accent fill for a
+                            person's avatar, so a group reads as a container rather than a contact. */}
+                        <Avatar icon={groupGlyph} size={36} radius={11} bg="var(--msg-received)" fg="var(--text-body-dim)" />
                         <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 3, gap: 8 }}>
-                            <span style={{ fontSize: 15, fontWeight: 600, color: active ? 'var(--text-primary)' : 'var(--text-name)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</span>
-                            <span style={{ fontFamily: MONO, fontSize: 11, color: 'var(--text-faint-dim)', flexShrink: 0 }}>{compactTime(gr.lastActivity)}</span>
+                          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+                            <span style={{ ...CONV_NAME, color: active ? 'var(--accent-ink)' : 'var(--text-name)' }}>{title}</span>
+                            <span style={CONV_TIME}>{compactTime(gr.lastActivity)}</span>
                           </div>
-                          <div style={{ fontSize: 13, color: 'var(--text-muted-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{preview}</div>
+                          <div style={{ ...CONV_PREVIEW, color: active ? 'var(--text-body-dim)' : 'var(--text-muted-dim)' }}>{preview}</div>
                         </div>
                       </div>
                     )
                   })}
-                  <div style={{ height: 1, background: 'rgba(var(--border-rgb),0.07)', margin: '6px 8px 10px' }} />
+                  <div style={{ height: 1, background: 'var(--border)', margin: '8px 6px 4px' }} />
                 </>
               )
             })()}
             {conversations.length === 0 && activeGroupRows.length > 0 ? null : conversations.length === 0 ? (
               /* Zero conversations (design empty state) */
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', height: '100%', padding: 24, gap: 16 }}>
-                <svg width={34} height={34} viewBox="0 0 24 24" fill="none" stroke="var(--teal-500)" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.4 }}><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg>
+                <svg width={34} height={34} viewBox="0 0 24 24" fill="none" stroke="var(--accent-400)" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.4 }}><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg>
                 <div style={{ textAlign: 'center' }}>
                   <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-muted)', marginBottom: 6 }}>No conversations yet</div>
                   <div style={{ fontSize: 13, color: 'var(--text-faint)', lineHeight: 1.55, maxWidth: 240 }}>Start one with an @name, or share yours so people can find you.</div>
                 </div>
-                <button onClick={() => { setComposeNpub(''); setComposeRes({ s: 'idle' }); setComposeOpen(true) }} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '11px 20px', borderRadius: 11, background: 'var(--teal-grad)', color: 'var(--ink-on-accent)', fontSize: 13, fontWeight: 700, cursor: 'pointer', border: 'none', fontFamily: 'inherit' }}>
+                <button onClick={() => { setComposeNpub(''); setComposeRes({ s: 'idle' }); setComposeOpen(true) }} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '10px 18px', borderRadius: 10, background: 'var(--accent-400)', color: 'var(--ink-on-accent)', fontSize: 13, fontWeight: 600, cursor: 'pointer', border: 'none', fontFamily: 'inherit' }} className="cv-btn-primary">
                   <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="var(--ink-on-accent)" strokeWidth={2.2} strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>New conversation
                 </button>
               </div>
@@ -1632,9 +1608,9 @@ export default function ChatApp() {
               </div>
             ) : (
               <>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 8px 10px' }}>
-                  <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.14em', color: 'var(--text-faint-dim)' }}>CONVERSATIONS</span>
-                  <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-teal-dim)' }}>{sq ? `${filteredConversations.length} of ${conversations.length}` : ''}</span>
+                <div style={SECTION_ROW}>
+                  <span style={{ ...SECTION_LABEL, flex: 1 }}>DIRECT</span>
+                  {sq && <span style={SECTION_COUNT}>{filteredConversations.length} of {conversations.length}</span>}
                 </div>
                 {filteredConversations.map((c) => {
                   const active = !selectedGroupId && selectedConvo?.peerHex === c.peerHex
@@ -1643,21 +1619,22 @@ export default function ChatApp() {
                   const isPay = !!lm?.payment
                   const preview = !lm ? '' : isPay ? 'Payment sent' : lm.direction === 'sent' ? `You: ${lm.plaintext}` : lm.plaintext
                   return (
-                    <div key={c.peerHex} onClick={() => { setSelectedPeer(c.peerHex); setSelectedGroupId(null) }} className="cv-conv" style={{ display: 'flex', gap: 13, padding: 13, borderRadius: 12, position: 'relative', background: active ? 'var(--surface-row-selected)' : 'transparent', border: active ? '1px solid rgba(var(--teal-500-rgb),0.18)' : '1px solid transparent', cursor: 'pointer', marginBottom: 4 }}>
-                      {active && <span style={{ position: 'absolute', left: 0, top: 14, bottom: 14, width: 3, borderRadius: '0 3px 3px 0', background: 'var(--teal-500)' }} />}
-                      <Avatar hex={c.peerHex} nickname={nick} size={46} radius={13} />
+                    <div key={c.peerHex} onClick={() => { setSelectedPeer(c.peerHex); setSelectedGroupId(null) }} className="cv-conv" style={{ ...CONV_ROW, background: active ? 'var(--accent-wash)' : 'transparent' }}>
+                      {/* A person's avatar is a CIRCLE and a group's is a rounded tile — the shape
+                          carries the distinction in V3, which is why the row needs no other badge. */}
+                      <Avatar hex={c.peerHex} nickname={nick} size={36} radius={99} fontSize={13} />
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 3, gap: 8 }}>
-                          <span style={{ fontSize: 15, fontWeight: 600, color: active ? 'var(--text-primary)' : 'var(--text-name)', fontFamily: nick ? undefined : "'IBM Plex Mono', monospace", overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{displayName(c.peerHex)}</span>
-                          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: 'var(--text-faint-dim)', flexShrink: 0 }}>{compactTime(c.lastActivity)}</span>
+                        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+                          <span style={{ ...CONV_NAME, color: active ? 'var(--accent-ink)' : 'var(--text-name)', fontFamily: nick ? undefined : MONO }}>{displayName(c.peerHex)}</span>
+                          <span style={CONV_TIME}>{compactTime(c.lastActivity)}</span>
                         </div>
                         {isPay ? (
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                            <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="var(--teal-500)" strokeWidth={2} style={{ flexShrink: 0 }}><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>
-                            <span style={{ color: 'var(--teal-500)', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{preview}</span>
+                          <div style={{ ...CONV_PREVIEW, display: 'flex', alignItems: 'center', gap: 5, color: 'var(--accent-ink)' }}>
+                            <svg width={11} height={11} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} style={{ flexShrink: 0 }}><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>
+                            <span style={{ fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{preview}</span>
                           </div>
                         ) : (
-                          <div style={{ fontSize: 13, color: 'var(--text-muted-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{preview}</div>
+                          <div style={{ ...CONV_PREVIEW, color: active ? 'var(--text-body-dim)' : 'var(--text-muted-dim)' }}>{preview}</div>
                         )}
                       </div>
                     </div>
@@ -2206,8 +2183,6 @@ export default function ChatApp() {
       </div>
     </div>
 
-    {walletOpen && <WalletModal onClose={() => setWalletOpen(false)} />}
-    {profileOpen && <ProfilePanel onClose={() => setProfileOpen(false)} />}
     {reinviteFor && (
       <ReinviteModal
         groupName={groups.find(g => g.id === reinviteFor)?.name?.trim() || 'this group'}

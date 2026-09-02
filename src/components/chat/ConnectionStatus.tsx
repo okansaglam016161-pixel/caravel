@@ -26,38 +26,43 @@ export function ConnectionIndicator({ status, connected, total, onClick }: {
   onClick: () => void
 }) {
   const count = `${connected}/${total}`
+  // V3 draws this as a DASHED strip on the page ground rather than a solid card: it is an ambient
+  // status line inside the list, not an item in it, and a dashed edge says "not a row you can open"
+  // without needing a different colour. The design only draws the degraded state; the other three
+  // keep their semantic hue, because a strip that looked the same whether you were connected or
+  // offline would be worse than no strip.
   const base: React.CSSProperties = {
-    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-    padding: '9px 13px', borderRadius: 10, background: 'var(--surface)', cursor: 'pointer',
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+    padding: '7px 12px', borderRadius: 9, background: 'var(--surface-base)', cursor: 'pointer',
   }
   const dot = (bg: string, anim: string) => (
-    <span style={{ width: 7, height: 7, borderRadius: '50%', background: bg, animation: anim, flexShrink: 0 }} />
+    <span style={{ width: 6, height: 6, borderRadius: '50%', background: bg, animation: anim, flexShrink: 0 }} />
   )
   const spinner = (
-    <span style={{ width: 12, height: 12, borderRadius: '50%', border: '2px solid rgba(var(--border-rgb),0.2)', borderTopColor: 'var(--text-muted-dim)', animation: 'cv-spin 0.8s linear infinite', flexShrink: 0 }} />
+    <span style={{ width: 10, height: 10, borderRadius: '50%', border: '2px solid var(--border-strong)', borderTopColor: 'var(--text-muted-dim)', animation: 'cv-spin 0.8s linear infinite', flexShrink: 0 }} />
   )
   let border: string, lead: React.ReactNode, label: string, labelC: string, countC: string
   if (status === 'connected') {
-    border = 'rgba(var(--teal-500-rgb),0.18)'; lead = dot('var(--teal-500)', 'cv-breathe 3s ease-in-out infinite')
-    label = 'Private & connected'; labelC = 'var(--teal-300)'; countC = 'var(--text-teal-dim)'
+    border = 'var(--border-strong)'; lead = dot('var(--positive)', 'cv-breathe 3s ease-in-out infinite')
+    label = 'Private & connected'; labelC = 'var(--text-body-dim)'; countC = 'var(--text-muted-dim)'
   } else if (status === 'connecting') {
-    border = 'rgba(var(--border-rgb),0.16)'; lead = spinner
-    label = 'Connecting…'; labelC = 'var(--text-muted)'; countC = 'var(--text-muted)'
+    border = 'var(--border-strong)'; lead = spinner
+    label = 'Connecting…'; labelC = 'var(--text-body-dim)'; countC = 'var(--text-muted-dim)'
   } else if (status === 'degraded') {
     const down = total - connected
-    border = 'rgba(var(--warn-rgb),0.26)'; lead = dot('var(--warn)', 'cv-pulse 1.8s ease-in-out infinite')
-    label = `Still connected, ${down} relay${down === 1 ? '' : 's'} down`; labelC = 'var(--warn-300)'; countC = 'var(--warn-300)'
+    border = 'var(--warn)'; lead = dot('var(--warn)', 'cv-pulse 1.8s ease-in-out infinite')
+    label = `Still connected, ${down} relay${down === 1 ? '' : 's'} down`; labelC = 'var(--text-body-dim)'; countC = 'var(--warn)'
   } else {
-    border = 'rgba(var(--danger-rgb),0.28)'; lead = dot('var(--danger-500)', 'cv-pulse 1.4s ease-in-out infinite')
+    border = 'var(--danger-500)'; lead = dot('var(--danger-500)', 'cv-pulse 1.4s ease-in-out infinite')
     label = 'Offline, reconnecting'; labelC = 'var(--danger-300)'; countC = 'var(--danger-300)'
   }
   return (
-    <div onClick={onClick} style={{ ...base, border: `1px solid ${border}` }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 9, minWidth: 0 }}>
+    <div onClick={onClick} style={{ ...base, border: `1px dashed ${border}` }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
         {lead}
-        <span style={{ fontSize: 13, fontWeight: 500, color: labelC, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
+        <span style={{ fontSize: 11.5, color: labelC, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
       </div>
-      <span style={{ fontFamily: MONO, fontSize: 11, color: countC, flexShrink: 0 }}>{count}</span>
+      <span style={{ fontFamily: MONO, fontSize: 10.5, color: countC, flexShrink: 0 }}>{count}</span>
     </div>
   )
 }

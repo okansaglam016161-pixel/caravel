@@ -48,6 +48,45 @@ export function bubbleTime(ts: number): string {
   return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
+// ── Day grouping (stage 4) ──────────────────────────────────────────────────────
+//
+// A thread reads as one undated wall without these. The pair is split by TESTABILITY, which is the
+// line this file already draws: `isNewDay` is a pure comparison over two epochs and is covered in
+// chatDisplay.test.ts; `dayLabel` calls toLocaleDateString and so is locale- and TZ-dependent,
+// exactly like compactTime and bubbleTime above, and is left untested for the same reason.
+//
+// LOCAL CALENDAR DAYS, NOT 24-HOUR BUCKETS. Two messages 30 minutes apart belong to different days
+// if a midnight fell between them, and two messages 20 hours apart do not if one did not. That is
+// what a reader means by "a new day", and it is why this compares date components rather than
+// subtracting.
+//
+// The views insert dividers at RENDER TIME by walking their own item list; nothing here mutates
+// that list, so mergeThreadItems and the ThreadItem union are untouched.
+
+/** True when `ts` falls on a later calendar day than `prev`, in the viewer's own timezone. */
+export function isNewDay(prev: number, ts: number): boolean {
+  const a = new Date(prev)
+  const b = new Date(ts)
+  return a.getFullYear() !== b.getFullYear()
+    || a.getMonth() !== b.getMonth()
+    || a.getDate() !== b.getDate()
+}
+
+/** TODAY / YESTERDAY / "MON 4 MAR" — the divider's caption, upper-cased by the design. */
+export function dayLabel(ts: number): string {
+  const d = new Date(ts)
+  const now = new Date()
+  if (!isNewDay(ts, now.getTime())) return 'TODAY'
+  const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1)
+  if (!isNewDay(ts, yesterday.getTime())) return 'YESTERDAY'
+  // The year is included only when it is not the current one — a date that needs it is old enough
+  // that its absence would be the thing you noticed.
+  const opts: Intl.DateTimeFormatOptions = d.getFullYear() === now.getFullYear()
+    ? { weekday: 'short', day: 'numeric', month: 'short' }
+    : { day: 'numeric', month: 'short', year: 'numeric' }
+  return d.toLocaleDateString([], opts).toUpperCase()
+}
+
 // The on-screen box for an image attachment (images M4): fit (width × height) inside maxW × maxH,
 // preserving aspect ratio.
 //
@@ -162,13 +201,14 @@ export function mediaFilename(mime: string, timestamp: number): string {
   return `caravel-${stamp}.${ext}`
 }
 
-// Stable avatar gradient per peer — the design's 5 avatar-token pairs (teal/slate/plum/moss/amber),
-// assigned by hash of the contact key.
+// Stable avatar gradient per peer — the five avatar-token pairs
+// (blue/slate/violet/green/amber), assigned by hash of the contact key. The order is load-bearing:
+// changing it re-colours every existing contact, because the hash indexes into this array.
 const AVATARS = [
-  { grad: 'var(--avatar-teal)', color: 'var(--avatar-teal-ink)' },
+  { grad: 'var(--avatar-blue)', color: 'var(--avatar-blue-ink)' },
   { grad: 'var(--avatar-slate)', color: 'var(--avatar-slate-ink)' },
-  { grad: 'var(--avatar-plum)', color: 'var(--avatar-plum-ink)' },
-  { grad: 'var(--avatar-moss)', color: 'var(--avatar-moss-ink)' },
+  { grad: 'var(--avatar-violet)', color: 'var(--avatar-violet-ink)' },
+  { grad: 'var(--avatar-green)', color: 'var(--avatar-green-ink)' },
   { grad: 'var(--avatar-amber)', color: 'var(--avatar-amber-ink)' },
 ]
 export function avatarFor(peerHex: string) {

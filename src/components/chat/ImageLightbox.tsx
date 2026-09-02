@@ -67,7 +67,7 @@ export default function ImageLightbox({ url, filename, caption, onClose }: {
           href={url}
           download={filename}
           onClick={e => e.stopPropagation()}
-          style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '8px 14px', borderRadius: 9, background: 'rgba(var(--border-rgb),0.14)', border: '1px solid rgba(var(--border-rgb),0.24)', color: 'var(--text-body)', fontSize: 12.5, fontWeight: 600, textDecoration: 'none' }}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '8px 14px', borderRadius: 9, background: 'rgba(255,255,255,0.10)', border: '1px solid rgba(255,255,255,0.18)', color: 'var(--text-body)', fontSize: 12.5, fontWeight: 600, textDecoration: 'none' }}
         >
           <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" /></svg>
           Download
@@ -76,7 +76,7 @@ export default function ImageLightbox({ url, filename, caption, onClose }: {
           ref={closeRef}
           onClick={onClose}
           aria-label="Close image"
-          style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 36, height: 36, borderRadius: 9, background: 'rgba(var(--border-rgb),0.14)', border: '1px solid rgba(var(--border-rgb),0.24)', color: 'var(--text-body)', cursor: 'pointer', padding: 0 }}
+          style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 36, height: 36, borderRadius: 9, background: 'rgba(255,255,255,0.10)', border: '1px solid rgba(255,255,255,0.18)', color: 'var(--text-body)', cursor: 'pointer', padding: 0 }}
         >
           <svg width={17} height={17} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12" /></svg>
         </button>

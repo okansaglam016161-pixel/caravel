@@ -188,7 +188,14 @@
      Not scale entries — specific compositions built out of the scale. Every
      one of these used to be a teal gradient; the foundation forbids gradients
      on the brand ("never teal, never gradients"), so they are flat now. */
-  --msg-sent: var(--accent-600);
+  /* The brand blue itself, as the design specifies (Caravel Chat V3 §4 draws the sent bubble
+     #378ADD). Theme-invariant on purpose — it is not restated in the light block, so a sent
+     bubble is the same blue whichever theme you are in, exactly as the design draws it.
+     NOTE, so it is not rediscovered later: white on accent-400 is 3.59:1, under WCAG AA's
+     4.5:1 for normal text. accent-600 would be 6.76:1. Matching the design's shade was chosen
+     deliberately over that margin; if the bubble is ever reported as hard to read, this line
+     is the one to revisit. */
+  --msg-sent: var(--accent-400);
   --msg-received: var(--navy-700);
   --card-payment: var(--vault-card);
   --card-payment-border: var(--border);
@@ -200,20 +207,33 @@
   --card-danger: rgba(255, 138, 115, 0.10);
   --card-danger-border: rgba(255, 138, 115, 0.28);
 
-  /* Avatar palette — rebased off the navy/cobalt scales and the two semantic
-     hues. Gradients are kept HERE deliberately: these are generated identity
-     colours, not the brand mark, and the no-gradient rule is about the logo
-     and the accent. */
-  --avatar-teal: linear-gradient(135deg, #1B5CA3, #123A67);
-  --avatar-teal-ink: #EBF4FC;
-  --avatar-slate: linear-gradient(135deg, #1E3654, #2A486C);
-  --avatar-slate-ink: #D2DBE6;
-  --avatar-plum: linear-gradient(135deg, #123A67, #0D2A4B);
-  --avatar-plum-ink: #A9CDF2;
-  --avatar-moss: linear-gradient(135deg, #0F4A38, #12704F);
-  --avatar-moss-ink: #C7ECE2;
-  --avatar-amber: linear-gradient(135deg, #4A3A14, #6E5A24);
-  --avatar-amber-ink: #ECDFC7;
+  /* Avatar palette — five generated identity colours. Gradients are kept HERE
+     deliberately: these are not the brand mark, and the no-gradient rule is
+     about the logo and the accent.
+
+     VIVID, AND FIVE DISTINCT HUES. They used to be five dark navy-scale
+     gradients, which made every avatar read as the same dark chip and told you
+     nothing at a glance — the whole point of hashing a pubkey into a colour is
+     that you can tell people apart. They are now spread around the wheel at
+     similar lightness, so the set reads as one family while staying separable.
+
+     THE INK IS PER-FILL, and mixed on purpose: white on the two deep fills,
+     near-black on the three light ones. Measured against WCAG AA (4.5:1 for
+     normal text — avatar initials are ~11-13px bold, which is NOT large text):
+     violet 7.10, amber 6.72, green 5.64, slate 5.20 all pass. BLUE IS 3.59 and
+     does not; it is #378ADD because the design specifies that exact blue for
+     avatars and for the sent bubble, and matching it was chosen over the
+     margin. Same decision, and the same caveat, as --msg-sent. */
+  --avatar-blue: linear-gradient(135deg, #378ADD, #2372C4);
+  --avatar-blue-ink: #FFFFFF;
+  --avatar-violet: linear-gradient(135deg, #7C3AED, #6025C9);
+  --avatar-violet-ink: #FFFFFF;
+  --avatar-green: linear-gradient(135deg, #22C55E, #16A34A);
+  --avatar-green-ink: #0A1322;
+  --avatar-amber: linear-gradient(135deg, #F5A524, #D98A0B);
+  --avatar-amber-ink: #0A1322;
+  --avatar-slate: linear-gradient(135deg, #94A3B8, #7789A0);
+  --avatar-slate-ink: #0A1322;
   /* Deprecated aliases whose targets are theme-dependent, so they must be
      restated per theme rather than resolved once on :root. */
   --text-accent-dim: #46648A;

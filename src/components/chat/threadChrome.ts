@@ -69,6 +69,21 @@ export const MENU_ITEM: CSSProperties = {
   fontSize: 13, fontWeight: 600, textAlign: 'left', fontFamily: 'inherit',
 }
 
+// ── Bubbles ─────────────────────────────────────────────────────────────────────
+
+/**
+ * The line under a bubble: time, an optional "edited", and — on a sent one — a tick.
+ *
+ * THREE COMPONENTS DRAW IT — MessageBubble in three variants, MediaMessageCard, and PendingBubble —
+ * and before this they drew it three different ways, two of them in mono at different colours. It
+ * sits directly under bubbles that are now identical, where a 1px or one-shade difference reads as
+ * a mistake. V3 sets it in the UI face; the mono was a teal-era habit.
+ */
+export const BUBBLE_META: CSSProperties = {
+  display: 'flex', alignItems: 'center', gap: 5,
+  fontSize: 11, color: 'var(--text-muted-dim)', marginTop: 4,
+}
+
 // ── The message list ────────────────────────────────────────────────────────────
 
 /**

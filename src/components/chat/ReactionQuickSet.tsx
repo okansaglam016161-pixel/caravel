@@ -86,7 +86,7 @@ export default function ReactionQuickSet({ mine, blocked, pending, align, onPick
                 style={{
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
                   width: CELL, height: CELL, flexShrink: 0, padding: 0, borderRadius: '50%',
-                  border: 'none', background: held ? 'rgba(var(--teal-500-rgb),0.18)' : 'transparent',
+                  border: 'none', background: held ? 'var(--accent-wash)' : 'transparent',
                   cursor: disabled ? 'default' : 'pointer',
                   opacity: waiting ? 0.4 : disabled ? 0.35 : 1,
                   fontSize: 18, lineHeight: 1,

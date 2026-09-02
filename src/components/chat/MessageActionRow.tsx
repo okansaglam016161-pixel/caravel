@@ -46,7 +46,7 @@ export default function MessageActionRow({ onReact, reactOpen, reactPopover, onR
             title="React"
             aria-label="React to message"
             aria-expanded={!!reactOpen}
-            style={{ ...ACTION_BTN, ...(reactOpen ? { opacity: 1, background: 'rgba(var(--border-rgb),0.14)' } : null) }}
+            style={{ ...ACTION_BTN, ...(reactOpen ? { opacity: 1, background: 'var(--surface-inset)' } : null) }}
           >
             <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><circle cx={12} cy={12} r={9} /><path d="M8.5 14.5a4.5 4.5 0 0 0 7 0" /><path d="M9 9.5h.01M15 9.5h.01" /></svg>
           </button>
@@ -68,7 +68,7 @@ export default function MessageActionRow({ onReact, reactOpen, reactPopover, onR
             title="More"
             aria-label="More message actions"
             aria-expanded={menuOpen}
-            style={{ ...ACTION_BTN, ...(menuOpen ? { opacity: 1, background: 'rgba(var(--border-rgb),0.14)' } : null) }}
+            style={{ ...ACTION_BTN, ...(menuOpen ? { opacity: 1, background: 'var(--surface-inset)' } : null) }}
           >
             <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round"><circle cx={12} cy={5} r={1.7} /><circle cx={12} cy={12} r={1.7} /><circle cx={12} cy={19} r={1.7} /></svg>
           </button>

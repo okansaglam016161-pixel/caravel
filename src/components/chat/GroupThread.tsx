@@ -18,7 +18,7 @@ import type { CaravelMessage, Group } from '../../messaging/types'
 import Avatar from './Avatar'
 import MessageBubble from './MessageBubble'
 import { THREAD_HEADER, HEADER_LEFT, THREAD_TITLE, MENU_SCRIM, MENU_PANEL, MENU_ITEM, THREAD_SCROLLER, THREAD_META_LINE } from './threadChrome'
-import { E2ELine, ThreadMenuButton, ThreadEmptyState } from './ThreadFrame'
+import { E2ELine, ThreadMenuButton, ThreadEmptyState, DayDivider } from './ThreadFrame'
 import QuotedPreview from './QuotedPreview'
 import { canBeginEdit, canBeginReply, canReplyTo, quotedAuthorLabel } from './replyCompose'
 import { aggregateReactions, atReactionLimit, canReactTo, myReactions } from './reactionDisplay'
@@ -26,7 +26,7 @@ import MessageActionRow from './MessageActionRow'
 import ReactionPills from './ReactionPills'
 import ReactionQuickSet from './ReactionQuickSet'
 import MediaMessageCard from './MediaMessageCard'
-import { mergeThreadItems, threadContentKey, MONO } from './chatDisplay'
+import { dayLabel, isNewDay, mergeThreadItems, threadContentKey, MONO } from './chatDisplay'
 import { groupGlyph } from './groupGlyph'
 import { useScrollToBottom } from './useScrollToBottom'
 import { useJumpToMessage } from './useJumpToMessage'
@@ -391,7 +391,7 @@ export default function GroupThread({
         {/* NO PAYMENT SENTENCE, unlike the DM's. This composer has no $ button (see its own note
             below), so offering one here would be the screen promising something the thread
             cannot do. */}
-        {messages.length === 0 && (
+        {messages.length === 0 && pending.length === 0 && (
           <ThreadEmptyState
             title="This group is private"
             body={<>Messages in {groupTitle(group)} go to every member, end-to-end encrypted. Only members can read them.</>}
@@ -400,127 +400,148 @@ export default function GroupThread({
         {/* Real messages and provisional bubbles in ONE chronological pass — see mergeThreadItems.
             A failed send used to be pinned below every later message, forever. */}
         {mergeThreadItems(messages, pending).map((item, i, items) => {
-          if (item.kind === 'pending') {
-            const p = item.pending
+          // DAY DIVIDERS. Inserted at render time by comparing neighbours — nothing is written into
+          // the merged list, so mergeThreadItems and the ThreadItem union are untouched. The Fragment
+          // carries the key; the inner element's own key is then unused and harmless.
+          const dayLbl = i === 0 || isNewDay(items[i - 1].at, item.at) ? dayLabel(item.at) : null
+          const rowKey = item.kind === 'pending' ? `p-${item.pending.id}` : `m-${item.message.id}`
+          const row = (() => {
+            if (item.kind === 'pending') {
+              const p = item.pending
+              return (
+                <PendingBubble
+                  key={p.id}
+                  text={p.text}
+                  status={p.status}
+                  failure={p.failure}
+                  onRetry={() => onRetryPending(p.id)}
+                  onDismiss={() => onDismissPending(p.id)}
+                />
+              )
+            }
+            const m = item.message
+            // System NOTICE (B-M2) — an inline centered line, never a bubble. Visual only: the roster
+            // is unchanged, so the header still counts the leaver among the members (Phase 1 has no
+            // roster edit). Text is composed here; the stored row carries empty plaintext.
+            if (m.system === 'group-leave') {
+              return (
+                <div key={m.id} style={THREAD_META_LINE}>
+                  {nameFor(m.senderPubkeyHex)} has left the chat
+                </div>
+              )
+            }
+            // An encrypted image (images M4). Same component and same resolver as the DM thread, on
+            // both sides — a group image is fetched and decrypted per member, from one upload.
+            if (m.media) {
+              return <MediaMessageCard key={m.id} message={m} lid={m.logicalId} flashed={!!m.logicalId && flashedId === m.logicalId} />
+            }
+            if (m.direction === 'sent') {
+              // My own group message: the same edit affordance the DM thread offers, on the same
+              // predicate. `flight` is the optimistic layer — the bubble reads the new text while the
+              // fan-out is outstanding and snaps back if it reached NOBODY.
+              const flight = flightFor(m, editFlights)
+              // My own sent bubble sits right, so its action row is outboard on the LEFT.
+              const rx = reactionProps(m, true)
+              return (
+                <Fragment key={m.id}>
+                  <MessageBubble
+                    text={displayTextFor(m, editFlights)}
+                    timestamp={m.timestamp}
+                    variant="sent"
+                    edited={!!m.editedAt}
+                    highlighted={!!m.logicalId && editing?.logicalId === m.logicalId}
+                    lid={m.logicalId}
+                    flashed={!!m.logicalId && flashedId === m.logicalId}
+                    quoted={m.replyTo ? <QuotedPreview replyTo={m.replyTo} byLogicalId={quotedIndex} nameFor={nameFor} onJump={jumpTo} tone="on-accent" /> : undefined}
+                    reactions={rx.pills}
+                    actions={(canEditMessage(m) || canReplyTo(m) || rx.reactable) ? (
+                      <MessageActionRow
+                        menuAlign={rx.side}
+                        onReact={rx.reactable ? rx.onReactClick : undefined}
+                        reactOpen={rx.open}
+                        reactPopover={rx.popover}
+                        onReply={canReplyTo(m) ? () => beginReply(m.logicalId!) : undefined}
+                        onEdit={canEditMessage(m) ? () => beginEdit(m.logicalId!, m.plaintext) : undefined}
+                      />
+                    ) : undefined}
+                  />
+                  {/* In-flight + failed states. "Saving" says only that the fan-out is running; a
+                      PARTIAL result is a success here and is reported in the footer instead. */}
+                  {flight?.status === 'saving' && (
+                    <div style={{ alignSelf: 'flex-end', display: 'flex', alignItems: 'center', gap: 6, fontFamily: MONO, fontSize: 11, color: 'var(--text-muted-dim)', marginTop: -2, marginRight: 4 }}>
+                      <span style={{ width: 10, height: 10, borderRadius: '50%', border: '2px solid rgba(var(--border-rgb),0.2)', borderTopColor: 'var(--text-muted-dim)', animation: 'cv-spin 0.8s linear infinite' }} />Saving edit
+                    </div>
+                  )}
+                  {flight?.status === 'failed' && (
+                    <div style={{ alignSelf: 'flex-end', display: 'flex', alignItems: 'center', gap: 10, marginTop: -2, marginRight: 4 }}>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'var(--danger-300)' }}>
+                        <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="var(--danger-500)" strokeWidth={2.4} strokeLinecap="round"><circle cx={12} cy={12} r={9} /><path d="M12 8v5M12 16h.01" /></svg>Couldn’t save edit
+                      </span>
+                      <span onClick={() => onRetryEdit(m.logicalId!)} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '4px 10px', borderRadius: 8, background: 'rgba(var(--danger-rgb),0.08)', border: '1px solid rgba(var(--danger-rgb),0.3)', fontSize: 11, fontWeight: 700, color: 'var(--danger-300)', cursor: 'pointer' }}>Retry</span>
+                      <span onClick={() => onDismissEdit(m.logicalId!)} style={{ fontSize: 11, color: 'var(--text-muted-dim)', cursor: 'pointer' }}>Dismiss</span>
+                    </div>
+                  )}
+                </Fragment>
+              )
+            }
+            // Group consecutive same-sender received messages: avatar + label once per run. A system
+            // line BREAKS the run — otherwise the sender header would be wrongly suppressed after an
+            // interruption, since prev.senderPubkeyHex still matches across the notice.
+            //
+            // A PENDING bubble breaks it too, and deliberately: it is a genuine visual interruption,
+            // exactly as one of my own sent bubbles already is. Resolving `prev` to undefined for a
+            // pending item is what does it — simpler and more honest than scanning backwards past
+            // provisional rows to find the last real message.
+            const prevItem = items[i - 1]
+            const prev = prevItem?.kind === 'message' ? prevItem.message : undefined
+            // A DAY DIVIDER BREAKS THE RUN TOO. Without this, a run spanning midnight puts a divider
+            // between two of the same sender's bubbles and leaves the one below it with no avatar and
+            // no name — reading as a continuation of something it has just been separated from.
+            const firstOfRun = !prev || prev.system !== undefined || prev.direction !== 'received'
+              || prev.senderPubkeyHex !== m.senderPubkeyHex || isNewDay(prevItem.at, item.at)
+            // The sender tile below is a CIRCLE, because it is a person — the shape language stages
+            // 2-3 settled, where a person is round and a group is a rounded tile. §3B draws it as a
+            // flat --recv swatch; we keep the generated per-sender colour instead, since in a group
+            // the avatar's whole job is telling you who at a glance.
+            // A member's bubble sits left, so its action row is outboard on the RIGHT.
+            const rx = reactionProps(m, false)
             return (
-              <PendingBubble
-                key={p.id}
-                text={p.text}
-                status={p.status}
-                failure={p.failure}
-                onRetry={() => onRetryPending(p.id)}
-                onDismiss={() => onDismissPending(p.id)}
+              <MessageBubble
+                key={m.id}
+                text={m.plaintext}
+                timestamp={m.timestamp}
+                variant="received"
+                // A member's corrected message is labelled here exactly as in the DM thread — the
+                // edit is only visible as an edit if the label travels with it. No EDIT affordance:
+                // only the author can edit, and applyEdit enforces that on every device. Reply,
+                // however, is not authorship-gated, so a received bubble now carries an action row.
+                edited={!!m.editedAt}
+                lid={m.logicalId}
+                flashed={!!m.logicalId && flashedId === m.logicalId}
+                quoted={m.replyTo ? <QuotedPreview replyTo={m.replyTo} byLogicalId={quotedIndex} nameFor={nameFor} onJump={jumpTo} /> : undefined}
+                reactions={rx.pills}
+                // No Edit on a member's message — only the author may, and applyEdit enforces that on
+                // every device, so there is nothing for the overflow menu to hold and it is omitted.
+                actions={(canReplyTo(m) || rx.reactable) ? (
+                  <MessageActionRow
+                    menuAlign={rx.side}
+                    onReact={rx.reactable ? rx.onReactClick : undefined}
+                    reactOpen={rx.open}
+                    reactPopover={rx.popover}
+                    onReply={canReplyTo(m) ? () => beginReply(m.logicalId!) : undefined}
+                  />
+                ) : undefined}
+                senderHeader={firstOfRun
+                  ? { avatar: <Avatar hex={m.senderPubkeyHex} size={28} radius={99} fontSize={11} />, label: nameFor(m.senderPubkeyHex) }
+                  : 'continuation'}
               />
             )
-          }
-          const m = item.message
-          // System NOTICE (B-M2) — an inline centered line, never a bubble. Visual only: the roster
-          // is unchanged, so the header still counts the leaver among the members (Phase 1 has no
-          // roster edit). Text is composed here; the stored row carries empty plaintext.
-          if (m.system === 'group-leave') {
-            return (
-              <div key={m.id} style={THREAD_META_LINE}>
-                {nameFor(m.senderPubkeyHex)} has left the chat
-              </div>
-            )
-          }
-          // An encrypted image (images M4). Same component and same resolver as the DM thread, on
-          // both sides — a group image is fetched and decrypted per member, from one upload.
-          if (m.media) {
-            return <MediaMessageCard key={m.id} message={m} lid={m.logicalId} flashed={!!m.logicalId && flashedId === m.logicalId} />
-          }
-          if (m.direction === 'sent') {
-            // My own group message: the same edit affordance the DM thread offers, on the same
-            // predicate. `flight` is the optimistic layer — the bubble reads the new text while the
-            // fan-out is outstanding and snaps back if it reached NOBODY.
-            const flight = flightFor(m, editFlights)
-            // My own sent bubble sits right, so its action row is outboard on the LEFT.
-            const rx = reactionProps(m, true)
-            return (
-              <Fragment key={m.id}>
-                <MessageBubble
-                  text={displayTextFor(m, editFlights)}
-                  timestamp={m.timestamp}
-                  variant="sent"
-                  edited={!!m.editedAt}
-                  highlighted={!!m.logicalId && editing?.logicalId === m.logicalId}
-                  lid={m.logicalId}
-                  flashed={!!m.logicalId && flashedId === m.logicalId}
-                  quoted={m.replyTo ? <QuotedPreview replyTo={m.replyTo} byLogicalId={quotedIndex} nameFor={nameFor} onJump={jumpTo} tone="on-accent" /> : undefined}
-                  reactions={rx.pills}
-                  actions={(canEditMessage(m) || canReplyTo(m) || rx.reactable) ? (
-                    <MessageActionRow
-                      menuAlign={rx.side}
-                      onReact={rx.reactable ? rx.onReactClick : undefined}
-                      reactOpen={rx.open}
-                      reactPopover={rx.popover}
-                      onReply={canReplyTo(m) ? () => beginReply(m.logicalId!) : undefined}
-                      onEdit={canEditMessage(m) ? () => beginEdit(m.logicalId!, m.plaintext) : undefined}
-                    />
-                  ) : undefined}
-                />
-                {/* In-flight + failed states. "Saving" says only that the fan-out is running; a
-                    PARTIAL result is a success here and is reported in the footer instead. */}
-                {flight?.status === 'saving' && (
-                  <div style={{ alignSelf: 'flex-end', display: 'flex', alignItems: 'center', gap: 6, fontFamily: MONO, fontSize: 11, color: 'var(--text-muted-dim)', marginTop: -2, marginRight: 4 }}>
-                    <span style={{ width: 10, height: 10, borderRadius: '50%', border: '2px solid rgba(var(--border-rgb),0.2)', borderTopColor: 'var(--text-muted-dim)', animation: 'cv-spin 0.8s linear infinite' }} />Saving edit
-                  </div>
-                )}
-                {flight?.status === 'failed' && (
-                  <div style={{ alignSelf: 'flex-end', display: 'flex', alignItems: 'center', gap: 10, marginTop: -2, marginRight: 4 }}>
-                    <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'var(--danger-300)' }}>
-                      <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="var(--danger-500)" strokeWidth={2.4} strokeLinecap="round"><circle cx={12} cy={12} r={9} /><path d="M12 8v5M12 16h.01" /></svg>Couldn’t save edit
-                    </span>
-                    <span onClick={() => onRetryEdit(m.logicalId!)} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '4px 10px', borderRadius: 8, background: 'rgba(var(--danger-rgb),0.08)', border: '1px solid rgba(var(--danger-rgb),0.3)', fontSize: 11, fontWeight: 700, color: 'var(--danger-300)', cursor: 'pointer' }}>Retry</span>
-                    <span onClick={() => onDismissEdit(m.logicalId!)} style={{ fontSize: 11, color: 'var(--text-muted-dim)', cursor: 'pointer' }}>Dismiss</span>
-                  </div>
-                )}
-              </Fragment>
-            )
-          }
-          // Group consecutive same-sender received messages: avatar + label once per run. A system
-          // line BREAKS the run — otherwise the sender header would be wrongly suppressed after an
-          // interruption, since prev.senderPubkeyHex still matches across the notice.
-          //
-          // A PENDING bubble breaks it too, and deliberately: it is a genuine visual interruption,
-          // exactly as one of my own sent bubbles already is. Resolving `prev` to undefined for a
-          // pending item is what does it — simpler and more honest than scanning backwards past
-          // provisional rows to find the last real message.
-          const prevItem = items[i - 1]
-          const prev = prevItem?.kind === 'message' ? prevItem.message : undefined
-          const firstOfRun = !prev || prev.system !== undefined || prev.direction !== 'received' || prev.senderPubkeyHex !== m.senderPubkeyHex
-          // A member's bubble sits left, so its action row is outboard on the RIGHT.
-          const rx = reactionProps(m, false)
+          })()
           return (
-            <MessageBubble
-              key={m.id}
-              text={m.plaintext}
-              timestamp={m.timestamp}
-              variant="received"
-              // A member's corrected message is labelled here exactly as in the DM thread — the
-              // edit is only visible as an edit if the label travels with it. No EDIT affordance:
-              // only the author can edit, and applyEdit enforces that on every device. Reply,
-              // however, is not authorship-gated, so a received bubble now carries an action row.
-              edited={!!m.editedAt}
-              lid={m.logicalId}
-              flashed={!!m.logicalId && flashedId === m.logicalId}
-              quoted={m.replyTo ? <QuotedPreview replyTo={m.replyTo} byLogicalId={quotedIndex} nameFor={nameFor} onJump={jumpTo} /> : undefined}
-              reactions={rx.pills}
-              // No Edit on a member's message — only the author may, and applyEdit enforces that on
-              // every device, so there is nothing for the overflow menu to hold and it is omitted.
-              actions={(canReplyTo(m) || rx.reactable) ? (
-                <MessageActionRow
-                  menuAlign={rx.side}
-                  onReact={rx.reactable ? rx.onReactClick : undefined}
-                  reactOpen={rx.open}
-                  reactPopover={rx.popover}
-                  onReply={canReplyTo(m) ? () => beginReply(m.logicalId!) : undefined}
-                />
-              ) : undefined}
-              senderHeader={firstOfRun
-                ? { avatar: <Avatar hex={m.senderPubkeyHex} size={28} radius={9} fontSize={11} />, label: nameFor(m.senderPubkeyHex) }
-                : 'continuation'}
-            />
+            <Fragment key={rowKey}>
+              {dayLbl && <DayDivider label={dayLbl} />}
+              {row}
+            </Fragment>
           )
         })}
         {/* Auto-scroll anchor */}

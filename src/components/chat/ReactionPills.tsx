@@ -39,17 +39,21 @@ export default function ReactionPills({ summaries, pending, labelFor, onToggle }
               display: 'flex', alignItems: 'center', gap: 4,
               padding: s.count > 1 ? '2px 7px 2px 5px' : '2px 5px',
               height: 22, borderRadius: 999,
-              // My own pill is tinted and outlined, so "which of these is mine" survives a strip of
-              // several — the tap target that REMOVES has to be unmistakable.
-              background: s.mine ? 'rgba(var(--teal-500-rgb),0.16)' : 'var(--surface-inset)',
-              border: `1px solid ${s.mine ? 'rgba(var(--teal-500-rgb),0.45)' : 'rgba(var(--border-rgb),0.16)'}`,
+              // MINE IS THE FILLED ONE, everyone else's is the card. V3 inverts the teal era's
+              // arrangement, where mine carried the heavier outline: the accent wash reads at a
+              // glance in a strip of several, and the tap target that REMOVES has to be
+              // unmistakable. Someone else's takes the surface + hairline + one step of elevation
+              // the design gives every other small card.
+              background: s.mine ? 'var(--accent-wash)' : 'var(--surface)',
+              border: `1px solid ${s.mine ? 'transparent' : 'var(--border)'}`,
+              boxShadow: s.mine ? undefined : 'var(--e1)',
               cursor: pending !== null ? 'default' : 'pointer',
               opacity: waiting ? 0.45 : 1,
             }}
           >
             <span style={{ fontSize: 13, lineHeight: 1, fontFamily: "'Apple Color Emoji','Segoe UI Emoji','Noto Color Emoji',sans-serif" }}>{s.emoji}</span>
             {s.count > 1 && (
-              <span style={{ fontFamily: MONO, fontSize: 10, fontWeight: 600, color: s.mine ? 'var(--teal-300)' : 'var(--text-muted-dim)' }}>{s.count}</span>
+              <span style={{ fontFamily: MONO, fontSize: 10, fontWeight: 600, color: s.mine ? 'var(--accent-ink)' : 'var(--text-body-dim)' }}>{s.count}</span>
             )}
           </button>
         )

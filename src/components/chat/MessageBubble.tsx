@@ -1,7 +1,9 @@
-// The text message bubble shared by DM + group views. Reproduces the DM markup EXACTLY for all
-// three variants (received / sent / notes-to-self). `senderHeader` is a group-only addition (an
-// avatar gutter + sender label above the bubble, with a 'continuation' mode for grouped runs) and
-// is never passed by the DM view — so a DM bubble renders byte-identically to before.
+// The text message bubble shared by DM + group views, in three variants (received / sent /
+// notes-to-self). `senderHeader` is a group-only addition — an avatar gutter and sender label above
+// the bubble, with a 'continuation' mode for grouped runs — and is never passed by the DM view.
+//
+// STAGE 4 put the three variants on one BUBBLE spec: 14px text in 10/14 padding, and the tail moved
+// from the top corner to the bottom. Only the fill and which corner is clipped differ now.
 //
 // EDIT SUPPORT (M3) adds three optional props — `edited`, `actions`, `highlighted`. All are opt-in,
 // so a call site that passes none renders exactly as it did before editing existed. M4 wired the
@@ -17,14 +19,48 @@
 // chat views mount this component and they never mount at the same time.
 // Only the markup slot lives here — all edit STATE stays in ChatApp, matching PendingBubble's split.
 
-import type { ReactNode } from 'react'
-import { bubbleTime, MONO } from './chatDisplay'
+import type { CSSProperties, ReactNode } from 'react'
+import { bubbleTime } from './chatDisplay'
+import { BUBBLE_META } from './threadChrome'
 
 export type SenderHeader = { avatar: ReactNode; label: string } | 'continuation'
 
 // Ring drawn around the bubble currently loaded in the composer, so it is never ambiguous which
 // message an edit is about.
-const EDIT_RING = '0 0 0 2px rgba(var(--teal-500-rgb),0.55)'
+const EDIT_RING = '0 0 0 2px rgba(var(--accent-400-rgb),0.55)'
+
+// The body every bubble shares. V3 takes it from 15px/13-17 to 14px/10-14, and moves the tail from
+// the TOP corner to the BOTTOM one — the bubble now points at where the eye leaves it rather than
+// where it arrives.
+const BUBBLE: CSSProperties = {
+  display: 'flex', flexDirection: 'column', alignItems: 'stretch', minWidth: 0,
+  padding: '10px 14px', fontSize: 14, lineHeight: 1.5,
+}
+const TAIL_SENT = '14px 14px 5px 14px'
+const TAIL_RECEIVED = '14px 14px 14px 5px'
+
+/**
+ * ONE TICK, AND IT MEANS "SENT FROM THIS DEVICE".
+ *
+ * The design draws two states — read, and delivered-but-not-read — and this app can express
+ * neither: CaravelMessage carries no delivery or read field, and nothing in src/messaging implements
+ * receipts. The module underneath this one is explicit about that and says so five times over
+ * (`membersReached` is "relays-reached, not delivered"; a group send is "NOT delivery
+ * confirmation… Surface only as a soft 'sent'"; sendEdit is "Best-effort: acceptance is not
+ * delivery"). The `edited` tag below follows the same rule.
+ *
+ * The bubble used to break it: an ACCENT checkmark, drawn unconditionally, which reads as
+ * "delivered" to everyone who has used another messenger. It is muted now, and it inherits the meta
+ * row's colour rather than choosing its own, so it sits with the timestamp as one quiet fact about
+ * what THIS device did. A second state can be added the day there is something true to put in it.
+ */
+function SentTick() {
+  return (
+    <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+      <path d="M18 7l-8 8-4-4" />
+    </svg>
+  )
+}
 
 // "edited" suffix for the meta row. Deliberately says nothing about delivery: on the sender's side
 // it means the edit was sent from this device, on the recipient's that it arrived. Neither side can
@@ -66,27 +102,27 @@ export default function MessageBubble({ text, timestamp, variant, senderHeader, 
   reactions?: ReactNode
 }) {
   // The flash ring must contrast with the bubble it lands on, exactly as the quote panel does. The
-  // 'sent' variant is the ONLY teal-filled message surface (--msg-sent), so it takes the light ring;
-  // 'self' and 'received' are both dark inset surfaces and keep the teal one. Decided here rather
+  // 'sent' variant is the ONLY accent-filled message surface (--msg-sent), so it takes the light
+  // ring; 'self' and 'received' sit on --msg-received and keep the accent one. Decided here rather
   // than via a prop because `variant` is already in scope — unlike `quoted`, which arrives as a
   // built node and so has to be told its tone by the call site.
   const flashClass = flashed ? (variant === 'sent' ? 'cv-msg-flash-light' : 'cv-msg-flash') : undefined
-  // Outgoing (right, teal, timestamp + delivered check).
+  // Outgoing (right, accent-filled, timestamp + a 'sent' tick — see SentTick for what it claims).
   if (variant === 'sent') {
     return (
-      <div style={{ alignSelf: 'flex-end', maxWidth: '62%', display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
+      <div style={{ alignSelf: 'flex-end', maxWidth: '78%', display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
         <div className={actions ? 'cv-msg-actionrow' : undefined} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           {actions}
-          <div data-lid={lid} className={flashClass} style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', minWidth: 0, padding: '13px 17px', borderRadius: '16px 4px 16px 16px', background: 'var(--msg-sent)', color: 'var(--text-bright)', fontSize: 15, lineHeight: 1.5, boxShadow: highlighted ? EDIT_RING : undefined }}>
+          <div data-lid={lid} className={flashClass} style={{ ...BUBBLE, borderRadius: TAIL_SENT, background: 'var(--msg-sent)', color: 'var(--ink-on-accent)', boxShadow: highlighted ? EDIT_RING : undefined }}>
             {quoted}
             <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', minWidth: 0 }}>{text}</span>
           </div>
         </div>
         {reactions}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontFamily: MONO, fontSize: 11, color: 'var(--text-muted-dim)', marginTop: 6, marginRight: 4 }}>
+        <div style={{ ...BUBBLE_META, marginRight: 4 }}>
           {bubbleTime(timestamp)}
           {edited && <EditedTag />}
-          <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="var(--teal-500)" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round"><path d="M18 7l-8 8-4-4" /></svg>
+          <SentTick />
         </div>
       </div>
     )
@@ -97,17 +133,17 @@ export default function MessageBubble({ text, timestamp, variant, senderHeader, 
   // label instead would make self-threads the one place an edit leaves no trace.
   if (variant === 'self') {
     return (
-      <div style={{ alignSelf: 'flex-end', maxWidth: '62%', display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
+      <div style={{ alignSelf: 'flex-end', maxWidth: '78%', display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
         <div className={actions ? 'cv-msg-actionrow' : undefined} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           {actions}
-          <div data-lid={lid} className={flashClass} style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', minWidth: 0, padding: '13px 17px', borderRadius: 14, background: 'var(--surface-inset)', border: '1px solid rgba(var(--border-rgb),0.14)', color: 'var(--text-body)', fontSize: 15, lineHeight: 1.5, boxShadow: highlighted ? EDIT_RING : undefined }}>
+          <div data-lid={lid} className={flashClass} style={{ ...BUBBLE, borderRadius: 14, background: 'var(--msg-received)', border: '1px solid var(--border)', color: 'var(--text-body)', boxShadow: highlighted ? EDIT_RING : undefined }}>
             {quoted}
             <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', minWidth: 0 }}>{text}</span>
           </div>
         </div>
         {reactions}
         {edited && (
-          <div style={{ fontFamily: MONO, fontSize: 11, color: 'var(--text-muted-dim)', marginTop: 6, marginRight: 4 }}><EditedTag /></div>
+          <div style={{ ...BUBBLE_META, marginRight: 4 }}><EditedTag /></div>
         )}
       </div>
     )
@@ -124,7 +160,9 @@ export default function MessageBubble({ text, timestamp, variant, senderHeader, 
   const bubble = (
     <>
       <div className={actions ? 'cv-msg-actionrow' : undefined} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <div data-lid={lid} className={flashClass} style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', minWidth: 0, padding: '13px 17px', borderRadius: '4px 16px 16px 16px', background: 'var(--surface-inset)', border: 'none', color: 'var(--text-body)', fontSize: 15, lineHeight: 1.5, boxShadow: highlighted ? EDIT_RING : undefined }}>
+        {/* --msg-received, not --surface-inset. The two resolve identically in both themes, so this
+            is a zero-pixel change; the point is that the semantic token finally does its job. */}
+        <div data-lid={lid} className={flashClass} style={{ ...BUBBLE, borderRadius: TAIL_RECEIVED, background: 'var(--msg-received)', border: 'none', color: 'var(--text-body)', boxShadow: highlighted ? EDIT_RING : undefined }}>
           {quoted}
           <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', minWidth: 0 }}>{text}</span>
         </div>
@@ -132,27 +170,27 @@ export default function MessageBubble({ text, timestamp, variant, senderHeader, 
       </div>
       {reactions}
       {edited ? (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontFamily: MONO, fontSize: 11, color: 'var(--text-faint-dim)', marginTop: 5, marginLeft: 4 }}>
+        <div style={{ ...BUBBLE_META, marginLeft: 4 }}>
           {bubbleTime(timestamp)}<EditedTag />
         </div>
       ) : (
-        <div style={{ fontFamily: MONO, fontSize: 11, color: 'var(--text-faint-dim)', marginTop: 5, marginLeft: 4 }}>{bubbleTime(timestamp)}</div>
+        <div style={{ ...BUBBLE_META, marginLeft: 4 }}>{bubbleTime(timestamp)}</div>
       )}
     </>
   )
 
-  // DM received — byte-identical to the previous inline markup.
+  // DM received — no gutter, no label; the thread has only two participants.
   if (!senderHeader) {
-    return <div style={{ alignSelf: 'flex-start', maxWidth: '62%' }}>{bubble}</div>
+    return <div style={{ alignSelf: 'flex-start', maxWidth: '78%' }}>{bubble}</div>
   }
 
   // Group received (Stage 2): avatar gutter + sender label; a 'continuation' aligns without them.
   const cont = senderHeader === 'continuation'
   return (
-    <div style={{ alignSelf: 'flex-start', maxWidth: '72%', display: 'flex', gap: 8 }}>
+    <div style={{ alignSelf: 'flex-start', maxWidth: '82%', display: 'flex', gap: 9 }}>
       <div style={{ width: 28, flexShrink: 0 }}>{!cont && senderHeader.avatar}</div>
       <div style={{ minWidth: 0, flex: 1 }}>
-        {!cont && <div style={{ fontFamily: MONO, fontSize: 11, fontWeight: 600, color: 'var(--text-teal-dim)', marginBottom: 3, marginLeft: 4 }}>{senderHeader.label}</div>}
+        {!cont && <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--accent-ink)', marginBottom: 3, marginLeft: 4 }}>{senderHeader.label}</div>}
         {bubble}
       </div>
     </div>

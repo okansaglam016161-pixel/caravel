@@ -19,7 +19,7 @@ import { beginEntry, settleEntry } from '../../crypto/journalStore'
 import { resolveOnsNameToHex, toOnsName, type OnsResolveErrorKind } from '../../crypto/ons'
 import { ConnectionIndicator, RelayHealthPanel } from './ConnectionStatus'
 import { usePaymentResolution } from '../../hooks/usePaymentResolution'
-import { avatarFor, initialsFor, truncNpub, bubbleTime, compactTime, mergeThreadItems, threadContentKey, MONO } from './chatDisplay'
+import { avatarFor, initialsFor, truncNpub, bubbleTime, compactTime, dayLabel, isNewDay, mergeThreadItems, threadContentKey, MONO } from './chatDisplay'
 import Avatar from './Avatar'
 import MessageBubble from './MessageBubble'
 import QuotedPreview from './QuotedPreview'
@@ -37,7 +37,7 @@ import { groupGlyph } from './groupGlyph'
 import EmojiPicker from './EmojiPicker'
 import { insertAtCursor } from './composerInsert'
 import { THREAD_HEADER, HEADER_LEFT, THREAD_TITLE, MENU_SCRIM, MENU_PANEL, MENU_ITEM, THREAD_SCROLLER, THREAD_META_LINE } from './threadChrome'
-import { E2ELine, ThreadMenuButton, ThreadEmptyState } from './ThreadFrame'
+import { E2ELine, ThreadMenuButton, ThreadEmptyState, DayDivider } from './ThreadFrame'
 import { useTheme } from '../../hooks/useTheme'
 
 // ── Sidebar section headers ─────────────────────────────────────────────────────
@@ -1813,94 +1813,107 @@ export default function ChatApp() {
             {/* Real messages and provisional bubbles in ONE chronological pass. Pending rows used to
                 render in a separate map after this one, which pinned a failed send to the bottom of
                 the thread forever — see mergeThreadItems. */}
-            {mergeThreadItems(selectedConvo.messages, pendingForPeer).map((item) => {
-              if (item.kind === 'pending') {
-                const p = item.pending
+            {mergeThreadItems(selectedConvo.messages, pendingForPeer).map((item, i, items) => {
+              // DAY DIVIDERS. Inserted at render time by comparing neighbours — nothing is written into
+              // the merged list, so mergeThreadItems and the ThreadItem union are untouched. The
+              // Fragment carries the key; the inner element's own key is then unused and harmless.
+              const dayLbl = i === 0 || isNewDay(items[i - 1].at, item.at) ? dayLabel(item.at) : null
+              const rowKey = item.kind === 'pending' ? `p-${item.pending.id}` : `m-${item.message.id}`
+              const row = (() => {
+                if (item.kind === 'pending') {
+                  const p = item.pending
+                  return (
+                    <PendingBubble
+                      key={p.id}
+                      text={p.text}
+                      status={p.status}
+                      failure={p.failure}
+                      onRetry={() => retrySend(p.id)}
+                      onDismiss={() => dismissPending(p.id)}
+                    />
+                  )
+                }
+                const m = item.message
+                if (m.payment) return <PaymentMessageCard key={m.id} message={m} lid={m.logicalId} flashed={!!m.logicalId && flashedId === m.logicalId} />
+                /* Encrypted image (images M4): resolves itself — cache first, then the host. */
+                if (m.media) return <MediaMessageCard key={m.id} message={m} lid={m.logicalId} flashed={!!m.logicalId && flashedId === m.logicalId} />
+                const flight = flightFor(m, editFlights)
+                const editable = canEditMessage(m)
+                // NO REACT AFFORDANCE IN A NOTES-TO-SELF THREAD. reactMessage refuses it — the wire
+                // destination would be my own key, and it will not publish a reaction to myself and
+                // then apply it locally as if it had gone somewhere. Offering a button that always
+                // fails would be worse than not offering one.
+                const reactable = !isSelf && canReactTo(m)
+                // The action row sits OUTBOARD of its bubble, so it is on the left of a sent bubble and
+                // the right of a received one. Popovers open inboard, i.e. the opposite way (F17).
+                const outboardLeft = isSelf || m.direction === 'sent'
+                const summaries = aggregateReactions(m, nostrPubkeyHex ?? '')
+                const pendingEmoji = reactPending && reactPending.logicalId === m.logicalId ? reactPending.emoji : null
                 return (
-                  <PendingBubble
-                    key={p.id}
-                    text={p.text}
-                    status={p.status}
-                    failure={p.failure}
-                    onRetry={() => retrySend(p.id)}
-                    onDismiss={() => dismissPending(p.id)}
-                  />
+                  <Fragment key={m.id}>
+                    <MessageBubble
+                      text={displayTextFor(m, editFlights)}
+                      timestamp={m.timestamp}
+                      variant={isSelf ? 'self' : m.direction === 'received' ? 'received' : 'sent'}
+                      edited={!!m.editedAt}
+                      highlighted={!!m.logicalId && editing?.logicalId === m.logicalId}
+                      lid={m.logicalId}
+                      flashed={!!m.logicalId && flashedId === m.logicalId}
+                      // 'self' is the notes-to-self bubble — dark inset, NOT teal — so only a true 'sent'
+                      // bubble takes the inverted palette.
+                      quoted={m.replyTo ? <QuotedPreview replyTo={m.replyTo} byLogicalId={quotedIndex} onJump={jumpTo} tone={!isSelf && m.direction === 'sent' ? 'on-accent' : 'on-dark'} /> : undefined}
+                      // No labelFor in a DM: the answer is one of two people, and a tooltip listing
+                      // npubs would be noise rather than information.
+                      reactions={summaries.length > 0 ? (
+                        <ReactionPills
+                          summaries={summaries}
+                          pending={pendingEmoji}
+                          onToggle={(emoji, action) => void toggleReaction(m.logicalId!, emoji, action)}
+                        />
+                      ) : undefined}
+                      actions={(editable || canReplyTo(m) || reactable) ? (
+                        <MessageActionRow
+                          menuAlign={outboardLeft ? 'left' : 'right'}
+                          onReact={reactable ? () => setReactOpen(o => (o === m.logicalId ? null : m.logicalId!)) : undefined}
+                          reactOpen={reactOpen === m.logicalId}
+                          reactPopover={reactOpen === m.logicalId ? (
+                            <ReactionQuickSet
+                              align={outboardLeft ? 'left' : 'right'}
+                              mine={myReactions(m, nostrPubkeyHex ?? '')}
+                              blocked={atReactionLimit(m, nostrPubkeyHex ?? '')}
+                              pending={pendingEmoji}
+                              onPick={emoji => void toggleReaction(m.logicalId!, emoji, myReactions(m, nostrPubkeyHex ?? '').includes(emoji) ? 'remove' : 'add')}
+                              onClose={() => setReactOpen(null)}
+                            />
+                          ) : undefined}
+                          onReply={canReplyTo(m) ? () => beginReply(m.logicalId!) : undefined}
+                          onEdit={editable ? () => beginEdit(m.logicalId!, m.plaintext) : undefined}
+                        />
+                      ) : undefined}
+                    />
+                    {/* In-flight + failed states for an edit. "Saving" says only that it left this
+                        device; nothing here implies the recipient received it. */}
+                    {flight?.status === 'saving' && (
+                      <div style={{ alignSelf: 'flex-end', display: 'flex', alignItems: 'center', gap: 6, fontFamily: MONO, fontSize: 11, color: 'var(--text-muted-dim)', marginTop: -2, marginRight: 4 }}>
+                        <span style={{ width: 10, height: 10, borderRadius: '50%', border: '2px solid rgba(var(--border-rgb),0.2)', borderTopColor: 'var(--text-muted-dim)', animation: 'cv-spin 0.8s linear infinite' }} />Saving edit
+                      </div>
+                    )}
+                    {flight?.status === 'failed' && (
+                      <div style={{ alignSelf: 'flex-end', display: 'flex', alignItems: 'center', gap: 10, marginTop: -2, marginRight: 4 }}>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'var(--danger-300)' }}>
+                          <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="var(--danger-500)" strokeWidth={2.4} strokeLinecap="round"><circle cx={12} cy={12} r={9} /><path d="M12 8v5M12 16h.01" /></svg>Couldn’t save edit
+                        </span>
+                        <span onClick={() => retryEdit(m.logicalId!)} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '4px 10px', borderRadius: 8, background: 'rgba(var(--danger-rgb),0.08)', border: '1px solid rgba(var(--danger-rgb),0.3)', fontSize: 11, fontWeight: 700, color: 'var(--danger-300)', cursor: 'pointer' }}>Retry</span>
+                        <span onClick={() => setEditFlights(x => clearFlight(x, m.logicalId!))} style={{ fontSize: 11, color: 'var(--text-muted-dim)', cursor: 'pointer' }}>Dismiss</span>
+                      </div>
+                    )}
+                  </Fragment>
                 )
-              }
-              const m = item.message
-              if (m.payment) return <PaymentMessageCard key={m.id} message={m} lid={m.logicalId} flashed={!!m.logicalId && flashedId === m.logicalId} />
-              /* Encrypted image (images M4): resolves itself — cache first, then the host. */
-              if (m.media) return <MediaMessageCard key={m.id} message={m} lid={m.logicalId} flashed={!!m.logicalId && flashedId === m.logicalId} />
-              const flight = flightFor(m, editFlights)
-              const editable = canEditMessage(m)
-              // NO REACT AFFORDANCE IN A NOTES-TO-SELF THREAD. reactMessage refuses it — the wire
-              // destination would be my own key, and it will not publish a reaction to myself and
-              // then apply it locally as if it had gone somewhere. Offering a button that always
-              // fails would be worse than not offering one.
-              const reactable = !isSelf && canReactTo(m)
-              // The action row sits OUTBOARD of its bubble, so it is on the left of a sent bubble and
-              // the right of a received one. Popovers open inboard, i.e. the opposite way (F17).
-              const outboardLeft = isSelf || m.direction === 'sent'
-              const summaries = aggregateReactions(m, nostrPubkeyHex ?? '')
-              const pendingEmoji = reactPending && reactPending.logicalId === m.logicalId ? reactPending.emoji : null
+              })()
               return (
-                <Fragment key={m.id}>
-                  <MessageBubble
-                    text={displayTextFor(m, editFlights)}
-                    timestamp={m.timestamp}
-                    variant={isSelf ? 'self' : m.direction === 'received' ? 'received' : 'sent'}
-                    edited={!!m.editedAt}
-                    highlighted={!!m.logicalId && editing?.logicalId === m.logicalId}
-                    lid={m.logicalId}
-                    flashed={!!m.logicalId && flashedId === m.logicalId}
-                    // 'self' is the notes-to-self bubble — dark inset, NOT teal — so only a true 'sent'
-                    // bubble takes the inverted palette.
-                    quoted={m.replyTo ? <QuotedPreview replyTo={m.replyTo} byLogicalId={quotedIndex} onJump={jumpTo} tone={!isSelf && m.direction === 'sent' ? 'on-accent' : 'on-dark'} /> : undefined}
-                    // No labelFor in a DM: the answer is one of two people, and a tooltip listing
-                    // npubs would be noise rather than information.
-                    reactions={summaries.length > 0 ? (
-                      <ReactionPills
-                        summaries={summaries}
-                        pending={pendingEmoji}
-                        onToggle={(emoji, action) => void toggleReaction(m.logicalId!, emoji, action)}
-                      />
-                    ) : undefined}
-                    actions={(editable || canReplyTo(m) || reactable) ? (
-                      <MessageActionRow
-                        menuAlign={outboardLeft ? 'left' : 'right'}
-                        onReact={reactable ? () => setReactOpen(o => (o === m.logicalId ? null : m.logicalId!)) : undefined}
-                        reactOpen={reactOpen === m.logicalId}
-                        reactPopover={reactOpen === m.logicalId ? (
-                          <ReactionQuickSet
-                            align={outboardLeft ? 'left' : 'right'}
-                            mine={myReactions(m, nostrPubkeyHex ?? '')}
-                            blocked={atReactionLimit(m, nostrPubkeyHex ?? '')}
-                            pending={pendingEmoji}
-                            onPick={emoji => void toggleReaction(m.logicalId!, emoji, myReactions(m, nostrPubkeyHex ?? '').includes(emoji) ? 'remove' : 'add')}
-                            onClose={() => setReactOpen(null)}
-                          />
-                        ) : undefined}
-                        onReply={canReplyTo(m) ? () => beginReply(m.logicalId!) : undefined}
-                        onEdit={editable ? () => beginEdit(m.logicalId!, m.plaintext) : undefined}
-                      />
-                    ) : undefined}
-                  />
-                  {/* In-flight + failed states for an edit. "Saving" says only that it left this
-                      device; nothing here implies the recipient received it. */}
-                  {flight?.status === 'saving' && (
-                    <div style={{ alignSelf: 'flex-end', display: 'flex', alignItems: 'center', gap: 6, fontFamily: MONO, fontSize: 11, color: 'var(--text-muted-dim)', marginTop: -2, marginRight: 4 }}>
-                      <span style={{ width: 10, height: 10, borderRadius: '50%', border: '2px solid rgba(var(--border-rgb),0.2)', borderTopColor: 'var(--text-muted-dim)', animation: 'cv-spin 0.8s linear infinite' }} />Saving edit
-                    </div>
-                  )}
-                  {flight?.status === 'failed' && (
-                    <div style={{ alignSelf: 'flex-end', display: 'flex', alignItems: 'center', gap: 10, marginTop: -2, marginRight: 4 }}>
-                      <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'var(--danger-300)' }}>
-                        <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="var(--danger-500)" strokeWidth={2.4} strokeLinecap="round"><circle cx={12} cy={12} r={9} /><path d="M12 8v5M12 16h.01" /></svg>Couldn’t save edit
-                      </span>
-                      <span onClick={() => retryEdit(m.logicalId!)} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '4px 10px', borderRadius: 8, background: 'rgba(var(--danger-rgb),0.08)', border: '1px solid rgba(var(--danger-rgb),0.3)', fontSize: 11, fontWeight: 700, color: 'var(--danger-300)', cursor: 'pointer' }}>Retry</span>
-                      <span onClick={() => setEditFlights(x => clearFlight(x, m.logicalId!))} style={{ fontSize: 11, color: 'var(--text-muted-dim)', cursor: 'pointer' }}>Dismiss</span>
-                    </div>
-                  )}
+                <Fragment key={rowKey}>
+                  {dayLbl && <DayDivider label={dayLbl} />}
+                  {row}
                 </Fragment>
               )
             })}

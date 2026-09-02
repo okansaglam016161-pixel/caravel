@@ -13,6 +13,7 @@ import { useState, type ReactNode } from 'react'
 import type { CaravelMessage, MediaRef } from '../../messaging/types'
 import { useMediaResolution } from '../../hooks/useMediaResolution'
 import { bubbleTime, mediaBoxSize, mediaFilename, MONO } from './chatDisplay'
+import { BUBBLE_META } from './threadChrome'
 import ImageLightbox from './ImageLightbox'
 
 // Stand-in for a row with no media, so the hook can be called unconditionally (rules of hooks) on a
@@ -43,9 +44,9 @@ function Frame({ w, h, sent, children }: { w: number; h: number; sent: boolean; 
     <div style={{
       width: w, height: h, overflow: 'hidden',
       display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 9,
-      borderRadius: sent ? '16px 6px 16px 16px' : '6px 16px 16px 16px',
-      background: 'var(--surface-inset)',
-      border: '1px solid rgba(var(--border-rgb),0.14)',
+      borderRadius: sent ? '14px 14px 5px 14px' : '14px 14px 14px 5px',
+      background: 'var(--msg-received)',
+      border: '1px solid var(--border)',
     }}>
       {children}
     </div>
@@ -53,7 +54,7 @@ function Frame({ w, h, sent, children }: { w: number; h: number; sent: boolean; 
 }
 
 const spinner = (
-  <span style={{ width: 20, height: 20, borderRadius: '50%', border: '2.2px solid rgba(var(--teal-500-rgb),0.2)', borderTopColor: 'var(--teal-500)', animation: 'cv-spin 0.9s linear infinite' }} />
+  <span style={{ width: 20, height: 20, borderRadius: '50%', border: '2.2px solid var(--border-strong)', borderTopColor: 'var(--accent-400)', animation: 'cv-spin 0.9s linear infinite' }} />
 )
 
 const brokenIcon = (
@@ -107,7 +108,7 @@ export default function MediaMessageCard({ message, lid, flashed }: { message: C
         {/* Retry ONLY where retrying can change the outcome. gone/corrupt/undecryptable/too_large all
             return the identical answer on a second attempt, so offering a button there would be a lie. */}
         {state.reason === 'network_error' && (
-          <span onClick={retry} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '5px 12px', borderRadius: 8, background: 'rgba(var(--border-rgb),0.1)', border: '1px solid rgba(var(--border-rgb),0.22)', fontSize: 11.5, fontWeight: 700, color: 'var(--text-body-dim)', cursor: 'pointer' }}>
+          <span onClick={retry} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '5px 12px', borderRadius: 8, background: 'var(--surface-inset)', border: '1px solid var(--border-strong)', fontSize: 11.5, fontWeight: 700, color: 'var(--text-body-dim)', cursor: 'pointer' }}>
             <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v5h-5" /></svg>
             Retry
           </span>
@@ -133,13 +134,11 @@ export default function MediaMessageCard({ message, lid, flashed }: { message: C
           {caption}
         </div>
       )}
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: 5, fontFamily: MONO, fontSize: 11,
-        color: 'var(--text-faint-dim)', marginTop: 6,
-        justifyContent: sent ? 'flex-end' : 'flex-start', width: w,
-      }}>
+      <div style={{ ...BUBBLE_META, justifyContent: sent ? 'flex-end' : 'flex-start', width: w }}>
         {bubbleTime(message.timestamp)}
-        {sent && <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="var(--teal-500)" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round"><path d="M18 7l-8 8-4-4" /></svg>}
+        {/* One muted tick, matching MessageBubble's — see SentTick there for what it does and
+            does not claim. */}
+        {sent && <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><path d="M18 7l-8 8-4-4" /></svg>}
       </div>
     </div>
   )

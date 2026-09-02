@@ -6,6 +6,7 @@
 //   or in the view.
 
 import type { ReactNode } from 'react'
+import { MONO } from './chatDisplay'
 import { MENU_BTN } from './threadChrome'
 
 /**
@@ -84,5 +85,22 @@ export function ThreadEmptyState({ title, body }: { title: string; body: ReactNo
       <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>{title}</div>
       <div style={{ fontSize: 12.5, color: 'var(--text-muted-dim)', maxWidth: 280, lineHeight: 1.55, textWrap: 'pretty' }}>{body}</div>
     </div>
+  )
+}
+
+/**
+ * The date separator between runs of messages (§3B).
+ *
+ * ITS PLACE IN THE LIST IS DECIDED AT RENDER TIME, not stored: each view walks its own item array
+ * and compares neighbours with chatDisplay's isNewDay. Nothing is inserted into the merged list, so
+ * mergeThreadItems and the ThreadItem union stay exactly as they were — and so do their tests.
+ */
+export function DayDivider({ label }: { label: string }) {
+  return (
+    <div style={{
+      alignSelf: 'center', padding: '6px 0 2px',
+      fontFamily: MONO, fontSize: 10, letterSpacing: '0.08em',
+      color: 'var(--text-muted-dim)',
+    }}>{label}</div>
   )
 }

@@ -139,7 +139,10 @@ export default function ServiceNav({ service, onSelect, onProfile }: {
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           width: 30, height: 30, flexShrink: 0, padding: 0,
           borderRadius: 9, border: 'none', cursor: 'pointer',
-          background: 'var(--vault-card)', color: 'var(--accent-300)',
+          // The brand blue, matching the mark above it and the avatars elsewhere. The design
+          // draws this tile quiet (--vault-card behind --accent-300); bright was chosen so the
+          // spine's two tiles read as one pair rather than a logo and an afterthought.
+          background: 'var(--accent-400)', color: 'var(--ink-on-accent)',
           fontFamily: 'inherit', fontSize: 11, fontWeight: 600,
         }}
       >@</button>

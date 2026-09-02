@@ -31,10 +31,12 @@ import type { CaravelMessage } from '../../messaging/types'
 //                 reason — and it is what the V3 design draws (its REPLY · QUOTED PREVIEW panel is
 //                 rgba(255,255,255,.14) behind a rgba(255,255,255,.6) rule).
 //
-// THE 'on-accent' VALUES ARE DELIBERATELY THEME-INVARIANT. --msg-sent resolves to --accent-600 in
-// both themes (the light block never restates it), so the surface this palette contrasts against
-// does not move, and neither should the ink on it. This is the one place in chat where a literal is
-// the correct answer rather than a missing token.
+// THE 'on-accent' VALUES ARE DELIBERATELY THEME-INVARIANT. --msg-sent is the brand blue in both
+// themes (the light block never restates it), so the surface this palette contrasts against does
+// not move, and neither should the ink on it. This is the one place in chat where a literal is the
+// correct answer rather than a missing token. The white alphas sit on a lighter blue since the
+// bubble took the design's accent-400 — still legible, but this is the palette to check first if
+// the quote inside a sent bubble is ever reported as washed out.
 //
 // It was 'on-teal', over a teal gradient bubble, with pale-mint ink. The bubble is flat cobalt now.
 //

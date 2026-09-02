@@ -43,7 +43,7 @@ export default function AttachPreview({ file, busy, stageLabel, onSend, onCancel
   }, [file])
 
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: 14, borderRadius: 14, background: 'var(--surface-base)', border: '1px solid rgba(var(--teal-500-rgb),0.24)', marginBottom: 12 }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: 14, borderRadius: 14, background: 'var(--surface-base)', border: '1px solid var(--border)', marginBottom: 12 }}>
       <div style={{ width: 62, height: 62, flexShrink: 0, borderRadius: 10, overflow: 'hidden', background: 'var(--surface-inset)', border: '1px solid var(--border)' }}>
         {previewUrl && <img src={previewUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />}
       </div>
@@ -68,10 +68,10 @@ export default function AttachPreview({ file, busy, stageLabel, onSend, onCancel
         <button
           onClick={onSend}
           disabled={busy}
-          style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '8px 16px', borderRadius: 9, border: 'none', background: busy ? 'rgba(var(--border-rgb),0.14)' : 'var(--teal-grad)', color: busy ? 'var(--text-disabled)' : 'var(--ink-on-accent)', fontSize: 12.5, fontWeight: 700, cursor: busy ? 'default' : 'pointer', fontFamily: 'inherit' }}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '8px 16px', borderRadius: 9, border: 'none', background: busy ? 'var(--surface-inset)' : 'var(--accent-400)', color: busy ? 'var(--text-disabled)' : 'var(--ink-on-accent)', fontSize: 12.5, fontWeight: 700, cursor: busy ? 'default' : 'pointer', fontFamily: 'inherit' }}
         >
           {busy
-            ? <span style={{ width: 13, height: 13, borderRadius: '50%', border: '2px solid rgba(var(--border-rgb),0.3)', borderTopColor: 'var(--text-muted-dim)', animation: 'cv-spin 0.8s linear infinite' }} />
+            ? <span style={{ width: 13, height: 13, borderRadius: '50%', border: '2px solid var(--border-strong)', borderTopColor: 'var(--text-muted-dim)', animation: 'cv-spin 0.8s linear infinite' }} />
             : <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.3} strokeLinecap="round" strokeLinejoin="round"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" /></svg>}
           Send
         </button>

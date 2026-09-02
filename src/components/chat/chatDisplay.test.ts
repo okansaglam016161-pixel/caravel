@@ -6,7 +6,7 @@
 // React — needs a real browser and is covered by the two-browser test instead.
 
 import { describe, expect, it } from 'vitest'
-import { mediaBoxSize, mediaFilename, mergeThreadItems, threadContentKey, type ThreadItem } from './chatDisplay'
+import { isNewDay, mediaBoxSize, mediaFilename, mergeThreadItems, threadContentKey, type ThreadItem } from './chatDisplay'
 
 const MAX_W = 320
 const MAX_H = 400
@@ -223,5 +223,49 @@ describe('mediaFilename', () => {
 
   it('distinguishes two images sent a second apart', () => {
     expect(mediaFilename('image/webp', TS)).not.toBe(mediaFilename('image/webp', TS + 1000))
+  })
+})
+
+// ── Day grouping (stage 4) ──────────────────────────────────────────────────────
+//
+// isNewDay decides where a "TODAY" divider goes. It compares LOCAL CALENDAR DAYS, so the cases that
+// matter are the ones a duration test would get wrong: a few minutes that cross midnight (new day)
+// and most of a day that does not (same day). Built from local Date components rather than epoch
+// literals so the suite does not depend on the runner's timezone.
+//
+// dayLabel is deliberately NOT tested — it calls toLocaleDateString, exactly like compactTime and
+// bubbleTime, which this file has never covered for the same reason.
+
+describe('isNewDay — the day-divider boundary', () => {
+  const at = (y: number, m: number, d: number, hh = 12, mm = 0) => new Date(y, m, d, hh, mm).getTime()
+
+  it('is false for two moments in the same calendar day', () => {
+    expect(isNewDay(at(2026, 2, 4, 0, 1), at(2026, 2, 4, 23, 59))).toBe(false)
+  })
+
+  it('is true across midnight, even minutes apart', () => {
+    expect(isNewDay(at(2026, 2, 4, 23, 58), at(2026, 2, 5, 0, 2))).toBe(true)
+  })
+
+  it('is false for 23 hours that stay inside one day', () => {
+    expect(isNewDay(at(2026, 2, 4, 0, 30), at(2026, 2, 4, 23, 30))).toBe(false)
+  })
+
+  it('is true across a month boundary', () => {
+    expect(isNewDay(at(2026, 2, 31, 22, 0), at(2026, 3, 1, 1, 0))).toBe(true)
+  })
+
+  it('is true across a year boundary', () => {
+    expect(isNewDay(at(2026, 11, 31, 23, 0), at(2027, 0, 1, 1, 0))).toBe(true)
+  })
+
+  it('distinguishes the same date in different years', () => {
+    expect(isNewDay(at(2025, 2, 4), at(2026, 2, 4))).toBe(true)
+  })
+
+  it('is symmetric — order does not change whether a boundary was crossed', () => {
+    const a = at(2026, 2, 4, 23, 58)
+    const b = at(2026, 2, 5, 0, 2)
+    expect(isNewDay(a, b)).toBe(isNewDay(b, a))
   })
 })

@@ -9,7 +9,7 @@
 // (received / sent / self) and is keyed off a real CaravelMessage. This one renders a local,
 // pre-persistence UI state that has no message id and no timestamp yet. Different lifecycles.
 
-import { MONO } from './chatDisplay'
+import { BUBBLE_META } from './threadChrome'
 
 export type PendingStatus = 'sending' | 'failed'
 
@@ -61,22 +61,22 @@ export default function PendingBubble({ text, status, onRetry, onDismiss, failur
   const hint = failure ? failure.hint : 'Your text is kept in the composer.'
   const showRetry = !!onRetry && (failure ? failure.retryable : true)
   return (
-    <div style={{ alignSelf: 'flex-end', maxWidth: '62%', display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
+    <div style={{ alignSelf: 'flex-end', maxWidth: '78%', display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
       {status === 'sending' ? (
         <>
           {/* THE ACCENT, HELD BACK. This bubble becomes a solid --msg-sent the moment the send is
               acknowledged, so "sending" has to read as the same colour not yet arrived at rather
               than as a different thing — a translucent accent does that and a neutral grey does
               not. It was a teal gradient until V3; the foundation allows no gradient on the brand,
-              and teal is not the brand any more. Stage 3 settles the bubble's shape. */}
-          <div style={{ padding: '13px 17px', borderRadius: '16px 4px 16px 16px', background: 'rgba(var(--accent-400-rgb),0.55)', color: 'var(--text-note)', fontSize: 15, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{text}</div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontFamily: MONO, fontSize: 11, color: 'var(--text-muted-dim)', marginTop: 6, marginRight: 4 }}>
-            <span style={{ width: 11, height: 11, borderRadius: '50%', border: '2px solid rgba(var(--border-rgb),0.2)', borderTopColor: 'var(--text-muted-dim)', animation: 'cv-spin 0.8s linear infinite' }} />Sending
+              and teal is not the brand any more. Stage 4 gave it the sent bubble's metrics. */}
+          <div style={{ padding: '10px 14px', borderRadius: '14px 14px 5px 14px', background: 'rgba(var(--accent-400-rgb),0.55)', color: 'var(--text-note)', fontSize: 14, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{text}</div>
+          <div style={{ ...BUBBLE_META, gap: 6, marginRight: 4 }}>
+            <span style={{ width: 11, height: 11, borderRadius: '50%', border: '2px solid var(--border)', borderTopColor: 'var(--text-muted-dim)', animation: 'cv-spin 0.8s linear infinite' }} />Sending
           </div>
         </>
       ) : (
         <>
-          <div style={{ padding: '13px 17px', borderRadius: '16px 4px 16px 16px', background: 'rgba(var(--danger-rgb),0.06)', border: '1px solid rgba(var(--danger-rgb),0.34)', color: 'var(--text-body)', fontSize: 15, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{text}</div>
+          <div style={{ padding: '10px 14px', borderRadius: '14px 14px 5px 14px', background: 'var(--card-danger)', border: '1px solid var(--card-danger-border)', color: 'var(--text-body)', fontSize: 14, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{text}</div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 7, marginRight: 4 }}>
             <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'var(--danger-300)' }}>
               <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="var(--danger-500)" strokeWidth={2.4} strokeLinecap="round"><circle cx={12} cy={12} r={9} /><path d="M12 8v5M12 16h.01" /></svg>{label}

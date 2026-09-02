@@ -1263,7 +1263,21 @@ export default function ChatApp() {
       : displayName(replyTarget.senderPubkeyHex)
   useEffect(() => {
     const el = composerRef.current
-    if (!el) return
+    // A HIDDEN SUBTREE MEASURES ZERO, AND THAT ZERO IS PERMANENT.
+    //
+    // AppShell mounts all three services at once and hides the inactive ones with display:none, so
+    // this effect's first run happens before chat has ever been shown — and `selectedConvo` falls
+    // back to conversations[0], so the composer is already mounted when it does. scrollHeight is 0
+    // in a display:none subtree, and writing that to an inline height is a one-way door: React never
+    // clears it (`height` is not in the textarea's style prop, only maxHeight), and this effect only
+    // re-runs on `draft`, which cannot change through a zero-height textarea. The composer was dead
+    // until something unmounted and remounted it — switching to a group and back.
+    //
+    // offsetParent is null exactly when an ancestor is display:none. It is also null for a
+    // position:fixed element; this composer is neither, so the check means here what it says.
+    // Skipping the write is safe: the textarea keeps its natural rows={1} height, and the first
+    // keystroke re-runs this with real layout.
+    if (!el || el.offsetParent === null) return
     el.style.height = 'auto'
     el.style.height = Math.min(el.scrollHeight, COMPOSER_MAX_H) + 'px'
   }, [draft])

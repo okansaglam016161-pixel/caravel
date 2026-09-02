@@ -84,6 +84,71 @@ export const BUBBLE_META: CSSProperties = {
   fontSize: 11, color: 'var(--text-muted-dim)', marginTop: 4,
 }
 
+// ── Composer ────────────────────────────────────────────────────────────────────
+
+/** The bar the composer sits in, under the thread. */
+export const COMPOSER_SHELL: CSSProperties = {
+  padding: '12px 18px 16px', borderTop: '1px solid var(--border)', flexShrink: 0,
+}
+
+/**
+ * ONE CARD, holding the input row and — when they are up — the reply chip or editing banner.
+ *
+ * V3 puts those two INSIDE this border rather than floating them above it as separate bordered
+ * blocks. It is the difference between "the composer is in a state" and "there is a notice near
+ * the composer", and the first is what both of them actually mean.
+ *
+ * NO `overflow: hidden` HERE, EVER. It was here briefly, to make the chip's border-bottom sit
+ * flush inside this radius, and it took the emoji picker out with it: the picker's containing
+ * block is the `position: relative` wrapper around its button, which lives INSIDE this card, and
+ * an absolutely-positioned box is clipped by any ancestor with overflow between it and its
+ * containing block. The panel opens ABOVE the button, so it was clipped away entirely — and no
+ * z-index rescues that, because clipping is not a stacking question. The chip rounds its own top
+ * corners instead (COMPOSER_CHIP_RADIUS), which is what the clip was for.
+ */
+export const COMPOSER_CARD: CSSProperties = {
+  border: '1px solid var(--border)', borderRadius: 13,
+  background: 'var(--surface)', boxShadow: 'var(--e1)',
+}
+
+/** The card's radius less its 1px border — what a flush first child has to round itself to. */
+export const COMPOSER_CHIP_RADIUS = 12
+
+export const COMPOSER_ROW: CSSProperties = {
+  display: 'flex', alignItems: 'flex-end', gap: 8, padding: '9px 10px',
+}
+
+/**
+ * THREE WEIGHTS IN ONE ROW, and the order matters.
+ *
+ * Send is the hero — a solid accent tile, because it is the action taken a hundred times a
+ * session. Attach and emoji are bare icons. The `$` sits between them: an accent wash with an
+ * accent ring, one notch above its neighbours and clearly below send. V3 draws it flat with the
+ * other two; it is louder here because stage 2 took the balance pill and the wallet modal out of
+ * chat, so this unlabelled glyph is now the ONLY payment entry point in a conversation, and
+ * burying it would hide the feature rather than merely quiet it.
+ */
+export const COMPOSER_BTN = 30
+export const COMPOSER_SEND = 34
+
+export const COMPOSER_ICON_BTN: CSSProperties = {
+  display: 'flex', alignItems: 'center', justifyContent: 'center',
+  width: COMPOSER_BTN, height: COMPOSER_BTN, flexShrink: 0, padding: 0,
+  borderRadius: 9, border: 'none', background: 'transparent',
+  color: 'var(--text-muted-dim)', cursor: 'pointer',
+}
+
+/**
+ * How far the emoji picker floats above the button it is anchored to.
+ *
+ * DERIVED, BECAUSE THE LITERAL ROTTED ONCE ALREADY. EmojiPicker's `offset` defaulted to 54 — which
+ * was the old 46px button plus an 8px gap — and neither composer passed one, so shrinking the
+ * button would have left the picker floating 16px off its anchor with nothing erroring. Both call
+ * sites now pass this explicitly. ReactionQuickSet keeps its own OFFSET: that anchor is a 26px
+ * action button inside the thread, a different measurement entirely.
+ */
+export const COMPOSER_POPOVER_OFFSET = COMPOSER_BTN + 8
+
 // ── The message list ────────────────────────────────────────────────────────────
 
 /**

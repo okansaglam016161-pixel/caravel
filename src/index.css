@@ -343,6 +343,12 @@ a:hover { color: var(--accent-200); }
 .cv-nav-item:hover { background: rgba(255, 255, 255, 0.05); color: #F2F6FA; }
 .cv-nav-item[aria-current="page"]:hover { background: var(--nav-selected); }
 
+/* The composer's bare icon buttons (attach, emoji). They sit inside the composer card, so they
+   lift to the PAGE ground on hover rather than to a surface — the card is already --surface. The $
+   beside them is deliberately not in this set: it carries its own accent fill. */
+.cv-composer-btn { transition: background 0.15s, color 0.15s; }
+.cv-composer-btn:hover:not(:disabled) { background: var(--surface-base); color: var(--text-body-dim); }
+
 /* The shared icon button (ThemeToggle). Was scoped to the landing page until the wallet header
    needed the same control. */
 .cv-icon-btn { transition: border-color 0.15s; }

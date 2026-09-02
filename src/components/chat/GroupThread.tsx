@@ -17,8 +17,8 @@ import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 
 import type { CaravelMessage, Group } from '../../messaging/types'
 import Avatar from './Avatar'
 import MessageBubble from './MessageBubble'
-import { THREAD_HEADER, HEADER_LEFT, THREAD_TITLE, MENU_SCRIM, MENU_PANEL, MENU_ITEM, THREAD_SCROLLER, THREAD_META_LINE } from './threadChrome'
-import { E2ELine, ThreadMenuButton, ThreadEmptyState, DayDivider } from './ThreadFrame'
+import { THREAD_HEADER, HEADER_LEFT, THREAD_TITLE, MENU_SCRIM, MENU_PANEL, MENU_ITEM, THREAD_SCROLLER, THREAD_META_LINE, COMPOSER_SHELL, COMPOSER_CARD, COMPOSER_ROW, COMPOSER_ICON_BTN, COMPOSER_SEND, COMPOSER_POPOVER_OFFSET } from './threadChrome'
+import { E2ELine, ThreadMenuButton, ThreadEmptyState, DayDivider, ComposerChip, REPLY_RULE } from './ThreadFrame'
 import QuotedPreview from './QuotedPreview'
 import { canBeginEdit, canBeginReply, canReplyTo, quotedAuthorLabel } from './replyCompose'
 import { aggregateReactions, atReactionLimit, canReactTo, myReactions } from './reactionDisplay'
@@ -26,7 +26,7 @@ import MessageActionRow from './MessageActionRow'
 import ReactionPills from './ReactionPills'
 import ReactionQuickSet from './ReactionQuickSet'
 import MediaMessageCard from './MediaMessageCard'
-import { dayLabel, isNewDay, mergeThreadItems, threadContentKey, MONO } from './chatDisplay'
+import { dayLabel, isNewDay, mergeThreadItems, replyChipDetail, threadContentKey, MONO } from './chatDisplay'
 import { groupGlyph } from './groupGlyph'
 import { useScrollToBottom } from './useScrollToBottom'
 import { useJumpToMessage } from './useJumpToMessage'
@@ -549,32 +549,7 @@ export default function GroupThread({
       </div>
 
       {/* Composer — DM compose treatment, minus the $ payment toggle (deferred). */}
-      <div style={{ padding: '16px 24px 20px', borderTop: '1px solid var(--border)', flexShrink: 0 }}>
-
-        {/* Replying-to chip (replies v1), matching the DM composer: same slot, same visual language,
-            same explicit Cancel. Names the MEMBER being answered, which a group needs and a DM does
-            not. Does not own the draft — whatever was half-typed stays put. */}
-        {replying && (
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 10, padding: '9px 13px', borderRadius: 11, background: 'rgba(var(--teal-500-rgb),0.06)', border: '1px solid rgba(var(--teal-500-rgb),0.28)' }}>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, minWidth: 0, fontSize: 12.5, fontWeight: 600, color: 'var(--teal-300)' }}>
-              <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="var(--teal-500)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><path d="M9 17l-5-5 5-5" /><path d="M4 12h11a5 5 0 0 1 5 5v2" /></svg>
-              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Replying to {replyChipLabel}</span>
-            </span>
-            <span onClick={cancelReply} style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', cursor: 'pointer', flexShrink: 0 }}>Cancel</span>
-          </div>
-        )}
-
-        {/* Editing banner (M4), matching the DM composer: names the state and offers the explicit
-            way out. The bubble being edited is ringed in the thread, so the pairing is visible. */}
-        {editing && (
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 10, padding: '9px 13px', borderRadius: 11, background: 'rgba(var(--teal-500-rgb),0.06)', border: '1px solid rgba(var(--teal-500-rgb),0.28)' }}>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12.5, fontWeight: 600, color: 'var(--teal-300)' }}>
-              <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="var(--teal-500)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" /></svg>
-              Editing message
-            </span>
-            <span onClick={cancelEdit} style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', cursor: 'pointer' }}>Cancel</span>
-          </div>
-        )}
+      <div style={COMPOSER_SHELL}>
 
         {attachment && (
           <AttachPreview
@@ -592,37 +567,64 @@ export default function GroupThread({
             onCancel={() => setAttachment(null)}
           />
         )}
-        <div style={{ display: 'flex', alignItems: 'flex-end', gap: 12 }}>
-          {/* accept="image/*" and NEVER image/heic — see the DM composer for why. */}
-          <input
-            ref={imageInputRef}
-            type="file"
-            accept="image/*"
-            style={{ display: 'none' }}
-            onChange={e => { const picked = e.target.files?.[0]; if (picked) setAttachment(picked); e.target.value = '' }}
-          />
-          <button
-            onClick={() => imageInputRef.current?.click()}
-            disabled={imageBusy}
-            title="Attach an image"
-            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 46, height: 46, flexShrink: 0, borderRadius: 12, border: '1px solid var(--border)', background: 'var(--surface-inset)', cursor: imageBusy ? 'default' : 'pointer', opacity: imageBusy ? 0.5 : 1, padding: 0 }}
-          >
-            <svg width={21} height={21} viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round"><rect x={3} y={3} width={18} height={18} rx={2} /><circle cx={8.5} cy={8.5} r={1.5} /><path d="M21 15l-5-5L5 21" /></svg>
-          </button>
-          {/* Emoji (B) — the DM composer's button, verbatim. `position: relative` anchors the panel. */}
-          <div style={{ position: 'relative', flexShrink: 0 }}>
+        {/* THE COMPOSER CARD — the DM's, minus the $ toggle: this thread has no payment path.
+            The reply chip and the editing banner sit INSIDE the border, and the card turns accent
+            while editing, exactly as in the DM. */}
+        <div style={{
+          ...COMPOSER_CARD,
+          ...(editing ? { border: '1px solid var(--accent-400)', boxShadow: '0 0 0 3px rgba(var(--accent-400-rgb),0.14)' } : null),
+        }}>
+          {replying && (
+            <ComposerChip
+              lead={REPLY_RULE}
+              label={`Replying to ${replyChipLabel}`}
+              detail={replyChipDetail(replyTarget)}
+              onCancel={cancelReply}
+            />
+          )}
+          {editing && (
+            <ComposerChip
+              lead={<svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="var(--accent-ink)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z" /></svg>}
+              label="Editing message"
+              onCancel={cancelEdit}
+            />
+          )}
+          <div style={COMPOSER_ROW}>
+            {/* accept="image/*" and NEVER image/heic — see the DM composer for why. */}
+            <input
+              ref={imageInputRef}
+              type="file"
+              accept="image/*"
+              style={{ display: 'none' }}
+              onChange={e => { const picked = e.target.files?.[0]; if (picked) setAttachment(picked); e.target.value = '' }}
+            />
+            {/* A picture, not the design's paperclip — see the DM composer. */}
             <button
-              onClick={() => setEmojiOpen(o => !o)}
-              disabled={sending}
-              title="Insert emoji"
-              aria-label="Insert emoji"
-              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 46, height: 46, flexShrink: 0, borderRadius: 12, border: '1px solid var(--border)', background: emojiOpen ? 'rgba(var(--border-rgb),0.1)' : 'var(--surface-inset)', cursor: sending ? 'default' : 'pointer', opacity: sending ? 0.5 : 1, padding: 0 }}
+              onClick={() => imageInputRef.current?.click()}
+              disabled={imageBusy}
+              title="Attach an image"
+              aria-label="Attach an image"
+              className="cv-composer-btn"
+              style={{ ...COMPOSER_ICON_BTN, opacity: imageBusy ? 0.5 : 1, cursor: imageBusy ? 'default' : 'pointer' }}
             >
-              <svg width={21} height={21} viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round"><circle cx={12} cy={12} r={9} /><path d="M8.5 14.5a4.5 4.5 0 0 0 7 0" /><path d="M9 9.5h.01M15 9.5h.01" /></svg>
+              <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round"><rect x={3} y={3} width={18} height={18} rx={2} /><circle cx={8.5} cy={8.5} r={1.5} /><path d="M21 15l-5-5L5 21" /></svg>
             </button>
-            {emojiOpen && <EmojiPicker onPick={insertEmoji} onClose={() => setEmojiOpen(false)} />}
-          </div>
-          <div style={{ flex: 1, display: 'flex', alignItems: 'center', padding: '13px 17px', borderRadius: 13, background: 'var(--surface-raised)', border: '1px solid var(--border)' }}>
+            {/* `position: relative` is load-bearing — the picker's offsetParent. The offset comes
+                from COMPOSER_POPOVER_OFFSET so it tracks the button's size. */}
+            <div style={{ position: 'relative', flexShrink: 0 }}>
+              <button
+                onClick={() => setEmojiOpen(o => !o)}
+                disabled={sending}
+                title="Insert emoji"
+                aria-label="Insert emoji"
+                aria-expanded={emojiOpen}
+                className="cv-composer-btn"
+                style={{ ...COMPOSER_ICON_BTN, background: emojiOpen ? 'var(--surface-inset)' : 'transparent', opacity: sending ? 0.5 : 1, cursor: sending ? 'default' : 'pointer' }}
+              >
+                <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.9} strokeLinecap="round"><circle cx={12} cy={12} r={9} /><path d="M8 14s1.5 2 4 2 4-2 4-2" /><path d="M9 9h.01M15 9h.01" /></svg>
+              </button>
+              {emojiOpen && <EmojiPicker onPick={insertEmoji} onClose={() => setEmojiOpen(false)} offset={COMPOSER_POPOVER_OFFSET} />}
+            </div>
             <textarea
               ref={composerRef}
               className="cv-composer"
@@ -635,31 +637,40 @@ export default function GroupThread({
                   if (editing) void saveEdit(); else void send()
                 }
               }}
-                  placeholder={editing ? 'Edit your message…' : attachment ? 'Add a caption…' : 'Message the group…'}
+              placeholder={editing ? 'Edit your message…' : attachment ? 'Add a caption…' : 'Write an encrypted message…'}
               rows={1}
               maxLength={2000}
               disabled={sending}
-              style={{ flex: 1, resize: 'none', background: 'transparent', border: 'none', outline: 'none', color: 'var(--text-body)', fontSize: 15, fontFamily: 'inherit', lineHeight: 1.4, maxHeight: 120, overflowY: 'auto', padding: 0, display: 'block' }}
+              style={{ flex: 1, minWidth: 0, resize: 'none', background: 'transparent', border: 'none', outline: 'none', color: 'var(--text-body)', fontSize: 14, fontFamily: 'inherit', lineHeight: 1.45, maxHeight: 120, overflowY: 'auto', padding: '6px 4px', display: 'block' }}
             />
+            {/* Send doubles as Save in edit mode — one button, one enabled rule per mode (M4). */}
+            {(() => {
+              const active = editing ? editSubmittable : canSend
+              return (
+                <button
+                  onClick={() => (editing ? void saveEdit() : void send())}
+                  disabled={!active}
+                  title={editing ? 'Save edit' : 'Send to group'}
+                  aria-label={editing ? 'Save edit' : 'Send to group'}
+                  className={active ? 'cv-btn-primary' : undefined}
+                  style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    width: COMPOSER_SEND, height: COMPOSER_SEND, flexShrink: 0, padding: 0,
+                    borderRadius: 10, border: 'none',
+                    background: active ? 'var(--accent-400)' : 'var(--surface-inset)',
+                    color: active ? 'var(--ink-on-accent)' : 'var(--text-disabled)',
+                    cursor: active ? 'pointer' : 'default',
+                  }}
+                >
+                  {sending && !editing
+                    ? <span style={{ width: 15, height: 15, borderRadius: '50%', border: '2px solid var(--border-strong)', borderTopColor: 'var(--text-muted-dim)', animation: 'cv-spin 0.8s linear infinite' }} />
+                    : editing
+                      ? <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round"><path d="M18 7l-8 8-4-4" /></svg>
+                      : <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M22 2L11 13" /><path d="M22 2l-7 20-4-9-9-4z" /></svg>}
+                </button>
+              )
+            })()}
           </div>
-          {/* Send doubles as Save in edit mode — one button, one enabled rule per mode (M4). */}
-          {(() => {
-            const active = editing ? editSubmittable : canSend
-            return (
-              <button
-                onClick={() => (editing ? void saveEdit() : void send())}
-                disabled={!active}
-                title={editing ? 'Save edit' : 'Send to group'}
-                style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 46, height: 46, flexShrink: 0, borderRadius: 12, background: 'var(--surface-inset)', border: '1px solid var(--border)', cursor: active ? 'pointer' : 'default', opacity: active ? 1 : 0.5, padding: 0 }}
-              >
-                {sending && !editing
-                  ? <span style={{ width: 20, height: 20, borderRadius: '50%', border: '2.5px solid rgba(var(--border-rgb),0.25)', borderTopColor: 'var(--text-muted-dim)', animation: 'cv-spin 0.8s linear infinite' }} />
-                  : editing
-                    ? <svg width={20} height={20} viewBox="0 0 24 24" fill="none" stroke={active ? 'var(--teal-500)' : 'var(--text-muted-dim)'} strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
-                    : <svg width={20} height={20} viewBox="0 0 24 24" fill="none" stroke={active ? 'var(--teal-500)' : 'var(--text-muted-dim)'} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" /></svg>}
-              </button>
-            )
-          })()}
         </div>
         {/* Footer: the standing best-effort line, replaced after a PARTIAL fan-out by an honest
             tally. "Reached" is deliberate — membersReached counts relay acceptance, not receipt, so
@@ -667,13 +678,13 @@ export default function GroupThread({
             An EDIT (M4) reuses this line: a partial edit fan-out leaves some members reading the new
             text and some the old, with no way for anyone to tell — the sender at least sees that. */}
         {sendNote ? (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontFamily: MONO, fontSize: 11, color: 'var(--warn-300)', marginTop: 8, marginLeft: 2 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontFamily: MONO, fontSize: 11, color: 'var(--warn)', marginTop: 8, marginLeft: 2 }}>
             <svg width={11} height={11} viewBox="0 0 24 24" fill="none" stroke="var(--warn)" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><path d="M12 9v4M12 17h.01" /></svg>
             Last {sendNote.kind === 'edit' ? 'edit' : 'message'} reached {sendNote.reached} of {sendNote.total} member(s)
           </div>
         ) : (
           <div style={{ fontFamily: MONO, fontSize: 11, color: 'var(--text-muted-dim)', marginTop: 8, marginLeft: 2 }}>
-            Sent to {Math.max(group.members.length - 1, 0)} member(s) · end-to-end encrypted · best-effort delivery
+            End-to-end encrypted · sent to {Math.max(group.members.length - 1, 0)} member(s) · best-effort delivery
           </div>
         )}
       </div>

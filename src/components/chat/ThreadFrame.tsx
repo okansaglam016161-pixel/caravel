@@ -7,7 +7,7 @@
 
 import type { ReactNode } from 'react'
 import { MONO } from './chatDisplay'
-import { MENU_BTN } from './threadChrome'
+import { MENU_BTN, COMPOSER_CHIP_RADIUS } from './threadChrome'
 
 /**
  * "End-to-end encrypted", stated calmly.
@@ -104,3 +104,54 @@ export function DayDivider({ label }: { label: string }) {
     }}>{label}</div>
   )
 }
+
+/**
+ * The reply chip and the editing banner — one shape, two sets of contents.
+ *
+ * IT LIVES INSIDE THE COMPOSER CARD, above the input row, divided by its own border-bottom. Both
+ * states are the composer being in a mode, not a notice sitting near it, and V3 draws them that
+ * way: the card gets a header rather than the page getting a banner. They were two byte-identical
+ * bordered blocks floating above the composer in each of the two views — four copies of one thing.
+ *
+ * `lead` is the only real difference: a 3px accent rule for a reply, a pencil for an edit.
+ */
+export function ComposerChip({ lead, label, detail, onCancel }: {
+  lead: ReactNode
+  label: string
+  detail?: string
+  onCancel: () => void
+}) {
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px',
+      borderBottom: '1px solid var(--border)', background: 'var(--surface-base)',
+      // Rounded here rather than clipped by the card — see COMPOSER_CARD for what clipping cost.
+      borderTopLeftRadius: COMPOSER_CHIP_RADIUS, borderTopRightRadius: COMPOSER_CHIP_RADIUS,
+    }}>
+      {lead}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--accent-ink)' }}>{label}</div>
+        {detail && (
+          <div style={{ fontSize: 12, color: 'var(--text-muted-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{detail}</div>
+        )}
+      </div>
+      <button
+        onClick={onCancel}
+        title="Cancel"
+        aria-label="Cancel"
+        style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          width: 20, height: 20, flexShrink: 0, padding: 0, borderRadius: 6,
+          border: 'none', background: 'transparent', color: 'var(--text-muted-dim)', cursor: 'pointer',
+        }}
+      >
+        <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12" /></svg>
+      </button>
+    </div>
+  )
+}
+
+/** The 3px accent rule a reply chip leads with. */
+export const REPLY_RULE = (
+  <span style={{ width: 3, height: 28, borderRadius: 99, background: 'var(--accent-400)', flexShrink: 0 }} />
+)

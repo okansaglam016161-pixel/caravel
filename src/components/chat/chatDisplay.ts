@@ -3,6 +3,8 @@
 // identically. Pure functions + tokens only; no behavior change.
 
 import * as nip19 from 'nostr-tools/nip19'
+import { classifyQuoted, quoteSnippet } from './replyCompose'
+import type { CaravelMessage } from '../../messaging/types'
 import type { CSSProperties } from 'react'
 import { compareMessages, sortKey, type MessageOrder } from '../../messaging/types'
 
@@ -46,6 +48,27 @@ export function compactTime(ts: number): string {
 // Full time shown under each message bubble.
 export function bubbleTime(ts: number): string {
   return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+}
+
+// ── The reply chip's second line ────────────────────────────────────────────────
+//
+// What you are replying to, in one line, for the chip inside the composer.
+//
+// IT REUSES QuotedPreview'S MAPPING RATHER THAN COPYING IT. A reply target is not always text: it
+// can be a photo, a payment, or a message that has not arrived yet, and each has an honest
+// one-liner. That four-way answer already existed once, in QuotedPreview; passing
+// `quoteSnippet(target.plaintext)` straight from the composer would have shown an empty line for a
+// photo or a payment, and inlining the mapping at both composers would have made a third and
+// fourth copy of it. This reads classifyQuoted and quoteSnippet from replyCompose; it does not
+// change them.
+
+/** One line naming what a reply is answering — the quoted text, or what it was instead. */
+export function replyChipDetail(target: CaravelMessage | undefined): string {
+  const kind = classifyQuoted(target)
+  return kind === 'text' ? quoteSnippet(target!.plaintext)
+    : kind === 'media' ? 'Photo'
+    : kind === 'payment' ? 'Payment'
+    : 'Original unavailable'
 }
 
 // ── Day grouping (stage 4) ──────────────────────────────────────────────────────

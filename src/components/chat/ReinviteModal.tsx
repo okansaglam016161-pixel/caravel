@@ -1,18 +1,20 @@
 //   C-M2 re-invite picker: choose WHICH members of a group to re-send the invite to.
 //
-//   Deliberately a sibling of CreateGroupModal rather than a mode of it — same frame/row/checkbox
-//   tokens, different subject (a fixed roster with per-member status vs a contact list plus a name
-//   field). Merging them would put two flows that are already diverging behind one component.
+//   Deliberately a sibling of CreateGroupModal rather than a mode of it — same frame and rows,
+//   different subject (a fixed roster with per-member status vs a contact list plus a name field).
+//   Merging them would put two flows that are already diverging behind one component. They share
+//   what is genuinely shared: ModalCard for the frame, PickRow for the rows.
 //
 //   The list is the FULL roster, always. `leftAt` is a HINT derived from received leave notices, and
 //   it drives ordering, the subtitle and the initial selection — never who is reachable. A member
 //   whose leave notice was lost (best-effort delivery) must still be selectable, and re-inviting a
-//   member who never left is a genuine no-op on their side (first-def-wins), not an error.
+//   member who never left is a genuine no-op on their side (first-def-wins), not an error. That last
+//   fact is why the body line survives the reskin: the roster shows current members too, and ticking
+//   one has to look as harmless as it actually is.
 
 import { useEffect, useState } from 'react'
-import Avatar from './Avatar'
-import { groupGlyph } from './groupGlyph'
-import { MONO } from './chatDisplay'
+import ModalCard from './ModalCard'
+import PickRow from './PickRow'
 
 export interface ReinviteMemberOption {
   hex: string
@@ -20,6 +22,9 @@ export interface ReinviteMemberOption {
   leftAt: number | null  // ms epoch of the leave notice we believe is current, else null
 }
 
+// Relative age of a leave notice. STAYS LOCAL: one caller, and no sibling implementation to drift
+// against. chatDisplay.ts earns its name by holding what two or more surfaces share; the day a
+// second surface wants relative ages, this moves there with a test.
 function agoLabel(ms: number): string {
   const mins = Math.floor((Date.now() - ms) / 60000)
   if (mins < 1) return 'just now'
@@ -60,62 +65,58 @@ export default function ReinviteModal({
   }
 
   return (
-    <>
-      <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(5,8,14,0.78)', backdropFilter: 'blur(3px)', zIndex: 200 }} />
-      <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', width: 'min(440px, 94vw)', maxHeight: '88vh', background: 'var(--surface)', borderRadius: 20, border: '1px solid var(--border)', boxShadow: 'var(--e3)', zIndex: 201, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 18px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-            <Avatar icon={groupGlyph} size={26} radius={8} />
-            <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Invite again</span>
-          </div>
-          <span onClick={onClose} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, border: '1px solid var(--border)', cursor: 'pointer', flexShrink: 0 }}>
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth="2.2" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
-          </span>
-        </div>
-
-        <div style={{ flex: 1, overflowY: 'auto', padding: 18 }}>
-          <div style={{ fontSize: 12.5, color: 'var(--text-muted)', lineHeight: 1.5, marginBottom: 16 }}>
-            Re-send the invite to <span style={{ color: 'var(--text-body)', fontWeight: 600 }}>{groupName}</span>. Members who are still in the group won't see anything.
-          </div>
-
-          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.14em', color: 'var(--text-faint-dim)', marginBottom: 10 }}>
-            MEMBERS {selected.size > 0 && <span style={{ color: 'var(--text-teal-dim)' }}>· {selected.size} selected</span>}
-          </div>
-
-          {members.length === 0 ? (
-            <div style={{ fontSize: 13, color: 'var(--text-faint)', lineHeight: 1.5, padding: '4px 0' }}>This group has no other members to invite.</div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {members.map(m => {
-                const on = selected.has(m.hex)
-                return (
-                  <div key={m.hex} onClick={() => toggle(m.hex)} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 13px', borderRadius: 11, cursor: 'pointer', background: on ? 'rgba(var(--teal-500-rgb),0.08)' : 'var(--surface-raised)', border: `1px solid ${on ? 'rgba(var(--teal-500-rgb),0.3)' : 'rgba(var(--border-rgb),0.12)'}` }}>
-                    <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 20, height: 20, borderRadius: 6, flexShrink: 0, border: `1.5px solid ${on ? 'var(--teal-500)' : 'var(--border-strong)'}`, background: on ? 'var(--teal-500)' : 'transparent' }}>
-                      {on && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--ink-on-accent)" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>}
-                    </span>
-                    <Avatar hex={m.hex} size={30} radius={10} fontSize={12} />
-                    <div style={{ minWidth: 0, flex: 1 }}>
-                      <div style={{ fontSize: 14, color: 'var(--text-body)', fontFamily: m.name.startsWith('npub') ? MONO : undefined, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.name}</div>
-                      <div style={{ fontSize: 11, color: m.leftAt !== null ? 'var(--text-muted)' : 'var(--text-faint-dim)', marginTop: 2 }}>
-                        {m.leftAt !== null ? `Left the chat · ${agoLabel(m.leftAt)}` : 'In the group'}
-                      </div>
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-          )}
-        </div>
-
-        <div style={{ padding: 18, borderTop: '1px solid var(--border)', flexShrink: 0 }}>
-          <div
-            onClick={() => { if (canSend) { onConfirm([...selected]); onClose() } }}
-            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 13, borderRadius: 12, fontSize: 14, fontWeight: 700, cursor: canSend ? 'pointer' : 'default', background: canSend ? 'var(--teal-grad)' : 'var(--surface-inset)', border: canSend ? 'none' : '1px solid var(--border)', color: canSend ? 'var(--ink-on-accent)' : 'var(--text-disabled)' }}
-          >
-            {canSend ? `Send invite to ${selected.size}` : 'Select members'}
-          </div>
-        </div>
+    <ModalCard
+      title="Re-invite members"
+      subtitle={`Invite people back into ${groupName}`}
+      onClose={onClose}
+      zIndex={200}
+      maxWidth={440}
+    >
+      <div style={{ fontSize: 12.5, color: 'var(--text-muted-dim)', lineHeight: 1.5, flexShrink: 0 }}>
+        Members who are still in the group won’t see anything.
       </div>
-    </>
+
+      {members.length === 0 ? (
+        <div style={{ textAlign: 'center', padding: '22px 16px', borderRadius: 12, border: '1px dashed var(--border-strong)' }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>This group has no other members</div>
+          <div style={{ fontSize: 12, color: 'var(--text-muted-dim)', marginTop: 3, lineHeight: 1.45, textWrap: 'pretty' }}>
+            There is no one to invite back.
+          </div>
+        </div>
+      ) : (
+        /* Only the rows scroll — the subtitle, the body line and the action stay put. */
+        <div style={{ flex: '0 1 auto', minHeight: 0, overflowY: 'auto', margin: '-2px -6px 0' }}>
+          {members.map(m => (
+            <PickRow
+              key={m.hex}
+              hex={m.hex}
+              name={m.name}
+              checked={selected.has(m.hex)}
+              onToggle={() => toggle(m.hex)}
+              sub={m.leftAt !== null ? `Left the chat · ${agoLabel(m.leftAt)}` : 'In the group'}
+              subInk={m.leftAt !== null ? 'var(--warn)' : undefined}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* OUR LABEL, not the design's flat "Send invites". It carries the count that the dropped
+          MEMBERS header used to show, and the disabled state says what to do rather than sitting
+          there dead. */}
+      <button
+        onClick={() => { if (canSend) { onConfirm([...selected]); onClose() } }}
+        disabled={!canSend}
+        className={canSend ? 'cv-btn-primary' : undefined}
+        style={{
+          width: '100%', flexShrink: 0, padding: 11, borderRadius: 11, border: 'none',
+          background: canSend ? 'var(--accent-400)' : 'var(--msg-received)',
+          color: canSend ? 'var(--ink-on-accent)' : 'var(--text-muted-dim)',
+          fontSize: 13.5, fontWeight: 600, fontFamily: 'inherit',
+          cursor: canSend ? 'pointer' : 'default',
+        }}
+      >
+        {canSend ? `Send invite to ${selected.size}` : 'Select members'}
+      </button>
+    </ModalCard>
   )
 }

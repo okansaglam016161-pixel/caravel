@@ -23,8 +23,16 @@
 
 import type { ReactNode } from 'react'
 
-export default function ModalCard({ title, onClose, zIndex, maxWidth = 420, children }: {
+export default function ModalCard({ title, subtitle, onClose, zIndex, maxWidth = 420, children }: {
   title: string
+  /**
+   * A second line under the title, inside the header. Re-invite names its group here.
+   *
+   * NOT THE SAME AS A BODY INSTRUCTION LINE, which is why New conversation's "Enter an npub or an
+   * @name" is a child rather than this prop: that one is full width, below the header, and reads as
+   * the first thing you do. This one sits beside the close button and says what the modal is about.
+   */
+  subtitle?: string
   onClose: () => void
   /** See the note above — the ladder is not settled, so each caller states its own. */
   zIndex: number
@@ -50,7 +58,12 @@ export default function ModalCard({ title, onClose, zIndex, maxWidth = 420, chil
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
-          <div style={{ flex: 1, fontSize: 16, fontWeight: 600, letterSpacing: '-0.01em', color: 'var(--text-primary)' }}>{title}</div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 16, fontWeight: 600, letterSpacing: '-0.01em', color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</div>
+            {subtitle && (
+              <div style={{ fontSize: 12, color: 'var(--text-muted-dim)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{subtitle}</div>
+            )}
+          </div>
           <button
             onClick={onClose}
             title="Close"

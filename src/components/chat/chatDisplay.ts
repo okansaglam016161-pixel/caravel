@@ -12,7 +12,7 @@ export const MONO = "'IBM Plex Mono', monospace"
 // the module both views already share, so the two buttons cannot drift apart visually — they sit
 // side by side in the same row, where a 1px difference reads as a mistake. Only the LOOK lives here;
 // the hover reveal is in index.css, keyed off .cv-msg-actionrow.
-export const ACTION_BTN: CSSProperties = { display: 'flex', alignItems: 'center', justifyContent: 'center', width: 26, height: 26, flexShrink: 0, padding: 0, borderRadius: 8, border: '1px solid rgba(var(--border-rgb),0.16)', background: 'var(--surface-raised)', color: 'var(--text-muted)', cursor: 'pointer' }
+export const ACTION_BTN: CSSProperties = { display: 'flex', alignItems: 'center', justifyContent: 'center', width: 26, height: 26, flexShrink: 0, padding: 0, borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface-raised)', color: 'var(--text-muted)', cursor: 'pointer' }
 
 // npub1abcdefg…wxyz — never throws (blank/invalid hex falls back to raw prefix).
 export function truncNpub(peerHex: string): string {

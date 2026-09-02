@@ -36,6 +36,8 @@ import AttachPreview from './AttachPreview'
 import { groupGlyph } from './groupGlyph'
 import EmojiPicker from './EmojiPicker'
 import { insertAtCursor } from './composerInsert'
+import { THREAD_HEADER, HEADER_LEFT, THREAD_TITLE, MENU_SCRIM, MENU_PANEL, MENU_ITEM, THREAD_SCROLLER, THREAD_META_LINE } from './threadChrome'
+import { E2ELine, ThreadMenuButton, ThreadEmptyState } from './ThreadFrame'
 import { useTheme } from '../../hooks/useTheme'
 
 // ── Sidebar section headers ─────────────────────────────────────────────────────
@@ -1646,7 +1648,7 @@ export default function ChatApp() {
         </div>
 
         {/* RIGHT: active chat */}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, background: 'var(--surface-base)', position: 'relative' }}>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, background: 'var(--surface)', position: 'relative' }}>
 
           {selectedGroupId && selectedGroup && selectedGroup.state === 'active' ? (
             <GroupThread
@@ -1697,9 +1699,9 @@ export default function ChatApp() {
           ) : (
           <>
           {/* Chat header (design: avatar, nickname + @handle inline, E2E badge, ⋯ only) */}
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 24px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 13, minWidth: 0 }}>
-              <Avatar hex={selectedConvo.peerHex} nickname={nicknames[selectedConvo.peerHex]} size={42} radius={12} />
+          <div style={THREAD_HEADER}>
+            <div style={HEADER_LEFT}>
+              <Avatar hex={selectedConvo.peerHex} nickname={nicknames[selectedConvo.peerHex]} size={34} radius={99} fontSize={13} />
               <div style={{ minWidth: 0 }}>
                 {editingNick ? (
                   <input
@@ -1713,39 +1715,30 @@ export default function ChatApp() {
                       else if (e.key === 'Escape') setEditingNick(false)
                     }}
                     placeholder="Add a nickname…"
-                    style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-bright)', background: 'var(--surface-raised)', border: '1px solid rgba(var(--teal-500-rgb),0.45)', boxShadow: '0 0 0 3px rgba(var(--teal-500-rgb),0.09)', borderRadius: 9, padding: '7px 11px', outline: 'none', width: 240 }}
+                    style={{ fontSize: 14.5, fontWeight: 600, color: 'var(--text-primary)', background: 'var(--surface-raised)', border: '1px solid var(--accent-400)', boxShadow: '0 0 0 3px rgba(var(--accent-400-rgb),0.18)', borderRadius: 8, padding: '5px 9px', outline: 'none', width: 220 }}
                   />
                 ) : (
                   <div onClick={beginEditNick} title="Click to set a nickname" style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-                    <span style={{ fontSize: 16, fontWeight: 600, color: 'var(--text-primary)', fontFamily: nicknames[selectedConvo.peerHex] ? undefined : MONO, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{displayName(selectedConvo.peerHex)}</span>
+                    <span style={{ ...THREAD_TITLE, fontFamily: nicknames[selectedConvo.peerHex] ? undefined : MONO }}>{displayName(selectedConvo.peerHex)}</span>
                     <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" /></svg>
-                    {nicknames[selectedConvo.peerHex] && <span style={{ fontFamily: MONO, fontSize: 13, color: 'var(--text-teal-dim)', flexShrink: 0 }}>{truncNpub(selectedConvo.peerHex)}</span>}
+                    {nicknames[selectedConvo.peerHex] && <span style={{ fontFamily: MONO, fontSize: 11.5, color: 'var(--text-muted-dim)', flexShrink: 0 }}>{truncNpub(selectedConvo.peerHex)}</span>}
                   </div>
                 )}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 3 }}>
-                  <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="var(--teal-500)" strokeWidth={2.2}><rect x={3} y={11} width={18} height={11} rx={2} /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
-                  <span style={{ fontSize: 12, color: 'var(--teal-300)', fontWeight: 500 }}>End to end encrypted</span>
-                </div>
+                <E2ELine />
               </div>
             </div>
             {/* ⋯ menu (design drops the call/video icon) */}
             <div style={{ position: 'relative', flexShrink: 0 }}>
-              <button
-                onClick={() => setMenuOpen(o => !o)}
-                title="Conversation options"
-                style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 36, height: 36, borderRadius: 10, border: '1px solid var(--border)', background: menuOpen ? 'rgba(var(--border-rgb),0.1)' : 'transparent', cursor: 'pointer', padding: 0 }}
-              >
-                <svg width={17} height={17} viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth={1.9} strokeLinecap="round"><circle cx={12} cy={12} r={1.6} /><circle cx={19} cy={12} r={1.6} /><circle cx={5} cy={12} r={1.6} /></svg>
-              </button>
+              <ThreadMenuButton open={menuOpen} title="Conversation options" onClick={() => setMenuOpen(o => !o)} />
               {menuOpen && (
                 <>
-                  <div onClick={() => setMenuOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
-                  <div style={{ position: 'absolute', top: 42, right: 0, zIndex: 41, minWidth: 200, padding: 6, borderRadius: 11, background: 'var(--surface-raised)', border: '1px solid var(--border)', boxShadow: 'var(--e3)' }}>
+                  <div onClick={() => setMenuOpen(false)} style={MENU_SCRIM} />
+                  <div style={MENU_PANEL}>
                     <button
                       onClick={() => { setMenuOpen(false); setConfirmDelete(true) }}
-                      style={{ display: 'flex', alignItems: 'center', gap: 11, width: '100%', padding: '9px 11px', borderRadius: 8, border: 'none', background: 'transparent', color: 'var(--danger-300)', fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}
+                      style={{ ...MENU_ITEM, color: 'var(--danger-300)', cursor: 'pointer' }}
                     >
-                      <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="var(--danger-300)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14" /></svg>
+                      <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /></svg>
                       Delete conversation
                     </button>
                   </div>
@@ -1764,51 +1757,43 @@ export default function ChatApp() {
             // a panel that spills past its LEFT edge is not merely off-screen, it is unreachable, a
             // scroll container's scrollable region never extending leftward. See popoverFit.ts.
             return (
-          <div ref={threadRef} data-popover-bounds style={{ flex: 1, overflowY: 'auto', padding: '28px 32px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div ref={threadRef} data-popover-bounds style={THREAD_SCROLLER}>
 
             {/* Notes-to-self banner (self thread) */}
             {isSelf && (
-              <div style={{ alignSelf: 'center', display: 'inline-flex', alignItems: 'center', gap: 8, padding: '6px 14px', borderRadius: 100, background: 'rgba(var(--border-rgb),0.06)', border: '1px solid var(--border)' }}>
-                <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V4s-1 1-4 1-5-2-8-2-4 1-4 1z" /><path d="M4 22v-7" /></svg>
-                <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Notes to self. Only you can read this thread.</span>
+              <div style={THREAD_META_LINE}>
+                <svg width={11} height={11} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V4s-1 1-4 1-5-2-8-2-4 1-4 1z" /><path d="M4 22v-7" /></svg>
+                Notes to self. Only you can read this thread.
               </div>
             )}
 
-            {/* Encryption pill (design) — teal */}
-            {!isSelf && !isEmpty && (
-              <div style={{ alignSelf: 'center', display: 'inline-flex', alignItems: 'center', gap: 8, padding: '6px 14px', borderRadius: 100, background: 'rgba(var(--teal-500-rgb),0.05)', border: '1px solid rgba(var(--teal-500-rgb),0.18)', marginBottom: 4 }}>
-                <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="var(--teal-500)" strokeWidth={2.2}><rect x={3} y={11} width={18} height={11} rx={2} /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
-                <span style={{ fontSize: 12, color: 'var(--teal-300)' }}>Messages and payments here are end to end encrypted</span>
-              </div>
-            )}
-
-            {/* Address-provenance banner (design) — wired to real state: exchanged (teal) / manual (amber) */}
+            {/* Address provenance. ASYMMETRIC ON PURPOSE: "we got this address from them" is an
+                "of course" and reads as a meta line; "you typed this in and nobody checked it" is
+                the one fact here you might need to act on, so it keeps a full banner. Quieting
+                the reassurance is what makes the warning mean something when it appears. */}
             {!isSelf && peerAddrRec && (
               addressVerified ? (
-                <div style={{ alignSelf: 'center', display: 'flex', alignItems: 'center', gap: 9, padding: '9px 15px', borderRadius: 11, background: 'rgba(var(--teal-500-rgb),0.05)', border: '1px solid rgba(var(--teal-500-rgb),0.24)', maxWidth: 560 }}>
-                  <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="var(--teal-500)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /><path d="M9 12l2 2 4-4" /></svg>
-                  <span style={{ fontSize: 12, color: 'var(--teal-300)', lineHeight: 1.45 }}>Payment address shared by {displayName(selectedConvo.peerHex)} in this conversation</span>
+                <div style={THREAD_META_LINE}>
+                  <svg width={11} height={11} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /><path d="M9 12l2 2 4-4" /></svg>
+                  Payment address shared by {displayName(selectedConvo.peerHex)} in this conversation
                 </div>
               ) : (
-                <div style={{ alignSelf: 'center', display: 'flex', alignItems: 'center', gap: 9, padding: '9px 15px', borderRadius: 11, background: 'rgba(var(--warn-rgb),0.05)', border: '1px solid rgba(var(--warn-rgb),0.28)', maxWidth: 560 }}>
+                <div style={{ alignSelf: 'center', display: 'flex', alignItems: 'center', gap: 9, padding: '9px 14px', borderRadius: 10, background: 'var(--card-warn)', border: '1px solid var(--card-warn-border)', maxWidth: 520 }}>
                   <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="var(--warn)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><path d="M12 9v4M12 17h.01" /></svg>
-                  <span style={{ fontSize: 12, color: 'var(--warn-300)', lineHeight: 1.45 }}>Address entered manually. Not verified against this contact’s identity.</span>
+                  <span style={{ fontSize: 12, color: 'var(--warn)', lineHeight: 1.45 }}>Address entered manually. Not verified against this contact’s identity.</span>
                 </div>
               )
             )}
 
-            {/* Empty accepted thread (first-message state) */}
+            {/* Empty accepted thread (first-message state). The design's tile + title + body,
+                and OUR second sentence: the composer's $ is an unlabelled glyph, and since the
+                balance pill left chat in stage 2 this is the only place the product says a
+                payment can start inside a conversation. */}
             {isEmpty && !isSelf && (
-              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14 }}>
-                <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '6px 14px', borderRadius: 100, background: 'rgba(var(--teal-500-rgb),0.05)', border: '1px solid rgba(var(--teal-500-rgb),0.18)' }}>
-                  <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="var(--teal-500)" strokeWidth={2.2}><rect x={3} y={11} width={18} height={11} rx={2} /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
-                  <span style={{ fontSize: 12, color: 'var(--teal-300)' }}>End to end encrypted</span>
-                </div>
-                <div style={{ textAlign: 'center', maxWidth: 300 }}>
-                  <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-body-dim)', marginBottom: 6 }}>This is the start of your conversation with {displayName(selectedConvo.peerHex)}</div>
-                  <div style={{ fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.55 }}>Say hello, or send a confidential payment with a note attached.</div>
-                </div>
-              </div>
+              <ThreadEmptyState
+                title="Your conversation is private"
+                body={<>Messages with {displayName(selectedConvo.peerHex)} are end-to-end encrypted — only the two of you can read them. Say hello, or send a confidential payment with a note.</>}
+              />
             )}
 
             {/* Real messages and provisional bubbles in ONE chronological pass. Pending rows used to

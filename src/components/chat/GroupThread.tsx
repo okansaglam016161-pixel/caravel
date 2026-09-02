@@ -17,6 +17,8 @@ import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 
 import type { CaravelMessage, Group } from '../../messaging/types'
 import Avatar from './Avatar'
 import MessageBubble from './MessageBubble'
+import { THREAD_HEADER, HEADER_LEFT, THREAD_TITLE, MENU_SCRIM, MENU_PANEL, MENU_ITEM, THREAD_SCROLLER, THREAD_META_LINE } from './threadChrome'
+import { E2ELine, ThreadMenuButton, ThreadEmptyState } from './ThreadFrame'
 import QuotedPreview from './QuotedPreview'
 import { canBeginEdit, canBeginReply, canReplyTo, quotedAuthorLabel } from './replyCompose'
 import { aggregateReactions, atReactionLimit, canReactTo, myReactions } from './reactionDisplay'
@@ -309,32 +311,27 @@ export default function GroupThread({
 
   return (
     <>
-      {/* Header — DM header tokens: group-glyph avatar + name + "N members · group chat" + E2E line;
-          delete lives behind the DM-style ⋯ menu button. */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 24px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 13, minWidth: 0 }}>
-          <Avatar icon={groupGlyph} size={42} radius={12} />
+      {/* Header — the shared thread frame, identical to the DM's: group-glyph avatar, name, and
+          one encryption line carrying the member count. Leave and Invite live behind the ⋯. */}
+      <div style={THREAD_HEADER}>
+        <div style={HEADER_LEFT}>
+          {/* The group tile, quiet — the same treatment stage 2 gave group rows in the list, so a
+              group reads as a container and a person as a contact on both surfaces. */}
+          <Avatar icon={groupGlyph} size={34} radius={11} bg="var(--msg-received)" fg="var(--text-body-dim)" />
           <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: 16, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{groupTitle(group)}</div>
-            <div style={{ fontSize: 12, color: 'var(--text-faint-dim)' }}>{memberLine} · group chat</div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 3 }}>
-              <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="var(--teal-500)" strokeWidth={2.2}><rect x={3} y={11} width={18} height={11} rx={2} /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
-              <span style={{ fontSize: 12, color: 'var(--teal-300)', fontWeight: 500 }}>End to end encrypted</span>
-            </div>
+            <div style={THREAD_TITLE}>{groupTitle(group)}</div>
+            {/* The member count folds INTO the encryption line, per the design. It used to be a
+                third header row, which made the group header taller than the DM's for no reason
+                anyone chose. */}
+            <E2ELine suffix={memberLine} />
           </div>
         </div>
         <div style={{ position: 'relative', flexShrink: 0 }}>
-          <button
-            onClick={() => (menuOpen ? closeMenu() : setMenuOpen(true))}
-            title="Group options"
-            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 36, height: 36, borderRadius: 10, border: '1px solid var(--border)', background: menuOpen ? 'rgba(var(--border-rgb),0.1)' : 'transparent', cursor: 'pointer', padding: 0 }}
-          >
-            <svg width={17} height={17} viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth={1.9} strokeLinecap="round"><circle cx={12} cy={12} r={1.6} /><circle cx={19} cy={12} r={1.6} /><circle cx={5} cy={12} r={1.6} /></svg>
-          </button>
+          <ThreadMenuButton open={menuOpen} title="Group options" onClick={() => (menuOpen ? closeMenu() : setMenuOpen(true))} />
           {menuOpen && (
             <>
-              <div onClick={closeMenu} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
-              <div style={{ position: 'absolute', top: 42, right: 0, zIndex: 41, minWidth: confirmLeave ? 244 : 200, padding: 6, borderRadius: 11, background: 'var(--surface-raised)', border: '1px solid var(--border)', boxShadow: 'var(--e3)' }}>
+              <div onClick={closeMenu} style={MENU_SCRIM} />
+              <div style={{ ...MENU_PANEL, minWidth: confirmLeave ? 244 : 200 }}>
                 {confirmLeave ? (
                   /* Step 2 — inline confirm, in the same panel. Cancel/Leave reuse the invite card's
                      neutral/decisive button tokens, danger-toned for the destructive side. */
@@ -346,13 +343,13 @@ export default function GroupThread({
                     <div style={{ display: 'flex', gap: 8 }}>
                       <button
                         onClick={closeMenu}
-                        style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 9, borderRadius: 9, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-muted)', fontSize: 12.5, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}
+                        style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 8, borderRadius: 8, border: '1px solid var(--border-strong)', background: 'transparent', color: 'var(--text-body-dim)', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}
                       >
                         Cancel
                       </button>
                       <button
                         onClick={() => { closeMenu(); onLeave() }}
-                        style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 9, borderRadius: 9, border: '1px solid rgba(var(--danger-rgb),0.3)', background: 'rgba(var(--danger-rgb),0.08)', color: 'var(--danger-300)', fontSize: 12.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}
+                        style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 8, borderRadius: 8, border: '1px solid var(--card-danger-border)', background: 'var(--card-danger)', color: 'var(--danger-300)', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}
                       >
                         Leave
                       </button>
@@ -368,16 +365,16 @@ export default function GroupThread({
                       onClick={() => { closeMenu(); onReinvite() }}
                       disabled={!canReinvite}
                       title={canReinvite ? "Choose members to re-send this group's invite to" : 'No other members in this group'}
-                      style={{ display: 'flex', alignItems: 'center', gap: 11, width: '100%', padding: '9px 11px', borderRadius: 8, border: 'none', background: 'transparent', color: canReinvite ? 'var(--text-body)' : 'var(--text-disabled)', fontSize: 14, fontWeight: 600, cursor: canReinvite ? 'pointer' : 'default', fontFamily: 'inherit', textAlign: 'left' }}
+                      style={{ ...MENU_ITEM, color: canReinvite ? 'var(--text-body)' : 'var(--text-disabled)', cursor: canReinvite ? 'pointer' : 'default' }}
                     >
-                      <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke={canReinvite ? 'var(--text-muted-dim)' : 'var(--text-disabled)'} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M19 8v6M22 11h-6" /></svg>
+                      <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx={9} cy={7} r={4} /><path d="M19 8v6M22 11h-6" /></svg>
                       Invite again
                     </button>
                     <button
                       onClick={() => setConfirmLeave(true)}
-                      style={{ display: 'flex', alignItems: 'center', gap: 11, width: '100%', padding: '9px 11px', borderRadius: 8, border: 'none', background: 'transparent', color: 'var(--danger-300)', fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}
+                      style={{ ...MENU_ITEM, color: 'var(--danger-300)', cursor: 'pointer' }}
                     >
-                      <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="var(--danger-300)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" /></svg>
+                      <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><path d="M16 17l5-5-5-5M21 12H9" /></svg>
                       Leave group
                     </button>
                   </>
@@ -390,12 +387,15 @@ export default function GroupThread({
 
       {/* Message list — DM container tokens; received bubbles carry a per-run sender identity. */}
       {/* data-popover-bounds — see the note on the DM thread's scroller in ChatApp. */}
-      <div ref={threadRef} data-popover-bounds style={{ flex: 1, overflowY: 'auto', padding: '28px 32px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <div ref={threadRef} data-popover-bounds style={THREAD_SCROLLER}>
+        {/* NO PAYMENT SENTENCE, unlike the DM's. This composer has no $ button (see its own note
+            below), so offering one here would be the screen promising something the thread
+            cannot do. */}
         {messages.length === 0 && (
-          <div style={{ margin: 'auto', textAlign: 'center', maxWidth: 300 }}>
-            <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-body-dim)', marginBottom: 6 }}>This is the start of {groupTitle(group)}</div>
-            <div style={{ fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.55 }}>Messages are sent to every member, end to end encrypted.</div>
-          </div>
+          <ThreadEmptyState
+            title="This group is private"
+            body={<>Messages in {groupTitle(group)} go to every member, end-to-end encrypted. Only members can read them.</>}
+          />
         )}
         {/* Real messages and provisional bubbles in ONE chronological pass — see mergeThreadItems.
             A failed send used to be pinned below every later message, forever. */}
@@ -419,7 +419,7 @@ export default function GroupThread({
           // roster edit). Text is composed here; the stored row carries empty plaintext.
           if (m.system === 'group-leave') {
             return (
-              <div key={m.id} style={{ padding: '2px 0', textAlign: 'center', fontSize: 11.5, color: 'var(--text-faint-dim)' }}>
+              <div key={m.id} style={THREAD_META_LINE}>
                 {nameFor(m.senderPubkeyHex)} has left the chat
               </div>
             )

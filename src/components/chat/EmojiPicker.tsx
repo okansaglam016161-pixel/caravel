@@ -102,8 +102,8 @@ export default function EmojiPicker({ onPick, onClose, placement = 'above', alig
           ...panelStyle,
           zIndex: 41,
           width: COLUMNS * CELL + 24, padding: 10, borderRadius: 13,
-          background: 'var(--surface-raised)', border: '1px solid rgba(var(--border-rgb),0.18)',
-          boxShadow: '0 10px 30px rgba(0,0,0,0.5)',
+          background: 'var(--surface-raised)', border: '1px solid var(--border)',
+          boxShadow: 'var(--e3)',
         }}
       >
         <input
@@ -117,7 +117,7 @@ export default function EmojiPicker({ onPick, onClose, placement = 'above', alig
           style={{
             width: '100%', boxSizing: 'border-box', marginBottom: 8,
             padding: '8px 10px', borderRadius: 9,
-            background: 'var(--surface-inset)', border: '1px solid rgba(var(--border-rgb),0.14)',
+            background: 'var(--surface-inset)', border: '1px solid var(--border)',
             outline: 'none', color: 'var(--text-body)', fontFamily: MONO, fontSize: 12,
           }}
         />

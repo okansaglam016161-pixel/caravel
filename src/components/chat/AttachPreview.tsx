@@ -44,7 +44,7 @@ export default function AttachPreview({ file, busy, stageLabel, onSend, onCancel
 
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: 14, borderRadius: 14, background: 'var(--surface-base)', border: '1px solid rgba(var(--teal-500-rgb),0.24)', marginBottom: 12 }}>
-      <div style={{ width: 62, height: 62, flexShrink: 0, borderRadius: 10, overflow: 'hidden', background: 'var(--surface-inset)', border: '1px solid rgba(var(--border-rgb),0.14)' }}>
+      <div style={{ width: 62, height: 62, flexShrink: 0, borderRadius: 10, overflow: 'hidden', background: 'var(--surface-inset)', border: '1px solid var(--border)' }}>
         {previewUrl && <img src={previewUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />}
       </div>
 
@@ -61,7 +61,7 @@ export default function AttachPreview({ file, busy, stageLabel, onSend, onCancel
         <button
           onClick={onCancel}
           disabled={busy}
-          style={{ padding: '8px 14px', borderRadius: 9, border: '1px solid rgba(var(--border-rgb),0.2)', background: 'transparent', color: 'var(--text-muted)', fontSize: 12.5, fontWeight: 600, cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.5 : 1, fontFamily: 'inherit' }}
+          style={{ padding: '8px 14px', borderRadius: 9, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-muted)', fontSize: 12.5, fontWeight: 600, cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.5 : 1, fontFamily: 'inherit' }}
         >
           Cancel
         </button>

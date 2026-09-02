@@ -64,7 +64,7 @@ export default function ReactionQuickSet({ mine, blocked, pending, align, onPick
             width: 'max-content',
             display: 'flex', alignItems: 'center', gap: 1, padding: 4,
             borderRadius: 999, background: 'var(--surface-raised)',
-            border: '1px solid rgba(var(--border-rgb),0.18)', boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
+            border: '1px solid var(--border)', boxShadow: 'var(--e2)',
             // The strip must not wrap or shrink inside the bubble row it overlays.
             whiteSpace: 'nowrap',
           }}

@@ -62,13 +62,13 @@ export default function ReinviteModal({
   return (
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(5,8,14,0.78)', backdropFilter: 'blur(3px)', zIndex: 200 }} />
-      <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', width: 'min(440px, 94vw)', maxHeight: '88vh', background: 'var(--surface)', borderRadius: 20, border: '1px solid rgba(var(--border-rgb),0.2)', boxShadow: '0 30px 90px rgba(0,0,0,0.65)', zIndex: 201, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 18px', borderBottom: '1px solid rgba(var(--border-rgb),0.1)', flexShrink: 0 }}>
+      <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', width: 'min(440px, 94vw)', maxHeight: '88vh', background: 'var(--surface)', borderRadius: 20, border: '1px solid var(--border)', boxShadow: 'var(--e3)', zIndex: 201, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 18px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
             <Avatar icon={groupGlyph} size={26} radius={8} />
             <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Invite again</span>
           </div>
-          <span onClick={onClose} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, border: '1px solid rgba(var(--border-rgb),0.16)', cursor: 'pointer', flexShrink: 0 }}>
+          <span onClick={onClose} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, border: '1px solid var(--border)', cursor: 'pointer', flexShrink: 0 }}>
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth="2.2" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
           </span>
         </div>
@@ -90,7 +90,7 @@ export default function ReinviteModal({
                 const on = selected.has(m.hex)
                 return (
                   <div key={m.hex} onClick={() => toggle(m.hex)} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 13px', borderRadius: 11, cursor: 'pointer', background: on ? 'rgba(var(--teal-500-rgb),0.08)' : 'var(--surface-raised)', border: `1px solid ${on ? 'rgba(var(--teal-500-rgb),0.3)' : 'rgba(var(--border-rgb),0.12)'}` }}>
-                    <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 20, height: 20, borderRadius: 6, flexShrink: 0, border: `1.5px solid ${on ? 'var(--teal-500)' : 'rgba(var(--border-rgb),0.3)'}`, background: on ? 'var(--teal-500)' : 'transparent' }}>
+                    <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 20, height: 20, borderRadius: 6, flexShrink: 0, border: `1.5px solid ${on ? 'var(--teal-500)' : 'var(--border-strong)'}`, background: on ? 'var(--teal-500)' : 'transparent' }}>
                       {on && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--ink-on-accent)" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>}
                     </span>
                     <Avatar hex={m.hex} size={30} radius={10} fontSize={12} />
@@ -107,10 +107,10 @@ export default function ReinviteModal({
           )}
         </div>
 
-        <div style={{ padding: 18, borderTop: '1px solid rgba(var(--border-rgb),0.1)', flexShrink: 0 }}>
+        <div style={{ padding: 18, borderTop: '1px solid var(--border)', flexShrink: 0 }}>
           <div
             onClick={() => { if (canSend) { onConfirm([...selected]); onClose() } }}
-            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 13, borderRadius: 12, fontSize: 14, fontWeight: 700, cursor: canSend ? 'pointer' : 'default', background: canSend ? 'var(--teal-grad)' : 'rgba(16,21,31,0.6)', border: canSend ? 'none' : '1px solid rgba(var(--border-rgb),0.12)', color: canSend ? 'var(--ink-on-accent)' : 'var(--text-disabled)' }}
+            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 13, borderRadius: 12, fontSize: 14, fontWeight: 700, cursor: canSend ? 'pointer' : 'default', background: canSend ? 'var(--teal-grad)' : 'var(--surface-inset)', border: canSend ? 'none' : '1px solid var(--border)', color: canSend ? 'var(--ink-on-accent)' : 'var(--text-disabled)' }}
           >
             {canSend ? `Send invite to ${selected.size}` : 'Select members'}
           </div>

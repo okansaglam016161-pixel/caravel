@@ -311,7 +311,7 @@ export default function GroupThread({
     <>
       {/* Header — DM header tokens: group-glyph avatar + name + "N members · group chat" + E2E line;
           delete lives behind the DM-style ⋯ menu button. */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 24px', borderBottom: '1px solid rgba(var(--border-rgb),0.1)', flexShrink: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 24px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 13, minWidth: 0 }}>
           <Avatar icon={groupGlyph} size={42} radius={12} />
           <div style={{ minWidth: 0 }}>
@@ -327,14 +327,14 @@ export default function GroupThread({
           <button
             onClick={() => (menuOpen ? closeMenu() : setMenuOpen(true))}
             title="Group options"
-            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 36, height: 36, borderRadius: 10, border: '1px solid rgba(var(--border-rgb),0.16)', background: menuOpen ? 'rgba(var(--border-rgb),0.1)' : 'transparent', cursor: 'pointer', padding: 0 }}
+            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 36, height: 36, borderRadius: 10, border: '1px solid var(--border)', background: menuOpen ? 'rgba(var(--border-rgb),0.1)' : 'transparent', cursor: 'pointer', padding: 0 }}
           >
             <svg width={17} height={17} viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth={1.9} strokeLinecap="round"><circle cx={12} cy={12} r={1.6} /><circle cx={19} cy={12} r={1.6} /><circle cx={5} cy={12} r={1.6} /></svg>
           </button>
           {menuOpen && (
             <>
               <div onClick={closeMenu} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
-              <div style={{ position: 'absolute', top: 42, right: 0, zIndex: 41, minWidth: confirmLeave ? 244 : 200, padding: 6, borderRadius: 11, background: 'var(--surface-raised)', border: '1px solid rgba(var(--border-rgb),0.18)', boxShadow: '0 10px 30px rgba(0,0,0,0.5)' }}>
+              <div style={{ position: 'absolute', top: 42, right: 0, zIndex: 41, minWidth: confirmLeave ? 244 : 200, padding: 6, borderRadius: 11, background: 'var(--surface-raised)', border: '1px solid var(--border)', boxShadow: 'var(--e3)' }}>
                 {confirmLeave ? (
                   /* Step 2 — inline confirm, in the same panel. Cancel/Leave reuse the invite card's
                      neutral/decisive button tokens, danger-toned for the destructive side. */
@@ -346,7 +346,7 @@ export default function GroupThread({
                     <div style={{ display: 'flex', gap: 8 }}>
                       <button
                         onClick={closeMenu}
-                        style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 9, borderRadius: 9, border: '1px solid rgba(var(--border-rgb),0.2)', background: 'transparent', color: 'var(--text-muted)', fontSize: 12.5, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}
+                        style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 9, borderRadius: 9, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-muted)', fontSize: 12.5, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}
                       >
                         Cancel
                       </button>
@@ -446,7 +446,7 @@ export default function GroupThread({
                   highlighted={!!m.logicalId && editing?.logicalId === m.logicalId}
                   lid={m.logicalId}
                   flashed={!!m.logicalId && flashedId === m.logicalId}
-                  quoted={m.replyTo ? <QuotedPreview replyTo={m.replyTo} byLogicalId={quotedIndex} nameFor={nameFor} onJump={jumpTo} tone="on-teal" /> : undefined}
+                  quoted={m.replyTo ? <QuotedPreview replyTo={m.replyTo} byLogicalId={quotedIndex} nameFor={nameFor} onJump={jumpTo} tone="on-accent" /> : undefined}
                   reactions={rx.pills}
                   actions={(canEditMessage(m) || canReplyTo(m) || rx.reactable) ? (
                     <MessageActionRow
@@ -528,7 +528,7 @@ export default function GroupThread({
       </div>
 
       {/* Composer — DM compose treatment, minus the $ payment toggle (deferred). */}
-      <div style={{ padding: '16px 24px 20px', borderTop: '1px solid rgba(var(--border-rgb),0.1)', flexShrink: 0 }}>
+      <div style={{ padding: '16px 24px 20px', borderTop: '1px solid var(--border)', flexShrink: 0 }}>
 
         {/* Replying-to chip (replies v1), matching the DM composer: same slot, same visual language,
             same explicit Cancel. Names the MEMBER being answered, which a group needs and a DM does
@@ -584,7 +584,7 @@ export default function GroupThread({
             onClick={() => imageInputRef.current?.click()}
             disabled={imageBusy}
             title="Attach an image"
-            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 46, height: 46, flexShrink: 0, borderRadius: 12, border: '1px solid rgba(var(--border-rgb),0.16)', background: 'var(--surface-inset)', cursor: imageBusy ? 'default' : 'pointer', opacity: imageBusy ? 0.5 : 1, padding: 0 }}
+            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 46, height: 46, flexShrink: 0, borderRadius: 12, border: '1px solid var(--border)', background: 'var(--surface-inset)', cursor: imageBusy ? 'default' : 'pointer', opacity: imageBusy ? 0.5 : 1, padding: 0 }}
           >
             <svg width={21} height={21} viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round"><rect x={3} y={3} width={18} height={18} rx={2} /><circle cx={8.5} cy={8.5} r={1.5} /><path d="M21 15l-5-5L5 21" /></svg>
           </button>
@@ -595,13 +595,13 @@ export default function GroupThread({
               disabled={sending}
               title="Insert emoji"
               aria-label="Insert emoji"
-              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 46, height: 46, flexShrink: 0, borderRadius: 12, border: '1px solid rgba(var(--border-rgb),0.16)', background: emojiOpen ? 'rgba(var(--border-rgb),0.1)' : 'var(--surface-inset)', cursor: sending ? 'default' : 'pointer', opacity: sending ? 0.5 : 1, padding: 0 }}
+              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 46, height: 46, flexShrink: 0, borderRadius: 12, border: '1px solid var(--border)', background: emojiOpen ? 'rgba(var(--border-rgb),0.1)' : 'var(--surface-inset)', cursor: sending ? 'default' : 'pointer', opacity: sending ? 0.5 : 1, padding: 0 }}
             >
               <svg width={21} height={21} viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round"><circle cx={12} cy={12} r={9} /><path d="M8.5 14.5a4.5 4.5 0 0 0 7 0" /><path d="M9 9.5h.01M15 9.5h.01" /></svg>
             </button>
             {emojiOpen && <EmojiPicker onPick={insertEmoji} onClose={() => setEmojiOpen(false)} />}
           </div>
-          <div style={{ flex: 1, display: 'flex', alignItems: 'center', padding: '13px 17px', borderRadius: 13, background: 'var(--surface-raised)', border: '1px solid rgba(var(--border-rgb),0.14)' }}>
+          <div style={{ flex: 1, display: 'flex', alignItems: 'center', padding: '13px 17px', borderRadius: 13, background: 'var(--surface-raised)', border: '1px solid var(--border)' }}>
             <textarea
               ref={composerRef}
               className="cv-composer"
@@ -629,7 +629,7 @@ export default function GroupThread({
                 onClick={() => (editing ? void saveEdit() : void send())}
                 disabled={!active}
                 title={editing ? 'Save edit' : 'Send to group'}
-                style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 46, height: 46, flexShrink: 0, borderRadius: 12, background: 'var(--surface-inset)', border: '1px solid rgba(var(--border-rgb),0.16)', cursor: active ? 'pointer' : 'default', opacity: active ? 1 : 0.5, padding: 0 }}
+                style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 46, height: 46, flexShrink: 0, borderRadius: 12, background: 'var(--surface-inset)', border: '1px solid var(--border)', cursor: active ? 'pointer' : 'default', opacity: active ? 1 : 0.5, padding: 0 }}
               >
                 {sending && !editing
                   ? <span style={{ width: 20, height: 20, borderRadius: '50%', border: '2.5px solid rgba(var(--border-rgb),0.25)', borderTopColor: 'var(--text-muted-dim)', animation: 'cv-spin 0.8s linear infinite' }} />

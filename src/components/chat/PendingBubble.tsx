@@ -64,7 +64,12 @@ export default function PendingBubble({ text, status, onRetry, onDismiss, failur
     <div style={{ alignSelf: 'flex-end', maxWidth: '62%', display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
       {status === 'sending' ? (
         <>
-          <div style={{ padding: '13px 17px', borderRadius: '16px 4px 16px 16px', background: 'linear-gradient(160deg, rgba(28,122,110,0.55), rgba(18,101,90,0.55))', color: 'var(--text-note)', fontSize: 15, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{text}</div>
+          {/* THE ACCENT, HELD BACK. This bubble becomes a solid --msg-sent the moment the send is
+              acknowledged, so "sending" has to read as the same colour not yet arrived at rather
+              than as a different thing — a translucent accent does that and a neutral grey does
+              not. It was a teal gradient until V3; the foundation allows no gradient on the brand,
+              and teal is not the brand any more. Stage 3 settles the bubble's shape. */}
+          <div style={{ padding: '13px 17px', borderRadius: '16px 4px 16px 16px', background: 'rgba(var(--accent-400-rgb),0.55)', color: 'var(--text-note)', fontSize: 15, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{text}</div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontFamily: MONO, fontSize: 11, color: 'var(--text-muted-dim)', marginTop: 6, marginRight: 4 }}>
             <span style={{ width: 11, height: 11, borderRadius: '50%', border: '2px solid rgba(var(--border-rgb),0.2)', borderTopColor: 'var(--text-muted-dim)', animation: 'cv-spin 0.8s linear infinite' }} />Sending
           </div>

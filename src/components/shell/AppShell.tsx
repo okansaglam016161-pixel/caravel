@@ -24,7 +24,6 @@
 
 import { useState } from 'react'
 import ChatApp from '../chat/ChatApp'
-import DarkPin from './DarkPin'
 import ProfilePanel from '../wallet/ProfilePanel'
 import WalletPage from '../wallet/WalletPage'
 import NamePage from './NamePage'
@@ -47,14 +46,14 @@ export default function AppShell() {
     <div style={{ height: '100vh', display: 'flex', background: 'var(--surface-base)', overflow: 'hidden' }}>
       <ServiceNav service={service} onSelect={setService} onProfile={() => setProfileOpen(true)} />
 
-      {/* Chat brings its own sidebar. Nested rails are accepted for now — chat is wired in as it
-          stands and gets its own design pass later; stripping its header now would mean editing
-          2,300 lines we are otherwise not touching. */}
+      {/* Chat brings its own sidebar. The nested rails are much less of a collision now that the
+          spine is 64px, but chat's own header still carries a second Caravel lockup ~64px from
+          this one — that goes with the conversation-list reskin, not here. */}
       <Pane show={service === 'wallet'}><WalletPage /></Pane>
-      {/* Pinned dark until the chat redesign — see DarkPin. */}
-      <Pane show={service === 'chat'}>
-        <DarkPin style={{ display: 'flex', flex: 1, minWidth: 0, height: '100%' }}><ChatApp /></DarkPin>
-      </Pane>
+      {/* No longer pinned dark. Chat's literals now resolve through the v0.3 role tokens, so it
+          follows the app theme like every other service — and so does the wallet modal inside it,
+          which used to inherit the pin. */}
+      <Pane show={service === 'chat'}><ChatApp /></Pane>
       <Pane show={service === 'name'}><NamePage /></Pane>
 
       {profileOpen && (

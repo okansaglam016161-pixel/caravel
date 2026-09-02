@@ -1,8 +1,21 @@
-//   The service rail — the app's permanent left edge.
+//   The service spine — the app's permanent left edge.
 //
-//   Built to the wallet design's nav: the lockup, one row per service, and the identity footer. It
-//   sits on navy in both themes, which is the foundation's rule for nav and the balance hero ("the
-//   balance hero and nav live on 900-950").
+//   Built to the V3 design's locked shell (Caravel Chat V3.dc.html §1, "ICON SPINE + LIST +
+//   THREAD"): 64px wide, icon-only, labels dropped to tooltips. It sits on navy in both themes,
+//   which is the foundation's rule for nav and the balance hero ("the balance hero and nav live
+//   on 900-950").
+//
+//   ── WHY ICON-ONLY, AND WHY APP-WIDE ──────────────────────────────────────────
+//
+//   The spine is the shell, not a chat component: Wallet and Name render beside it too, so it
+//   narrows for all three or none. Chat is what forced the question — it brings its own 380px
+//   sidebar, so a labelled 210px rail put 590px of navy in two abutting columns before the thread
+//   started. 64px is the design's answer, and the 146px it gives back go to the content pane on
+//   every service.
+//
+//   THE LABELS BECOME TOOLTIPS, via `title` + `aria-label` on each button — this codebase's
+//   pattern for an icon-only control (primitives/ThemeToggle, wallet/v2 HeaderIcon). There is no
+//   tooltip component here and a hover flyout would be a new one.
 //
 //   ── THE BALANCE CARD IS GONE ─────────────────────────────────────────────────
 //
@@ -17,13 +30,27 @@
 //   render path over the same unions, kept in step by hand.
 //
 //   WHERE IT SHOULD COME BACK, IF IT DOES: on a service OTHER than the wallet, where the balance is
-//   genuinely out of sight. Chat is the case that would justify it. Restoring it unconditionally is
-//   what this pass removed.
+//   genuinely out of sight. Chat is the case that would justify it — and chat's own sidebar already
+//   carries a balance pill for exactly that reason. Restoring it here is not the answer; 64px has
+//   no room for a figure, which is the design settling the question.
 //
-//   AN ALWAYS-DARK ISLAND, like the vault hero. The rail carries data-theme="dark" so its contents
+//   ── THE ADDRESS LABEL WENT WITH THE WIDTH ────────────────────────────────────
+//
+//   The identity row used to print an elided address (ten leading characters and five trailing)
+//   beside a lock glyph. An icon-only spine has nowhere to put it, so it is now the design's 30px
+//   "@" tile and nothing else. THE FULL VALUE IS STILL ON `title`, which is where it always
+//   actually was — the elision was aggressive enough that it was never something to check an
+//   address against, only a "this is you" marker. The tile says the same thing in less space, and
+//   the panel behind it has the real row with the real copy control.
+//
+//   AN ALWAYS-DARK ISLAND, like the vault hero. The spine carries data-theme="dark" so its contents
 //   resolve the dark ramp whatever the page around it is, which is what lets it use ordinary role
 //   tokens instead of the white literals it would otherwise need. Same mechanism, same reason: the
 //   foundation keeps the nav on navy in both themes.
+//
+//   NO BORDER ON THE RIGHT EDGE, per the design. The pane beside it draws its own — chat's list
+//   pane and the wallet page both do — and a second hairline between two surfaces that already
+//   differ by #0C1A2E vs the page ground is a line doing no work.
 
 import { useWallet } from '../../context/WalletContext'
 
@@ -32,6 +59,7 @@ const SERVICES = ['wallet', 'chat', 'name'] as const
 /** Type-only export: keeps this file a component module, which is what fast refresh wants. */
 export type Service = (typeof SERVICES)[number]
 
+/** The tooltip text, and the accessible name. Both, from one string — see the header note. */
 const LABEL: Record<Service, string> = { wallet: 'Wallet', chat: 'Chat', name: 'Name' }
 
 const ICON: Record<Service, React.ReactNode> = {
@@ -52,23 +80,6 @@ const ICON: Record<Service, React.ReactNode> = {
   ),
 }
 
-/**
- * otl_esm_1t…8224p — the footer identity.
- *
- * THE WALLET ADDRESS, NOT THE NPUB. The row opens a panel that is wallet-only as of V3 series 6:
- * the npub and the @names left it, so a row labelled with an npub was announcing an identity that
- * is no longer behind it.
- *
- * DISPLAY ONLY, and nothing here copies. The rail is 210px wide with a tile and a lock beside the
- * label, so this is aggressive — ten leading characters and five trailing, most of the leading run
- * being the `otl_esm_1` network prefix every address on this chain shares. That is fine for what
- * it is: a "this is you" marker, not something to check an address against. The full value is on
- * the button's `title`, and the panel behind it has the real row with the real copy control.
- */
-function shortAddress(a: string): string {
-  return a.length > 18 ? `${a.slice(0, 10)}…${a.slice(-5)}` : a
-}
-
 export default function ServiceNav({ service, onSelect, onProfile }: {
   service: Service
   onSelect: (s: Service) => void
@@ -78,19 +89,18 @@ export default function ServiceNav({ service, onSelect, onProfile }: {
 
   return (
     <nav data-theme="dark" style={{
-      width: 210, flexShrink: 0, background: 'var(--nav-ground)', borderRight: '1px solid var(--border)',
-      padding: '18px 14px', display: 'flex', flexDirection: 'column', gap: 4,
+      width: 64, flexShrink: 0, background: 'var(--nav-ground)',
+      padding: '14px 0', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
     }}>
-      {/* Lockup */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 10px 22px' }}>
-        <span style={{
-          width: 30, height: 30, borderRadius: 9, background: 'var(--accent-400)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-        }}>
-          <img src="/logo-light.png" alt="" aria-hidden="true" style={{ height: 16, width: 'auto', display: 'block' }} />
-        </span>
-        <span style={{ fontSize: 16, fontWeight: 600, color: 'var(--text-bright)' }}>Caravel</span>
-      </div>
+      {/* The mark, on its accent tile. Not a control — the spine's rows are the navigation, and a
+          fourth clickable thing at the top that goes somewhere else is a trap in 64px. */}
+      <span style={{
+        width: 32, height: 32, borderRadius: 10, background: 'var(--accent-400)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+        marginBottom: 10,
+      }}>
+        <img src="/logo-light.png" alt="" aria-hidden="true" style={{ height: 17, width: 'auto', display: 'block' }} />
+      </span>
 
       {/* Services */}
       {SERVICES.map(s => {
@@ -100,56 +110,39 @@ export default function ServiceNav({ service, onSelect, onProfile }: {
             key={s}
             onClick={() => onSelect(s)}
             aria-current={on ? 'page' : undefined}
+            title={LABEL[s]}
+            aria-label={LABEL[s]}
             className="cv-nav-item"
             style={{
-              display: 'flex', alignItems: 'center', gap: 11, padding: '10px 12px',
-              borderRadius: 'var(--r-md)', border: 'none', width: '100%', textAlign: 'left',
-              fontFamily: 'inherit', fontSize: 14, cursor: 'pointer',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              width: 38, height: 38, flexShrink: 0, padding: 0,
+              borderRadius: 11, border: 'none', cursor: 'pointer',
               background: on ? 'var(--nav-selected)' : 'transparent',
               color: on ? 'var(--text-bright)' : 'var(--text-body-dim)',
-              fontWeight: on ? 600 : 500,
             }}
           >
-            {ICON[s]}<span>{LABEL[s]}</span>
+            {ICON[s]}
           </button>
         )
       })}
 
-      <div style={{ flex: 1, minHeight: 24 }} />
+      <span style={{ flex: 1, minHeight: 24 }} />
 
-      {/* Identity — opens the profile panel (address, recovery phrase, lock). */}
+      {/* Identity — opens the profile panel (address, recovery phrase, lock). The full address on
+          hover: the tile shows none of it, and this is the only place in the spine it exists. */}
       <button
         onClick={onProfile}
+        title={address ?? 'Your profile'}
+        aria-label="Your profile"
         className="cv-nav-item"
-        // The full address on hover — the label is elided in two directions and this is the only
-        // place in the rail the whole thing exists.
-        title={address ?? undefined}
         style={{
-          display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px',
-          borderTop: '1px solid var(--border)', borderLeft: 'none', borderRight: 'none', borderBottom: 'none',
-          borderRadius: 0, background: 'transparent', width: '100%', textAlign: 'left',
-          fontFamily: 'inherit', cursor: 'pointer',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          width: 30, height: 30, flexShrink: 0, padding: 0,
+          borderRadius: 9, border: 'none', cursor: 'pointer',
+          background: 'var(--vault-card)', color: 'var(--accent-300)',
+          fontFamily: 'inherit', fontSize: 11, fontWeight: 600,
         }}
-      >
-        <span style={{
-          width: 26, height: 26, borderRadius: 8, background: 'var(--vault-card)', color: 'var(--accent-300)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 600, flexShrink: 0,
-        }}>@</span>
-        <span style={{
-          flex: 1, minWidth: 0, color: 'var(--text-primary)',
-          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-          // MONO, and a step down in size. Addresses are set in mono everywhere else in the app —
-          // the receive sheet, the review rows, the profile panel — and a base58 string in the UI
-          // face reads as a word that went wrong. The smaller size is what buys the extra
-          // characters back.
-          ...(address
-            ? { fontFamily: 'var(--font-mono)', fontSize: 11.5, fontWeight: 500 }
-            : { fontSize: 13, fontWeight: 600 }),
-        }}>{address ? shortAddress(address) : 'Your profile'}</span>
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--vault-label)" strokeWidth="2" strokeLinecap="round" style={{ flexShrink: 0 }}>
-          <rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" />
-        </svg>
-      </button>
+      >@</button>
     </nav>
   )
 }

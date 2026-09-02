@@ -103,9 +103,14 @@ export const MODAL_WIDTH = 480
 /**
  * The widest the wallet PAGE lets its content grow.
  *
- * The design lays the app out in a 1280 shell with a 224 nav beside it, leaving roughly 1050 for
- * the wallet and about 990 inside its padding. Past that the vault hero stops reading as a card and
- * the assets rows put half a screen between a name and its amount, so the content centres rather
- * than stretching further.
+ * The cap is a READING MEASURE, not a derivation from the shell's width, and that is what keeps it
+ * correct as the shell changes: past roughly 1040 the vault hero stops reading as a card and the
+ * assets rows put half a screen between a name and its amount, so the content centres rather than
+ * stretching further.
+ *
+ * It was originally justified against "a 1280 shell with a 224 nav beside it, leaving roughly
+ * 1050". That arithmetic is dead — the nav is now the 64px icon spine — and the value did not move,
+ * which is the evidence the measure was doing the work rather than the subtraction. The pane is
+ * simply wider than the cap more often now.
  */
 export const PAGE_MAX_WIDTH = 1040

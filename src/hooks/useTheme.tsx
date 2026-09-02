@@ -6,7 +6,12 @@
 //   `:root[data-theme="light"]` and `:root, [data-theme="dark"]`. Setting the attribute therefore
 //   re-declares the role tokens for the whole document — every route, including the gate screens,
 //   which render outside the app shell. Any subtree can still override it, which is what the
-//   remaining dark PINS rely on (see DarkPin).
+//   ALWAYS-DARK ISLANDS rely on: the service spine, the wallet's vault hero, and chat's
+//   confidential-payment card all carry `data-theme="dark"` because the foundation keeps those
+//   surfaces on navy in both themes. The temporary wrapper that used to pin whole unconverted
+//   surfaces to dark is gone: chat was its last caller, and chat followed the theme from the moment
+//   its literals became tokens. Islands are now only ever a deliberate design choice, never a
+//   holding pattern.
 //
 //   ── WHY A PROVIDER RATHER THAN A HOOK PER CALLER ─────────────────────────────
 //

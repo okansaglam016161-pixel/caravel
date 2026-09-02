@@ -97,10 +97,10 @@ export function RelayHealthPanel({ getRelayStates, reconnectAll, onClose }: {
         position: 'absolute', top: 8, left: 16, right: 16, zIndex: 151,
         borderRadius: 16, background: 'var(--surface)',
         border: `1px solid ${healthy ? 'rgba(var(--teal-500-rgb),0.22)' : 'rgba(var(--warn-rgb),0.26)'}`,
-        boxShadow: '0 20px 50px rgba(0,0,0,0.5)', overflow: 'hidden',
+        boxShadow: 'var(--e3)', overflow: 'hidden',
       }}>
         {/* header */}
-        <div style={{ padding: '18px 18px 16px', background: `radial-gradient(300px 140px at 50% 0%, rgba(var(--${healthy ? 'teal-500' : 'warn'}-rgb),0.1), rgba(12,17,27,0))`, borderBottom: '1px solid rgba(var(--border-rgb),0.08)' }}>
+        <div style={{ padding: '18px 18px 16px', background: `radial-gradient(300px 140px at 50% 0%, rgba(var(--${healthy ? 'teal-500' : 'warn'}-rgb),0.1), rgba(var(--${healthy ? 'teal-500' : 'warn'}-rgb),0))`, borderBottom: '1px solid var(--border)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
             <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 26, height: 26, borderRadius: 8, background: `rgba(var(--${healthy ? 'teal-500' : 'warn'}-rgb),0.14)`, border: `1px solid rgba(var(--${healthy ? 'teal-500' : 'warn'}-rgb),0.3)` }}>
               {healthy
@@ -109,7 +109,7 @@ export function RelayHealthPanel({ getRelayStates, reconnectAll, onClose }: {
             </span>
             <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-bright)' }}>{healthy ? 'Privately connected' : 'Still connected'}</span>
           </div>
-          <div style={{ fontSize: 13, color: 'var(--text-teal-label)', lineHeight: 1.5 }}>
+          <div style={{ fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.5 }}>
             {healthy
               ? `Connected to ${connected} of ${total} relays. Your messages are relayed blind.`
               : `Connected to ${connected} of ${total} relays. Messages still send, delivery may be slower.`}

@@ -38,10 +38,10 @@ export default function CreateGroupModal({
   return (
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(5,8,14,0.78)', backdropFilter: 'blur(3px)', zIndex: 200 }} />
-      <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', width: 'min(440px, 94vw)', maxHeight: '88vh', background: 'var(--surface)', borderRadius: 20, border: '1px solid rgba(var(--border-rgb),0.2)', boxShadow: '0 30px 90px rgba(0,0,0,0.65)', zIndex: 201, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 18px', borderBottom: '1px solid rgba(var(--border-rgb),0.1)', flexShrink: 0 }}>
+      <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', width: 'min(440px, 94vw)', maxHeight: '88vh', background: 'var(--surface)', borderRadius: 20, border: '1px solid var(--border)', boxShadow: 'var(--e3)', zIndex: 201, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 18px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
           <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>New group</span>
-          <span onClick={onClose} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, border: '1px solid rgba(var(--border-rgb),0.16)', cursor: 'pointer' }}>
+          <span onClick={onClose} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, border: '1px solid var(--border)', cursor: 'pointer' }}>
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth="2.2" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
           </span>
         </div>
@@ -54,7 +54,7 @@ export default function CreateGroupModal({
             placeholder="e.g. Weekend plans"
             maxLength={48}
             autoFocus
-            style={{ width: '100%', boxSizing: 'border-box', padding: '13px 15px', borderRadius: 11, background: 'var(--surface-raised)', border: '1px solid rgba(var(--border-rgb),0.14)', fontSize: 14, color: 'var(--text-body)', outline: 'none', fontFamily: 'inherit', marginBottom: 18 }}
+            style={{ width: '100%', boxSizing: 'border-box', padding: '13px 15px', borderRadius: 11, background: 'var(--surface-raised)', border: '1px solid var(--border)', fontSize: 14, color: 'var(--text-body)', outline: 'none', fontFamily: 'inherit', marginBottom: 18 }}
           />
 
           <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.14em', color: 'var(--text-faint-dim)', marginBottom: 10 }}>
@@ -68,7 +68,7 @@ export default function CreateGroupModal({
                 const on = selected.has(c.hex)
                 return (
                   <div key={c.hex} onClick={() => toggle(c.hex)} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 13px', borderRadius: 11, cursor: 'pointer', background: on ? 'rgba(var(--teal-500-rgb),0.08)' : 'var(--surface-raised)', border: `1px solid ${on ? 'rgba(var(--teal-500-rgb),0.3)' : 'rgba(var(--border-rgb),0.12)'}` }}>
-                    <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 20, height: 20, borderRadius: 6, flexShrink: 0, border: `1.5px solid ${on ? 'var(--teal-500)' : 'rgba(var(--border-rgb),0.3)'}`, background: on ? 'var(--teal-500)' : 'transparent' }}>
+                    <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 20, height: 20, borderRadius: 6, flexShrink: 0, border: `1.5px solid ${on ? 'var(--teal-500)' : 'var(--border-strong)'}`, background: on ? 'var(--teal-500)' : 'transparent' }}>
                       {on && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--ink-on-accent)" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>}
                     </span>
                     <span style={{ fontSize: 14, color: 'var(--text-body)', fontFamily: c.name.startsWith('npub') ? MONO : undefined, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</span>
@@ -79,10 +79,10 @@ export default function CreateGroupModal({
           )}
         </div>
 
-        <div style={{ padding: 18, borderTop: '1px solid rgba(var(--border-rgb),0.1)', flexShrink: 0 }}>
+        <div style={{ padding: 18, borderTop: '1px solid var(--border)', flexShrink: 0 }}>
           <div
             onClick={() => { if (canCreate) { onCreate(name.trim(), [...selected]); onClose() } }}
-            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 13, borderRadius: 12, fontSize: 14, fontWeight: 700, cursor: canCreate ? 'pointer' : 'default', background: canCreate ? 'var(--teal-grad)' : 'rgba(16,21,31,0.6)', border: canCreate ? 'none' : '1px solid rgba(var(--border-rgb),0.12)', color: canCreate ? 'var(--ink-on-accent)' : 'var(--text-disabled)' }}
+            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 13, borderRadius: 12, fontSize: 14, fontWeight: 700, cursor: canCreate ? 'pointer' : 'default', background: canCreate ? 'var(--teal-grad)' : 'var(--surface-inset)', border: canCreate ? 'none' : '1px solid var(--border)', color: canCreate ? 'var(--ink-on-accent)' : 'var(--text-disabled)' }}
           >
             Create group
           </div>

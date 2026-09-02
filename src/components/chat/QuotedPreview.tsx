@@ -22,18 +22,25 @@ import type { CaravelMessage } from '../../messaging/types'
 // nested inside the bubble, so the bubble is its backdrop. That makes two palettes necessary rather
 // than one:
 //
-//   'on-dark'  — inside a received or notes-to-self bubble (--surface-inset). A teal-tinted panel
-//                with teal-leaning text reads clearly against dark, and ties the quote to the accent
-//                colour used for quoting elsewhere in the UI.
-//   'on-teal'  — inside a SENT bubble (--msg-sent, a teal gradient). The same teal panel would be
-//                teal-on-teal: present, but barely legible. A translucent DARK panel with light text
-//                inverts it, which is the arrangement WhatsApp and Signal both settled on and for the
-//                same reason. rgba(10,14,23,…) is the existing "dark inset on a coloured surface"
-//                value used by the payment card's note panel.
+//   'on-dark'   — inside a received or notes-to-self bubble (--surface-inset). An accent-tinted
+//                 panel with accent-leaning text, which ties the quote to the colour used for
+//                 quoting elsewhere in the UI. Its tokens are theme-aware, so it follows the app.
+//   'on-accent' — inside a SENT bubble (--msg-sent). The same accent panel would be accent-on-accent:
+//                 present, but barely legible. A translucent WHITE panel with white text inverts it,
+//                 which is the arrangement WhatsApp and Signal both settled on and for the same
+//                 reason — and it is what the V3 design draws (its REPLY · QUOTED PREVIEW panel is
+//                 rgba(255,255,255,.14) behind a rgba(255,255,255,.6) rule).
 //
-// Both keep the left accent rule; only its colour flips, because a teal rule on teal is invisible.
+// THE 'on-accent' VALUES ARE DELIBERATELY THEME-INVARIANT. --msg-sent resolves to --accent-600 in
+// both themes (the light block never restates it), so the surface this palette contrasts against
+// does not move, and neither should the ink on it. This is the one place in chat where a literal is
+// the correct answer rather than a missing token.
+//
+// It was 'on-teal', over a teal gradient bubble, with pale-mint ink. The bubble is flat cobalt now.
+//
+// Both keep the left rule; only its colour flips, because an accent rule on accent is invisible.
 // Both stay SUBORDINATE to the reply's own text — a quote is context, not content.
-type QuoteTone = 'on-dark' | 'on-teal'
+type QuoteTone = 'on-dark' | 'on-accent'
 
 const PALETTE: Record<QuoteTone, { rule: string; bg: string; body: string; author: string; muted: string }> = {
   'on-dark': {
@@ -43,15 +50,17 @@ const PALETTE: Record<QuoteTone, { rule: string; bg: string; body: string; autho
     author: 'var(--text-teal-dim)',
     muted: 'var(--text-faint-dim)',
   },
-  'on-teal': {
-    // Light rule + dark panel: the inverse arrangement, so the quote reads as a recess in the teal.
-    rule: '2px solid rgba(234,251,247,0.5)',
-    bg: 'rgba(10,14,23,0.3)',
+  'on-accent': {
+    // A white recess in the accent, per the design. The panel lightens rather than darkens: on
+    // --accent-600 a dark inset reads as a hole punched in the bubble, a light one as a quoted
+    // slab lying on it.
+    rule: '2px solid rgba(255,255,255,0.6)',
+    bg: 'rgba(255,255,255,0.14)',
     // Deliberately BELOW the bubble text's --text-bright, so the quote stays secondary to the reply
     // it belongs to while remaining comfortably readable.
-    body: 'rgba(234,251,247,0.82)',
-    author: 'rgba(234,251,247,0.95)',
-    muted: 'rgba(234,251,247,0.6)',
+    body: 'rgba(255,255,255,0.82)',
+    author: 'rgba(255,255,255,0.95)',
+    muted: 'rgba(255,255,255,0.6)',
   },
 }
 

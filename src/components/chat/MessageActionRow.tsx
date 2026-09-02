@@ -82,7 +82,7 @@ export default function MessageActionRow({ onReact, reactOpen, reactPopover, onR
                   position: 'absolute', top: 30, zIndex: 41, minWidth: 150, padding: 5,
                   ...(menuAlign === 'left' ? { left: 0 } : { right: 0 }),
                   borderRadius: 10, background: 'var(--surface-raised)',
-                  border: '1px solid rgba(var(--border-rgb),0.18)', boxShadow: '0 10px 30px rgba(0,0,0,0.5)',
+                  border: '1px solid var(--border)', boxShadow: 'var(--e3)',
                 }}
               >
                 <button

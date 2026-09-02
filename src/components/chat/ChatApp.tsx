@@ -42,6 +42,7 @@ import AttachPreview from './AttachPreview'
 import { groupGlyph } from './groupGlyph'
 import EmojiPicker from './EmojiPicker'
 import { insertAtCursor } from './composerInsert'
+import { useTheme } from '../../hooks/useTheme'
 
 // ── Conversation derivation ─────────────────────────────────────────────────────
 
@@ -149,13 +150,18 @@ function PaymentCard({ sent, tone, chip, timestamp, plaintext, body, lid, flashe
   const noteBorder = tone === 'teal' ? 'rgba(var(--teal-500-rgb),0.28)' : 'rgba(var(--border-rgb),0.2)'
   return (
     <div data-lid={lid} className={flashed ? 'cv-msg-flash' : undefined} style={{ alignSelf: sent ? 'flex-end' : 'flex-start', maxWidth: '68%', width: 440, borderRadius: 16 }}>
-      <div style={{ borderRadius: sent ? '16px 6px 16px 16px' : '6px 16px 16px 16px', overflow: 'hidden', border: `1px solid ${c.border}`, background: c.bg }}>
+      {/* AN ALWAYS-DARK ISLAND. --card-payment resolves to --vault-card in BOTH themes — the light
+          block never restates it — because a confidential payment is deliberately a vault moment.
+          Pinning the subtree is what lets its contents keep using ordinary role tokens instead of
+          the white literals a navy card on a light page would otherwise need. The payment-cards
+          stage reskins it properly; this only makes it honest in light. */}
+      <div data-theme="dark" style={{ borderRadius: sent ? '16px 6px 16px 16px' : '6px 16px 16px 16px', overflow: 'hidden', border: `1px solid ${c.border}`, background: c.bg }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 17px', background: c.headerBg, borderBottom: `1px solid ${c.headerBorder}` }}>
           <span style={{ fontSize: 12, fontWeight: 700, color: c.title, letterSpacing: '0.06em' }}>CONFIDENTIAL PAYMENT</span>
           <span style={{ fontFamily: MONO, fontSize: 11, color: chipColor }}>{chip}</span>
         </div>
         <div style={{ padding: '20px 17px 8px', textAlign: 'center' }}>{body}</div>
-        <div style={{ margin: '10px 14px 16px', padding: '13px 15px', borderRadius: 12, background: 'rgba(10,14,23,0.6)', border: `1px dashed ${noteBorder}` }}>
+        <div style={{ margin: '10px 14px 16px', padding: '13px 15px', borderRadius: 12, background: 'var(--surface-trough)', border: `1px dashed ${noteBorder}` }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 7 }}>
             <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="var(--text-teal-dim)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V4s-1 1-4 1-5-2-8-2-4 1-4 1z" /><path d="M4 22v-7" /></svg>
             <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.1em', color: 'var(--text-teal-dim)' }}>PRIVATE NOTE</span>
@@ -234,6 +240,10 @@ export default function ChatApp() {
   const { wallet, address, scan, messages, nostrPubkeyHex, messagingStatus, contacts, acceptContact, contactAddresses, setManualTariAddress, createMessagingProvider, recordSentMessage, deleteConversation, editMessage, reactMessage, getRelayStates, reconnectAll, balanceHidden, setBalanceHidden, groups, createGroup, acceptGroup, declineGroup, leaveGroup, reinviteGroup } = useWallet()
   // The combined balance for the sidebar pill — one shared derivation, see useWalletTotal.
   const walletTotal = useWalletTotal()
+  // Logo has no theme awareness of its own — `onLight` is a manual prop. Both marks in this view
+  // sit on surfaces that are now light in the light theme, so the white mark would vanish.
+  const { theme } = useTheme()
+  const onLight = theme === 'light'
   const [walletOpen, setWalletOpen] = useState(false)
   const [profileOpen, setProfileOpen] = useState(false)
   // The user's own generated avatar (deterministic gradient from their pubkey hash) — used for the
@@ -1251,19 +1261,29 @@ export default function ChatApp() {
 
   return (
     <>
-    <div style={{ height: '100vh', display: 'flex', background: 'var(--surface-base)' }}>
+    {/* FILLS ITS PANE, like WalletPage and NamePage do. AppShell's Pane is a flex row, so chat's
+        root has to grow into it — without `flex: 1` it shrink-to-fits the sidebar plus the thread's
+        intrinsic width and leaves the rest of the pane blank. `minWidth: 0` travels with it: a flex
+        item otherwise refuses to shrink below its content's min-content width, which is what would
+        let one long unbroken message push the thread wider than the pane holding it.
+
+        This used to come from the DarkPin wrapper, which was a flex box in its own right. Chat was
+        the only service getting its box from a wrapper rather than declaring it, which is why
+        removing the pin left a gap here and nowhere else. `100%` rather than `100vh` for the same
+        reason: chat is a pane inside AppShell's height now, not a route filling the viewport. */}
+    <div style={{ flex: 1, minWidth: 0, height: '100%', display: 'flex', background: 'var(--surface-base)' }}>
       <div style={{ display: 'flex', width: '100%', height: '100%' }}>
 
         {/* LEFT: sidebar */}
-        <div style={{ width: 380, flexShrink: 0, borderRight: '1px solid rgba(var(--border-rgb),0.1)', display: 'flex', flexDirection: 'column', background: 'var(--surface-sidebar)', position: 'relative' }}>
+        <div style={{ width: 380, flexShrink: 0, borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', background: 'var(--surface-base)', position: 'relative' }}>
 
           {relayPanelOpen && <RelayHealthPanel getRelayStates={getRelayStates} reconnectAll={reconnectAll} onClose={() => setRelayPanelOpen(false)} />}
 
           {/* Sidebar header */}
-          <div style={{ padding: '20px 20px 16px', borderBottom: '1px solid rgba(var(--border-rgb),0.08)' }}>
+          <div style={{ padding: '20px 20px 16px', borderBottom: '1px solid var(--border)' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18 }}>
               <Link to="/" style={{ display: 'flex', alignItems: 'center', gap: 11, cursor: 'pointer', opacity: 1, transition: 'opacity 0.15s' }} onMouseEnter={e => (e.currentTarget.style.opacity = '0.75')} onMouseLeave={e => (e.currentTarget.style.opacity = '1')}>
-                <Logo size={26} />
+                <Logo size={26} onLight={onLight} />
                 <span style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-primary)' }}>Caravel</span>
               </Link>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -1277,14 +1297,14 @@ export default function ChatApp() {
                 <button
                   onClick={() => { setComposeNpub(''); setComposeRes({ s: 'idle' }); setComposeOpen(true) }}
                   title="Start a new conversation"
-                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 34, height: 34, borderRadius: 9, border: '1px solid rgba(var(--border-rgb),0.2)', background: 'transparent', cursor: 'pointer', padding: 0 }}
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 34, height: 34, borderRadius: 9, border: '1px solid var(--border)', background: 'transparent', cursor: 'pointer', padding: 0 }}
                 >
                   <svg width={17} height={17} viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth={2} strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>
                 </button>
                 <button
                   onClick={() => setCreateGroupOpen(true)}
                   title="New group"
-                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 34, height: 34, borderRadius: 9, border: '1px solid rgba(var(--border-rgb),0.2)', background: 'transparent', cursor: 'pointer', padding: 0 }}
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 34, height: 34, borderRadius: 9, border: '1px solid var(--border)', background: 'transparent', cursor: 'pointer', padding: 0 }}
                 >
                   <svg width={17} height={17} viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx={9} cy={7} r={4} /><path d="M19 8v6M22 11h-6" /></svg>
                 </button>
@@ -1313,13 +1333,13 @@ export default function ChatApp() {
                 <div
                   onClick={() => setWalletOpen(true)}
                   title={pillTitle}
-                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '13px 15px', borderRadius: 12, background: 'linear-gradient(140deg, rgba(var(--accRGB,45,224,198),0.1), rgba(18,165,148,0.04))', border: '1px solid rgba(var(--accRGB,45,224,198),0.22)', cursor: 'pointer', transition: 'border-color 0.15s' }}
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '13px 15px', borderRadius: 12, background: 'linear-gradient(140deg, rgba(var(--accent-400-rgb),0.1), rgba(var(--accent-400-rgb),0.04))', border: '1px solid rgba(var(--accent-400-rgb),0.22)', cursor: 'pointer', transition: 'border-color 0.15s' }}
                   onMouseEnter={e => (e.currentTarget.style.borderColor = 'rgba(var(--teal-500-rgb),0.45)')}
-                  onMouseLeave={e => (e.currentTarget.style.borderColor = 'rgba(var(--accRGB,45,224,198),0.22)')}
+                  onMouseLeave={e => (e.currentTarget.style.borderColor = 'rgba(var(--accent-400-rgb),0.22)')}
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    <svg width={17} height={17} viewBox="0 0 24 24" fill="none" stroke="var(--acc,#2DE0C6)" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round"><rect x={2} y={6} width={20} height={13} rx={2.5} /><path d="M2 10h20" /></svg>
-                    <span style={{ fontSize: 13, color: 'var(--text-teal-label)', fontWeight: 500 }}>Balance</span>
+                    <svg width={17} height={17} viewBox="0 0 24 24" fill="none" stroke="var(--accent-400)" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round"><rect x={2} y={6} width={20} height={13} rx={2.5} /><path d="M2 10h20" /></svg>
+                    <span style={{ fontSize: 13, color: 'var(--text-muted)', fontWeight: 500 }}>Balance</span>
                     {isScanning && (
                       <svg width={11} height={11} viewBox="0 0 24 24" fill="none" stroke="var(--text-faint-dim)" strokeWidth={2.5} strokeLinecap="round" style={{ animation: 'spin 1s linear infinite', flexShrink: 0 }}>
                         <path d="M21 12a9 9 0 1 1-6.219-8.56" />
@@ -1330,7 +1350,7 @@ export default function ChatApp() {
                     <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 16, fontWeight: 500, color: balanceColor, letterSpacing: '0.08em', transition: 'color 0.2s' }}>
                       {balanceValue}
                     </span>
-                    <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--acc,#2DE0C6)' }}>TARI</span>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--accent-400)' }}>TARI</span>
                     {/* Eye toggle — stops propagation so the wallet panel doesn't open */}
                     <button
                       onClick={e => { e.stopPropagation(); setBalanceHidden(v => !v) }}
@@ -1363,7 +1383,7 @@ export default function ChatApp() {
 
           {/* Search — filters conversations + requests live */}
           <div style={{ padding: '14px 16px 8px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 13px', borderRadius: 10, background: 'var(--surface-raised)', border: `1px solid ${sidebarQuery ? 'rgba(var(--teal-500-rgb),0.45)' : 'rgba(var(--border-rgb),0.12)'}`, boxShadow: sidebarQuery ? '0 0 0 3px rgba(var(--teal-500-rgb),0.09)' : 'none' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 13px', borderRadius: 10, background: 'var(--surface-raised)', border: `1px solid ${sidebarQuery ? 'rgba(var(--teal-500-rgb),0.45)' : 'var(--border)'}`, boxShadow: sidebarQuery ? '0 0 0 3px rgba(var(--teal-500-rgb),0.09)' : 'none' }}>
               <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="var(--text-faint-dim)" strokeWidth={2} strokeLinecap="round"><circle cx={11} cy={11} r={7} /><path d="M21 21l-4-4" /></svg>
               <input
                 type="text"
@@ -1399,7 +1419,7 @@ export default function ChatApp() {
                 const busy = busyRequest?.peerHex === req.peerHex ? busyRequest.kind : null
                 // Card frame: teal at rest, teal-stronger while accepting, neutral while declining.
                 const frame = busy === 'decline'
-                  ? { background: 'rgba(var(--border-rgb),0.03)', border: '1px solid rgba(var(--border-rgb),0.16)' }
+                  ? { background: 'rgba(var(--border-rgb),0.03)', border: '1px solid var(--border)' }
                   : { background: 'rgba(var(--teal-500-rgb),0.04)', border: `1px solid rgba(var(--teal-500-rgb),${busy === 'accept' ? 0.26 : 0.18})` }
                 return (
                   <div key={req.peerHex} style={{ padding: 16, borderRadius: 14, marginBottom: 5, ...frame }}>
@@ -1424,19 +1444,19 @@ export default function ChatApp() {
 
                     {pay ? (
                       /* Payment attached — amount stays confidential (••••) for a stranger; no chain query. */
-                      <div style={{ borderRadius: 11, overflow: 'hidden', border: '1px dashed rgba(var(--teal-500-rgb),0.3)', background: 'rgba(10,14,23,0.55)', marginBottom: 12 }}>
+                      <div style={{ borderRadius: 11, overflow: 'hidden', border: '1px dashed rgba(var(--teal-500-rgb),0.3)', background: 'var(--surface-trough)', marginBottom: 12 }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 13px', background: 'rgba(var(--teal-500-rgb),0.06)', borderBottom: '1px dashed rgba(var(--teal-500-rgb),0.22)' }}>
                           <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="var(--teal-500)" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>
                           <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--teal-300)', letterSpacing: '0.06em' }}>CONFIDENTIAL PAYMENT ATTACHED</span>
                         </div>
                         <div style={{ padding: 13 }}>
                           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, marginBottom: 9 }}>
-                            <span style={{ fontFamily: MONO, fontSize: 22, fontWeight: 700, color: 'var(--text-teal-label)', letterSpacing: '0.1em' }}>••••</span>
+                            <span style={{ fontFamily: MONO, fontSize: 22, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.1em' }}>••••</span>
                             <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-teal-dim)' }}>TARI</span>
                           </div>
                           <div style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5, textAlign: 'center', marginBottom: note ? 11 : 0 }}>Amount stays unresolved until you accept. Caravel doesn’t query the chain for strangers.</div>
                           {note && (
-                            <div style={{ padding: '10px 12px', borderRadius: 9, background: 'rgba(10,14,23,0.6)', border: '1px solid rgba(var(--border-rgb),0.1)' }}>
+                            <div style={{ padding: '10px 12px', borderRadius: 9, background: 'var(--surface-trough)', border: '1px solid var(--border)' }}>
                               <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.12em', color: 'var(--text-teal-dim)', marginBottom: 5 }}>NOTE</div>
                               <div style={{ fontSize: 12, color: 'var(--text-body-dim)', lineHeight: 1.45, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{note}</div>
                             </div>
@@ -1446,7 +1466,7 @@ export default function ChatApp() {
                     ) : note ? (
                       /* Text request — a stranger's message renders as inert plain text (React auto-escapes). */
                       <>
-                        <div style={{ padding: '11px 13px', borderRadius: 10, background: `rgba(10,14,23,${busy ? 0.4 : 0.5})`, border: `1px solid rgba(var(--border-rgb),${busy ? 0.08 : 0.12})`, fontSize: 13, color: busy ? 'var(--text-muted-dim)' : 'var(--text-body-dim)', lineHeight: 1.5, marginBottom: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{note}</div>
+                        <div style={{ padding: '11px 13px', borderRadius: 10, background: 'var(--surface-trough)', border: '1px solid var(--border)', fontSize: 13, color: busy ? 'var(--text-muted-dim)' : 'var(--text-body-dim)', lineHeight: 1.5, marginBottom: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{note}</div>
                         {!nick && !busy && (
                           <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 11, color: 'var(--text-muted-dim)', marginBottom: 12 }}>
                             <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth={2} strokeLinecap="round"><circle cx="12" cy="12" r="9" /><path d="M12 16v-5M12 8h.01" /></svg>
@@ -1465,12 +1485,12 @@ export default function ChatApp() {
                         </div>
                       ) : (
                         <button onClick={() => { setBusyRequest({ peerHex: req.peerHex, kind: 'accept' }); acceptRequest(req.peerHex) }} disabled={!!busy}
-                          style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 10, borderRadius: 10, border: 'none', background: busy ? 'rgba(16,21,31,0.6)' : 'var(--teal-grad)', color: busy ? 'var(--text-faint-dim)' : 'var(--ink-on-accent)', fontSize: 13, fontWeight: 700, cursor: busy ? 'default' : 'pointer', fontFamily: 'inherit' }}>
+                          style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 10, borderRadius: 10, border: 'none', background: busy ? 'var(--surface-inset)' : 'var(--teal-grad)', color: busy ? 'var(--text-faint-dim)' : 'var(--ink-on-accent)', fontSize: 13, fontWeight: 700, cursor: busy ? 'default' : 'pointer', fontFamily: 'inherit' }}>
                           Accept
                         </button>
                       )}
                       {busy === 'decline' ? (
-                        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 10, borderRadius: 10, border: '1px solid rgba(var(--border-rgb),0.2)', color: 'var(--text-muted)', fontSize: 13, fontWeight: 600 }}>
+                        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 10, borderRadius: 10, border: '1px solid var(--border)', color: 'var(--text-muted)', fontSize: 13, fontWeight: 600 }}>
                           <span style={{ width: 13, height: 13, borderRadius: '50%', border: '2px solid rgba(var(--border-rgb),0.18)', borderTopColor: 'var(--text-muted-dim)', animation: 'cv-spin 0.8s linear infinite' }} />Declining
                         </div>
                       ) : (
@@ -1511,7 +1531,7 @@ export default function ChatApp() {
                     // Card frame: teal at rest, teal-stronger while accepting, neutral while declining
                     // — identical treatment to the DM request card.
                     const frame = busy === 'decline'
-                      ? { background: 'rgba(var(--border-rgb),0.03)', border: '1px solid rgba(var(--border-rgb),0.16)' }
+                      ? { background: 'rgba(var(--border-rgb),0.03)', border: '1px solid var(--border)' }
                       : { background: 'rgba(var(--teal-500-rgb),0.04)', border: `1px solid rgba(var(--teal-500-rgb),${busy === 'accept' ? 0.26 : 0.18})` }
                     return (
                       <div key={g.id} style={{ padding: 16, borderRadius: 14, marginBottom: 5, ...frame }}>
@@ -1531,12 +1551,12 @@ export default function ChatApp() {
                             </div>
                           ) : (
                             <button onClick={() => { setBusyInvite({ groupId: g.id, kind: 'accept' }); acceptInvite(g.id) }} disabled={!!busy}
-                              style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 10, borderRadius: 10, border: 'none', background: busy ? 'rgba(16,21,31,0.6)' : 'var(--teal-grad)', color: busy ? 'var(--text-faint-dim)' : 'var(--ink-on-accent)', fontSize: 13, fontWeight: 700, cursor: busy ? 'default' : 'pointer', fontFamily: 'inherit' }}>
+                              style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 10, borderRadius: 10, border: 'none', background: busy ? 'var(--surface-inset)' : 'var(--teal-grad)', color: busy ? 'var(--text-faint-dim)' : 'var(--ink-on-accent)', fontSize: 13, fontWeight: 700, cursor: busy ? 'default' : 'pointer', fontFamily: 'inherit' }}>
                               Accept
                             </button>
                           )}
                           {busy === 'decline' ? (
-                            <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 10, borderRadius: 10, border: '1px solid rgba(var(--border-rgb),0.2)', color: 'var(--text-muted)', fontSize: 13, fontWeight: 600 }}>
+                            <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 10, borderRadius: 10, border: '1px solid var(--border)', color: 'var(--text-muted)', fontSize: 13, fontWeight: 600 }}>
                               <span style={{ width: 13, height: 13, borderRadius: '50%', border: '2px solid rgba(var(--border-rgb),0.18)', borderTopColor: 'var(--text-muted-dim)', animation: 'cv-spin 0.8s linear infinite' }} />Declining
                             </div>
                           ) : (
@@ -1686,8 +1706,8 @@ export default function ChatApp() {
             />
           ) : selectedConvo === null ? (
             /* Chat pane at rest (design: sail + reassurance) */
-            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 20, background: 'radial-gradient(700px 420px at 50% 40%, rgba(var(--teal-500-rgb),0.045), rgba(10,14,23,0))' }}>
-              <Logo size={64} mono style={{ opacity: 0.34 }} />
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 20, background: 'radial-gradient(700px 420px at 50% 40%, rgba(var(--teal-500-rgb),0.045), rgba(var(--teal-500-rgb),0))' }}>
+              <Logo size={64} onLight={onLight} style={{ opacity: 0.34 }} />
               <div style={{ textAlign: 'center' }}>
                 <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-body-dim)', marginBottom: 8 }}>Select a conversation</div>
                 <div style={{ fontSize: 14, color: 'var(--text-faint)', lineHeight: 1.6, maxWidth: 340 }}>Messages and payments here are end to end encrypted.</div>
@@ -1700,7 +1720,7 @@ export default function ChatApp() {
           ) : (
           <>
           {/* Chat header (design: avatar, nickname + @handle inline, E2E badge, ⋯ only) */}
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 24px', borderBottom: '1px solid rgba(var(--border-rgb),0.1)', flexShrink: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 24px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 13, minWidth: 0 }}>
               <Avatar hex={selectedConvo.peerHex} nickname={nicknames[selectedConvo.peerHex]} size={42} radius={12} />
               <div style={{ minWidth: 0 }}>
@@ -1736,14 +1756,14 @@ export default function ChatApp() {
               <button
                 onClick={() => setMenuOpen(o => !o)}
                 title="Conversation options"
-                style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 36, height: 36, borderRadius: 10, border: '1px solid rgba(var(--border-rgb),0.16)', background: menuOpen ? 'rgba(var(--border-rgb),0.1)' : 'transparent', cursor: 'pointer', padding: 0 }}
+                style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 36, height: 36, borderRadius: 10, border: '1px solid var(--border)', background: menuOpen ? 'rgba(var(--border-rgb),0.1)' : 'transparent', cursor: 'pointer', padding: 0 }}
               >
                 <svg width={17} height={17} viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth={1.9} strokeLinecap="round"><circle cx={12} cy={12} r={1.6} /><circle cx={19} cy={12} r={1.6} /><circle cx={5} cy={12} r={1.6} /></svg>
               </button>
               {menuOpen && (
                 <>
                   <div onClick={() => setMenuOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
-                  <div style={{ position: 'absolute', top: 42, right: 0, zIndex: 41, minWidth: 200, padding: 6, borderRadius: 11, background: 'var(--surface-raised)', border: '1px solid rgba(var(--border-rgb),0.18)', boxShadow: '0 10px 30px rgba(0,0,0,0.5)' }}>
+                  <div style={{ position: 'absolute', top: 42, right: 0, zIndex: 41, minWidth: 200, padding: 6, borderRadius: 11, background: 'var(--surface-raised)', border: '1px solid var(--border)', boxShadow: 'var(--e3)' }}>
                     <button
                       onClick={() => { setMenuOpen(false); setConfirmDelete(true) }}
                       style={{ display: 'flex', alignItems: 'center', gap: 11, width: '100%', padding: '9px 11px', borderRadius: 8, border: 'none', background: 'transparent', color: 'var(--danger-300)', fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}
@@ -1771,7 +1791,7 @@ export default function ChatApp() {
 
             {/* Notes-to-self banner (self thread) */}
             {isSelf && (
-              <div style={{ alignSelf: 'center', display: 'inline-flex', alignItems: 'center', gap: 8, padding: '6px 14px', borderRadius: 100, background: 'rgba(var(--border-rgb),0.06)', border: '1px solid rgba(var(--border-rgb),0.18)' }}>
+              <div style={{ alignSelf: 'center', display: 'inline-flex', alignItems: 'center', gap: 8, padding: '6px 14px', borderRadius: 100, background: 'rgba(var(--border-rgb),0.06)', border: '1px solid var(--border)' }}>
                 <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V4s-1 1-4 1-5-2-8-2-4 1-4 1z" /><path d="M4 22v-7" /></svg>
                 <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Notes to self. Only you can read this thread.</span>
               </div>
@@ -1859,7 +1879,7 @@ export default function ChatApp() {
                     flashed={!!m.logicalId && flashedId === m.logicalId}
                     // 'self' is the notes-to-self bubble — dark inset, NOT teal — so only a true 'sent'
                     // bubble takes the inverted palette.
-                    quoted={m.replyTo ? <QuotedPreview replyTo={m.replyTo} byLogicalId={quotedIndex} onJump={jumpTo} tone={!isSelf && m.direction === 'sent' ? 'on-teal' : 'on-dark'} /> : undefined}
+                    quoted={m.replyTo ? <QuotedPreview replyTo={m.replyTo} byLogicalId={quotedIndex} onJump={jumpTo} tone={!isSelf && m.direction === 'sent' ? 'on-accent' : 'on-dark'} /> : undefined}
                     // No labelFor in a DM: the answer is one of two people, and a tooltip listing
                     // npubs would be noise rather than information.
                     reactions={summaries.length > 0 ? (
@@ -1927,7 +1947,7 @@ export default function ChatApp() {
             const showCounter = draft.length >= MAX_MESSAGE_LEN - 200
             const inputsDisabled = sending || payBusy || confirming
             return (
-            <div style={{ padding: '16px 24px 20px', borderTop: '1px solid rgba(var(--border-rgb),0.1)' }}>
+            <div style={{ padding: '16px 24px 20px', borderTop: '1px solid var(--border)' }}>
 
               {/* PERSISTENT must-acknowledge alert (orphan / timeout) — logic unchanged, reskinned */}
               {payAlert && (
@@ -1943,8 +1963,8 @@ export default function ChatApp() {
                       ? <>The funds ({<b>{payAlert.amountTari} tTARI</b>}) left your wallet. {displayName(selectedConvo.peerHex)} has the money but no note explaining it, so tell them separately.</>
                       : <>Broadcast to the network, no confirmation yet ({<b>{payAlert.amountTari} tTARI</b>}). Do not resend. Check Activity before trying again.</>}
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '9px 12px', borderRadius: 9, background: 'rgba(10,14,23,0.5)' }}>
-                    <span style={{ fontFamily: MONO, fontSize: 11, color: 'var(--text-teal-label)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{payAlert.txId.slice(0, 8)}…{payAlert.txId.slice(-4)}</span>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '9px 12px', borderRadius: 9, background: 'var(--surface-trough)' }}>
+                    <span style={{ fontFamily: MONO, fontSize: 11, color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{payAlert.txId.slice(0, 8)}…{payAlert.txId.slice(-4)}</span>
                     <span onClick={() => navigator.clipboard.writeText(payAlert.txId).catch(() => {})} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 600, color: 'var(--warn-300)', cursor: 'pointer', flexShrink: 0 }}>
                       <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="var(--warn-300)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><rect x={9} y={9} width={13} height={13} rx={2} /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>Copy
                     </span>
@@ -1988,9 +2008,9 @@ export default function ChatApp() {
                       <span style={{ fontSize: 11, fontWeight: 700, color: payInsufficient ? 'var(--danger-300)' : 'var(--teal-500)' }}>TARI</span>
                     </div>
                     {addressVerified ? (
-                      <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', padding: '12px 14px', borderRadius: 11, background: 'var(--surface-raised)', border: '1px solid rgba(var(--border-rgb),0.14)', fontFamily: MONO, fontSize: 13, color: 'var(--text-body-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{peerAddrRec!.address.slice(0, 14)}…{peerAddrRec!.address.slice(-4)}</div>
+                      <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', padding: '12px 14px', borderRadius: 11, background: 'var(--surface-raised)', border: '1px solid var(--border)', fontFamily: MONO, fontSize: 13, color: 'var(--text-body-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{peerAddrRec!.address.slice(0, 14)}…{peerAddrRec!.address.slice(-4)}</div>
                     ) : (
-                      <input value={payAddress} onChange={e => { setPayAddress(e.target.value); if (payError) setPayError(null) }} placeholder="otl_esm_…" spellCheck={false} style={{ flex: 1, minWidth: 0, padding: '12px 14px', borderRadius: 11, background: 'var(--surface-raised)', border: '1px solid rgba(var(--border-rgb),0.14)', fontFamily: MONO, fontSize: 13, color: 'var(--text-body-dim)', outline: 'none' }} />
+                      <input value={payAddress} onChange={e => { setPayAddress(e.target.value); if (payError) setPayError(null) }} placeholder="otl_esm_…" spellCheck={false} style={{ flex: 1, minWidth: 0, padding: '12px 14px', borderRadius: 11, background: 'var(--surface-raised)', border: '1px solid var(--border)', fontFamily: MONO, fontSize: 13, color: 'var(--text-body-dim)', outline: 'none' }} />
                     )}
                   </div>
                   {/* insufficient-balance row */}
@@ -2004,9 +2024,9 @@ export default function ChatApp() {
                   <textarea value={draft} onChange={e => setDraft(e.target.value)} placeholder="Add a note (optional)…" rows={1} maxLength={MAX_MESSAGE_LEN} style={{ display: 'block', width: '100%', boxSizing: 'border-box', padding: '12px 14px', borderRadius: 11, background: 'var(--surface-raised)', border: '1px dashed rgba(var(--teal-500-rgb),0.24)', fontSize: 13, color: 'var(--text-note)', fontStyle: draft ? 'normal' : 'italic', outline: 'none', resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.4, marginBottom: 14 }} />
                   {/* buttons */}
                   <div style={{ display: 'flex', gap: 10 }}>
-                    <button onClick={toggleTari} style={{ flex: '0 0 120px', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 12, borderRadius: 11, border: '1px solid rgba(var(--border-rgb),0.2)', background: 'transparent', color: 'var(--text-muted)', fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
+                    <button onClick={toggleTari} style={{ flex: '0 0 120px', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 12, borderRadius: 11, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-muted)', fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
                     {(() => { const ok = validatePayment() === null; return (
-                      <button onClick={onComposerSend} disabled={!ok} style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 12, borderRadius: 11, border: ok ? 'none' : '1px solid rgba(var(--border-rgb),0.12)', background: ok ? 'var(--teal-grad)' : 'rgba(16,21,31,0.6)', color: ok ? 'var(--ink-on-accent)' : 'var(--text-disabled)', fontSize: 14, fontWeight: 700, cursor: ok ? 'pointer' : 'default', fontFamily: 'inherit' }}>Review payment</button>
+                      <button onClick={onComposerSend} disabled={!ok} style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 12, borderRadius: 11, border: ok ? 'none' : '1px solid var(--border)', background: ok ? 'var(--teal-grad)' : 'var(--surface-inset)', color: ok ? 'var(--ink-on-accent)' : 'var(--text-disabled)', fontSize: 14, fontWeight: 700, cursor: ok ? 'pointer' : 'default', fontFamily: 'inherit' }}>Review payment</button>
                     ) })()}
                   </div>
                 </div>
@@ -2017,12 +2037,12 @@ export default function ChatApp() {
               {confirming && (
                 <div style={{ padding: 20, borderRadius: 16, background: 'var(--surface)', border: '1px solid rgba(var(--teal-500-rgb),0.28)', marginBottom: 12 }}>
                   <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 16 }}>Confirm payment to {displayName(selectedConvo.peerHex)}</div>
-                  <div style={{ borderRadius: 12, background: 'var(--surface-raised)', border: '1px solid rgba(var(--border-rgb),0.12)', overflow: 'hidden', marginBottom: 14 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '13px 15px', borderBottom: '1px solid rgba(var(--border-rgb),0.08)' }}><span style={{ fontSize: 13, color: 'var(--text-muted-dim)' }}>Amount</span><span style={{ fontFamily: MONO, fontSize: 15, fontWeight: 600, color: 'var(--text-bright)' }}>{payAmount} TARI</span></div>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '13px 15px', borderBottom: '1px solid rgba(var(--border-rgb),0.08)' }}><span style={{ fontSize: 13, color: 'var(--text-muted-dim)' }}>Network fee</span><span style={{ fontFamily: MONO, fontSize: 13, color: 'var(--text-muted)' }}>≤ {FEE_CEIL_TARI} TARI</span></div>
+                  <div style={{ borderRadius: 12, background: 'var(--surface-raised)', border: '1px solid var(--border)', overflow: 'hidden', marginBottom: 14 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '13px 15px', borderBottom: '1px solid var(--border)' }}><span style={{ fontSize: 13, color: 'var(--text-muted-dim)' }}>Amount</span><span style={{ fontFamily: MONO, fontSize: 15, fontWeight: 600, color: 'var(--text-bright)' }}>{payAmount} TARI</span></div>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '13px 15px', borderBottom: '1px solid var(--border)' }}><span style={{ fontSize: 13, color: 'var(--text-muted-dim)' }}>Network fee</span><span style={{ fontFamily: MONO, fontSize: 13, color: 'var(--text-muted)' }}>≤ {FEE_CEIL_TARI} TARI</span></div>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '13px 15px' }}><span style={{ fontSize: 13, color: 'var(--text-muted-dim)', flexShrink: 0 }}>To</span><span style={{ fontFamily: MONO, fontSize: 12, color: 'var(--text-body-dim)' }}>{effectivePayAddress.slice(0, 12)}…{effectivePayAddress.slice(-4)}</span></div>
                   </div>
-                  <div style={{ padding: '12px 14px', borderRadius: 11, background: 'rgba(10,14,23,0.6)', border: '1px dashed rgba(var(--teal-500-rgb),0.26)', marginBottom: 14 }}>
+                  <div style={{ padding: '12px 14px', borderRadius: 11, background: 'var(--surface-trough)', border: '1px dashed rgba(var(--teal-500-rgb),0.26)', marginBottom: 14 }}>
                     <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.12em', color: 'var(--text-teal-dim)', marginBottom: 6 }}>PRIVATE NOTE</div>
                     <div style={{ fontSize: 13, color: 'var(--text-note)', fontStyle: 'italic' }}>“{draft.trim() || '💸 Payment'}”</div>
                   </div>
@@ -2030,7 +2050,7 @@ export default function ChatApp() {
                     <span style={{ fontSize: 12, color: 'var(--warn-300)', lineHeight: 1.5 }}>This is a real, irreversible testnet payment. It cannot be recalled once sent.</span>
                   </div>
                   <div style={{ display: 'flex', gap: 10 }}>
-                    <button onClick={() => setConfirming(false)} style={{ flex: '0 0 120px', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 13, borderRadius: 12, border: '1px solid rgba(var(--border-rgb),0.2)', background: 'transparent', color: 'var(--text-muted)', fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
+                    <button onClick={() => setConfirming(false)} style={{ flex: '0 0 120px', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 13, borderRadius: 12, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-muted)', fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
                     <button onClick={submitPayment} style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 13, borderRadius: 12, border: 'none', background: 'var(--teal-grad)', color: 'var(--ink-on-accent)', fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>Send payment</button>
                   </div>
                 </div>
@@ -2111,7 +2131,7 @@ export default function ChatApp() {
                     onClick={() => imageInputRef.current?.click()}
                     disabled={imageBusy}
                     title="Attach an image"
-                    style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 46, height: 46, flexShrink: 0, borderRadius: 12, border: '1px solid rgba(var(--border-rgb),0.16)', background: 'var(--surface-inset)', cursor: imageBusy ? 'default' : 'pointer', opacity: imageBusy ? 0.5 : 1, padding: 0 }}
+                    style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 46, height: 46, flexShrink: 0, borderRadius: 12, border: '1px solid var(--border)', background: 'var(--surface-inset)', cursor: imageBusy ? 'default' : 'pointer', opacity: imageBusy ? 0.5 : 1, padding: 0 }}
                   >
                     <svg width={21} height={21} viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round"><rect x={3} y={3} width={18} height={18} rx={2} /><circle cx={8.5} cy={8.5} r={1.5} /><path d="M21 15l-5-5L5 21" /></svg>
                   </button>
@@ -2125,7 +2145,7 @@ export default function ChatApp() {
                       disabled={inputsDisabled}
                       title="Insert emoji"
                       aria-label="Insert emoji"
-                      style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 46, height: 46, flexShrink: 0, borderRadius: 12, border: '1px solid rgba(var(--border-rgb),0.16)', background: emojiOpen ? 'rgba(var(--border-rgb),0.1)' : 'var(--surface-inset)', cursor: inputsDisabled ? 'default' : 'pointer', opacity: inputsDisabled ? 0.5 : 1, padding: 0 }}
+                      style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 46, height: 46, flexShrink: 0, borderRadius: 12, border: '1px solid var(--border)', background: emojiOpen ? 'rgba(var(--border-rgb),0.1)' : 'var(--surface-inset)', cursor: inputsDisabled ? 'default' : 'pointer', opacity: inputsDisabled ? 0.5 : 1, padding: 0 }}
                     >
                       <svg width={21} height={21} viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round"><circle cx={12} cy={12} r={9} /><path d="M8.5 14.5a4.5 4.5 0 0 0 7 0" /><path d="M9 9.5h.01M15 9.5h.01" /></svg>
                     </button>
@@ -2135,7 +2155,7 @@ export default function ChatApp() {
                       <EmojiPicker onPick={insertEmoji} onClose={() => setEmojiOpen(false)} />
                     )}
                   </div>
-                  <div style={{ flex: 1, display: 'flex', alignItems: 'center', padding: '13px 17px', borderRadius: 13, background: 'var(--surface-raised)', border: '1px solid rgba(var(--border-rgb),0.14)' }}>
+                  <div style={{ flex: 1, display: 'flex', alignItems: 'center', padding: '13px 17px', borderRadius: 13, background: 'var(--surface-raised)', border: '1px solid var(--border)' }}>
                     <textarea
                       ref={composerRef}
                       className="cv-composer"
@@ -2159,7 +2179,7 @@ export default function ChatApp() {
                     onClick={() => (editing ? void saveEdit() : onComposerSend())}
                     disabled={!canSend}
                     title={editing ? 'Save edit' : 'Send message'}
-                    style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 46, height: 46, flexShrink: 0, borderRadius: 12, background: 'var(--surface-inset)', border: '1px solid rgba(var(--border-rgb),0.16)', cursor: canSend ? 'pointer' : 'default', opacity: canSend ? 1 : 0.5, padding: 0 }}
+                    style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 46, height: 46, flexShrink: 0, borderRadius: 12, background: 'var(--surface-inset)', border: '1px solid var(--border)', cursor: canSend ? 'pointer' : 'default', opacity: canSend ? 1 : 0.5, padding: 0 }}
                   >
                     {sending ? (
                       <span style={{ width: 20, height: 20, borderRadius: '50%', border: '2.5px solid rgba(var(--border-rgb),0.25)', borderTopColor: 'var(--text-muted-dim)', animation: 'cv-spin 0.8s linear infinite' }} />
@@ -2220,9 +2240,9 @@ export default function ChatApp() {
       const inputBorder =
         isRed ? 'rgba(var(--danger-rgb),0.5)'
         : isAmber ? 'rgba(var(--warn-rgb),0.4)'
-        : r.s === 'resolving' ? 'rgba(var(--border-rgb),0.24)'
+        : r.s === 'resolving' ? 'var(--border-strong)'
         : r.s === 'ok' ? `rgba(var(--teal-500-rgb),${existing ? 0.32 : 0.45})`
-        : 'rgba(var(--border-rgb),0.14)'
+        : 'var(--border)'
       const iconStroke = isRed ? 'var(--danger-300)' : isAmber ? 'var(--warn-300)' : r.s === 'ok' || r.s === 'resolving' ? 'var(--teal-300)' : 'var(--text-muted-dim)'
       const canStart = r.s === 'ok'
       const isUnreachable = r.s === 'fail' && r.kind === 'unreachable'
@@ -2233,14 +2253,14 @@ export default function ChatApp() {
       >
         <div
           onClick={e => e.stopPropagation()}
-          style={{ width: '100%', maxWidth: 460, borderRadius: 18, background: 'var(--surface)', border: '1px solid rgba(var(--border-rgb),0.2)', boxShadow: '0 30px 90px rgba(0,0,0,0.65)', overflow: 'hidden' }}
+          style={{ width: '100%', maxWidth: 460, borderRadius: 18, background: 'var(--surface)', border: '1px solid var(--border)', boxShadow: 'var(--e3)', overflow: 'hidden' }}
         >
           {/* Header — title + Esc hint + close */}
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 18px', borderBottom: '1px solid rgba(var(--border-rgb),0.1)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 18px', borderBottom: '1px solid var(--border)' }}>
             <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>New conversation</span>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ padding: '3px 7px', borderRadius: 6, border: '1px solid rgba(var(--border-rgb),0.18)', fontFamily: MONO, fontSize: 10, color: 'var(--text-muted-dim)' }}>Esc</span>
-              <span onClick={() => setComposeOpen(false)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, border: '1px solid rgba(var(--border-rgb),0.16)', cursor: 'pointer' }}>
+              <span style={{ padding: '3px 7px', borderRadius: 6, border: '1px solid var(--border)', fontFamily: MONO, fontSize: 10, color: 'var(--text-muted-dim)' }}>Esc</span>
+              <span onClick={() => setComposeOpen(false)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, border: '1px solid var(--border)', cursor: 'pointer' }}>
                 <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth={2.2} strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
               </span>
             </div>
@@ -2276,7 +2296,7 @@ export default function ChatApp() {
               </div>
             )}
             {r.s === 'resolving' && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--text-teal-label)', marginBottom: 18 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--text-muted)', marginBottom: 18 }}>
                 <span style={{ width: 12, height: 12, borderRadius: '50%', border: '2px solid rgba(var(--teal-500-rgb),0.2)', borderTopColor: 'var(--teal-500)', animation: 'cv-spin 0.8s linear infinite' }} />
                 Resolving @{r.name} on the Tari network…
               </div>
@@ -2286,7 +2306,7 @@ export default function ChatApp() {
                 <div style={{ width: 36, height: 36, borderRadius: 11, background: avatarFor(okHex!).grad, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 700, color: avatarFor(okHex!).color, flexShrink: 0 }}>{initialsFor(nicknames[okHex!] ?? r.name ?? undefined)}</div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-bright)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{nicknames[okHex!] ?? (r.name ? `@${r.name}` : truncNpub(okHex!))}</div>
-                  <div style={{ fontFamily: existing ? undefined : MONO, fontSize: 12, color: 'var(--text-teal-label)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{existing ? 'You already have this conversation' : (r.name ? truncNpub(okHex!) : 'Ready to message')}</div>
+                  <div style={{ fontFamily: existing ? undefined : MONO, fontSize: 12, color: 'var(--text-muted)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{existing ? 'You already have this conversation' : (r.name ? truncNpub(okHex!) : 'Ready to message')}</div>
                 </div>
               </div>
             )}
@@ -2305,7 +2325,7 @@ export default function ChatApp() {
 
             {/* Actions — Cancel + primary (Start / Start conversation / Open conversation / Try again). */}
             <div style={{ display: 'flex', gap: 10 }}>
-              <div onClick={() => setComposeOpen(false)} style={{ flex: '0 0 120px', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 13, borderRadius: 12, border: '1px solid rgba(var(--border-rgb),0.2)', color: 'var(--text-muted)', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>Cancel</div>
+              <div onClick={() => setComposeOpen(false)} style={{ flex: '0 0 120px', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 13, borderRadius: 12, border: '1px solid var(--border)', color: 'var(--text-muted)', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>Cancel</div>
               {canStart ? (
                 <div onClick={() => startWith(okHex!)} style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 13, borderRadius: 12, background: 'var(--teal-grad)', color: 'var(--ink-on-accent)', fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>
                   {existing ? 'Open conversation' : 'Start conversation'}
@@ -2316,7 +2336,7 @@ export default function ChatApp() {
                   <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="var(--teal-500)" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v5h-5" /></svg>Try again
                 </div>
               ) : (
-                <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 13, borderRadius: 12, background: 'rgba(16,21,31,0.6)', border: '1px solid rgba(var(--border-rgb),0.12)', color: 'var(--text-faint-dim)', fontSize: 14, fontWeight: 700 }}>Start</div>
+                <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 13, borderRadius: 12, background: 'var(--surface-inset)', border: '1px solid var(--border)', color: 'var(--text-faint-dim)', fontSize: 14, fontWeight: 700 }}>Start</div>
               )}
             </div>
           </div>
@@ -2333,7 +2353,7 @@ export default function ChatApp() {
       >
         <div
           onClick={e => e.stopPropagation()}
-          style={{ width: '100%', maxWidth: 420, padding: '24px 24px 20px', borderRadius: 16, background: 'var(--surface-raised)', border: '1px solid rgba(var(--danger-rgb),0.3)', boxShadow: '0 24px 60px rgba(0,0,0,0.6)' }}
+          style={{ width: '100%', maxWidth: 420, padding: '24px 24px 20px', borderRadius: 16, background: 'var(--surface-raised)', border: '1px solid rgba(var(--danger-rgb),0.3)', boxShadow: 'var(--e3)' }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 14 }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 40, height: 40, borderRadius: 11, background: 'rgba(var(--danger-rgb),0.12)', flexShrink: 0 }}>
@@ -2341,19 +2361,19 @@ export default function ChatApp() {
             </div>
             <div style={{ fontSize: 17, fontWeight: 700, color: 'var(--text-primary)' }}>Delete conversation?</div>
           </div>
-          <div style={{ fontSize: 14, color: '#B4C0D4', lineHeight: 1.6, marginBottom: 20 }}>
+          <div style={{ fontSize: 14, color: 'var(--text-body-dim)', lineHeight: 1.6, marginBottom: 20 }}>
             All messages, the nickname, and payment history with <b style={{ color: 'var(--text-name)' }}>{displayName(selectedConvo.peerHex)}</b> will be permanently removed from this device and <b style={{ color: 'var(--danger-300)' }}>cannot be recovered</b>. The other person keeps their copy.
           </div>
           <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
             <button
               onClick={() => setConfirmDelete(false)}
-              style={{ padding: '10px 18px', borderRadius: 9, border: '1px solid rgba(var(--border-rgb),0.25)', background: 'transparent', color: 'var(--text-muted-dim)', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}
+              style={{ padding: '10px 18px', borderRadius: 9, border: '1px solid var(--border-strong)', background: 'transparent', color: 'var(--text-muted-dim)', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}
             >
               Cancel
             </button>
             <button
               onClick={performDelete}
-              style={{ padding: '10px 18px', borderRadius: 9, border: 'none', background: 'var(--danger-500)', color: '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}
+              style={{ padding: '10px 18px', borderRadius: 9, border: 'none', background: 'var(--danger-500)', color: 'var(--ink-on-accent)', fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}
             >
               Delete
             </button>

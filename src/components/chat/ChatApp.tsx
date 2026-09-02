@@ -8,6 +8,7 @@ import { plainError } from '../wallet/v2/plainError'
 import { compareMessages, sortKey, type CaravelMessage, type Group } from '../../messaging/types'
 import GroupThread from './GroupThread'
 import CreateGroupModal, { type GroupContactOption } from './CreateGroupModal'
+import ModalCard from './ModalCard'
 import ReinviteModal, { type ReinviteMemberOption } from './ReinviteModal'
 import { useScrollToBottom } from './useScrollToBottom'
 import { useJumpToMessage } from './useJumpToMessage'
@@ -2254,8 +2255,8 @@ export default function ChatApp() {
         Now the border says only "is this being worked on" (accent while resolving or resolved,
         danger only when the TEXT itself is wrong), and everything else is said once, underneath.
 
-        NO CANCEL BUTTON. The ×, Escape and the backdrop all close this, and in six of the nine
-        states the primary is disabled — so Cancel beside it was a second inert button. One
+        NO CANCEL BUTTON. ModalCard's ×, Escape and the backdrop all close this, and in six of the
+        nine states the primary is disabled — so Cancel beside it was a second inert button. One
         full-width CTA instead.
 
         Everything here is presentational. The debounced resolver fills composeRes, the input feeds
@@ -2273,137 +2274,116 @@ export default function ChatApp() {
       const fieldActive = r.s === 'resolving' || r.s === 'ok'
       const av = okHex ? avatarFor(okHex) : null
       return (
-      <div
-        onClick={() => setComposeOpen(false)}
-        style={{ position: 'fixed', inset: 0, zIndex: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(5,8,14,0.78)', backdropFilter: 'blur(3px)', padding: 24 }}
-      >
-        <div
-          onClick={e => e.stopPropagation()}
-          style={{ width: '100%', maxWidth: 420, borderRadius: 16, padding: 20, background: 'var(--surface)', border: '1px solid var(--border)', boxShadow: 'var(--e3)', display: 'flex', flexDirection: 'column', gap: 13 }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <div style={{ flex: 1, fontSize: 16, fontWeight: 600, letterSpacing: '-0.01em', color: 'var(--text-primary)' }}>New conversation</div>
-            <button
-              onClick={() => setComposeOpen(false)}
-              title="Close"
-              aria-label="Close"
-              className="cv-icon-btn"
-              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 26, height: 26, flexShrink: 0, padding: 0, borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-muted-dim)', cursor: 'pointer' }}
-            >
-              <svg width={11} height={11} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12" /></svg>
-            </button>
+      <ModalCard title="New conversation" onClose={() => setComposeOpen(false)} zIndex={60} maxWidth={420}>
+        <div style={{ fontSize: 12.5, color: 'var(--text-muted-dim)', marginTop: -6 }}>Enter an npub or an @name</div>
+
+        <div style={{
+          display: 'flex', alignItems: 'center', padding: '11px 13px', borderRadius: 11,
+          border: `1px solid ${typedIsWrong ? 'var(--danger-500)' : fieldActive ? 'var(--accent-400)' : 'var(--border)'}`,
+          boxShadow: fieldActive ? '0 0 0 3px rgba(var(--accent-400-rgb),0.14)' : 'none',
+        }}>
+          <input
+            autoFocus
+            value={composeNpub}
+            onChange={e => setComposeNpub(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') { if (canStart) startWith(okHex!) } else if (e.key === 'Escape') setComposeOpen(false) }}
+            placeholder="npub or @name"
+            spellCheck={false}
+            className="cv-composer"
+            style={{ flex: 1, minWidth: 0, background: 'transparent', border: 'none', outline: 'none', color: 'var(--text-body)', fontSize: 13.5, fontFamily: composeNpub.startsWith('npub') ? MONO : 'inherit', padding: 0 }}
+          />
+        </div>
+
+        {/* The text itself is malformed — the one case the field is right to go red about. */}
+        {r.s === 'invalid' && (
+          <div style={{ fontSize: 12, color: 'var(--danger-500)', marginTop: -4 }}>
+            {r.kind === 'not-npub' ? 'That is not an npub or an @name' : 'Invalid npub. The checksum doesn’t match.'}
           </div>
+        )}
 
-          <div style={{ fontSize: 12.5, color: 'var(--text-muted-dim)', marginTop: -6 }}>Enter an npub or an @name</div>
-
-          <div style={{
-            display: 'flex', alignItems: 'center', padding: '11px 13px', borderRadius: 11,
-            border: `1px solid ${typedIsWrong ? 'var(--danger-500)' : fieldActive ? 'var(--accent-400)' : 'var(--border)'}`,
-            boxShadow: fieldActive ? '0 0 0 3px rgba(var(--accent-400-rgb),0.14)' : 'none',
-          }}>
-            <input
-              autoFocus
-              value={composeNpub}
-              onChange={e => setComposeNpub(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter') { if (canStart) startWith(okHex!) } else if (e.key === 'Escape') setComposeOpen(false) }}
-              placeholder="npub or @name"
-              spellCheck={false}
-              className="cv-composer"
-              style={{ flex: 1, minWidth: 0, background: 'transparent', border: 'none', outline: 'none', color: 'var(--text-body)', fontSize: 13.5, fontFamily: composeNpub.startsWith('npub') ? MONO : 'inherit', padding: 0 }}
-            />
+        {r.s === 'resolving' && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 9, fontSize: 12.5, color: 'var(--text-body-dim)' }}>
+            <span style={{ width: 13, height: 13, borderRadius: 99, border: '2px solid var(--border)', borderTopColor: 'var(--accent-400)', animation: 'cv-spin 0.8s linear infinite', flexShrink: 0 }} />
+            Resolving @{r.name} on the Tari network…
           </div>
+        )}
 
-          {/* The text itself is malformed — the one case the field is right to go red about. */}
-          {r.s === 'invalid' && (
-            <div style={{ fontSize: 12, color: 'var(--danger-500)', marginTop: -4 }}>
-              {r.kind === 'not-npub' ? 'That is not an npub or an @name' : 'Invalid npub. The checksum doesn’t match.'}
+        {r.s === 'ok' && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '12px 13px', borderRadius: 12, background: 'var(--accent-wash)' }}>
+            {/* THE GENERATED COLOUR, not the design's flat blue. The avatar's job here is the same
+                as everywhere else in chat: telling you which person this is. */}
+            <span style={{ width: 32, height: 32, borderRadius: 99, flexShrink: 0, background: av!.grad, color: av!.color, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 600 }}>
+              {/* r.name WITHOUT its @ — initialsFor takes the first two characters, so "@haci" would
+                  render "@H" where "haci" gives "HA". */}
+              {initialsFor(nicknames[okHex!] ?? r.name ?? undefined)}
+            </span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--accent-ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {nicknames[okHex!] ?? (r.name ? `@${r.name}` : truncNpub(okHex!))}
+              </div>
+              {/* THE KEY AN @NAME RESOLVED TO, in mono, not the design's flat "Ready to message".
+                  This is the one moment before you message someone where you can check that the
+                  name you typed points at the key you were given out of band — the same reason the
+                  unreachable copy stays ours. A raw npub needs no such check: you already have the
+                  key, so that case says "Ready to message" as the design draws it.
+                  `existing` still wins the line, and is said twice over: the CTA below reads
+                  "Open conversation" rather than "Start conversation". */}
+              <div style={{ fontFamily: existing || !r.name ? undefined : MONO, fontSize: 11.5, color: 'var(--text-body-dim)', marginTop: 1, lineHeight: 1.45, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {existing ? 'You already have a conversation' : r.name ? truncNpub(okHex!) : 'Ready to message'}
+              </div>
             </div>
-          )}
+          </div>
+        )}
 
-          {r.s === 'resolving' && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 9, fontSize: 12.5, color: 'var(--text-body-dim)' }}>
-              <span style={{ width: 13, height: 13, borderRadius: 99, border: '2px solid var(--border)', borderTopColor: 'var(--accent-400)', animation: 'cv-spin 0.8s linear infinite', flexShrink: 0 }} />
-              Resolving @{r.name} on the Tari network…
-            </div>
-          )}
-
-          {r.s === 'ok' && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '12px 13px', borderRadius: 12, background: 'var(--accent-wash)' }}>
-              {/* THE GENERATED COLOUR, not the design's flat blue. The avatar's job here is the same
-                  as everywhere else in chat: telling you which person this is. */}
-              <span style={{ width: 32, height: 32, borderRadius: 99, flexShrink: 0, background: av!.grad, color: av!.color, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 600 }}>
-                {/* r.name WITHOUT its @ — initialsFor takes the first two characters, so "@haci" would
-                    render "@H" where "haci" gives "HA". */}
-                {initialsFor(nicknames[okHex!] ?? r.name ?? undefined)}
+        {r.s === 'fail' && (() => {
+          const bad = r.kind === 'not-found'
+          return (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '12px 13px', borderRadius: 12, background: bad ? 'var(--card-danger)' : 'var(--card-warn)' }}>
+              <span style={{ width: 32, height: 32, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: bad ? 'var(--danger-500)' : 'var(--warn)' }}>
+                <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round">
+                  <circle cx={12} cy={12} r={9} />
+                  {bad ? <path d="M15 9l-6 6M9 9l6 6" /> : <path d="M12 8v4M12 16h.01" />}
+                </svg>
               </span>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--accent-ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {nicknames[okHex!] ?? (r.name ? `@${r.name}` : truncNpub(okHex!))}
+                <div style={{ fontSize: 13, fontWeight: 600, color: bad ? 'var(--danger-500)' : 'var(--warn)' }}>
+                  {bad ? `@${r.name} was not found` : r.kind === 'unreachable' ? `Could not check @${r.name}` : `@${r.name} cannot receive messages yet`}
                 </div>
-                {/* THE KEY AN @NAME RESOLVED TO, in mono, not the design's flat "Ready to message".
-                    This is the one moment before you message someone where you can check that the
-                    name you typed points at the key you were given out of band — the same reason the
-                    unreachable copy stays ours. A raw npub needs no such check: you already have the
-                    key, so that case says "Ready to message" as the design draws it.
-                    `existing` still wins the line, and is said twice over: the CTA below reads
-                    "Open conversation" rather than "Start conversation". */}
-                <div style={{ fontFamily: existing || !r.name ? undefined : MONO, fontSize: 11.5, color: 'var(--text-body-dim)', marginTop: 1, lineHeight: 1.45, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {existing ? 'You already have a conversation' : r.name ? truncNpub(okHex!) : 'Ready to message'}
+                {/* UNREACHABLE KEEPS OUR WORDING, against the design's "The network is unreachable
+                    right now." A lookup that failed is not a name that is missing, and letting a
+                    reader conclude the second from the first is the one wrong belief this screen
+                    can leave behind. */}
+                <div style={{ fontSize: 11.5, color: 'var(--text-body-dim)', marginTop: 1, lineHeight: 1.45, textWrap: 'pretty' }}>
+                  {bad ? 'No one has registered this name.'
+                    : r.kind === 'unreachable' ? `This is a network problem, not a missing name. @${r.name} may well exist.`
+                    : 'The name is registered but has no messaging key. Ask them to open Caravel Chat once.'}
                 </div>
               </div>
+              {r.kind === 'unreachable' && (
+                <button
+                  onClick={() => setComposeRetry(n => n + 1)}
+                  style={{ flexShrink: 0, padding: 0, border: 'none', background: 'transparent', fontSize: 12.5, fontWeight: 600, color: 'var(--accent-ink)', cursor: 'pointer', fontFamily: 'inherit' }}
+                >Try again</button>
+              )}
             </div>
-          )}
+          )
+        })()}
 
-          {r.s === 'fail' && (() => {
-            const bad = r.kind === 'not-found'
-            return (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '12px 13px', borderRadius: 12, background: bad ? 'var(--card-danger)' : 'var(--card-warn)' }}>
-                <span style={{ width: 32, height: 32, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: bad ? 'var(--danger-500)' : 'var(--warn)' }}>
-                  <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round">
-                    <circle cx={12} cy={12} r={9} />
-                    {bad ? <path d="M15 9l-6 6M9 9l6 6" /> : <path d="M12 8v4M12 16h.01" />}
-                  </svg>
-                </span>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: bad ? 'var(--danger-500)' : 'var(--warn)' }}>
-                    {bad ? `@${r.name} was not found` : r.kind === 'unreachable' ? `Could not check @${r.name}` : `@${r.name} cannot receive messages yet`}
-                  </div>
-                  {/* UNREACHABLE KEEPS OUR WORDING, against the design's "The network is unreachable
-                      right now." A lookup that failed is not a name that is missing, and letting a
-                      reader conclude the second from the first is the one wrong belief this screen
-                      can leave behind. */}
-                  <div style={{ fontSize: 11.5, color: 'var(--text-body-dim)', marginTop: 1, lineHeight: 1.45, textWrap: 'pretty' }}>
-                    {bad ? 'No one has registered this name.'
-                      : r.kind === 'unreachable' ? `This is a network problem, not a missing name. @${r.name} may well exist.`
-                      : 'The name is registered but has no messaging key. Ask them to open Caravel Chat once.'}
-                  </div>
-                </div>
-                {r.kind === 'unreachable' && (
-                  <button
-                    onClick={() => setComposeRetry(n => n + 1)}
-                    style={{ flexShrink: 0, padding: 0, border: 'none', background: 'transparent', fontSize: 12.5, fontWeight: 600, color: 'var(--accent-ink)', cursor: 'pointer', fontFamily: 'inherit' }}
-                  >Try again</button>
-                )}
-              </div>
-            )
-          })()}
-
-          <button
-            onClick={() => { if (canStart) startWith(okHex!) }}
-            disabled={!canStart}
-            className={canStart ? 'cv-btn-primary' : undefined}
-            style={{
-              width: '100%', padding: 11, borderRadius: 11, border: 'none',
-              background: canStart ? 'var(--accent-400)' : 'var(--msg-received)',
-              color: canStart ? 'var(--ink-on-accent)' : 'var(--text-muted-dim)',
-              fontSize: 13.5, fontWeight: 600, fontFamily: 'inherit',
-              cursor: canStart ? 'pointer' : 'default',
-            }}
-          >
-            {canStart ? (existing ? 'Open conversation' : 'Start conversation') : 'Start'}
-          </button>
-        </div>
-      </div>
+        <button
+          onClick={() => { if (canStart) startWith(okHex!) }}
+          disabled={!canStart}
+          className={canStart ? 'cv-btn-primary' : undefined}
+          style={{
+            width: '100%', padding: 11, borderRadius: 11, border: 'none',
+            background: canStart ? 'var(--accent-400)' : 'var(--msg-received)',
+            color: canStart ? 'var(--ink-on-accent)' : 'var(--text-muted-dim)',
+            fontSize: 13.5, fontWeight: 600, fontFamily: 'inherit',
+            cursor: canStart ? 'pointer' : 'default',
+          }}
+        >
+          {canStart ? (existing ? 'Open conversation' : 'Start conversation') : 'Start'}
+        </button>
+      </ModalCard>
       )
     })()}
 

@@ -1,4 +1,4 @@
-import { Fragment, useState, useEffect, useCallback, useLayoutEffect, useMemo, useRef, type CSSProperties, type ReactNode } from 'react'
+import { Fragment, useState, useEffect, useCallback, useLayoutEffect, useMemo, useRef, type CSSProperties } from 'react'
 import * as nip19 from 'nostr-tools/nip19'
 import Logo from '../primitives/Logo'
 import { useWallet } from '../../context/WalletContext'
@@ -189,112 +189,148 @@ function microToTari(micro: string): string {
   try { return fmt6(BigInt(micro)) } catch { return '—' }
 }
 
-// ── Payment card ──────────────────────────────────────────────────────────────
+// ── Payment card (§8A) ────────────────────────────────────────────────────────
+//
+// Confidential-payment card in the thread. Sender shows the amount from its local cache (never on
+// the wire). Recipient resolves the true amount from the referenced UTXO with its own view key. The
+// note ALWAYS renders (M10.0 guarantee).
+//
+// ── THE CARD IS A VAULT ISLAND, DARK IN BOTH THEMES, ON PURPOSE ───────────────
+//
+// It pins `data-theme="dark"` over its own subtree, so the dark ramp resolves inside it whatever the
+// page is doing. That is the same treatment the foundation gives the balance hero and the nav rail,
+// and it is a statement rather than a leftover: a confidential payment is the one moment in chat
+// where the product is a vault, and the card says so by not following the room's lighting. The pin
+// is also what lets everything inside keep using ordinary role tokens — unpinned, a navy card on a
+// white page would need a parallel set of literals for every piece of ink on it.
+//
+// ── ONE CARD, TEN STATES, NO TONES ───────────────────────────────────────────
+//
+// The card used to restyle its whole self per outcome: three tone chromes swapping background,
+// border and header fill, plus a status chip. §8A draws one card and lets a single status line
+// carry the difference, which is why the states below are DATA rather than ten JSX branches. What
+// varies is: an amount or a mask or neither, one sentence, its ink, a spinner, a Retry, a pill.
 
-// Confidential-payment card in the thread (design recovered from git history, driven by real data).
-// Sender shows the amount from its local cache (never on the wire). Recipient resolves the true
-// amount from the referenced UTXO with its own view key. The note ALWAYS renders (M10.0 guarantee).
-
-type CardTone = 'teal' | 'neutral' | 'danger'
-
-function BigAmount({ tari }: { tari: string }) {
-  return (
-    <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'center', gap: 8, marginBottom: 8 }}>
-      <span style={{ fontFamily: MONO, fontSize: 34, fontWeight: 700, color: 'var(--text-bright)', letterSpacing: '0.02em' }}>{tari}</span>
-      <span style={{ fontSize: 17, fontWeight: 600, color: 'var(--teal-500)' }}>TARI</span>
-    </div>
-  )
+type PayCardState = {
+  dir: 'SENT' | 'RECEIVED'
+  /** Formatted TARI, already through fmt6. Mutually exclusive with `masked`. */
+  amount?: string
+  /** The sender's "••••" — an amount that exists but is not on this device. */
+  masked?: boolean
+  status?: string
+  /** Status ink. `danger` is reserved for the two states that offer a Retry. */
+  tone?: 'dim' | 'danger'
+  spin?: boolean
+  retry?: () => void
+  /** "Amount hidden on chain" — shown only where an amount actually is. */
+  pill?: boolean
 }
 
-const cardChrome: Record<CardTone, { border: string; bg: string; headerBg: string; headerBorder: string; title: string }> = {
-  teal: { border: 'rgba(var(--teal-500-rgb),0.24)', bg: 'var(--card-payment)', headerBg: 'linear-gradient(180deg, rgba(var(--teal-500-rgb),0.12), rgba(var(--teal-500-rgb),0.04))', headerBorder: 'rgba(var(--teal-500-rgb),0.2)', title: 'var(--teal-300)' },
-  neutral: { border: 'rgba(var(--border-rgb),0.18)', bg: 'var(--card-neutral)', headerBg: 'rgba(var(--border-rgb),0.04)', headerBorder: 'rgba(var(--border-rgb),0.1)', title: 'var(--text-muted-dim)' },
-  danger: { border: 'rgba(var(--danger-rgb),0.28)', bg: 'var(--card-danger)', headerBg: 'rgba(var(--danger-rgb),0.06)', headerBorder: 'rgba(var(--danger-rgb),0.2)', title: 'var(--danger-300)' },
-}
+// The app's encryption mark, the same path E2ELine draws in the thread header.
+const padlock = <svg width={11} height={11} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round"><rect x={5} y={11} width={14} height={9} rx={2} /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></svg>
 
-// Card chrome per resolution tone. The private note ALWAYS renders (M10.0) below the amount area.
-function PaymentCard({ sent, tone, chip, timestamp, plaintext, body, lid, flashed }: { sent: boolean; tone: CardTone; chip: string; timestamp: number; plaintext: string; body: ReactNode; lid?: string; flashed?: boolean }) {
-  const c = cardChrome[tone]
-  const chipColor = tone === 'danger' ? 'var(--danger-300)' : (sent && tone === 'teal') ? 'var(--teal-500)' : 'var(--text-muted-dim)'
-  const noteBorder = tone === 'teal' ? 'rgba(var(--teal-500-rgb),0.28)' : 'rgba(var(--border-rgb),0.2)'
+function PaymentCard({ sent, state, timestamp, plaintext, lid, flashed }: {
+  sent: boolean
+  state: PayCardState
+  timestamp: number
+  plaintext: string
+  lid?: string
+  flashed?: boolean
+}) {
+  const statusInk = state.tone === 'danger' ? 'var(--danger-500)' : 'var(--vault-ink-dim)'
   return (
-    <div data-lid={lid} className={flashed ? 'cv-msg-flash' : undefined} style={{ alignSelf: sent ? 'flex-end' : 'flex-start', maxWidth: '68%', width: 440, borderRadius: 16 }}>
-      {/* AN ALWAYS-DARK ISLAND. --card-payment resolves to --vault-card in BOTH themes — the light
-          block never restates it — because a confidential payment is deliberately a vault moment.
-          Pinning the subtree is what lets its contents keep using ordinary role tokens instead of
-          the white literals a navy card on a light page would otherwise need. The payment-cards
-          stage reskins it properly; this only makes it honest in light. */}
-      <div data-theme="dark" style={{ borderRadius: sent ? '16px 6px 16px 16px' : '6px 16px 16px 16px', overflow: 'hidden', border: `1px solid ${c.border}`, background: c.bg }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 17px', background: c.headerBg, borderBottom: `1px solid ${c.headerBorder}` }}>
-          <span style={{ fontSize: 12, fontWeight: 700, color: c.title, letterSpacing: '0.06em' }}>CONFIDENTIAL PAYMENT</span>
-          <span style={{ fontFamily: MONO, fontSize: 11, color: chipColor }}>{chip}</span>
+    <div data-lid={lid} className={flashed ? 'cv-msg-flash' : undefined} style={{ alignSelf: sent ? 'flex-end' : 'flex-start', maxWidth: '68%', width: 440 }}>
+      {/* See the header note: the pin is the point, not a workaround. `cv-msg-flash` is the dark
+          flash for the same reason — this surface is near-black under either theme. */}
+      <div data-theme="dark" style={{
+        display: 'flex', flexDirection: 'column', gap: 12,
+        padding: 18, borderRadius: 16,
+        background: 'var(--card-payment)', border: '1px solid var(--card-payment-border)',
+        boxShadow: 'var(--vault-shadow)', color: 'var(--text-primary)',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, borderRadius: 8, flexShrink: 0, background: 'rgba(var(--accent-300-rgb),0.14)', color: 'var(--accent-300)' }}>{padlock}</span>
+          <span style={{ flex: 1, fontSize: 11.5, fontWeight: 600, color: 'var(--text-body-dim)', letterSpacing: '0.04em' }}>Confidential payment</span>
+          {/* The DIRECTION, which never changes with the outcome — a spent payment is still one you
+              received. The old chip said "Spent"/"Not found" here and the status line said it again. */}
+          <span style={{ fontFamily: MONO, fontSize: 9.5, letterSpacing: '0.1em', color: 'var(--text-muted-dim)' }}>{state.dir}</span>
         </div>
-        <div style={{ padding: '20px 17px 8px', textAlign: 'center' }}>{body}</div>
-        <div style={{ margin: '10px 14px 16px', padding: '13px 15px', borderRadius: 12, background: 'var(--surface-trough)', border: `1px dashed ${noteBorder}` }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 7 }}>
-            <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="var(--text-teal-dim)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V4s-1 1-4 1-5-2-8-2-4 1-4 1z" /><path d="M4 22v-7" /></svg>
-            <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.1em', color: 'var(--text-teal-dim)' }}>PRIVATE NOTE</span>
+
+        {state.amount !== undefined && (
+          <div style={{ fontFamily: MONO, fontSize: 24, fontWeight: 600, fontFeatureSettings: "'tnum'", letterSpacing: '-0.01em' }}>
+            {state.amount}<span style={{ fontSize: 13, color: 'var(--vault-ink-dim)', marginLeft: 6 }}>XTR</span>
           </div>
-          <div style={{ fontSize: 14, color: 'var(--text-note)', lineHeight: 1.45, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{plaintext}</div>
+        )}
+        {state.masked && (
+          <div style={{ fontFamily: MONO, fontSize: 24, fontWeight: 600, color: 'var(--vault-ink-dim)', letterSpacing: '0.14em' }}>••••</div>
+        )}
+
+        {state.status && (
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 12, lineHeight: 1.5, color: statusInk, textWrap: 'pretty' }}>
+            {state.spin && <span style={{ width: 12, height: 12, borderRadius: '50%', border: '2px solid var(--vault-hairline)', borderTopColor: 'var(--accent-300)', animation: 'cv-spin 1s linear infinite', flexShrink: 0, marginTop: 2 }} />}
+            <span style={{ flex: 1 }}>{state.status}</span>
+            {state.retry && (
+              <span onClick={state.retry} style={{ flexShrink: 0, padding: '3px 9px', borderRadius: 7, border: '1px solid rgba(var(--danger-rgb),0.4)', fontSize: 11.5, fontWeight: 600, color: 'var(--danger-500)', cursor: 'pointer' }}>Retry</span>
+            )}
+          </div>
+        )}
+
+        {state.pill && (
+          <div style={{ alignSelf: 'flex-start', display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 9px', borderRadius: 999, background: 'rgba(var(--accent-300-rgb),0.12)', color: 'var(--accent-300)', fontSize: 10.5, fontWeight: 600 }}>
+            <svg width={9} height={9} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z" /><path d="M4 4l16 16" /></svg>
+            Amount hidden on chain
+          </div>
+        )}
+
+        {/* ALWAYS RENDERED, in every one of the ten states — the M10.0 guarantee. */}
+        <div style={{ border: '1px dashed var(--vault-dash)', borderRadius: 10, padding: '9px 12px' }}>
+          <div style={{ fontFamily: MONO, fontSize: 9, letterSpacing: '0.12em', color: 'var(--text-muted-dim)' }}>PRIVATE NOTE</div>
+          <div style={{ fontSize: 12.5, color: 'var(--text-note)', marginTop: 3, lineHeight: 1.45, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{plaintext}</div>
         </div>
-      </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontFamily: MONO, fontSize: 11, color: 'var(--text-faint-dim)', marginTop: 6, marginRight: sent ? 4 : 0, marginLeft: sent ? 0 : 4, justifyContent: sent ? 'flex-end' : 'flex-start' }}>
-        {bubbleTime(timestamp)}
-        {sent && <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="var(--teal-500)" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round"><path d="M18 7l-8 8-4-4" /></svg>}
+
+        {/* INSIDE the card, unlike every other row's meta line. §8A draws the payment as an object
+            rather than a bubble — uniform corners, no tail — and the time belongs to the object. */}
+        <div style={{ fontSize: 10.5, color: 'var(--text-muted-dim)' }}>{bubbleTime(timestamp)}</div>
       </div>
     </div>
   )
 }
-
-const hiddenPill = (
-  <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 2, padding: '4px 11px', borderRadius: 100, background: 'rgba(var(--border-rgb),0.08)' }}>
-    <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="var(--text-teal-label)" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" /><circle cx={12} cy={12} r={3} /><path d="M4 4l16 16" /></svg>
-    <span style={{ fontSize: 11, color: 'var(--text-teal-label)', fontFamily: MONO }}>amount hidden on chain</span>
-  </div>
-)
-const spinner18 = <span style={{ width: 18, height: 18, borderRadius: '50%', border: '2px solid rgba(var(--teal-500-rgb),0.2)', borderTopColor: 'var(--teal-500)', animation: 'cv-spin 0.9s linear infinite', flexShrink: 0 }} />
-const retryBtn = (retry: () => void) => (
-  <span onClick={retry} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '8px 16px', borderRadius: 10, background: 'rgba(var(--danger-rgb),0.08)', border: '1px solid rgba(var(--danger-rgb),0.3)', fontSize: 13, fontWeight: 700, color: 'var(--danger-300)', cursor: 'pointer' }}>
-    <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="var(--danger-300)" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v5h-5" /></svg>Retry
-  </span>
-)
 
 function SentPaymentCard({ message, lid, flashed }: { message: CaravelMessage; lid?: string; flashed?: boolean }) {
   const amount = message.localPayment ? microToTari(message.localPayment.amountMicrotari) : null
-  const body = amount !== null
-    ? <>{<BigAmount tari={amount} />}{hiddenPill}</>
-    : <>
-        <div style={{ fontFamily: MONO, fontSize: 26, fontWeight: 700, color: 'var(--text-teal-label)', letterSpacing: '0.08em', marginBottom: 10 }}>••••</div>
-        <div style={{ fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.5, maxWidth: 320, margin: '0 auto' }}>Sent from another device, so the amount isn’t cached here. The recipient can still see it.</div>
-      </>
-  return <PaymentCard sent tone="teal" chip="Sent" timestamp={message.timestamp} plaintext={message.plaintext} body={body} lid={lid} flashed={flashed} />
+  const state: PayCardState = amount !== null
+    ? { dir: 'SENT', amount, pill: true }                                                   // S1
+    : { dir: 'SENT', masked: true, tone: 'dim', status: 'Sent from another device, so the amount isn’t cached here.' }  // S2
+  return <PaymentCard sent state={state} timestamp={message.timestamp} plaintext={message.plaintext} lid={lid} flashed={flashed} />
 }
 
 function ReceivedPaymentCard({ message, lid, flashed }: { message: CaravelMessage; lid?: string; flashed?: boolean }) {
-  const { state, retry } = usePaymentResolution(message.payment!.utxoId)
-  let tone: CardTone = 'teal', chip = 'Received', body: ReactNode
-  if (state.kind === 'resolved') {
-    body = <>{<BigAmount tari={microToTari(state.amountMicrotari)} />}{hiddenPill}</>
-  } else if (state.kind === 'loading') {
-    body = <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 11, padding: '2px 0 12px' }}>{spinner18}<span style={{ fontSize: 14, color: 'var(--text-teal-label)' }}>Resolving amount…</span></div>
-  } else if (state.kind === 'retrying' && state.reason === 'not_found') {
-    body = <><div style={{ fontSize: 14, fontWeight: 600, color: 'var(--teal-300)', marginBottom: 6 }}>Waiting for the payment to be indexed</div><div style={{ fontSize: 13, color: 'var(--text-teal-label)', lineHeight: 1.5 }}>The payment arrived. The amount will appear once the indexer catches up.</div></>
-  } else if (state.kind === 'retrying') {
-    body = <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 11, padding: '2px 0 12px' }}>{spinner18}<span style={{ fontSize: 14, color: 'var(--text-teal-label)' }}>Reaching the indexer…</span></div>
-  } else if (state.reason === 'spent') {
-    tone = 'neutral'; chip = 'Spent'
-    body = <><div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, marginBottom: 8 }}><svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg><span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-muted)' }}>Payment output has been spent</span></div><div style={{ fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.5 }}>You already used these funds. Nothing to claim here.</div></>
-  } else if (state.reason === 'unreadable') {
-    tone = 'neutral'; chip = 'Unreadable'
-    body = <><div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 6 }}>Not addressed to this wallet</div><div style={{ fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.5 }}>This wallet can’t decrypt it. It may belong to another of your devices.</div></>
-  } else if (state.reason === 'not_found') {
-    tone = 'danger'; chip = 'Not found'
-    body = <><div style={{ fontSize: 14, fontWeight: 600, color: 'var(--danger-300)', marginBottom: 6 }}>No matching output on chain</div><div style={{ fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.5, marginBottom: 14 }}>The note referenced a payment we can’t locate.</div>{retryBtn(retry)}</>
+  const { state: res, retry } = usePaymentResolution(message.payment!.utxoId)
+  // Same branches, same order, same predicates as before — only what they PRODUCE has changed.
+  let state: PayCardState
+  if (res.kind === 'resolved') {
+    state = { dir: 'RECEIVED', amount: microToTari(res.amountMicrotari), pill: true }        // R1
+  } else if (res.kind === 'loading') {
+    state = { dir: 'RECEIVED', tone: 'dim', spin: true, status: 'Resolving amount…' }        // R2
+  } else if (res.kind === 'retrying' && res.reason === 'not_found') {
+    // NO SPINNER, deliberately. The payment arrived; only the index is behind, and a spinner would
+    // make a settled fact look like a request in doubt.
+    state = { dir: 'RECEIVED', tone: 'dim', status: 'Waiting for the payment to be indexed. It will appear on its own.' }  // R3
+  } else if (res.kind === 'retrying') {
+    state = { dir: 'RECEIVED', tone: 'dim', spin: true, status: 'Reaching the indexer…' }    // R4
+  } else if (res.reason === 'spent') {
+    state = { dir: 'RECEIVED', tone: 'dim', status: 'Payment output has been spent.' }       // R5
+  } else if (res.reason === 'unreadable') {
+    state = { dir: 'RECEIVED', tone: 'dim', status: 'Not addressed to this wallet.' }        // R6
+  } else if (res.reason === 'not_found') {
+    // HONEST 404. The resolver cannot tell "spent" from "not yet indexed" at this status — its own
+    // comment says so — and the old copy ("No matching output on chain") picked one and sounded
+    // certain about it. This says what we actually know.
+    state = { dir: 'RECEIVED', tone: 'danger', retry, status: 'Could not verify this payment. It may have been spent, or not yet indexed.' }  // R7
   } else {
-    tone = 'danger'; chip = 'Error'
-    body = <><div style={{ fontSize: 14, fontWeight: 600, color: 'var(--danger-300)', marginBottom: 6 }}>Couldn’t reach the network</div><div style={{ fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.5, marginBottom: 14 }}>The payment is fine. We just can’t read it right now.</div>{retryBtn(retry)}</>
+    state = { dir: 'RECEIVED', tone: 'danger', retry, status: 'Could not reach the network.' }  // R8
   }
-  return <PaymentCard sent={false} tone={tone} chip={chip} timestamp={message.timestamp} plaintext={message.plaintext} body={body} lid={lid} flashed={flashed} />
+  return <PaymentCard sent={false} state={state} timestamp={message.timestamp} plaintext={message.plaintext} lid={lid} flashed={flashed} />
 }
 
 function PaymentMessageCard({ message, lid, flashed }: { message: CaravelMessage; lid?: string; flashed?: boolean }) {

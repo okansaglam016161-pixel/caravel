@@ -3,7 +3,10 @@
 // contract honest, and a bug here corrupts stored messages, so each guard is covered explicitly.
 
 import { beforeEach, describe, expect, it } from 'vitest'
-import { addReceivedMessage, addSentMessage, applyEdit, applyEditByLogicalId, applyReactionByLogicalId, editReachOk, targetsLeftGroup, findByLogicalId, isReactableTarget, liveReactionCountBy, loadMessages, nextReactionSeq, nextRevision } from './messageStore'
+import { clearStoreKey, setStoreKey } from '../crypto/sessionKey'
+import {
+  addReceivedMessage, addSentMessage, applyEdit, applyEditByLogicalId, applyReactionByLogicalId, deletePeerMessages, editReachOk, findByLogicalId, isReactableTarget, liveReactionCountBy, loadMessages, nextReactionSeq, nextRevision, targetsLeftGroup,
+} from './messageStore'
 import { sortKey, type CaravelMessage } from './types'
 
 // messageStore persists through localStorage, which does not exist under Vitest's node
@@ -36,8 +39,14 @@ function msg(over: Partial<CaravelMessage> = {}): CaravelMessage {
   }
 }
 
+// Messages are sealed at rest from stage 3 on, so these specs run against the ENCRYPTED path —
+// every dedup, edit, reaction and deletion rule below is now verified through real
+// XChaCha20-Poly1305 rather than over bare JSON. A fixed key keeps them deterministic.
+const STORE_KEY = new Uint8Array(32).fill(42)
+
 beforeEach(() => {
   globalThis.localStorage = memoryStorage()
+  setStoreKey(Uint8Array.from(STORE_KEY))
 })
 
 describe('applyEdit — guards', () => {
@@ -796,5 +805,113 @@ describe('existing behaviour is unchanged', () => {
     const again = addReceivedMessage(ME, first, msg({ id: 'e1', senderPubkeyHex: PEER, direction: 'received', plaintext: 'different' }))
     expect(again).toBe(first)
     expect(again[0].plaintext).toBe('original')
+  })
+})
+
+
+// ── At rest (stage 3) ─────────────────────────────────────────────────────────
+
+describe('messages: encryption at rest', () => {
+  const MSG_KEY = 'caravel.messages.v1.' + ME
+
+  it('writes ciphertext, not readable JSON', () => {
+    addSentMessage(ME, [], msg({ plaintext: 'meet me at the harbour' }))
+    const stored = localStorage.getItem(MSG_KEY)!
+    expect(stored).not.toContain('meet me at the harbour')
+    expect(JSON.parse(stored).v).toBe(2)
+  })
+
+  it('hides a chat payment amount and an attachment key', () => {
+    // The two fields that make this store tier-1: an amount the wire cannot carry, and the AES key
+    // for an image attachment.
+    addSentMessage(ME, [], msg({
+      plaintext: 'for lunch',
+      localPayment: { amountMicrotari: '1500000', txId: 'txabc' },
+    }))
+    const stored = localStorage.getItem(MSG_KEY)!
+    expect(stored).not.toContain('1500000')
+    expect(stored).not.toContain('txabc')
+  })
+
+  it('reads back everything it sealed', () => {
+    const sent = msg({ id: 'a', plaintext: 'one' })
+    addSentMessage(ME, addSentMessage(ME, [], sent), msg({ id: 'b', plaintext: 'two' }))
+    const loaded = loadMessages(ME)
+    expect(loaded.map(m => m.plaintext).sort()).toEqual(['one', 'two'])
+  })
+
+  it('cannot be read with a different key, or with none', () => {
+    addSentMessage(ME, [], msg())
+    setStoreKey(new Uint8Array(32).fill(7))
+    expect(loadMessages(ME)).toEqual([])
+    clearStoreKey()
+    expect(loadMessages(ME)).toEqual([])
+  })
+})
+
+describe('messages: migration from plaintext', () => {
+  const MSG_KEY = 'caravel.messages.v1.' + ME
+
+  function seedLegacy() {
+    localStorage.setItem(MSG_KEY, JSON.stringify([
+      { id: 'legacy-1', senderPubkeyHex: PEER, recipientPubkeyHex: ME, plaintext: 'older message', timestamp: 900, direction: 'received' },
+    ]))
+  }
+
+  it('reads a plaintext store written before encryption existed', () => {
+    seedLegacy()
+    const [m] = loadMessages(ME)
+    expect(m.id).toBe('legacy-1')
+    expect(m.plaintext).toBe('older message')
+  })
+
+  it('re-emits the whole store SEALED on the next write, losing nothing', () => {
+    seedLegacy()
+    expect(Array.isArray(JSON.parse(localStorage.getItem(MSG_KEY)!))).toBe(true)
+
+    addReceivedMessage(ME, loadMessages(ME), msg({ id: 'new-1', plaintext: 'newer', direction: 'received', senderPubkeyHex: PEER, recipientPubkeyHex: ME }))
+
+    expect(JSON.parse(localStorage.getItem(MSG_KEY)!).v).toBe(2)
+    const ids = loadMessages(ME).map(m => m.id).sort()
+    expect(ids).toEqual(['legacy-1', 'new-1'])
+    expect(loadMessages(ME).find(m => m.id === 'legacy-1')!.plaintext).toBe('older message')
+  })
+})
+
+describe('messages: refusing to write', () => {
+  const MSG_KEY = 'caravel.messages.v1.' + ME
+
+  it('will not write with no store key', () => {
+    clearStoreKey()
+    addSentMessage(ME, [], msg())
+    expect(localStorage.getItem(MSG_KEY)).toBeNull()
+  })
+
+  it('NEVER OVERWRITES A HISTORY IT COULD NOT READ', () => {
+    addSentMessage(ME, [], msg({ id: 'keep', plaintext: 'the history that must survive' }))
+    const original = localStorage.getItem(MSG_KEY)!
+
+    setStoreKey(new Uint8Array(32).fill(7))       // wrong key
+    expect(loadMessages(ME)).toEqual([])           // reads empty...
+
+    addReceivedMessage(ME, [], msg({ id: 'new', direction: 'received' }))
+    expect(localStorage.getItem(MSG_KEY)).toBe(original)   // ...and did not clobber
+
+    setStoreKey(Uint8Array.from(STORE_KEY))
+    expect(loadMessages(ME)[0].plaintext).toBe('the history that must survive')
+  })
+
+  it('will not let a DELETE clobber an unreadable history either', () => {
+    addSentMessage(ME, [], msg({ id: 'keep' }))
+    const original = localStorage.getItem(MSG_KEY)!
+    setStoreKey(new Uint8Array(32).fill(7))
+    deletePeerMessages(ME, [msg({ id: 'keep' })], PEER)
+    expect(localStorage.getItem(MSG_KEY)).toBe(original)
+  })
+
+  it('still writes normally over an EMPTY store', () => {
+    expect(localStorage.getItem(MSG_KEY)).toBeNull()
+    addSentMessage(ME, [], msg())
+    expect(loadMessages(ME)).toHaveLength(1)
   })
 })

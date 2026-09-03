@@ -58,7 +58,17 @@ export interface SealedRecord {
  * bytes it did not understand. See journalStore's save().
  */
 export type OpenResult =
-  | { status: 'ok'; json: string }
+  /**
+   * `legacy` says which FORMAT the value came from, not whether it was readable — true for a v1
+   * plaintext passthrough, false for a decrypted v2 envelope.
+   *
+   * It exists so a store can migrate on read: seeing `legacy` it can re-persist itself sealed
+   * without waiting for its next ordinary write. utxoLedger needs that because it only writes when
+   * a scan brings NEW information, so a wallet that is not transacting would otherwise keep a
+   * plaintext ledger indefinitely. Reported from here rather than re-derived by each caller,
+   * because isSealed() is the one place that is allowed to know the discriminator.
+   */
+  | { status: 'ok'; json: string; legacy: boolean }
   | { status: 'empty' }
   | { status: 'unreadable' }
 
@@ -118,14 +128,14 @@ export function open(key: Uint8Array | null, stored: string | null): OpenResult 
   }
 
   // v1 — plaintext, exactly as every store wrote it before this module existed.
-  if (!isSealed(parsed)) return { status: 'ok', json: stored }
+  if (!isSealed(parsed)) return { status: 'ok', json: stored, legacy: true }
 
   // v2 — sealed. A missing key is `unreadable`, never an empty read: see OpenResult.
   if (key === null) return { status: 'unreadable' }
 
   try {
     const plain = xchacha20poly1305(key, b64Decode(parsed.n)).decrypt(b64Decode(parsed.ct))
-    return { status: 'ok', json: new TextDecoder().decode(plain) }
+    return { status: 'ok', json: new TextDecoder().decode(plain), legacy: false }
   } catch {
     // A wrong key fails here, as a Poly1305 tag mismatch, rather than yielding garbage. That
     // authentication is what makes `unreadable` trustworthy enough to gate a write on.

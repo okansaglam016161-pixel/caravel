@@ -34,6 +34,9 @@
 // and it takes the whole scan shape rather than a list of ids so that the rule lives in this
 // module, under test, instead of at a call site where it can be forgotten.
 
+import { getStoreKey } from './sessionKey'
+import { open, seal } from './storeCrypto'
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface UtxoLedger {
@@ -64,6 +67,20 @@ export interface ScanObservation {
 
 const EMPTY: UtxoLedger = { firstSeen: {}, baseline: null, baselineAt: null, degradedAt: null }
 
+// ── ENCRYPTED AT REST (stage 3) ──────────────────────────────────────────────
+//
+// Sealed under the session store key through storeCrypto. What this file records — which outputs
+// are ours, and when each was first seen — is the clustering data that links a wallet's outputs to
+// each other, so it belongs in the same tier as the journal.
+//
+// IT FAILS CLOSED, which is why encrypting it is safe for reconciliation. An unopenable record
+// reads as EMPTY, so `baseline` is null, so isPreEpoch() answers true for every UTXO and reconcile
+// suppresses all of them as pre-epoch. A key failure therefore produces NO receives rather than
+// wrong ones — the same direction the design already chose for an absent ledger.
+//
+// Migration is lazy: a plaintext ledger reads through the v1 passthrough and is re-emitted sealed
+// by the next scan. Nothing is ever wiped.
+
 // ── Storage ───────────────────────────────────────────────────────────────────
 
 function key(walletAddress: string) { return `caravel.utxoseen.v1.${walletAddress}` }
@@ -77,30 +94,90 @@ function key(walletAddress: string) { return `caravel.utxoseen.v1.${walletAddres
  */
 const sessionDegradations = new Map<string, number>()
 
+/** Was the stored record readable? `unreadable` is what save() refuses to overwrite. */
+function readStatus(walletAddress: string): 'ok' | 'empty' | 'unreadable' {
+  let raw: string | null
+  try {
+    raw = localStorage.getItem(key(walletAddress))
+  } catch {
+    return 'unreadable'
+  }
+  const opened = open(getStoreKey(), raw)
+  if (opened.status !== 'ok') return opened.status
+  try {
+    const parsed: unknown = JSON.parse(opened.json)
+    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed) ? 'ok' : 'unreadable'
+  } catch {
+    return 'unreadable'
+  }
+}
+
 export function loadLedger(walletAddress: string): UtxoLedger {
   let stored: UtxoLedger = EMPTY
+  let wasPlaintext = false
   try {
     const raw = localStorage.getItem(key(walletAddress))
-    if (raw) {
-      const parsed = JSON.parse(raw) as Partial<UtxoLedger>
+    const opened = open(getStoreKey(), raw)
+    // An unopenable record reads as EMPTY — see the header: that is the fail-closed direction, and
+    // reconcile already treats a null baseline as "nothing is classifiable".
+    if (opened.status === 'ok') {
+      const parsed = JSON.parse(opened.json) as Partial<UtxoLedger>
       stored = {
         firstSeen: parsed.firstSeen && typeof parsed.firstSeen === 'object' ? parsed.firstSeen : {},
         baseline: Array.isArray(parsed.baseline) ? parsed.baseline : null,
         baselineAt: typeof parsed.baselineAt === 'number' ? parsed.baselineAt : null,
         degradedAt: typeof parsed.degradedAt === 'number' ? parsed.degradedAt : null,
       }
+      wasPlaintext = opened.legacy
     }
-  } catch { stored = EMPTY }
+  } catch { stored = EMPTY; wasPlaintext = false }
+
+  // ── MIGRATE ON READ ────────────────────────────────────────────────────────
+  //
+  // WHY THIS STORE NEEDS IT AND THE OTHERS DO NOT. journalStore, txHistory and messageStore all
+  // rewrite themselves during ordinary use — a send, a message, any wallet action — so their lazy
+  // migration lands on the next thing the user does. This one is FIRST-WRITE-WINS: recordCompleteScan
+  // returns before save() when a scan brings no new UTXO, and captureBaseline is skipped once a
+  // baseline exists. A wallet that is not transacting therefore never writes, and would keep its
+  // firstSeen map and baseline — tier-1 output-clustering data — in plaintext indefinitely.
+  //
+  // So the read migrates, exactly as txHistory's read does when it strips legacy rows.
+  //
+  // THREE THINGS THIS MUST NOT DO, all load-bearing:
+  //   1. Never on `unreadable` — writing over bytes we could not open is the loss this whole design
+  //      guards against. Only a confirmed `ok` read reaches here.
+  //   2. Never on an already-sealed record — `legacy` is false there, so every subsequent load is a
+  //      pure read. Without that check each load would rewrite the store.
+  //   3. Persist `stored`, NOT the session-merged value below. A degradation known only to this
+  //      session must not become a persisted one as a side effect of somebody reading.
+  //
+  // save() refuses when there is no store key, which is the right answer: a legacy record still
+  // reads without one (nothing to decrypt) but cannot be sealed, so it stays plaintext until an
+  // unlocked session reads it. This runs inside WalletModal's reconcile useMemo, so it is a write
+  // during render — once, idempotently, and touching no React state.
+  if (wasPlaintext) save(walletAddress, stored)
 
   const session = sessionDegradations.get(walletAddress) ?? null
   if (stored.degradedAt === null && session !== null) return { ...stored, degradedAt: session }
   return stored
 }
 
-/** Returns false when the write did not land. */
+/**
+ * Returns false when the write did not land.
+ *
+ * THE NEVER-CLOBBER GUARD MATTERS MOST HERE, because of markDegraded below: it loads the ledger and
+ * writes it back with a stamp, so under a wrong key it would load EMPTY and persist EMPTY —
+ * destroying firstSeen and baseline in the very act of recording that something went wrong. The
+ * guard refuses, and the in-session map still holds the flag, which this file already treats as the
+ * durable half.
+ */
 function save(walletAddress: string, ledger: UtxoLedger): boolean {
+  const storeKey = getStoreKey()
+  if (storeKey === null) return false
+  if (readStatus(walletAddress) === 'unreadable') return false
+
   try {
-    localStorage.setItem(key(walletAddress), JSON.stringify(ledger))
+    localStorage.setItem(key(walletAddress), seal(storeKey, JSON.stringify(ledger)))
     return true
   } catch { return false }
 }

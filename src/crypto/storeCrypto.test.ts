@@ -13,12 +13,12 @@ describe('seal / open round-trip', () => {
   it('returns exactly the JSON it was given', () => {
     const json = JSON.stringify([{ note: 'lunch', amount: '1500000' }])
     const opened = open(KEY, seal(KEY, json))
-    expect(opened).toEqual({ status: 'ok', json })
+    expect(opened).toEqual({ status: 'ok', json, legacy: false })
   })
 
   it('carries an empty payload, and multi-byte text, unharmed', () => {
     for (const json of ['[]', '{}', '""', JSON.stringify({ note: 'cafe ☕ 日本語 end' })]) {
-      expect(open(KEY, seal(KEY, json))).toEqual({ status: 'ok', json })
+      expect(open(KEY, seal(KEY, json))).toEqual({ status: 'ok', json, legacy: false })
     }
   })
 
@@ -51,27 +51,27 @@ describe('the v1 / v2 discriminator - what makes migration lossless', () => {
   it('passes a legacy plaintext ARRAY straight through', () => {
     // The journal's legacy shape.
     const legacy = JSON.stringify([{ id: 'a', note: 'older payment' }])
-    expect(open(KEY, legacy)).toEqual({ status: 'ok', json: legacy })
+    expect(open(KEY, legacy)).toEqual({ status: 'ok', json: legacy, legacy: true })
   })
 
   it('passes a legacy plaintext OBJECT straight through', () => {
     // The shape every messaging store uses, for the stages after this one.
     const legacy = JSON.stringify({ abc123: { state: 'accepted', updatedAt: 5 } })
-    expect(open(KEY, legacy)).toEqual({ status: 'ok', json: legacy })
+    expect(open(KEY, legacy)).toEqual({ status: 'ok', json: legacy, legacy: true })
   })
 
   it('reads legacy plaintext with NO KEY - there is nothing to decrypt', () => {
     // This is what lets a device migrate at all, and it is honest: the function cannot protect
     // bytes that are already in the clear on disk.
     const legacy = JSON.stringify([1, 2, 3])
-    expect(open(null, legacy)).toEqual({ status: 'ok', json: legacy })
+    expect(open(null, legacy)).toEqual({ status: 'ok', json: legacy, legacy: true })
   })
 
   it('does not mistake a plaintext object for an envelope just because it is an object', () => {
     const notAnEnvelope = JSON.stringify({ v: 2 })                       // missing n/ct
-    expect(open(KEY, notAnEnvelope)).toEqual({ status: 'ok', json: notAnEnvelope })
+    expect(open(KEY, notAnEnvelope)).toEqual({ status: 'ok', json: notAnEnvelope, legacy: true })
     const wrongVersion = JSON.stringify({ v: 1, n: 'x', ct: 'y' })
-    expect(open(KEY, wrongVersion)).toEqual({ status: 'ok', json: wrongVersion })
+    expect(open(KEY, wrongVersion)).toEqual({ status: 'ok', json: wrongVersion, legacy: true })
   })
 })
 
@@ -113,5 +113,24 @@ describe('the three states', () => {
       expect(() => open(KEY, input)).not.toThrow()
       expect(() => open(null, input)).not.toThrow()
     }
+  })
+})
+
+
+describe('the legacy flag — what lets a store migrate on read', () => {
+  it('marks a v1 plaintext read as legacy', () => {
+    const opened = open(KEY, JSON.stringify([1, 2, 3]))
+    expect(opened.status === 'ok' && opened.legacy).toBe(true)
+  })
+
+  it('marks a decrypted v2 read as NOT legacy', () => {
+    // The half that stops a migrating store rewriting itself on every single load.
+    const opened = open(KEY, seal(KEY, '[]'))
+    expect(opened.status === 'ok' && opened.legacy).toBe(false)
+  })
+
+  it('reports the FORMAT, not the readability — an unreadable record has no flag at all', () => {
+    expect(open(OTHER_KEY, seal(KEY, '[]'))).toEqual({ status: 'unreadable' })
+    expect(open(KEY, '{not json')).toEqual({ status: 'unreadable' })
   })
 })

@@ -46,10 +46,10 @@ type QuoteTone = 'on-dark' | 'on-accent'
 
 const PALETTE: Record<QuoteTone, { rule: string; bg: string; body: string; author: string; muted: string }> = {
   'on-dark': {
-    rule: '2px solid rgba(var(--teal-500-rgb),0.45)',
-    bg: 'rgba(var(--teal-500-rgb),0.05)',
+    rule: '2px solid rgba(var(--accent-400-rgb),0.45)',
+    bg: 'rgba(var(--accent-400-rgb),0.05)',
     body: 'var(--text-muted)',
-    author: 'var(--text-teal-dim)',
+    author: 'var(--text-accent-dim)',
     muted: 'var(--text-faint-dim)',
   },
   'on-accent': {

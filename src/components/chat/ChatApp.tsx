@@ -1566,20 +1566,20 @@ export default function ChatApp() {
 
                     {pay ? (
                       /* Payment attached — amount stays confidential (••••) for a stranger; no chain query. */
-                      <div style={{ borderRadius: 11, overflow: 'hidden', border: '1px dashed rgba(var(--teal-500-rgb),0.3)', background: 'var(--surface-trough)', marginBottom: 12 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 13px', background: 'rgba(var(--teal-500-rgb),0.06)', borderBottom: '1px dashed rgba(var(--teal-500-rgb),0.22)' }}>
-                          <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="var(--teal-500)" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>
-                          <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--teal-300)', letterSpacing: '0.06em' }}>CONFIDENTIAL PAYMENT ATTACHED</span>
+                      <div style={{ borderRadius: 11, overflow: 'hidden', border: '1px dashed rgba(var(--accent-400-rgb),0.3)', background: 'var(--surface-trough)', marginBottom: 12 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 13px', background: 'rgba(var(--accent-400-rgb),0.06)', borderBottom: '1px dashed rgba(var(--accent-400-rgb),0.22)' }}>
+                          <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="var(--accent-400)" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>
+                          <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--accent-300)', letterSpacing: '0.06em' }}>CONFIDENTIAL PAYMENT ATTACHED</span>
                         </div>
                         <div style={{ padding: 13 }}>
                           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, marginBottom: 9 }}>
                             <span style={{ fontFamily: MONO, fontSize: 22, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.1em' }}>••••</span>
-                            <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-teal-dim)' }}>TARI</span>
+                            <span style={{ fontFamily: MONO, fontSize: 13, fontWeight: 600, color: 'var(--text-accent-dim)' }}>XTR</span>
                           </div>
                           <div style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5, textAlign: 'center', marginBottom: note ? 11 : 0 }}>Amount stays unresolved until you accept. Caravel doesn’t query the chain for strangers.</div>
                           {note && (
                             <div style={{ padding: '10px 12px', borderRadius: 9, background: 'var(--surface-trough)', border: '1px solid var(--border)' }}>
-                              <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.12em', color: 'var(--text-teal-dim)', marginBottom: 5 }}>NOTE</div>
+                              <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.12em', color: 'var(--text-accent-dim)', marginBottom: 5 }}>NOTE</div>
                               <div style={{ fontSize: 12, color: 'var(--text-body-dim)', lineHeight: 1.45, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{note}</div>
                             </div>
                           )}
@@ -1829,7 +1829,7 @@ export default function ChatApp() {
             />
           ) : selectedConvo === null ? (
             /* Chat pane at rest (design: sail + reassurance) */
-            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 20, background: 'radial-gradient(700px 420px at 50% 40%, rgba(var(--teal-500-rgb),0.045), rgba(var(--teal-500-rgb),0))' }}>
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 20, background: 'radial-gradient(700px 420px at 50% 40%, rgba(var(--accent-400-rgb),0.045), rgba(var(--accent-400-rgb),0))' }}>
               <Logo size={64} onLight={onLight} style={{ opacity: 0.34 }} />
               <div style={{ textAlign: 'center' }}>
                 <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-body-dim)', marginBottom: 8 }}>Select a conversation</div>

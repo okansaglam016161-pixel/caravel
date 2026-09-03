@@ -211,8 +211,6 @@
   --card-payment: var(--vault-grad);
   --card-payment-border: var(--vault-hairline);
 
-  --card-neutral: var(--navy-900);
-  --card-neutral-border: var(--border);
   --card-warn: rgba(232, 176, 75, 0.10);
   --card-warn-border: rgba(232, 176, 75, 0.28);
   --card-danger: rgba(255, 138, 115, 0.10);
@@ -245,12 +243,12 @@
   --avatar-amber-ink: #0A1322;
   --avatar-slate: linear-gradient(135deg, #94A3B8, #7789A0);
   --avatar-slate-ink: #0A1322;
-  /* Deprecated aliases whose targets are theme-dependent, so they must be
-     restated per theme rather than resolved once on :root. */
+  /* Restated per theme rather than resolved once on :root, because their
+     targets are theme-dependent. --text-teal-dim is the deprecated alias of
+     --text-accent-dim and has no consumers left; the other two are current. */
   --text-accent-dim: #46648A;
   --text-teal-dim: #46648A;
   --text-vault-label: var(--vault-label);
-  --text-teal-label: var(--vault-label);
 }
 
 /* ══ LIGHT ROLE TOKENS ════════════════════════════════════════════════════
@@ -290,7 +288,6 @@
   --text-accent-dim: #7C8CA0;
   --text-teal-dim: #7C8CA0;
   --text-vault-label: var(--vault-label);
-  --text-teal-label: var(--vault-label);
 
   --accent-ink: var(--accent-500);
   --accent-wash: rgba(var(--accent-400-rgb), 0.10);
@@ -309,7 +306,6 @@
   --danger-rgb: 194, 70, 50;
 
   --msg-received: var(--navy-50);
-  --card-neutral: #FFFFFF;
   --card-warn: rgba(169, 107, 20, 0.10);
   --card-warn-border: rgba(169, 107, 20, 0.28);
   --card-danger: rgba(194, 70, 50, 0.10);
@@ -439,6 +435,14 @@ a:hover { color: var(--accent-200); }
    while never being mounted at the same time, so neither can own the rule. */
 .cv-emoji-cell:hover { background: rgba(var(--border-rgb), 0.14); }
 .cv-emoji-cell:focus-visible { outline: 2px solid rgba(var(--accent-400-rgb), 0.5); outline-offset: -2px; }
+
+/* Image lightbox toolbar (9A). LITERAL WHITE ALPHAS, deliberately — the lightbox scrim is a
+   near-black in both themes ("one composition, not two theme variants"), so these controls sit on a
+   surface that never moves and role tokens would be the wrong answer. Same reasoning, and the same
+   shape, as .cv-nav-item on the permanently-navy rail. 6% at rest, 12% on hover, per the design. */
+.cv-lightbox-btn { transition: background 0.15s; }
+.cv-lightbox-btn:hover { background: rgba(255, 255, 255, 0.12) !important; }
+.cv-lightbox-btn:focus-visible { outline: 2px solid rgba(255, 255, 255, 0.55); outline-offset: 2px; }
 
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-thumb { background: rgba(var(--border-rgb), 0.55); border-radius: 4px; }

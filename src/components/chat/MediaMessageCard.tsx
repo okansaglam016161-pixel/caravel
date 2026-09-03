@@ -126,6 +126,10 @@ export default function MediaMessageCard({ message, lid, flashed }: { message: C
           url={state.url}
           filename={mediaFilename(media.mime, message.timestamp)}
           caption={caption}
+          size={media.size}
+          width={media.width}
+          height={media.height}
+          timestamp={message.timestamp}
           onClose={() => setExpanded(false)}
         />
       )}

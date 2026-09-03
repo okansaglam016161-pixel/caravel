@@ -90,9 +90,10 @@ export function RelayHealthPanel({ getRelayStates, reconnectAll, onClose }: {
   const connected = states.filter(s => s.status === 'connected').length
   const healthy = total > 0 && connected === total
 
-  // §7B paints a connected relay with --pos on BOTH the dot and its status text. The dot was
-  // --teal-500 (the accent, not the health colour) and the text --text-teal-dim (#46648A — a slate,
-  // not a green at all), so a healthy relay never actually read as healthy.
+  // §7B paints a connected relay with --pos on BOTH the dot and its status text. The dot used to
+  // take the accent (the brand colour, not the health colour) and the text a slate dim (#46648A —
+  // not a green at all), so a healthy relay never actually read as healthy. Those were the
+  // teal-era token names, retired in the V3 sweep; the current pair is below.
   const rowDot = (s: RelayState) => {
     if (s.status === 'connected') return 'var(--positive)'
     if (s.status === 'failed') return 'var(--danger-500)'

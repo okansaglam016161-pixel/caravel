@@ -6,7 +6,7 @@
 // React — needs a real browser and is covered by the two-browser test instead.
 
 import { describe, expect, it } from 'vitest'
-import { isNewDay, mediaBoxSize, mediaFilename, mergeThreadItems, threadContentKey, type ThreadItem } from './chatDisplay'
+import { isNewDay, mediaBoxSize, mediaFilename, mergeThreadItems, readableSize, threadContentKey, type ThreadItem } from './chatDisplay'
 
 const MAX_W = 320
 const MAX_H = 400
@@ -178,6 +178,40 @@ describe('threadContentKey — the auto-scroll trigger', () => {
   it('does not collide across the counts that used to sum equal', () => {
     // 5 messages + 1 pending vs 6 messages + 0 pending summed to the same number. They must not.
     expect(threadContentKey(new Array(5), [send('failed')])).not.toBe(threadContentKey(new Array(6), []))
+  })
+})
+
+describe('readableSize', () => {
+  // Promoted out of AttachPreview in stage 9 so the compose preview and the lightbox footer quote
+  // one image's weight identically. Pure and deterministic, unlike the time helpers below it.
+
+  it('shows plain bytes below a kilobyte', () => {
+    expect(readableSize(0)).toBe('0 B')
+    expect(readableSize(1)).toBe('1 B')
+    expect(readableSize(1023)).toBe('1023 B')
+  })
+
+  it('switches to KB at 1024 bytes, rounded to whole units', () => {
+    expect(readableSize(1024)).toBe('1 KB')
+    expect(readableSize(1536)).toBe('2 KB')      // 1.5 rounds up
+    expect(readableSize(250_000)).toBe('244 KB')
+  })
+
+  it('switches to MB at a mebibyte, to one decimal', () => {
+    expect(readableSize(1024 * 1024)).toBe('1.0 MB')
+    expect(readableSize(2_516_582)).toBe('2.4 MB')
+  })
+
+  it('is binary units under decimal labels — 1 KB is 1024 B, as a file manager shows', () => {
+    expect(readableSize(1000)).toBe('1000 B')    // not "1 KB"
+    expect(readableSize(1_000_000)).toBe('977 KB')
+  })
+
+  it("GCM's 16-byte tag never moves the figure at the granularity we render", () => {
+    // MediaRef.size counts ciphertext; the lightbox quotes it as the image's size. This is why
+    // that is honest.
+    const plaintext = 2_516_582
+    expect(readableSize(plaintext + 16)).toBe(readableSize(plaintext))
   })
 })
 

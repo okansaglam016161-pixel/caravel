@@ -17,13 +17,7 @@
 // lifetime, and picking a dozen photos in a session would leak a dozen.
 
 import { useEffect, useState } from 'react'
-import { MONO } from './chatDisplay'
-
-function readableSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
-}
+import { MONO, readableSize } from './chatDisplay'
 
 export default function AttachPreview({ file, busy, stageLabel, onSend, onCancel }: {
   file: File

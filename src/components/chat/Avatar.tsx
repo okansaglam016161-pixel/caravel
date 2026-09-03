@@ -28,7 +28,7 @@ export default function Avatar({ hex, nickname, size = 42, radius = 12, fontSize
     alignItems: 'center', justifyContent: 'center', flexShrink: 0,
   }
   if (icon) {
-    return <div style={{ ...base, background: bg ?? 'var(--teal-grad)', color: fg ?? 'var(--ink-on-accent)' }}>{icon}</div>
+    return <div style={{ ...base, background: bg ?? 'var(--accent-400)', color: fg ?? 'var(--ink-on-accent)' }}>{icon}</div>
   }
   const av = avatarFor(hex ?? '')
   return <div style={{ ...base, background: av.grad, fontSize, fontWeight: 700, color: av.color }}>{initialsFor(nickname)}</div>

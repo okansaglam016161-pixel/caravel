@@ -199,6 +199,20 @@ export function threadContentKey(
   return `${messages.length}:${pending.map(p => p.status).join(',')}`
 }
 
+// Byte count → "912 B" / "244 KB" / "2.4 MB", for anywhere an attachment's weight is quoted.
+//
+// LIVED IN AttachPreview UNTIL STAGE 9, which needed the same string in the lightbox footer. It is
+// here rather than copied because the two appear at opposite ends of one image's life — the size
+// you agree to send and the size you are offered to download — and a reader comparing them would
+// read a rounding difference as a size difference.
+//
+// Binary units under decimal labels (1 KB = 1024 B), which is what a file manager shows.
+export function readableSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
 // Filename offered when saving an image out of the lightbox (images M5).
 //
 // The decrypted bytes have no name of their own — the original filename is deliberately never sent

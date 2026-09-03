@@ -111,30 +111,14 @@
   --font-mono: "IBM Plex Mono", monospace;
   --font-ui: "Instrument Sans", -apple-system, sans-serif;
 
-  /* ── Legacy aliases — DEPRECATED, do not use in new code ────────────────
-     296 call sites still name the teal-era tokens. Repointing them here keeps
-     this pass a reviewable colour change rather than a 296-site rename; the
-     rename is a separate mechanical commit. Every one of these resolves to
-     its v0.3 equivalent, so nothing reads teal any more. */
-  --teal-500: var(--accent-400);
-  --teal-300: var(--accent-300);
-  --teal-grad-top: var(--accent-300);
-  --teal-grad-bottom: var(--accent-500);
-  --teal-grad: var(--accent-400); /* was a gradient — the brand is flat now */
-  --teal-500-rgb: var(--accent-400-rgb);
-  --acc: var(--accent-400);
-  --accB: var(--accent-300);
-  --accD: var(--accent-500);
-  --accT: var(--accent-300);
-  --accOn: var(--ink-on-accent);
-  --accRGB: var(--accent-400-rgb);
-  --accL: var(--accent-300);
-
-  /* The teal-era --r-* and --space-* names are GONE rather than aliased: a
-     grep across src found zero consumers of either, and keeping --space-6
-     alive would have been actively harmful — it meant 6px here and means
-     6 × 4px = 24px in the foundation. A dead token with a changed meaning is
-     the one kind worth deleting outright. */
+  /* NO LEGACY ALIASES LIVE HERE ANY MORE. The teal-era --r-* and --space-*
+     names were deleted outright at the rebrand — a grep found zero consumers,
+     and keeping --space-6 alive would have been actively harmful, since it
+     meant 6px here and means 6 × 4px = 24px in the foundation. The colour
+     names (--teal-*, --acc*) were aliased instead, to keep that pass a
+     reviewable colour change rather than a 296-site rename; stage 9 finished
+     the rename, and the aliases went the same way once every consumer was
+     gone. Nothing in src names a teal-era token. */
 }
 
 /* ══ DARK ROLE TOKENS — the app-wide default, and any opted-in subtree ═════
@@ -244,10 +228,8 @@
   --avatar-slate: linear-gradient(135deg, #94A3B8, #7789A0);
   --avatar-slate-ink: #0A1322;
   /* Restated per theme rather than resolved once on :root, because their
-     targets are theme-dependent. --text-teal-dim is the deprecated alias of
-     --text-accent-dim and has no consumers left; the other two are current. */
+     targets are theme-dependent. */
   --text-accent-dim: #46648A;
-  --text-teal-dim: #46648A;
   --text-vault-label: var(--vault-label);
 }
 
@@ -286,7 +268,6 @@
   --text-name: #0A1322;
   --text-note: #44566E;
   --text-accent-dim: #7C8CA0;
-  --text-teal-dim: #7C8CA0;
   --text-vault-label: var(--vault-label);
 
   --accent-ink: var(--accent-500);

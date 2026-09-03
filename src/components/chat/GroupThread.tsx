@@ -331,30 +331,32 @@ export default function GroupThread({
           {menuOpen && (
             <>
               <div onClick={closeMenu} style={MENU_SCRIM} />
-              <div style={{ ...MENU_PANEL, minWidth: confirmLeave ? 244 : 200 }}>
+              <div style={{ ...MENU_PANEL, ...(confirmLeave ? { width: 210, minWidth: 0, padding: 12 } : null) }}>
                 {confirmLeave ? (
-                  /* Step 2 — inline confirm, in the same panel. Cancel/Leave reuse the invite card's
-                     neutral/decisive button tokens, danger-toned for the destructive side. */
-                  <div style={{ padding: '5px 6px 6px' }}>
-                    <div style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--text-primary)' }}>Leave this group?</div>
-                    <div style={{ fontSize: 11.5, color: 'var(--text-muted-dim)', lineHeight: 1.45, marginTop: 4, marginBottom: 11 }}>
-                      You'll stop seeing new messages and this chat is hidden for good.
+                  /* Step 2 — §7A·2: the confirm replaces the menu IN PLACE, never a modal. The panel
+                     holds one 210px width across both steps (it used to jump to 244), and the
+                     destructive side is now the design's SOLID danger button rather than a tinted
+                     card — this is the irreversible step, and it should not look like a surface. */
+                  <>
+                    <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-primary)', overflowWrap: 'anywhere' }}>Leave {groupTitle(group)}?</div>
+                    <div style={{ fontSize: 11.5, color: 'var(--text-muted-dim)', lineHeight: 1.5, marginTop: 3, textWrap: 'pretty' }}>
+                      You'll stop seeing new messages. You can be re-invited later.
                     </div>
-                    <div style={{ display: 'flex', gap: 8 }}>
+                    <div style={{ display: 'flex', gap: 7, marginTop: 10 }}>
                       <button
                         onClick={closeMenu}
-                        style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 8, borderRadius: 8, border: '1px solid var(--border-strong)', background: 'transparent', color: 'var(--text-body-dim)', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}
+                        style={{ flex: 1, padding: 7, borderRadius: 8, border: '1px solid var(--border-strong)', background: 'transparent', color: 'var(--text-body-dim)', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}
                       >
                         Cancel
                       </button>
                       <button
                         onClick={() => { closeMenu(); onLeave() }}
-                        style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 8, borderRadius: 8, border: '1px solid var(--card-danger-border)', background: 'var(--card-danger)', color: 'var(--danger-300)', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}
+                        style={{ flex: 1, padding: 7, borderRadius: 8, border: 'none', background: 'var(--danger-500)', color: 'var(--ink-on-accent)', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}
                       >
                         Leave
                       </button>
                     </div>
-                  </div>
+                  </>
                 ) : (
                   /* Step 1 — the menu items. Invite again (neutral) above Leave (danger). */
                   <>

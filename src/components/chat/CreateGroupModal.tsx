@@ -48,7 +48,7 @@ export default function CreateGroupModal({
   const named = name.length > 0
 
   return (
-    <ModalCard title="New group" onClose={onClose} zIndex={200} maxWidth={440}>
+    <ModalCard title="New group" onClose={onClose} maxWidth={440}>
       {/* Name + a live character count. maxLength has always been 48; it used to enforce that
           silently, so a name stopped growing with no explanation. */}
       <div style={{

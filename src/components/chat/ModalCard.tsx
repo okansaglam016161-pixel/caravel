@@ -13,17 +13,19 @@
 //   whole purpose is to hold arbitrary content. Nothing in these three modals is absolutely
 //   positioned today; the point is that nothing has to think about it tomorrow.
 //
-//   ── zIndex IS A PROP, DELIBERATELY ───────────────────────────────────────────
+//   ── zIndex IS SETTLED (stage 7) ──────────────────────────────────────────────
 //
-//   The app's stacking ladder is currently 40/41 for popovers, 60 for the chat modals, 100 for the
-//   lightbox, 150/151 for the relay panel and 200/201 for the group modals. Nothing is broken, but
-//   the relay panel sitting above the lightbox is arbitrary rather than decided. Rationalising it is
-//   its own change; until then this component CARRIES the difference rather than hiding it behind a
-//   constant that would quietly pick a winner.
+//   The ladder used to be 40/41 popovers, 60 chat modals, 100 lightbox, 150/151 relay panel and
+//   200/201 group modals — which put the relay panel above the lightbox for no reason anyone chose.
+//   Stage 7 decided it: 100 popovers, 200 panels, 300 modals, 400 sheets, 500 lightbox. Every
+//   caller of this component is a modal, so the tier is a constant here rather than a prop; the
+//   prop only ever existed because the ladder was unsettled, and nothing is left for it to say.
 
 import type { ReactNode } from 'react'
 
-export default function ModalCard({ title, subtitle, onClose, zIndex, maxWidth = 420, children }: {
+const MODAL_Z = 300
+
+export default function ModalCard({ title, subtitle, onClose, maxWidth = 420, children }: {
   title: string
   /**
    * A second line under the title, inside the header. Re-invite names its group here.
@@ -34,8 +36,6 @@ export default function ModalCard({ title, subtitle, onClose, zIndex, maxWidth =
    */
   subtitle?: string
   onClose: () => void
-  /** See the note above — the ladder is not settled, so each caller states its own. */
-  zIndex: number
   maxWidth?: number
   children: ReactNode
 }) {
@@ -43,7 +43,7 @@ export default function ModalCard({ title, subtitle, onClose, zIndex, maxWidth =
     <div
       onClick={onClose}
       style={{
-        position: 'fixed', inset: 0, zIndex,
+        position: 'fixed', inset: 0, zIndex: MODAL_Z,
         display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24,
         background: 'rgba(5,8,14,0.78)', backdropFilter: 'blur(3px)',
       }}

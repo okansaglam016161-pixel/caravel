@@ -95,12 +95,12 @@ export default function EmojiPicker({ onPick, onClose, placement = 'above', alig
     <>
       {/* Click-away, matching the conversation ⋯ menu: a full-screen scrim under the panel. It also
           swallows the first click on the composer, which is the established behaviour here. */}
-      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 100 }} />
       <div
         ref={panelRef}
         style={{
           ...panelStyle,
-          zIndex: 41,
+          zIndex: 101,
           width: COLUMNS * CELL + 24, padding: 10, borderRadius: 13,
           background: 'var(--surface-raised)', border: '1px solid var(--border)',
           boxShadow: 'var(--e3)',

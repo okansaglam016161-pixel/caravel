@@ -54,10 +54,10 @@ export const THREAD_TITLE: CSSProperties = {
 export const MENU_BTN = 28
 export const MENU_TOP = MENU_BTN + 6
 
-export const MENU_SCRIM: CSSProperties = { position: 'fixed', inset: 0, zIndex: 40 }
+export const MENU_SCRIM: CSSProperties = { position: 'fixed', inset: 0, zIndex: 100 }
 
 export const MENU_PANEL: CSSProperties = {
-  position: 'absolute', top: MENU_TOP, right: 0, zIndex: 41, minWidth: 200, padding: 6,
+  position: 'absolute', top: MENU_TOP, right: 0, zIndex: 101, minWidth: 200, padding: 6,
   borderRadius: 11, background: 'var(--surface-raised)',
   border: '1px solid var(--border)', boxShadow: 'var(--e3)',
 }

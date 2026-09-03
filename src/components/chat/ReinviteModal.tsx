@@ -69,7 +69,6 @@ export default function ReinviteModal({
       title="Re-invite members"
       subtitle={`Invite people back into ${groupName}`}
       onClose={onClose}
-      zIndex={200}
       maxWidth={440}
     >
       <div style={{ fontSize: 12.5, color: 'var(--text-muted-dim)', lineHeight: 1.5, flexShrink: 0 }}>

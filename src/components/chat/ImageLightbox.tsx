@@ -46,7 +46,7 @@ export default function ImageLightbox({ url, filename, caption, onClose }: {
     <div
       onClick={onClose}   // click-outside closes; the image below stops propagation
       style={{
-        position: 'fixed', inset: 0, zIndex: 100,
+        position: 'fixed', inset: 0, zIndex: 500,
         // dvh, not vh: on iOS Safari 100vh is taller than the visible area because of the address
         // bar, which would push the controls off-screen.
         height: '100dvh',

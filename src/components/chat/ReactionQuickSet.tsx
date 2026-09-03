@@ -46,7 +46,7 @@ export default function ReactionQuickSet({ mine, blocked, pending, align, onPick
   return (
     <>
       {/* Click-away, the same scrim shape the conversation ⋯ menu and the composer picker use. */}
-      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 100 }} />
 
       {full ? (
         <EmojiPicker onPick={onPick} onClose={onClose} placement="above" align={align} offset={OFFSET} />
@@ -55,7 +55,7 @@ export default function ReactionQuickSet({ mine, blocked, pending, align, onPick
           ref={rowRef}
           style={{
             ...rowStyle,
-            zIndex: 41,
+            zIndex: 101,
             // max-content, NOT the default shrink-to-fit. An absolutely positioned box sizes against
             // `containing block width − offsets`, and the containing block here is the 26px action
             // button — so `auto` would squeeze the row toward its min-content width and crush the

@@ -2274,7 +2274,7 @@ export default function ChatApp() {
       const fieldActive = r.s === 'resolving' || r.s === 'ok'
       const av = okHex ? avatarFor(okHex) : null
       return (
-      <ModalCard title="New conversation" onClose={() => setComposeOpen(false)} zIndex={60} maxWidth={420}>
+      <ModalCard title="New conversation" onClose={() => setComposeOpen(false)} maxWidth={420}>
         <div style={{ fontSize: 12.5, color: 'var(--text-muted-dim)', marginTop: -6 }}>Enter an npub or an @name</div>
 
         <div style={{
@@ -2387,41 +2387,44 @@ export default function ChatApp() {
       )
     })()}
 
-    {/* Delete-conversation confirmation — destructive, localStorage is the only copy */}
+    {/* Delete-conversation confirmation — destructive, localStorage is the only copy.
+        §7A·1 draws this on the SHARED modal frame, not as a bespoke danger card: the warning-icon
+        tile and the danger-tinted border are gone, and a peer identity row does that work instead —
+        it says WHICH conversation and how much of it, which a red triangle never did.
+        THE BODY COPY IS OURS, DELIBERATELY. The design's own draft reads "Messages are end-to-end
+        encrypted, so they cannot be recovered" — encryption is not why: this device holds the only
+        copy. Ours names what actually goes (messages, nickname, payment history) and why. */}
     {confirmDelete && selectedConvo && (
-      <div
-        onClick={() => setConfirmDelete(false)}
-        style={{ position: 'fixed', inset: 0, zIndex: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(4,7,12,0.72)', padding: 24 }}
-      >
-        <div
-          onClick={e => e.stopPropagation()}
-          style={{ width: '100%', maxWidth: 420, padding: '24px 24px 20px', borderRadius: 16, background: 'var(--surface-raised)', border: '1px solid rgba(var(--danger-rgb),0.3)', boxShadow: 'var(--e3)' }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 14 }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 40, height: 40, borderRadius: 11, background: 'rgba(var(--danger-rgb),0.12)', flexShrink: 0 }}>
-              <svg width={20} height={20} viewBox="0 0 24 24" fill="none" stroke="var(--danger-500)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /><path d="M10 11v6M14 11v6" /></svg>
+      <ModalCard title="Delete conversation" onClose={() => setConfirmDelete(false)} maxWidth={420}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '12px 13px', borderRadius: 12, background: 'var(--surface-base)', border: '1px solid var(--border)' }}>
+          {/* Our generated per-peer tile, not the design's flat blue swatch — the identity system
+              stage 2 settled is the whole point of an avatar appearing here at all. */}
+          <Avatar hex={selectedConvo.peerHex} nickname={nicknames[selectedConvo.peerHex]} size={32} radius={99} fontSize={12} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{displayName(selectedConvo.peerHex)}</div>
+            <div style={{ fontSize: 11.5, color: 'var(--text-muted-dim)', marginTop: 1 }}>
+              Direct conversation · {selectedConvo.messages.length} message{selectedConvo.messages.length === 1 ? '' : 's'}
             </div>
-            <div style={{ fontSize: 17, fontWeight: 700, color: 'var(--text-primary)' }}>Delete conversation?</div>
-          </div>
-          <div style={{ fontSize: 14, color: 'var(--text-body-dim)', lineHeight: 1.6, marginBottom: 20 }}>
-            All messages, the nickname, and payment history with <b style={{ color: 'var(--text-name)' }}>{displayName(selectedConvo.peerHex)}</b> will be permanently removed from this device and <b style={{ color: 'var(--danger-300)' }}>cannot be recovered</b>. The other person keeps their copy.
-          </div>
-          <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
-            <button
-              onClick={() => setConfirmDelete(false)}
-              style={{ padding: '10px 18px', borderRadius: 9, border: '1px solid var(--border-strong)', background: 'transparent', color: 'var(--text-muted-dim)', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}
-            >
-              Cancel
-            </button>
-            <button
-              onClick={performDelete}
-              style={{ padding: '10px 18px', borderRadius: 9, border: 'none', background: 'var(--danger-500)', color: 'var(--ink-on-accent)', fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}
-            >
-              Delete
-            </button>
           </div>
         </div>
-      </div>
+        <div style={{ fontSize: 12.5, color: 'var(--text-body-dim)', lineHeight: 1.55, textWrap: 'pretty' }}>
+          All messages, the nickname, and payment history with <b style={{ color: 'var(--text-name)' }}>{displayName(selectedConvo.peerHex)}</b> will be permanently removed from this device and <b style={{ color: 'var(--danger-300)' }}>cannot be recovered</b>. The other person keeps their copy.
+        </div>
+        <div style={{ display: 'flex', gap: 9, marginTop: 2 }}>
+          <button
+            onClick={() => setConfirmDelete(false)}
+            style={{ flex: 1, padding: 11, borderRadius: 11, border: '1px solid var(--border-strong)', background: 'transparent', color: 'var(--text-body-dim)', fontSize: 13.5, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}
+          >
+            Cancel
+          </button>
+          <button
+            onClick={performDelete}
+            style={{ flex: 1, padding: 11, borderRadius: 11, border: 'none', background: 'var(--danger-500)', color: 'var(--ink-on-accent)', fontSize: 13.5, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}
+          >
+            Delete
+          </button>
+        </div>
+      </ModalCard>
     )}
     </>
   )

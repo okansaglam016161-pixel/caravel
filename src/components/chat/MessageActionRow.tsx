@@ -76,10 +76,10 @@ export default function MessageActionRow({ onReact, reactOpen, reactPopover, onR
             <>
               {/* Same scrim shape as the conversation ⋯ menu and both pickers, so every popover in
                   the app dismisses identically. */}
-              <div onClick={() => setMenuOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+              <div onClick={() => setMenuOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 100 }} />
               <div
                 style={{
-                  position: 'absolute', top: 30, zIndex: 41, minWidth: 150, padding: 5,
+                  position: 'absolute', top: 30, zIndex: 101, minWidth: 150, padding: 5,
                   ...(menuAlign === 'left' ? { left: 0 } : { right: 0 }),
                   borderRadius: 10, background: 'var(--surface-raised)',
                   border: '1px solid var(--border)', boxShadow: 'var(--e3)',

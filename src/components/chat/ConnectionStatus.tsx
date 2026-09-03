@@ -62,7 +62,13 @@ export function ConnectionIndicator({ status, connected, total, onClick }: {
         {lead}
         <span style={{ fontSize: 11.5, color: labelC, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
       </div>
-      <span style={{ fontFamily: MONO, fontSize: 10.5, color: countC, flexShrink: 0 }}>{count}</span>
+      {/* The COUNT is ours — §7B's strip drops it, and "3/3" is the one thing this line can say at
+          a glance that the label can't. The CHEVRON is the design's, and deliberately NEUTRAL:
+          the dot and the label already carry status, so this one says only "this opens". */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+        <span style={{ fontFamily: MONO, fontSize: 10.5, color: countC }}>{count}</span>
+        <svg width={11} height={11} viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, transform: 'rotate(180deg)' }}><path d="M6 9l6 6 6-6" /></svg>
+      </div>
     </div>
   )
 }
@@ -84,60 +90,78 @@ export function RelayHealthPanel({ getRelayStates, reconnectAll, onClose }: {
   const connected = states.filter(s => s.status === 'connected').length
   const healthy = total > 0 && connected === total
 
+  // §7B paints a connected relay with --pos on BOTH the dot and its status text. The dot was
+  // --teal-500 (the accent, not the health colour) and the text --text-teal-dim (#46648A — a slate,
+  // not a green at all), so a healthy relay never actually read as healthy.
   const rowDot = (s: RelayState) => {
-    if (s.status === 'connected') return 'var(--teal-500)'
+    if (s.status === 'connected') return 'var(--positive)'
     if (s.status === 'failed') return 'var(--danger-500)'
     return 'var(--warn)' // connecting / closed → reconnecting
   }
+  // Three states, three strings — the design spells the good one out ("Connected · 12s ago") and
+  // leaves the other two as bare words. A failed relay no longer shows a stale last-seen clock:
+  // the dot and the word are the whole story, and a time there read as if it were still alive.
   const rowText = (s: RelayState): { t: string; c: string } => {
-    if (s.status === 'connected') return { t: ago(s.lastHeartbeatOk), c: 'var(--text-teal-dim)' }
-    if (s.status === 'failed') return { t: s.lastHeartbeatOk ? ago(s.lastHeartbeatOk) : 'failed', c: 'var(--danger-300)' }
-    return { t: 'reconnecting', c: 'var(--warn-300)' }
+    if (s.status === 'connected') return { t: `Connected · ${ago(s.lastHeartbeatOk)}`, c: 'var(--positive)' }
+    if (s.status === 'failed') return { t: 'Failed', c: 'var(--danger-500)' }
+    return { t: 'Reconnecting', c: 'var(--warn)' }
   }
 
   return (
     <>
-      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 150 }} />
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 200 }} />
+      {/* §7B — ONE FLAT CARD. The V2 panel had a two-region build: a radial-gradient hero header
+          with its own border-bottom, then a padded list. The design draws neither — a plain hairline
+          box at 16px padding, with the health colour carried by the icon tile and the rows rather
+          than by the container's border. */}
       <div style={{
-        position: 'absolute', top: 8, left: 16, right: 16, zIndex: 151,
-        borderRadius: 16, background: 'var(--surface)',
-        border: `1px solid ${healthy ? 'rgba(var(--teal-500-rgb),0.22)' : 'rgba(var(--warn-rgb),0.26)'}`,
-        boxShadow: 'var(--e3)', overflow: 'hidden',
+        position: 'absolute', top: 8, left: 16, right: 16, zIndex: 201,
+        borderRadius: 14, background: 'var(--surface)', border: '1px solid var(--border)',
+        boxShadow: 'var(--e3)', padding: 16,
       }}>
-        {/* header */}
-        <div style={{ padding: '18px 18px 16px', background: `radial-gradient(300px 140px at 50% 0%, rgba(var(--${healthy ? 'teal-500' : 'warn'}-rgb),0.1), rgba(var(--${healthy ? 'teal-500' : 'warn'}-rgb),0))`, borderBottom: '1px solid var(--border)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
-            <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 26, height: 26, borderRadius: 8, background: `rgba(var(--${healthy ? 'teal-500' : 'warn'}-rgb),0.14)`, border: `1px solid rgba(var(--${healthy ? 'teal-500' : 'warn'}-rgb),0.3)` }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+          {/* One glyph for both states — the design swaps only the tile's fill and ink, so healthy
+              and degraded stay the same shape and the colour does the talking. */}
+          <span style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            width: 28, height: 28, borderRadius: 9, flexShrink: 0,
+            background: healthy ? 'rgba(var(--positive-rgb),0.12)' : 'rgba(var(--warn-rgb),0.12)',
+            color: healthy ? 'var(--positive)' : 'var(--warn)',
+          }}>
+            <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round"><path d="M5 12.5a7 7 0 0 1 14 0" /><path d="M8.5 15.5a4 4 0 0 1 7 0" /><path d="M12 18.5h.01" /></svg>
+          </span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--text-primary)' }}>{healthy ? 'Privately connected' : 'Still connected'}</div>
+            {/* OUR sentence, at the design's type scale. §7B's own sub is "All 3 relays connected",
+                which the rows below already say — and it drops "relayed blind", which is the claim
+                this panel exists to make. The colour is --text-muted-dim (the design's --muted);
+                it was --text-muted, which maps to the design's --text2, one step too bright. */}
+            <div style={{ fontSize: 11.5, color: 'var(--text-muted-dim)', marginTop: 1, lineHeight: 1.5, textWrap: 'pretty' }}>
               {healthy
-                ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--teal-500)" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
-                : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--warn)" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 8v5M12 17h.01" /><circle cx="12" cy="12" r="9" /></svg>}
-            </span>
-            <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-bright)' }}>{healthy ? 'Privately connected' : 'Still connected'}</span>
-          </div>
-          <div style={{ fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.5 }}>
-            {healthy
-              ? `Connected to ${connected} of ${total} relays. Your messages are relayed blind.`
-              : `Connected to ${connected} of ${total} relays. Messages still send, delivery may be slower.`}
+                ? `Connected to ${connected} of ${total} relays. Your messages are relayed blind.`
+                : `Connected to ${connected} of ${total} relays. Messages still send, delivery may be slower.`}
+            </div>
           </div>
         </div>
-        {/* per-relay list */}
-        <div style={{ padding: 8 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: 12 }}>
           {states.map((s) => {
             const rt = rowText(s)
             return (
-              <div key={s.url} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 12px', borderRadius: 10 }}>
+              <div key={s.url} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 6px', borderRadius: 8 }}>
                 <span style={{ width: 7, height: 7, borderRadius: '50%', background: rowDot(s), flexShrink: 0 }} />
-                <span style={{ flex: 1, fontFamily: MONO, fontSize: 12, color: s.status === 'connected' ? 'var(--text-body-dim)' : rt.c, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{hostname(s.url)}</span>
-                <span style={{ fontFamily: MONO, fontSize: 11, color: rt.c, flexShrink: 0 }}>{rt.t}</span>
+                <span style={{ flex: 1, fontFamily: MONO, fontSize: 11.5, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{hostname(s.url)}</span>
+                {/* Sans, not mono: the host is the machine-readable half of the row, the status is
+                    prose about it, and the design sets them in different faces for that reason. */}
+                <span style={{ fontSize: 11, fontWeight: 600, color: rt.c, flexShrink: 0 }}>{rt.t}</span>
               </div>
             )
           })}
-          {!healthy && (
-            <div onClick={reconnectAll} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, margin: '6px 4px 2px', padding: '11px', borderRadius: 11, background: 'var(--surface-raised)', border: '1px solid rgba(var(--teal-500-rgb),0.24)', color: 'var(--text-bright)', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--teal-500)" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v5h-5" /></svg>Reconnect all
-            </div>
-          )}
         </div>
+        {!healthy && (
+          <div onClick={reconnectAll} style={{ textAlign: 'center', padding: 9, borderRadius: 10, border: '1px solid var(--border-strong)', color: 'var(--text-body-dim)', fontSize: 12.5, fontWeight: 600, cursor: 'pointer', marginTop: 10 }}>
+            Reconnect all
+          </div>
+        )}
       </div>
     </>
   )

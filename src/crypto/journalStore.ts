@@ -15,15 +15,32 @@
 // returns whether it landed, and the first failure stamps the epoch as degraded — permanently, and
 // for that wallet only.
 //
-// ── PLAINTEXT, FOR NOW ───────────────────────────────────────────────────────
+// ── ENCRYPTED AT REST ────────────────────────────────────────────────────────
 //
-// REVISIT BEFORE MAINNET. This file writes, unencrypted, to disk: every recipient address, every
-// amount, every note, and a complete private↔public movement history that the chain deliberately
-// conceals. It is consistent with how messages and txHistory are already stored — only the seed is
-// encrypted at rest — but it is a larger disclosure than either, because it is the one record that
-// reconstructs what the confidentiality was hiding. The primitives to encrypt it under the unlock
-// password already exist in walletCrypto.ts; the cost is a journal unreadable while locked.
+// The entry list is sealed under the session store key (sessionKey.ts) through storeCrypto's
+// envelope. This file used to write every recipient address, every amount, every note and a
+// complete private↔public movement history to disk in the clear — the one record that reconstructs
+// what the chain's confidentiality was hiding — and it was the first store fixed for exactly that
+// reason.
+//
+// The cost is as predicted: a journal unreadable while locked. Nothing reads it while locked
+// (journalSnapshot short-circuits on a null address), so the cost is theoretical today.
+//
+// MIGRATION IS LAZY AND PER RECORD. A journal written before this reads through storeCrypto's v1
+// passthrough and is re-emitted sealed by the next write — and since every write already rewrites
+// the whole array, migration is a side effect of ordinary use rather than a sweep. Nothing is ever
+// wiped.
+//
+// STILL PLAINTEXT, DELIBERATELY: the epoch below. It is the channel that RECORDS a failed write, so
+// making it depend on the same key and the same cipher as the thing whose failure it records would
+// couple the alarm to the fault. It is also metadata — timestamps and action kinds — not the
+// movement history this file exists to protect.
+//
+// The remaining stores (txHistory, messages, the ledger, the messaging maps) are still plaintext
+// and are the subject of later stages. This one is done.
 
+import { getStoreKey } from './sessionKey'
+import { open, seal } from './storeCrypto'
 import {
   applyPatch, coverageComplete, draftToEntry,
   type JournalDraft, type JournalEntry, type JournalEpoch, type JournalPatch,
@@ -62,20 +79,72 @@ function fromRaw(r: EntryRaw): JournalEntry {
 function key(walletAddress: string) { return `caravel.journal.v1.${walletAddress}` }
 function epochKey(walletAddress: string) { return `caravel.journal.epoch.v1.${walletAddress}` }
 
-export function loadJournal(walletAddress: string): JournalEntry[] {
+/**
+ * The stored value, decided: readable entries, nothing there, or present-but-unopenable.
+ *
+ * `loadJournal` flattens the last two to `[]` because a display path has nothing useful to do with
+ * the difference. `save` does not — see the note there.
+ */
+type ReadResult =
+  | { status: 'ok'; entries: JournalEntry[] }
+  | { status: 'empty' }
+  | { status: 'unreadable' }
+
+function read(walletAddress: string): ReadResult {
+  let raw: string | null
   try {
-    const raw = localStorage.getItem(key(walletAddress))
-    if (!raw) return []
-    const parsed = JSON.parse(raw) as EntryRaw[]
-    if (!Array.isArray(parsed)) return []
-    return parsed.map(fromRaw)
-  } catch { return [] }
+    raw = localStorage.getItem(key(walletAddress))
+  } catch {
+    return { status: 'unreadable' }   // storage disabled — not "no journal"
+  }
+
+  const opened = open(getStoreKey(), raw)
+  if (opened.status !== 'ok') return opened
+
+  try {
+    const parsed = JSON.parse(opened.json) as EntryRaw[]
+    // A decrypted payload that is not an array is a corrupt record, not an empty journal — the
+    // distinction matters because save() refuses to overwrite the former.
+    if (!Array.isArray(parsed)) return { status: 'unreadable' }
+    return { status: 'ok', entries: parsed.map(fromRaw) }
+  } catch {
+    return { status: 'unreadable' }
+  }
 }
 
-/** Returns false when the write did not land — the caller stamps the epoch. */
+export function loadJournal(walletAddress: string): JournalEntry[] {
+  const result = read(walletAddress)
+  return result.status === 'ok' ? result.entries : []
+}
+
+/**
+ * Returns false when the write did not land — the caller stamps the epoch.
+ *
+ * TWO REFUSALS BEFORE THE WRITE IS EVEN ATTEMPTED, and both report failure the same way a quota
+ * error does, so the existing degradation contract carries them without changing.
+ *
+ * 1. NO STORE KEY. Falling back to plaintext would defeat the entire point, and throwing would take
+ *    down a send that has already left the wallet. "Not recorded" is the honest outcome and the
+ *    epoch exists to say it. This should not happen while unlocked — sessionKey is set before
+ *    adoptIdentity — so reaching it means something is wrong and degrading is correct.
+ *
+ * 2. THE CURRENT RECORD IS PRESENT BUT UNREADABLE. This is the guard against silent total loss. A
+ *    key that is present but WRONG — a re-minted salt — makes read() return `unreadable`, which
+ *    loadJournal flattens to `[]`; beginEntry would then build a one-row array from that emptiness
+ *    and this function would encrypt it perfectly well and overwrite an entire history it never
+ *    understood. Refusing to write over bytes we could not read is what keeps the migration
+ *    lossless in the one case where it could silently not be.
+ *
+ * Note that both refusals are consistent with what read() would return, and that consistency is the
+ * invariant: if the load path cannot read a record, the save path must not replace it.
+ */
 function save(walletAddress: string, entries: JournalEntry[]): boolean {
+  const storeKey = getStoreKey()
+  if (storeKey === null) return false
+  if (read(walletAddress).status === 'unreadable') return false
+
   try {
-    localStorage.setItem(key(walletAddress), JSON.stringify(entries.map(toRaw)))
+    localStorage.setItem(key(walletAddress), seal(storeKey, JSON.stringify(entries.map(toRaw))))
     return true
   } catch { return false }
 }

@@ -12,6 +12,8 @@ import {
   settleEntry, subscribeJournal,
 } from './journalStore'
 import { OUTPUT_CREATING_ACTIONS, journalCovers, type JournalDraft } from './journal'
+import { clearStoreKey, setStoreKey } from './sessionKey'
+import { seal } from './storeCrypto'
 
 // localStorage does not exist under Vitest's node environment — the same in-memory Storage the
 // other crypto specs use, with a switch that makes writes start failing on demand.
@@ -46,10 +48,16 @@ const DRAFT: JournalDraft = {
   selfOutputIds: null,
 }
 
+// The journal is sealed at rest from stage 2 on, so these specs run against the ENCRYPTED path —
+// every degradation and round-trip rule below is now verified through real XChaCha20-Poly1305
+// rather than over bare JSON. A fixed key keeps them deterministic.
+const STORE_KEY = new Uint8Array(32).fill(42)
+
 beforeEach(() => {
   failWrites = false
   globalThis.localStorage = memoryStorage()
   __resetSessionDegradationsForTests()
+  setStoreKey(Uint8Array.from(STORE_KEY))
 })
 
 describe('round-trip', () => {
@@ -318,5 +326,147 @@ describe('recordCoverage — the writer stage D will call', () => {
   it('is per wallet', () => {
     recordCoverage(ADDR, OUTPUT_CREATING_ACTIONS, 5_000)
     expect(loadEpoch(OTHER)).toBeNull()
+  })
+})
+
+
+// ── At rest (stage 2) ─────────────────────────────────────────────────────────
+
+describe('encryption at rest', () => {
+  const JOURNAL_KEY = 'caravel.journal.v1.' + ADDR
+
+  it('writes ciphertext, not readable JSON', () => {
+    beginEntry(ADDR, { ...DRAFT, note: 'lunch with mira', counterparty: { kind: 'address', value: 'otl_esm_1recipient' } })
+    const stored = localStorage.getItem(JOURNAL_KEY)!
+    // The three things the plaintext would have leaked: the note, the recipient, the amount.
+    expect(stored).not.toContain('lunch with mira')
+    expect(stored).not.toContain('otl_esm_1recipient')
+    expect(stored).not.toContain('1500000')
+    expect(JSON.parse(stored).v).toBe(2)
+  })
+
+  it('leaves the epoch in plaintext — it is the channel that reports a failed write', () => {
+    beginEntry(ADDR, DRAFT)
+    const epoch = localStorage.getItem('caravel.journal.epoch.v1.' + ADDR)!
+    expect(JSON.parse(epoch).startedAt).toEqual(expect.any(Number))
+  })
+
+  it('cannot be read with a different key', () => {
+    beginEntry(ADDR, DRAFT)
+    setStoreKey(new Uint8Array(32).fill(7))
+    expect(loadJournal(ADDR)).toEqual([])
+  })
+
+  it('cannot be read with no key at all', () => {
+    beginEntry(ADDR, DRAFT)
+    clearStoreKey()
+    expect(loadJournal(ADDR)).toEqual([])
+  })
+})
+
+describe('migration from plaintext', () => {
+  const JOURNAL_KEY = 'caravel.journal.v1.' + ADDR
+
+  // A journal exactly as a pre-stage-2 build left it on a real device: a bare JSON array.
+  function seedLegacy() {
+    localStorage.setItem(JOURNAL_KEY, JSON.stringify([{
+      id: 'legacy-1', kind: 'send', timestamp: 1_000, txId: 'txLegacy', outcome: 'committed',
+      amountMicrotari: '2500000', feeMicrotari: '14457', from: 'private', to: 'external',
+      counterparty: { kind: 'address', value: 'otl_esm_1old' }, note: 'older payment',
+      source: 'local-journal', selfOutputIds: ['utxo_old'],
+    }]))
+  }
+
+  it('reads a plaintext journal written before encryption existed', () => {
+    seedLegacy()
+    const [entry] = loadJournal(ADDR)
+    expect(entry.id).toBe('legacy-1')
+    expect(entry.note).toBe('older payment')
+    // The bigint mapping still applies on the legacy path — it is the same fromRaw either way.
+    expect(entry.amountMicrotari).toBe(2_500_000n)
+    expect(entry.feeMicrotari).toBe(14_457n)
+  })
+
+  it('re-emits the whole journal SEALED on the next write, losing nothing', () => {
+    seedLegacy()
+    expect(Array.isArray(JSON.parse(localStorage.getItem(JOURNAL_KEY)!))).toBe(true)
+
+    const { ok } = beginEntry(ADDR, DRAFT)
+    expect(ok).toBe(true)
+
+    // Now sealed...
+    expect(JSON.parse(localStorage.getItem(JOURNAL_KEY)!).v).toBe(2)
+    // ...and the legacy row survived it intact, alongside the new one.
+    const entries = loadJournal(ADDR)
+    expect(entries).toHaveLength(2)
+    const legacy = entries.find(e => e.id === 'legacy-1')!
+    expect(legacy.note).toBe('older payment')
+    expect(legacy.amountMicrotari).toBe(2_500_000n)
+    expect(legacy.selfOutputIds).toEqual(['utxo_old'])
+  })
+
+  it('migrates on a settle as well as on a begin', () => {
+    seedLegacy()
+    const res = settleEntry(ADDR, 'legacy-1', { outcome: 'rejected' })
+    expect(res).toEqual({ ok: true, found: true })
+    expect(JSON.parse(localStorage.getItem(JOURNAL_KEY)!).v).toBe(2)
+    expect(loadJournal(ADDR)[0].outcome).toBe('rejected')
+  })
+})
+
+describe('refusing to write — the no-key and never-clobber guards', () => {
+  const JOURNAL_KEY = 'caravel.journal.v1.' + ADDR
+
+  it('will not write with no store key, and degrades instead', () => {
+    clearStoreKey()
+    const { ok } = beginEntry(ADDR, DRAFT)
+    expect(ok).toBe(false)
+    expect(loadEpoch(ADDR)!.degradedAt).toEqual(expect.any(Number))
+    expect(localStorage.getItem(JOURNAL_KEY)).toBeNull()
+  })
+
+  it('NEVER OVERWRITES A RECORD IT COULD NOT READ', () => {
+    // The silent-total-loss path this guard exists for: a key that is present but WRONG reads as
+    // empty, and without the guard the next action would append one row to that emptiness and
+    // encrypt it over the entire history.
+    beginEntry(ADDR, { ...DRAFT, note: 'the history that must survive' })
+    const original = localStorage.getItem(JOURNAL_KEY)!
+
+    setStoreKey(new Uint8Array(32).fill(7))     // re-minted salt, in effect
+    expect(loadJournal(ADDR)).toEqual([])        // reads as empty...
+
+    const { ok } = beginEntry(ADDR, DRAFT)
+    expect(ok).toBe(false)                       // ...but refuses to write
+    expect(localStorage.getItem(JOURNAL_KEY)).toBe(original)   // ciphertext untouched
+    expect(loadEpoch(ADDR)!.degradedAt).toEqual(expect.any(Number))
+
+    // And the history is still there for the right key.
+    setStoreKey(Uint8Array.from(STORE_KEY))
+    expect(loadJournal(ADDR)[0].note).toBe('the history that must survive')
+  })
+
+  it('will not clobber a corrupt record either', () => {
+    localStorage.setItem(JOURNAL_KEY, '{not json')
+    const { ok } = beginEntry(ADDR, DRAFT)
+    expect(ok).toBe(false)
+    expect(localStorage.getItem(JOURNAL_KEY)).toBe('{not json')
+  })
+
+  it('still writes normally over an EMPTY store — absence is not unreadable', () => {
+    // The guard must not turn a first-ever write into a refusal.
+    expect(localStorage.getItem(JOURNAL_KEY)).toBeNull()
+    expect(beginEntry(ADDR, DRAFT).ok).toBe(true)
+    expect(loadJournal(ADDR)).toHaveLength(1)
+  })
+
+  it('reads a sealed record written under the same key by another path', () => {
+    // Pins the envelope boundary: journalStore must read anything storeCrypto sealed, not just what
+    // journalStore itself wrote.
+    localStorage.setItem(JOURNAL_KEY, seal(STORE_KEY, JSON.stringify([{
+      id: 'external-1', kind: 'faucet', timestamp: 5, txId: null, outcome: 'pending',
+      amountMicrotari: null, feeMicrotari: null, from: null, to: 'private',
+      counterparty: null, note: null, source: 'local-journal', selfOutputIds: null,
+    }])))
+    expect(loadJournal(ADDR)[0].id).toBe('external-1')
   })
 })

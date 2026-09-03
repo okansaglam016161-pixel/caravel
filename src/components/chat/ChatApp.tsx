@@ -20,10 +20,13 @@ import { beginEntry, settleEntry } from '../../crypto/journalStore'
 import { resolveOnsNameToHex, toOnsName, type OnsResolveErrorKind } from '../../crypto/ons'
 import { ConnectionIndicator, RelayHealthPanel } from './ConnectionStatus'
 import { usePaymentResolution } from '../../hooks/usePaymentResolution'
-import { isInsufficientBalance } from './paymentGuard'
+import { balanceIsLowerBound, isInsufficientBalance } from './paymentGuard'
 // The wallet's amount formatters, bigint-only — shared rather than re-derived, which is the whole
-// point of format.ts having been written.
-import { fmt2, fmt6 } from '../wallet/v2/format'
+// point of format.ts having been written. MASK_SHORT is the same stand-in its balance rows use.
+import { fmt6, MASK_SHORT } from '../wallet/v2/format'
+// The wallet's own sentence for "this figure came off a truncated scan". Shared, not retyped: its
+// note says there is one wording precisely so the two surfaces cannot drift apart on the claim.
+import { incompleteAvailableNote } from '../wallet/v2/total'
 import { avatarFor, initialsFor, truncNpub, bubbleTime, compactTime, dayLabel, isNewDay, mergeThreadItems, replyChipDetail, threadContentKey, MONO } from './chatDisplay'
 import Avatar from './Avatar'
 import MessageBubble from './MessageBubble'
@@ -163,12 +166,45 @@ const COMPOSER_MAX_H = 120
 // cards used to disagree — 12/r11 on one, 13/r12 on the other — for the same Cancel/commit pair.
 const PAY_BTN: CSSProperties = {
   display: 'flex', alignItems: 'center', justifyContent: 'center',
-  padding: 12, borderRadius: 10, fontSize: 14, fontWeight: 600, fontFamily: 'inherit',
+  padding: 9, borderRadius: 10, fontSize: 12.5, fontWeight: 600, fontFamily: 'inherit',
 }
 
-// Fee ceiling shown in the confirm step. Reuses confidentialSend.MAX_FEE and the wallet's trimmed
-// format so both surfaces render the identical "≤ 0.01 TARI".
-const FEE_CEIL_TARI = (Number(MAX_FEE) / 1_000_000).toString()
+/**
+ * The inline payment panel (§8B) — ONE shell for compose and for confirm.
+ *
+ * It opens in the composer's own slot, over the composer, and is never a modal or a screen. The
+ * shadow points UPWARD, which is the whole cue: this sheet has risen over the input rather than
+ * floating above the page. Sitting inside COMPOSER_SHELL already, it takes no margin of its own.
+ */
+const PAY_PANEL: CSSProperties = {
+  display: 'flex', flexDirection: 'column', gap: 11,
+  padding: '14px 16px', borderRadius: 14, marginBottom: 12,
+  background: 'var(--surface)', boxShadow: '0 -8px 24px -12px rgba(10,19,34,0.18)',
+}
+
+// Compose and confirm are the same panel with its contents swapped, so they share one header —
+// the padlock tile, the name, and the × that leaves payment mode altogether.
+function PayPanelHeader({ onClose }: { onClose: () => void }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 22, height: 22, borderRadius: 7, flexShrink: 0, background: 'var(--accent-wash)', color: 'var(--accent-ink)' }}>
+        <svg width={10} height={10} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round"><rect x={5} y={11} width={14} height={9} rx={2} /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></svg>
+      </span>
+      <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>Confidential payment</span>
+      <button onClick={onClose} title="Cancel payment" aria-label="Cancel payment" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted-dim)', display: 'flex', padding: 2, flexShrink: 0 }}>
+        <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12" /></svg>
+      </button>
+    </div>
+  )
+}
+
+// Fee ceiling shown in the confirm step, from confidentialSend.MAX_FEE.
+//
+// fmt6 rather than `Number(MAX_FEE) / 1_000_000` — the third instance of the pattern 8A removed.
+// Constant-folded, so it could never have been wrong here; replaced anyway, because the argument
+// for the other two was that there should be one way to turn µtTARI into a figure, and an exception
+// that happens to be safe is how the next unsafe one gets written.
+const FEE_CEIL_XTR = fmt6(MAX_FEE)
 
 // Compose-modal resolution state (Flag 1b). `ok` carries the resolved peer; `name` is the ONS name
 // (null for a raw npub), `existing` true when it is already an accepted conversation.
@@ -342,7 +378,7 @@ function PaymentMessageCard({ message, lid, flashed }: { message: CaravelMessage
 // ── Component ────────────────────────────────────────────────────────────────────
 
 export default function ChatApp() {
-  const { wallet, address, scan, messages, nostrPubkeyHex, messagingStatus, contacts, acceptContact, contactAddresses, setManualTariAddress, createMessagingProvider, recordSentMessage, deleteConversation, editMessage, reactMessage, getRelayStates, reconnectAll, groups, createGroup, acceptGroup, declineGroup, leaveGroup, reinviteGroup } = useWallet()
+  const { wallet, address, scan, messages, nostrPubkeyHex, messagingStatus, contacts, acceptContact, contactAddresses, setManualTariAddress, createMessagingProvider, recordSentMessage, deleteConversation, editMessage, reactMessage, getRelayStates, reconnectAll, groups, createGroup, acceptGroup, declineGroup, leaveGroup, reinviteGroup, balanceHidden } = useWallet()
   // Logo has no theme awareness of its own — `onLight` is a manual prop. Both marks in this view
   // sit on surfaces that are now light in the light theme, so the white mark would vanish.
   const { theme } = useTheme()
@@ -420,12 +456,24 @@ export default function ChatApp() {
   const [attachment, setAttachment] = useState<File | null>(null)
   const imageInputRef = useRef<HTMLInputElement | null>(null)
   const [paymentMode, setPaymentMode] = useState(false)
-  const [payAmount, setPayAmount] = useState('')       // tTARI, as typed
+  const [payAmount, setPayAmount] = useState('')       // XTR, as typed
   const [payAddress, setPayAddress] = useState('')     // recipient otl_esm_ (manual — see caveat)
   const [confirming, setConfirming] = useState(false)  // inline confirm panel shown
   const [payBusy, setPayBusy] = useState(false)        // payment/message in flight
   const [payProgress, setPayProgress] = useState<string | null>(null)
   const [payError, setPayErrorRaw] = useState<string | null>(null)
+  /**
+   * Whether we may add "Nothing left your wallet." to the error.
+   *
+   * §8B·4 states it flatly, and for four of the five failure sites it is simply true: a validation
+   * refusal, the pre-flight connection check, a locked wallet, and an on-chain Reject all fail
+   * BEFORE or INSTEAD OF money moving. The fifth is the catch, and there it is unprovable — this
+   * file's own note on that path says a throw "can land either side of the money moving and proves
+   * neither". Telling someone their funds are safe on the one path where we cannot know is the
+   * confident-wrong-claim this codebase keeps engineering against, so the flag DEFAULTS TO FALSE and
+   * each safe site opts in: a new failure site added later stays quiet until someone proves it can.
+   */
+  const [payErrorSafe, setPayErrorSafe] = useState(false)
   /**
    * EVERY pay error goes through the translator (M9 C10).
    *
@@ -439,7 +487,10 @@ export default function ChatApp() {
    * strings and network rejections through it too costs nothing and means no future call site can
    * forget. That is the point of wrapping the setter rather than the call sites.
    */
-  const setPayError = useCallback((m: string | null) => setPayErrorRaw(m === null ? null : plainError(m)), [])
+  const setPayError = useCallback((m: string | null, safe = false) => {
+    setPayErrorRaw(m === null ? null : plainError(m))
+    setPayErrorSafe(m !== null && safe)
+  }, [])
   // Persistent, must-acknowledge banner for the two dangerous outcomes: a payment that went
   // through but whose message failed (orphan), or a payment left unconfirmed (timeout).
   const [payAlert, setPayAlert] = useState<{ kind: 'orphan' | 'timeout'; txId: string; amountTari: string } | null>(null)
@@ -1086,6 +1137,21 @@ export default function ChatApp() {
   // TRUNCATED scan, where the balance is a lower bound and "larger than what we could see" is not
   // "more than you have". Inline in this file nothing could test it, and it failed as a disabled
   // button with no explanation.
+  // ── The "Private available" line (§8B·1) ────────────────────────────────────
+  //
+  // PRIVATE ONLY, and that is the honest figure rather than a partial one. A chat payment goes
+  // through sendConfidential, which spends confidential UTXOs — the public balance is not spendable
+  // from this panel without a move first, so showing it here would offer money this button cannot
+  // touch. The wallet's Send tab shows both because it can actually choose a source; this cannot.
+  //
+  // The three qualifications are the wallet's, not new ones: null is "—" and never 0 (a failed read
+  // is not an empty wallet), a truncated scan keeps its figure and states the uncertainty rather
+  // than withdrawing a number that is safe to act on, and the hide toggle masks it.
+  const availableLowerBound = balanceIsLowerBound(scan)
+  const availableText = balanceHidden
+    ? MASK_SHORT
+    : scan.balance === null ? '—' : `${fmt6(scan.balance)} XTR`
+
   const payAmountNum = Number(payAmount)
   const payAmountUsable = !!payAmount.trim() && isFinite(payAmountNum) && payAmountNum > 0
   const payInsufficient = isInsufficientBalance(
@@ -1115,7 +1181,7 @@ export default function ChatApp() {
   function onComposerSend() {
     if (paymentMode) {
       const err = validatePayment()
-      if (err) { setPayError(err); return }
+      if (err) { setPayError(err, true); return }   // validation — nothing has been attempted
       setPayError(null)
       setConfirming(true)
     } else {
@@ -1132,10 +1198,10 @@ export default function ChatApp() {
 
     // PRE-FLIGHT: never spend money we cannot announce.
     if (messagingStatus !== 'connected' && messagingStatus !== 'degraded') {
-      setPayError('Not connected to relays — cannot announce the payment. Try again once connected.')
+      setPayError('Not connected to relays — cannot announce the payment. Try again once connected.', true)
       return
     }
-    if (!wallet || !address) { setPayError('Wallet is locked — unlock to send.'); return }
+    if (!wallet || !address) { setPayError('Wallet is locked — unlock to send.', true); return }
 
     const amountMicro = tariToMicrotari(Number(payAmount))
     const recipientAddr = effectivePayAddress   // exchanged address, or the manually-entered one
@@ -1196,7 +1262,7 @@ export default function ChatApp() {
 
       if (result.outcome === 'Reject') {
         // Nothing happened — keep payment mode + fields so the user can adjust and retry.
-        setPayError('Payment was rejected on-chain — nothing was sent.')
+        setPayError('Payment was rejected on-chain — nothing was sent.', true)
         return
       }
       if (result.outcome === 'Timeout') {
@@ -1245,6 +1311,8 @@ export default function ChatApp() {
       // the attempt happened rather than nothing at all — and records it as ATTEMPTED, because a
       // throw can land either side of the money moving and proves neither.
       settleEntry(address, journalId, { outcome: 'pending' })
+      // NO `safe` FLAG HERE, deliberately — same reason the journal records this as ATTEMPTED. The
+      // error strip will not add "Nothing left your wallet."; on this one path we do not know that.
       setPayError(e instanceof Error ? e.message : String(e))
     } finally {
       setPayBusy(false)
@@ -2000,19 +2068,23 @@ export default function ChatApp() {
             return (
             <div style={COMPOSER_SHELL}>
 
-              {/* PERSISTENT must-acknowledge alert (orphan / timeout) — logic unchanged, reskinned */}
+              {/* §8B·5 — PERSISTENT must-acknowledge alert (orphan / timeout), above the restored
+                  composer. Logic unchanged.
+                  THE DESIGN'S BANNER IS TRIMMED BACK TO TWO SENTENCES; the txId, its Copy and the
+                  dismiss are kept anyway. This alert is the only place the product can hand over a
+                  transaction id, "Check Activity before trying again" is unactionable without one,
+                  and setPayAlert(null) is the single thing that clears it — a banner with no
+                  acknowledge would either never leave or leave on its own, and both are wrong here.
+                  This is the one screen where dropping information is the dangerous choice. */}
               {payAlert && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12, padding: '13px 15px', borderRadius: 12, background: 'rgba(var(--warn-rgb),0.08)', border: '1.5px solid rgba(var(--warn-rgb),0.4)' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="var(--warn)" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><path d="M12 9v4M12 17h.01" /></svg>
-                    <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--warn-300)' }}>
-                      {payAlert.kind === 'orphan' ? 'Payment sent, but the message did not' : 'Payment submitted, but not confirmed'}
-                    </span>
-                  </div>
-                  <div style={{ fontSize: 12.5, color: 'var(--text-body-dim)', lineHeight: 1.5 }}>
-                    {payAlert.kind === 'orphan'
-                      ? <>The funds ({<b>{payAlert.amountTari} tTARI</b>}) left your wallet. {displayName(selectedConvo.peerHex)} has the money but no note explaining it, so tell them separately.</>
-                      : <>Broadcast to the network, no confirmation yet ({<b>{payAlert.amountTari} tTARI</b>}). Do not resend. Check Activity before trying again.</>}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12, padding: '11px 13px', borderRadius: 12, background: 'var(--card-warn)', border: '1px solid var(--warn)' }}>
+                  <div style={{ display: 'flex', gap: 9 }}>
+                    <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="var(--warn)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 2 }}><path d="M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" /><path d="M12 9v4M12 17h.01" /></svg>
+                    <div style={{ fontSize: 11.5, lineHeight: 1.5, textWrap: 'pretty' }}>
+                      {payAlert.kind === 'orphan'
+                        ? <><span style={{ fontWeight: 600, color: 'var(--warn)' }}>The funds left your wallet, but no note was attached.</span> <span style={{ color: 'var(--text-body-dim)' }}>{displayName(selectedConvo.peerHex)} received {payAlert.amountTari} XTR without your message, so tell them separately.</span></>
+                        : <><span style={{ fontWeight: 600, color: 'var(--warn)' }}>The send timed out. Do not resend.</span> <span style={{ color: 'var(--text-body-dim)' }}>{payAlert.amountTari} XTR may still have gone through. Check Activity before trying again.</span></>}
+                    </div>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '9px 12px', borderRadius: 9, background: 'var(--surface-trough)' }}>
                     <span style={{ fontFamily: MONO, fontSize: 11, color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{payAlert.txId.slice(0, 8)}…{payAlert.txId.slice(-4)}</span>
@@ -2026,56 +2098,107 @@ export default function ChatApp() {
                 </div>
               )}
 
-              {/* Payment error (validation / reject / pre-flight) — draft + fields preserved */}
+              {/* §8B·4 — the error, ABOVE the still-editable form rather than replacing it. The
+                  design draws a "Try again" that restores the panel; submitPayment already keeps
+                  payment mode and every field on a failure, so the form the link would bring back
+                  is the one directly underneath. The second sentence is conditional — see
+                  payErrorSafe: on the throw path we cannot claim the money stayed put. */}
               {payError && (
-                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7, marginBottom: 10, fontSize: 12, color: 'var(--danger-300)', fontFamily: MONO, lineHeight: 1.45 }}>
-                  <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="var(--danger-500)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 1 }}><circle cx={12} cy={12} r={10} /><path d="M12 8v4M12 16h.01" /></svg>
-                  <span style={{ wordBreak: 'break-word' }}>{payError}</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, padding: '11px 13px', borderRadius: 12, background: 'var(--surface)', border: '1px solid var(--danger-500)' }}>
+                  <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, borderRadius: 8, flexShrink: 0, background: 'rgba(var(--danger-rgb),0.12)', color: 'var(--danger-500)' }}>
+                    <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round"><circle cx={12} cy={12} r={9} /><path d="M15 9l-6 6M9 9l6 6" /></svg>
+                  </span>
+                  <div style={{ flex: 1, minWidth: 0, fontSize: 12, lineHeight: 1.5, textWrap: 'pretty', wordBreak: 'break-word' }}>
+                    <span style={{ fontWeight: 600, color: 'var(--danger-300)' }}>{payError}</span>
+                    {payErrorSafe && <span style={{ color: 'var(--text-body-dim)' }}> Nothing left your wallet.</span>}
+                  </div>
                 </div>
               )}
 
-              {/* Payment in flight — progress */}
+              {/* §8B·3 — sending. The design writes a fixed "Sending payment to @haci…"; payProgress
+                  is kept instead because it names the PHASE, and one of those phases is "Payment
+                  confirmed — sending the message…", i.e. the money has already moved and only the
+                  note is outstanding. That line is the only warning before an orphan alert. */}
               {payBusy && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, fontSize: 12.5, color: 'var(--accent-ink)', fontFamily: MONO }}>
-                  <span style={{ width: 13, height: 13, borderRadius: '50%', border: '2px solid var(--border-strong)', borderTopColor: 'var(--accent-400)', animation: 'cv-spin 0.8s linear infinite', flexShrink: 0 }} />
-                  <span>{payProgress ?? 'Working…'}</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, padding: '11px 13px', borderRadius: 12, background: 'var(--surface)', border: '1px solid var(--border-strong)' }}>
+                  <span style={{ width: 13, height: 13, borderRadius: '50%', border: '2px solid var(--border)', borderTopColor: 'var(--accent-400)', animation: 'cv-spin 1s linear infinite', flexShrink: 0 }} />
+                  <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: 'var(--text-body-dim)' }}>{payProgress ?? 'Working…'}</span>
+                  {payAmount.trim() && <span style={{ fontFamily: MONO, fontSize: 11.5, color: 'var(--text-muted-dim)', flexShrink: 0 }}>{payAmount} XTR</span>}
                 </div>
               )}
 
-              {/* Payment composer card (transcribed from design source: contained card, amount+address
-                  row, dashed note, Cancel/Review; danger-toned when the balance pre-check fails) */}
+              {/* §8B·1 — THE INLINE PANEL. Not a modal and not a screen: it opens in the composer's
+                  own slot, over the composer, and the upward shadow is what says so. */}
               {paymentMode && !confirming && !payBusy && (
-                <div style={{ padding: 18, borderRadius: 16, background: 'var(--surface)', boxShadow: 'var(--e1)', border: `1px solid ${payInsufficient ? 'var(--card-danger-border)' : 'var(--border)'}`, marginBottom: 12 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
-                    <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--accent-ink)', letterSpacing: '0.08em' }}>CONFIDENTIAL PAYMENT</span>
-                    <button onClick={toggleTari} title="Cancel payment" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted-dim)', display: 'flex', padding: 2 }}>
-                      <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12" /></svg>
-                    </button>
-                  </div>
-                  {/* amount + address row */}
-                  <div style={{ display: 'flex', gap: 10, marginBottom: payInsufficient ? 8 : 10 }}>
-                    <div style={{ flex: '0 0 150px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 14px', borderRadius: 11, background: 'var(--surface-raised)', border: `1px solid ${payInsufficient ? 'var(--danger-500)' : 'var(--border)'}` }}>
-                      <input value={payAmount} onChange={e => { setPayAmount(e.target.value); if (payError) setPayError(null) }} placeholder="0.00" inputMode="decimal" style={{ flex: 1, minWidth: 0, background: 'transparent', border: 'none', outline: 'none', fontFamily: MONO, fontSize: 15, color: 'var(--text-body)' }} />
-                      <span style={{ fontSize: 11, fontWeight: 600, color: payInsufficient ? 'var(--danger-300)' : 'var(--accent-ink)' }}>TARI</span>
+                <div style={{ ...PAY_PANEL, border: `1px solid ${payInsufficient ? 'var(--danger-500)' : 'var(--border-strong)'}` }}>
+                  <PayPanelHeader onClose={toggleTari} />
+
+                  {/* Amount, and who it is going to. The design pairs the field with a recipient
+                      CHIP rather than an address box — which it can, because it assumes an
+                      identity-bound address. See the address row below for when we have none. */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+                    <div style={{
+                      flex: 1, minWidth: 0, display: 'flex', alignItems: 'baseline', gap: 7,
+                      padding: '10px 12px', borderRadius: 10,
+                      border: `1px solid ${payInsufficient ? 'var(--danger-500)' : 'var(--accent-400)'}`,
+                      boxShadow: payInsufficient ? '0 0 0 3px rgba(var(--danger-rgb),0.14)' : '0 0 0 3px rgba(var(--accent-400-rgb),0.14)',
+                    }}>
+                      <input
+                        value={payAmount}
+                        onChange={e => { setPayAmount(e.target.value); if (payError) setPayError(null) }}
+                        placeholder="0.000000"
+                        inputMode="decimal"
+                        aria-label="Amount in XTR"
+                        style={{ flex: 1, minWidth: 0, background: 'transparent', border: 'none', outline: 'none', fontFamily: MONO, fontSize: 15, fontWeight: 600, color: 'var(--text-body)' }}
+                      />
+                      <span style={{ fontFamily: MONO, fontSize: 11.5, color: 'var(--text-muted-dim)', flexShrink: 0 }}>XTR</span>
                     </div>
-                    {addressVerified ? (
-                      <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', padding: '12px 14px', borderRadius: 11, background: 'var(--surface-raised)', border: '1px solid var(--border)', fontFamily: MONO, fontSize: 13, color: 'var(--text-body-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{peerAddrRec!.address.slice(0, 14)}…{peerAddrRec!.address.slice(-4)}</div>
-                    ) : (
-                      <input value={payAddress} onChange={e => { setPayAddress(e.target.value); if (payError) setPayError(null) }} placeholder="otl_esm_…" spellCheck={false} style={{ flex: 1, minWidth: 0, padding: '12px 14px', borderRadius: 11, background: 'var(--surface-raised)', border: '1px solid var(--border)', fontFamily: MONO, fontSize: 13, color: 'var(--text-body-dim)', outline: 'none' }} />
-                    )}
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: 'var(--text-body-dim)', flexShrink: 0 }}>
+                      to
+                      <Avatar hex={selectedConvo.peerHex} nickname={nicknames[selectedConvo.peerHex]} size={20} radius={99} fontSize={9.5} />
+                      <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{displayName(selectedConvo.peerHex)}</span>
+                    </span>
                   </div>
-                  {/* insufficient-balance row */}
-                  {payInsufficient && (
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 12, marginBottom: 14 }}>
-                      <span style={{ color: 'var(--danger-300)' }}>Exceeds your balance</span>
-                      {scan.balance !== null && <span style={{ fontFamily: MONO, color: 'var(--text-muted-dim)' }}>available {fmt2(scan.balance)}</span>}
-                    </div>
+
+                  {/* THE ADDRESS ROW HAS NO EQUIVALENT IN §8B·1, and it has to exist. The design's
+                      chip assumes an exchanged, identity-bound address; M10.1 also allows typing one
+                      in for a peer who has never shared theirs, and dropping the field would make
+                      those payments impossible rather than merely unstyled. The thread keeps its own
+                      "entered manually, not verified" banner — this is only the entry. */}
+                  {!addressVerified && (
+                    <input
+                      value={payAddress}
+                      onChange={e => { setPayAddress(e.target.value); if (payError) setPayError(null) }}
+                      placeholder="otl_esm_…"
+                      spellCheck={false}
+                      aria-label="Recipient address"
+                      style={{ display: 'block', width: '100%', boxSizing: 'border-box', padding: '10px 12px', borderRadius: 10, background: 'transparent', border: '1px solid var(--border)', fontFamily: MONO, fontSize: 12.5, color: 'var(--text-body-dim)', outline: 'none' }}
+                    />
                   )}
-                  {/* note (dashed) */}
-                  <textarea value={draft} onChange={e => setDraft(e.target.value)} placeholder="Add a note (optional)…" rows={1} maxLength={MAX_MESSAGE_LEN} style={{ display: 'block', width: '100%', boxSizing: 'border-box', padding: '12px 14px', borderRadius: 11, background: 'var(--surface-raised)', border: '1px dashed var(--border-strong)', fontSize: 13, color: 'var(--text-note)', fontStyle: draft ? 'normal' : 'italic', outline: 'none', resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.4, marginBottom: 14 }} />
-                  {/* buttons */}
-                  <div style={{ display: 'flex', gap: 10 }}>
-                    <button onClick={toggleTari} style={{ ...PAY_BTN, flex: '0 0 120px', border: '1px solid var(--border-strong)', background: 'transparent', color: 'var(--text-body-dim)' }}>Cancel</button>
+
+                  {/* The spendable figure. Private only — see the derivation above. */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: 'var(--text-muted-dim)', marginTop: -4 }}>
+                    <svg width={9} height={9} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" style={{ flexShrink: 0 }}><rect x={5} y={11} width={14} height={9} rx={2} /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></svg>
+                    Private available: <span style={{ fontFamily: MONO, color: 'var(--text-body-dim)' }}>{availableText}</span>
+                  </div>
+                  {availableLowerBound && !balanceHidden && (
+                    <div style={{ fontSize: 11, color: 'var(--warn)', lineHeight: 1.5, marginTop: -6, textWrap: 'pretty' }}>{incompleteAvailableNote()}</div>
+                  )}
+                  {payInsufficient && (
+                    <div style={{ fontSize: 11.5, color: 'var(--danger-300)', marginTop: -6 }}>Exceeds your balance</div>
+                  )}
+
+                  <textarea
+                    value={draft}
+                    onChange={e => setDraft(e.target.value)}
+                    placeholder={`Private note, only you and ${displayName(selectedConvo.peerHex)} can read it`}
+                    rows={1}
+                    maxLength={MAX_MESSAGE_LEN}
+                    style={{ display: 'block', width: '100%', boxSizing: 'border-box', padding: '10px 12px', borderRadius: 10, background: 'transparent', border: '1px solid var(--border)', fontSize: 12.5, color: 'var(--text-body)', outline: 'none', resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.45 }}
+                  />
+
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button onClick={toggleTari} style={{ ...PAY_BTN, flex: 1, border: '1px solid var(--border-strong)', background: 'transparent', color: 'var(--text-body-dim)' }}>Cancel</button>
                     {(() => { const ok = validatePayment() === null; return (
                       <button onClick={onComposerSend} disabled={!ok} className={ok ? 'cv-btn-primary' : undefined} style={{ ...PAY_BTN, flex: 1, border: ok ? 'none' : '1px solid var(--border)', background: ok ? 'var(--accent-400)' : 'var(--surface-inset)', color: ok ? 'var(--ink-on-accent)' : 'var(--text-disabled)', cursor: ok ? 'pointer' : 'default' }}>Review payment</button>
                     ) })()}
@@ -2083,25 +2206,43 @@ export default function ChatApp() {
                 </div>
               )}
 
-              {/* In-thread confirm gate (transcribed from design source: --surface card, Amount /
-                  Network fee ≤ 0.01 TARI / To rows, dashed note, warn callout, Cancel / Send payment) */}
+              {/* §8B·2 — the confirm gate, in the SAME panel. The old "Confirm payment to X" title
+                  is gone: the design carries the recipient as a To row instead, and the note joins
+                  the summary rather than sitting in a box of its own. */}
               {confirming && (
-                <div style={{ padding: 20, borderRadius: 16, background: 'var(--surface)', boxShadow: 'var(--e1)', border: '1px solid var(--border)', marginBottom: 12 }}>
-                  <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 16 }}>Confirm payment to {displayName(selectedConvo.peerHex)}</div>
-                  <div style={{ borderRadius: 12, background: 'var(--surface-raised)', border: '1px solid var(--border)', overflow: 'hidden', marginBottom: 14 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '13px 15px', borderBottom: '1px solid var(--border)' }}><span style={{ fontSize: 13, color: 'var(--text-muted-dim)' }}>Amount</span><span style={{ fontFamily: MONO, fontSize: 15, fontWeight: 600, color: 'var(--text-bright)' }}>{payAmount} TARI</span></div>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '13px 15px', borderBottom: '1px solid var(--border)' }}><span style={{ fontSize: 13, color: 'var(--text-muted-dim)' }}>Network fee</span><span style={{ fontFamily: MONO, fontSize: 13, color: 'var(--text-muted)' }}>≤ {FEE_CEIL_TARI} TARI</span></div>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '13px 15px' }}><span style={{ fontSize: 13, color: 'var(--text-muted-dim)', flexShrink: 0 }}>To</span><span style={{ fontFamily: MONO, fontSize: 12, color: 'var(--text-body-dim)' }}>{effectivePayAddress.slice(0, 12)}…{effectivePayAddress.slice(-4)}</span></div>
+                <div style={{ ...PAY_PANEL, border: '1px solid var(--border-strong)' }}>
+                  <PayPanelHeader onClose={toggleTari} />
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '11px 13px', borderRadius: 11, background: 'var(--surface-base)', border: '1px solid var(--border)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 12.5 }}>
+                      <span style={{ color: 'var(--text-muted-dim)' }}>Amount</span>
+                      <span style={{ fontFamily: MONO, fontWeight: 600, color: 'var(--text-primary)' }}>{payAmount} XTR</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 12.5, minWidth: 0 }}>
+                      <span style={{ color: 'var(--text-muted-dim)', flexShrink: 0 }}>To</span>
+                      <span style={{ fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{displayName(selectedConvo.peerHex)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 12.5, minWidth: 0 }}>
+                      <span style={{ color: 'var(--text-muted-dim)', flexShrink: 0 }}>Note</span>
+                      <span style={{ color: 'var(--text-body-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{draft.trim() || '💸 Payment'}</span>
+                    </div>
+                    {/* A CEILING, said as one. The exact fee is not known until the transaction
+                        settles — the send has no prepare/submit split to price it — so the caption
+                        is doing real work rather than softening a number. */}
+                    <div style={{ borderTop: '1px solid var(--border)', paddingTop: 8, display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 12.5 }}>
+                      <span style={{ color: 'var(--text-muted-dim)' }}>Fee, at most</span>
+                      <span style={{ fontFamily: MONO, fontWeight: 600, color: 'var(--text-primary)' }}>{FEE_CEIL_XTR} XTR</span>
+                    </div>
+                    <div style={{ fontSize: 11, color: 'var(--text-muted-dim)', marginTop: -3, textAlign: 'right' }}>The exact fee is known once it settles</div>
                   </div>
-                  <div style={{ padding: '12px 14px', borderRadius: 11, background: 'var(--surface-trough)', border: '1px dashed var(--border-strong)', marginBottom: 14 }}>
-                    <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.12em', color: 'var(--text-muted-dim)', marginBottom: 6 }}>PRIVATE NOTE</div>
-                    <div style={{ fontSize: 13, color: 'var(--text-note)', fontStyle: 'italic' }}>“{draft.trim() || '💸 Payment'}”</div>
+
+                  <div style={{ display: 'flex', gap: 8, padding: '9px 11px', borderRadius: 9, background: 'var(--card-warn)', color: 'var(--warn)', fontSize: 11.5, lineHeight: 1.5, textWrap: 'pretty' }}>
+                    <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" style={{ flexShrink: 0, marginTop: 2 }}><circle cx={12} cy={12} r={9} /><path d="M12 8v4M12 16h.01" /></svg>
+                    <span>Confidential payments cannot be cancelled once sent.</span>
                   </div>
-                  <div style={{ display: 'flex', gap: 10, padding: '12px 14px', borderRadius: 11, background: 'var(--card-warn)', border: '1px solid var(--card-warn-border)', marginBottom: 16 }}>
-                    <span style={{ fontSize: 12, color: 'var(--warn)', lineHeight: 1.5 }}>This is a real, irreversible testnet payment. It cannot be recalled once sent.</span>
-                  </div>
-                  <div style={{ display: 'flex', gap: 10 }}>
-                    <button onClick={() => setConfirming(false)} style={{ ...PAY_BTN, flex: '0 0 120px', border: '1px solid var(--border-strong)', background: 'transparent', color: 'var(--text-body-dim)' }}>Cancel</button>
+
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button onClick={() => setConfirming(false)} style={{ ...PAY_BTN, flex: 1, border: '1px solid var(--border-strong)', background: 'transparent', color: 'var(--text-body-dim)' }}>Cancel</button>
                     <button onClick={submitPayment} className="cv-btn-primary" style={{ ...PAY_BTN, flex: 1, border: 'none', background: 'var(--accent-400)', color: 'var(--ink-on-accent)', cursor: 'pointer' }}>Send payment</button>
                   </div>
                 </div>

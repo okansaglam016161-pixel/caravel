@@ -20,6 +20,10 @@ import { beginEntry, settleEntry } from '../../crypto/journalStore'
 import { resolveOnsNameToHex, toOnsName, type OnsResolveErrorKind } from '../../crypto/ons'
 import { ConnectionIndicator, RelayHealthPanel } from './ConnectionStatus'
 import { usePaymentResolution } from '../../hooks/usePaymentResolution'
+import { isInsufficientBalance } from './paymentGuard'
+// The wallet's amount formatters, bigint-only — shared rather than re-derived, which is the whole
+// point of format.ts having been written.
+import { fmt2, fmt6 } from '../wallet/v2/format'
 import { avatarFor, initialsFor, truncNpub, bubbleTime, compactTime, dayLabel, isNewDay, mergeThreadItems, replyChipDetail, threadContentKey, MONO } from './chatDisplay'
 import Avatar from './Avatar'
 import MessageBubble from './MessageBubble'
@@ -176,8 +180,13 @@ type ComposeRes =
   | { s: 'fail'; kind: OnsResolveErrorKind; name: string }
 
 // Decimal µTari string → TARI display string. Defensive; never throws.
+//
+// fmt6, NOT `Number(µt) / 1_000_000`. Amounts are 128-bit on the wire and a float divide drifts on a
+// large one — the same silent-rounding bug the faucet shipped once, which is why format.ts exists
+// and is bigint-only. The try/catch stays: these strings come off the wire and out of a cache, and a
+// malformed one must render a dash rather than throw inside a message row.
 function microToTari(micro: string): string {
-  try { return (Number(BigInt(micro)) / 1_000_000).toFixed(6) } catch { return '—' }
+  try { return fmt6(BigInt(micro)) } catch { return '—' }
 }
 
 // ── Payment card ──────────────────────────────────────────────────────────────
@@ -1036,9 +1045,18 @@ export default function ChatApp() {
   // Insufficient-balance pre-check (flag 3b): same rule as the wallet's validateSendForm —
   // amount + MAX_FEE must not exceed the confidential balance. Additive guard; never blocks a
   // valid send. `payInsufficient` drives the design's inline pre-check state in the composer.
+  //
+  // THE RULE ITSELF LIVES IN paymentGuard.ts, and the reason is written there: it used to block on a
+  // TRUNCATED scan, where the balance is a lower bound and "larger than what we could see" is not
+  // "more than you have". Inline in this file nothing could test it, and it failed as a disabled
+  // button with no explanation.
   const payAmountNum = Number(payAmount)
-  const payInsufficient = !!payAmount.trim() && isFinite(payAmountNum) && payAmountNum > 0
-    && scan.balance !== null && tariToMicrotari(payAmountNum) + MAX_FEE > scan.balance
+  const payAmountUsable = !!payAmount.trim() && isFinite(payAmountNum) && payAmountNum > 0
+  const payInsufficient = isInsufficientBalance(
+    payAmountUsable ? tariToMicrotari(payAmountNum) : null,
+    MAX_FEE,
+    scan,
+  )
 
   function validatePayment(): string | null {
     const amt = Number(payAmount)
@@ -2014,7 +2032,7 @@ export default function ChatApp() {
                   {payInsufficient && (
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 12, marginBottom: 14 }}>
                       <span style={{ color: 'var(--danger-300)' }}>Exceeds your balance</span>
-                      {scan.balance !== null && <span style={{ fontFamily: MONO, color: 'var(--text-muted-dim)' }}>available {(Number(scan.balance) / 1_000_000).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>}
+                      {scan.balance !== null && <span style={{ fontFamily: MONO, color: 'var(--text-muted-dim)' }}>available {fmt2(scan.balance)}</span>}
                     </div>
                   )}
                   {/* note (dashed) */}

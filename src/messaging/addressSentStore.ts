@@ -8,22 +8,37 @@
 // acknowledgement later.
 //
 // Cleared on decline/delete so a fresh contact re-exchanges. Per-identity key, quota swallowed.
+//
+// ── ENCRYPTED AT REST (stage 6) ──────────────────────────────────────────────
+//
+// MIS-FILED AS INERT METADATA UNTIL NOW, and that is the only reason it was not in stage 4. It sat
+// with tombstoneStore, seenDefStore and deletedGroupStore as "an id → timestamp map", which is true
+// of its SHAPE and false of its CONTENTS. Those three key on gift-wrap event ids (public on the
+// relays by construction) and on random `grp-` UUIDs. This one keys on PEER PUBKEYS — the same key
+// space as contactStore, nicknameStore and tariAddressStore, all three of which stage 4 sealed for
+// the reason contactStore states in two words: who you talk to.
+//
+// And it is the LIVE slice of that graph, not stale residue: ChatApp clears an entry on decline and
+// on delete, so what is here is the set of contacts currently exchanged with.
+//
+// It MIGRATES ON READ (storeIo), like its four stage-4 siblings, and needs no forced startup read
+// the way paymentResolutionStore did: ChatApp already loads it on mount beside the nicknames.
+
+import { asRecord, loadStore, writeStore, type Parse } from '../crypto/storeIo'
 
 // peer Nostr pubkey hex → ms epoch when my address was delivered.
 export type AddressSentMap = Record<string, number>
 
 function key(myPubkeyHex: string) { return `caravel.addrsent.v1.${myPubkeyHex}` }
 
+const parse: Parse<AddressSentMap> = decoded => asRecord(decoded) as AddressSentMap | null
+
 function save(myPubkeyHex: string, map: AddressSentMap): void {
-  try { localStorage.setItem(key(myPubkeyHex), JSON.stringify(map)) } catch { /* quota / private mode */ }
+  writeStore(key(myPubkeyHex), JSON.stringify(map), parse)
 }
 
 export function loadAddressSent(myPubkeyHex: string): AddressSentMap {
-  try {
-    const raw = localStorage.getItem(key(myPubkeyHex))
-    if (!raw) return {}
-    return JSON.parse(raw) as AddressSentMap
-  } catch { return {} }
+  return loadStore(key(myPubkeyHex), parse, () => ({}))
 }
 
 // Mark my address delivered to a peer. Returns the next map.

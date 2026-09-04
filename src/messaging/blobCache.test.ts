@@ -21,6 +21,7 @@ import {
   putBlob,
   __resetBlobCacheForTests,
 } from './blobCache'
+import { clearStoreKey, setStoreKey } from '../crypto/sessionKey'
 
 const ME = 'a'.repeat(64)
 const OTHER = 'b'.repeat(64)
@@ -33,9 +34,15 @@ function readBytes(buffer: ArrayBuffer): number[] {
   return [...new Uint8Array(buffer)]
 }
 
+const STORE_KEY = new Uint8Array(32).fill(42)
+
 beforeEach(() => {
   // A brand-new factory per test = a brand-new empty database, with no teardown to forget.
   globalThis.indexedDB = new IDBFactory()
+  // A store key per test, for the same reason (stage 5): every read and write now needs one, and an
+  // unlocked session is the ordinary case these specs describe. The locked case is its own block.
+  // Copied rather than shared — clearStoreKey zeroes the buffer it is handed.
+  setStoreKey(Uint8Array.from(STORE_KEY))
   __resetBlobCacheForTests()
 })
 
@@ -227,9 +234,11 @@ describe('failure degrades to re-fetch — never throws, never loses a message',
   })
 
   it('reports false rather than throwing when a value cannot be stored', async () => {
-    // A put whose transaction aborts must resolve false, not reject. Structured-clone failure is the
-    // reachable version of this in a browser; quota abort takes the same path (tx.onabort).
-    // @ts-expect-error — a function is not structured-cloneable.
+    // A put that cannot complete must resolve false, not reject. Since stage 5 this bogus value is
+    // rejected EARLIER than it used to be — crypto.subtle.encrypt refuses a non-BufferSource before
+    // any transaction opens, where it previously reached IndexedDB and failed the structured clone.
+    // The outcome the callers depend on is the same, and the quota path still lands on tx.onabort.
+    // @ts-expect-error — a function is neither a BufferSource nor structured-cloneable.
     const unclonable: ArrayBuffer = { bytes: () => {} }
     await expect(putBlob(ME, 'bad', unclonable, 'image/png')).resolves.toBe(false)
     // and the store is still usable afterwards
@@ -259,5 +268,268 @@ describe('concurrent access shares one open', () => {
     const [, hit] = await Promise.all([deleteBlobs(ME, ['h1']), getBlob(ME, 'h1')])
     expect(hit === null || readBytes(hit.bytes)).toBeTruthy()
     expect(await hasBlob(ME, 'h1')).toBe(false)
+  })
+})
+
+// ── Stage 5: encryption at rest ───────────────────────────────────────────────
+//
+// These reach PAST the public API and read the raw IndexedDB records, which the specs above
+// deliberately never do. That is the point: every assertion here is about what a person with the
+// disk sees, and asking getBlob would only tell us the module can read its own output.
+
+const DB = 'caravel.blobs.v1'
+const OBJ = 'blobs'
+
+interface RawRecord {
+  id: string
+  pubkey: string
+  v?: number
+  nonce?: ArrayBuffer
+  bytes: ArrayBuffer
+  mime: string
+  size: number
+  storedAt: number
+}
+
+// Open a SECOND connection at the current version, alongside the module's own handle.
+//
+// Creates the object store if it is not there, because a probe can legitimately run against a
+// database the module never opened — putBlob bails on the key check BEFORE openDb, so "locked, and
+// nothing was written" is exactly the case where no store exists yet. Without this the probe throws
+// where it should report emptiness.
+function rawOpen(): Promise<IDBDatabase> {
+  return new Promise(resolve => {
+    const request = globalThis.indexedDB.open(DB, 2)
+    request.onupgradeneeded = () => {
+      const db = request.result
+      if (!db.objectStoreNames.contains(OBJ)) {
+        db.createObjectStore(OBJ, { keyPath: 'id' }).createIndex('pubkey', 'pubkey', { unique: false })
+      }
+    }
+    request.onsuccess = () => resolve(request.result)
+  })
+}
+
+function rawGet(id: string): Promise<RawRecord | undefined> {
+  return rawOpen().then(db => new Promise<RawRecord | undefined>(resolve => {
+    const get = db.transaction(OBJ, 'readonly').objectStore(OBJ).get(id)
+    get.onsuccess = () => { db.close(); resolve(get.result as RawRecord | undefined) }
+  }))
+}
+
+function rawPut(record: RawRecord): Promise<void> {
+  return rawOpen().then(db => new Promise<void>(resolve => {
+    const tx = db.transaction(OBJ, 'readwrite')
+    tx.objectStore(OBJ).put(record)
+    tx.oncomplete = () => { db.close(); resolve() }
+  }))
+}
+
+function rawCount(): Promise<number> {
+  return rawOpen().then(db => new Promise<number>(resolve => {
+    const count = db.transaction(OBJ, 'readonly').objectStore(OBJ).count()
+    count.onsuccess = () => { db.close(); resolve(count.result) }
+  }))
+}
+
+// A pre-stage-5 database: schema version 1, the old record shape, bytes in the clear.
+function seedLegacyV1(records: { id: string; pubkey: string; bytes: ArrayBuffer; mime: string }[]): Promise<void> {
+  return new Promise(resolve => {
+    const request = globalThis.indexedDB.open(DB, 1)
+    request.onupgradeneeded = () => {
+      const store = request.result.createObjectStore(OBJ, { keyPath: 'id' })
+      store.createIndex('pubkey', 'pubkey', { unique: false })
+    }
+    request.onsuccess = () => {
+      const db = request.result
+      const tx = db.transaction(OBJ, 'readwrite')
+      for (const r of records) {
+        tx.objectStore(OBJ).put({ ...r, size: r.bytes.byteLength, storedAt: Date.now() })
+      }
+      tx.oncomplete = () => { db.close(); resolve() }
+    }
+  })
+}
+
+// Long and distinctive, so "the ciphertext does not contain the plaintext" is a real assertion
+// rather than a coincidence about four bytes.
+const SECRET = new Uint8Array(64).map((_, i) => (i * 7 + 13) & 0xff)
+const secretBytes = () => SECRET.slice().buffer
+function contains(haystack: ArrayBuffer, needle: Uint8Array): boolean {
+  const hay = new Uint8Array(haystack)
+  outer: for (let i = 0; i + needle.length <= hay.length; i++) {
+    for (let j = 0; j < needle.length; j++) if (hay[i + j] !== needle[j]) continue outer
+    return true
+  }
+  return false
+}
+
+describe('encryption at rest', () => {
+  it('writes ciphertext — the image bytes are not on disk', async () => {
+    expect(await putBlob(ME, 'hash1', secretBytes(), 'image/png')).toBe(true)
+
+    const raw = (await rawGet(`${ME}:hash1`))!
+    expect(raw.v).toBe(2)
+    expect(raw.nonce!.byteLength).toBe(12)
+    expect(contains(raw.bytes, SECRET)).toBe(false)
+    // GCM appends a 128-bit tag, so the stored value is longer than what went in.
+    expect(raw.bytes.byteLength).toBe(SECRET.length + 16)
+  })
+
+  it('round-trips through decrypt-on-read', async () => {
+    await putBlob(ME, 'hash1', secretBytes(), 'image/webp')
+    const hit = (await getBlob(ME, 'hash1'))!
+    expect(new Uint8Array(hit.bytes)).toEqual(SECRET)
+    expect(hit.mime).toBe('image/webp')
+  })
+
+  it('mints a fresh nonce per put, so the same image twice is not the same ciphertext', async () => {
+    await putBlob(ME, 'hash1', secretBytes(), 'image/png')
+    const first = (await rawGet(`${ME}:hash1`))!
+    await putBlob(ME, 'hash1', secretBytes(), 'image/png')
+    const second = (await rawGet(`${ME}:hash1`))!
+
+    expect(new Uint8Array(second.nonce!)).not.toEqual(new Uint8Array(first.nonce!))
+    expect(new Uint8Array(second.bytes)).not.toEqual(new Uint8Array(first.bytes))
+  })
+
+  it('keeps mime readable and size meaning the PLAINTEXT length', async () => {
+    // Both stay in the clear on purpose — mime rebuilds the Blob, and size feeds the sweep the
+    // header anticipates. Neither reveals more than the ciphertext length already does.
+    await putBlob(ME, 'hash1', secretBytes(), 'image/jpeg')
+    const raw = (await rawGet(`${ME}:hash1`))!
+    expect(raw.mime).toBe('image/jpeg')
+    expect(raw.size).toBe(SECRET.length)
+  })
+
+  it('stores nothing readable for an empty image either', async () => {
+    expect(await putBlob(ME, 'empty', bytes(), 'image/png')).toBe(true)
+    const raw = (await rawGet(`${ME}:empty`))!
+    expect(raw.bytes.byteLength).toBe(16)   // the bare GCM tag
+    expect((await getBlob(ME, 'empty'))!.bytes.byteLength).toBe(0)
+  })
+})
+
+describe('AAD binds the record to its id and mime', () => {
+  it('refuses a record moved to another identity', async () => {
+    await putBlob(ME, 'shared-hash', secretBytes(), 'image/png')
+    const stolen = (await rawGet(`${ME}:shared-hash`))!
+
+    // Byte-for-byte the same ciphertext, re-filed under the other identity — the move an attacker
+    // with disk access can make trivially, and the one blobCacheKey alone only prevents by
+    // convention.
+    await rawPut({ ...stolen, id: `${OTHER}:shared-hash`, pubkey: OTHER })
+    expect(await getBlob(OTHER, 'shared-hash')).toBeNull()
+    // and the original still opens
+    expect(new Uint8Array((await getBlob(ME, 'shared-hash'))!.bytes)).toEqual(SECRET)
+  })
+
+  it('refuses a record whose mime was swapped underneath it', async () => {
+    await putBlob(ME, 'hash1', secretBytes(), 'image/png')
+    const record = (await rawGet(`${ME}:hash1`))!
+    await rawPut({ ...record, mime: 'text/html' })
+    expect(await getBlob(ME, 'hash1')).toBeNull()
+  })
+})
+
+describe('no store key means a miss, never plaintext', () => {
+  it('refuses to write while locked, and writes nothing at all', async () => {
+    clearStoreKey()
+    expect(await putBlob(ME, 'hash1', secretBytes(), 'image/png')).toBe(false)
+    expect(await rawGet(`${ME}:hash1`)).toBeUndefined()
+    expect(await rawCount()).toBe(0)
+  })
+
+  it('reads as a miss while locked, and has/get agree', async () => {
+    await putBlob(ME, 'hash1', secretBytes(), 'image/png')
+    clearStoreKey()
+    expect(await getBlob(ME, 'hash1')).toBeNull()
+    expect(await hasBlob(ME, 'hash1')).toBe(false)
+    // The record is untouched — locking is not a purge.
+    expect(await rawCount()).toBe(1)
+  })
+
+  it('still purges while locked — destroying what we cannot read IS the operation', async () => {
+    await putBlob(ME, 'keep', secretBytes(), 'image/png')
+    await putBlob(ME, 'drop', secretBytes(), 'image/png')
+    clearStoreKey()
+    await deleteBlobs(ME, ['drop'])
+    expect(await rawGet(`${ME}:drop`)).toBeUndefined()
+    await deleteAllForIdentity(ME)
+    expect(await rawCount()).toBe(0)
+  })
+
+  it('does not keep decrypting through a cached key import after a lock', async () => {
+    // The CryptoKey holds its own copy of the material, so clearStoreKey's fill(0) cannot reach it.
+    // Without the null check on every operation this read would still succeed.
+    await putBlob(ME, 'hash1', secretBytes(), 'image/png')
+    expect(await getBlob(ME, 'hash1')).not.toBeNull()   // warms the import
+    clearStoreKey()
+    expect(await getBlob(ME, 'hash1')).toBeNull()
+  })
+
+  it('resumes on the next unlock', async () => {
+    await putBlob(ME, 'hash1', secretBytes(), 'image/png')
+    clearStoreKey()
+    setStoreKey(Uint8Array.from(STORE_KEY))
+    expect(new Uint8Array((await getBlob(ME, 'hash1'))!.bytes)).toEqual(SECRET)
+  })
+})
+
+describe('a wrong key is a miss, not garbage', () => {
+  it('fails the tag check rather than returning wrong bytes', async () => {
+    await putBlob(ME, 'hash1', secretBytes(), 'image/png')
+    setStoreKey(new Uint8Array(32).fill(7))   // a re-minted salt derives a different key
+    expect(await getBlob(ME, 'hash1')).toBeNull()
+  })
+
+  it('LEAVES the undecryptable record on disk — a read path must not be destructive', async () => {
+    await putBlob(ME, 'hash1', secretBytes(), 'image/png')
+    setStoreKey(new Uint8Array(32).fill(7))
+    await getBlob(ME, 'hash1')
+    expect(await rawCount()).toBe(1)
+    // and the right key still opens it, which is why deleting would have been wrong
+    setStoreKey(Uint8Array.from(STORE_KEY))
+    expect(new Uint8Array((await getBlob(ME, 'hash1'))!.bytes)).toEqual(SECRET)
+  })
+})
+
+describe('migration: the v1 plaintext cache is wiped in place', () => {
+  it('clears every legacy record on the first open, rather than migrating it', async () => {
+    await seedLegacyV1([
+      { id: `${ME}:old1`, pubkey: ME, bytes: secretBytes(), mime: 'image/png' },
+      { id: `${ME}:old2`, pubkey: ME, bytes: secretBytes(), mime: 'image/jpeg' },
+      { id: `${OTHER}:old3`, pubkey: OTHER, bytes: secretBytes(), mime: 'image/png' },
+    ])
+    __resetBlobCacheForTests()
+
+    // Any operation opens the database, which runs the upgrade.
+    expect(await hasBlob(ME, 'old1')).toBe(false)
+
+    // THE POINT: the plaintext is GONE from disk, not merely unreadable and not orphaned in a
+    // renamed database. A rename would have left these three records sitting there forever.
+    expect(await rawCount()).toBe(0)
+    expect(await rawGet(`${ME}:old1`)).toBeUndefined()
+    expect(await rawGet(`${OTHER}:old3`)).toBeUndefined()
+  })
+
+  it('leaves a working sealed cache behind, repopulating on the next put', async () => {
+    await seedLegacyV1([{ id: `${ME}:old1`, pubkey: ME, bytes: secretBytes(), mime: 'image/png' }])
+    __resetBlobCacheForTests()
+
+    // What the app does after the wipe: the image is re-fetched from the blob host and re-cached,
+    // sealed this time. Nothing was lost that a download does not replace.
+    expect(await putBlob(ME, 'old1', secretBytes(), 'image/png')).toBe(true)
+    expect(new Uint8Array((await getBlob(ME, 'old1'))!.bytes)).toEqual(SECRET)
+    expect((await rawGet(`${ME}:old1`))!.v).toBe(2)
+  })
+
+  it('reads a stray unversioned record as a miss rather than as plaintext', async () => {
+    // Unreachable in practice — the upgrade ran before any read could see one — but the check is
+    // what stops a v1 record being handed back as though it had been opened.
+    await putBlob(ME, 'hash1', secretBytes(), 'image/png')
+    const sealed = (await rawGet(`${ME}:hash1`))!
+    await rawPut({ id: sealed.id, pubkey: ME, bytes: secretBytes(), mime: 'image/png', size: 64, storedAt: Date.now() })
+    expect(await getBlob(ME, 'hash1')).toBeNull()
   })
 })

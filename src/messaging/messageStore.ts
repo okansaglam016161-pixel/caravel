@@ -23,10 +23,11 @@ const SELF_ECHO_WINDOW_MS = 60_000
 // every image attachment (MediaRef.key). Encrypting the journal while this sat in the clear beside
 // it would have been half a fix.
 //
-// NOTE FOR blobCache: its header argues that caching DECRYPTED image bytes buys nothing because the
-// key travels in the message and messages are plaintext at rest. That premise no longer holds —
-// the keys are sealed now, and the cached bytes are the weaker link. That is a later stage's
-// problem, but the reasoning there is stale as of this commit.
+// THIS IS WHAT FALSIFIED blobCache's OLD ARGUMENT. That module reasoned that caching DECRYPTED image
+// bytes bought nothing, because the key travels in the message and messages were plaintext at rest.
+// Sealing MediaRef.key here broke the second half of that, leaving the cached images the only
+// plaintext left. CLOSED IN STAGE 5 — blobCache seals its records under the same store key, and
+// keeps the dead argument at putBlob rather than deleting it.
 //
 // ── THE COST, MEASURED ───────────────────────────────────────────────────────
 //

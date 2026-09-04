@@ -1,28 +1,45 @@
 import type { Group, GroupDef, GroupState } from './types'
+import { loadStore, writeStore, type Parse } from '../crypto/storeIo'
 
 // Local persistence for groups, sibling to messageStore.ts. Same shape of problem: localStorage
 // keyed per identity, loaded on unlock, merged on arrival, React state cleared on lock while the
 // stored copy persists. Phase 1: fan-out messaging, in-message roster, fixed membership.
+//
+// ── ENCRYPTED AT REST (stage 4) ──────────────────────────────────────────────
+//
+// Group names and rosters — the membership half of the social graph. Sealed through storeIo, and it
+// MIGRATES ON READ because every mutation here is guarded: ensureGroup returns early for a group it
+// already knows, and addOrUpdateGroup is first-def-wins. A wallet whose groups are all established
+// writes nothing, so lazy-on-write alone would have left the rosters in plaintext.
+//
+// AND THAT MAKES THE `state` MIGRATION PERMANENT. A group persisted before invite-gating has no
+// `state`, and the default below has been re-derived on every load ever since. The migration write
+// persists the PARSED list, so it is done once.
+//
+// hasGroup and getGroupState below read the persisted store and are documented as authoritative at
+// call time BECAUSE every mutation here writes synchronously. Sealing keeps that property — the
+// envelope is deliberately synchronous — but it is now load-bearing for correctness, not only for
+// convenience: an async store would break their contract silently.
 
 // ── Storage ───────────────────────────────────────────────────────────────────
 
 // Keyed on Nostr pubkey hex, mirroring messageStore.
 function key(pubkeyHex: string) { return `caravel.groups.v1.${pubkeyHex}` }
 
+const parse: Parse<Group[]> = decoded => {
+  if (!Array.isArray(decoded)) return null
+  // MIGRATION (Phase A): a group persisted before the invite-gating field existed has no `state`.
+  // It was already visible, so default it to 'active' — nothing regresses. Since stage 4 the
+  // migrating read re-persists this, so it is applied once rather than on every load.
+  return (decoded as Group[]).map(g => (g.state ? g : { ...g, state: 'active' as GroupState }))
+}
+
 export function loadGroups(pubkeyHex: string): Group[] {
-  try {
-    const raw = localStorage.getItem(key(pubkeyHex))
-    if (!raw) return []
-    const stored = JSON.parse(raw) as Group[]
-    // LAZY MIGRATION (Phase A): a group persisted before the invite-gating field existed has no
-    // `state`. It was already visible, so default it to 'active' — nothing regresses. Same shape as
-    // the DM lazy 'accepted' migration. No one-time backfill; done on every load.
-    return stored.map(g => (g.state ? g : { ...g, state: 'active' as GroupState }))
-  } catch { return [] }
+  return loadStore(key(pubkeyHex), parse, () => [])
 }
 
 function save(pubkeyHex: string, groups: Group[]): void {
-  try { localStorage.setItem(key(pubkeyHex), JSON.stringify(groups)) } catch { /* quota / private mode */ }
+  writeStore(key(pubkeyHex), JSON.stringify(groups), parse)
 }
 
 // A lazy placeholder is a group we learned of from a message before its definition arrived: it has

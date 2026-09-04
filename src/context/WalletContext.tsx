@@ -26,7 +26,7 @@ import { loadDeletedGroupIdSet, recordDeletedGroup, clearDeletedGroup } from '..
 import { loadSeenDefIdSet, recordSeenDef } from '../messaging/seenDefStore'
 import type { Group } from '../messaging/types'
 import { loadTombstoneIdSet, recordTombstones } from '../messaging/tombstoneStore'
-import { removeResolvedAmounts } from '../messaging/paymentResolutionStore'
+import { removeResolvedAmounts, migrateResolvedAmounts } from '../messaging/paymentResolutionStore'
 import { deleteBlobs } from '../messaging/blobCache'
 import { mediaBlobKeys } from '../messaging/sendMedia'
 import { loadContacts, setContactState, removeContact, type ContactMap } from '../messaging/contactStore'
@@ -458,6 +458,10 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     setMessages(loaded)
     setContacts(loadContacts(pubkeyHex))
     setContactAddresses(loadTariAddresses(pubkeyHex))
+    // No React state to seed — the resolved-amount cache is read per card, not held here. This read
+    // exists purely so the record is migrated to the sealed format at unlock like the loads around
+    // it, instead of waiting for a received-payment card that a given wallet may never render.
+    migrateResolvedAmounts(pubkeyHex)
     const loadedGroups = loadGroups(pubkeyHex)
     setGroups(loadedGroups)
     // Seed the "known peers" set from persisted history — anyone we already have a message with is

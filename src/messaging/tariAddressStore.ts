@@ -9,7 +9,23 @@
 // address takes precedence over a manual one for the same peer (verified beats pasted).
 //
 // Conventions match the other stores: per-identity localStorage key (keyed under MY pubkey),
-// quota swallowed. Legacy entries were bare strings (all manual) and migrate lazily on load.
+// quota swallowed.
+//
+// ── ENCRYPTED AT REST (stage 4) ──────────────────────────────────────────────
+//
+// THE HIGHEST-VALUE LINKAGE IN THE APP, and the reason tier 2 started here: this map is the join
+// between a Nostr identity and an on-chain one. Beside the journal — which is now sealed — it was
+// the other half of a deanonymisation package.
+//
+// It MIGRATES ON READ (storeIo), because it writes only when an address is pasted or exchanged: a
+// wallet whose contacts already have addresses would otherwise keep this in plaintext forever.
+//
+// AND THAT MAKES THE LEGACY-STRING MIGRATION PERMANENT. Entries were once bare strings (all
+// manual); the conversion below has been re-derived on every load ever since, because nothing
+// re-persisted it. The migration write now stores the PARSED map, so it is done once and stays
+// done.
+
+import { asRecord, loadStore, writeStore, type Parse } from '../crypto/storeIo'
 
 export type AddressSource = 'manual' | 'exchanged'
 
@@ -23,23 +39,24 @@ export type TariAddressMap = Record<string, TariAddressRecord>
 
 function key(myPubkeyHex: string) { return `caravel.tariaddr.v1.${myPubkeyHex}` }
 
+const parse: Parse<TariAddressMap> = decoded => {
+  const record = asRecord(decoded)
+  if (record === null) return null
+  const out: TariAddressMap = {}
+  for (const peer in record) {
+    const v = record[peer] as string | TariAddressRecord
+    // Legacy bare-string values were all manually-entered addresses.
+    out[peer] = typeof v === 'string' ? { address: v, source: 'manual' } : v
+  }
+  return out
+}
+
 function save(myPubkeyHex: string, map: TariAddressMap): void {
-  try { localStorage.setItem(key(myPubkeyHex), JSON.stringify(map)) } catch { /* quota / private mode */ }
+  writeStore(key(myPubkeyHex), JSON.stringify(map), parse)
 }
 
 export function loadTariAddresses(myPubkeyHex: string): TariAddressMap {
-  try {
-    const raw = localStorage.getItem(key(myPubkeyHex))
-    if (!raw) return {}
-    const parsed = JSON.parse(raw) as Record<string, string | TariAddressRecord>
-    const out: TariAddressMap = {}
-    for (const peer in parsed) {
-      const v = parsed[peer]
-      // Lazy migration: legacy bare-string values were all manually-entered addresses.
-      out[peer] = typeof v === 'string' ? { address: v, source: 'manual' } : v
-    }
-    return out
-  } catch { return {} }
+  return loadStore(key(myPubkeyHex), parse, () => ({}))
 }
 
 // Set (or clear, when addr is blank) a peer's address with an explicit source. Returns the next

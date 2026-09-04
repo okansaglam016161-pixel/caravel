@@ -12,6 +12,17 @@
 // peer with NO prior messages, so existing conversations are never mis-flagged.
 //
 // Conventions match the other stores: per-identity key (keyed under MY pubkey), quota swallowed.
+//
+// ── ENCRYPTED AT REST (stage 4) ──────────────────────────────────────────────
+//
+// Who you talk to. Sealed through storeIo, and MIGRATES ON READ: this writes only on a state
+// change — a new request arriving, or an accept — so a wallet with settled conversations would
+// otherwise keep its contact graph in plaintext indefinitely.
+//
+// The lazy 'accepted' derivation described above is UNAFFECTED: it lives in ChatApp over messages,
+// not in this file, so nothing here re-persists it.
+
+import { asRecord, loadStore, writeStore, type Parse } from '../crypto/storeIo'
 
 export type ContactState = 'pending' | 'accepted'
 
@@ -25,16 +36,14 @@ export type ContactMap = Record<string, ContactRecord>
 
 function key(myPubkeyHex: string) { return `caravel.contacts.v1.${myPubkeyHex}` }
 
+const parse: Parse<ContactMap> = decoded => asRecord(decoded) as ContactMap | null
+
 function save(myPubkeyHex: string, map: ContactMap): void {
-  try { localStorage.setItem(key(myPubkeyHex), JSON.stringify(map)) } catch { /* quota / private mode */ }
+  writeStore(key(myPubkeyHex), JSON.stringify(map), parse)
 }
 
 export function loadContacts(myPubkeyHex: string): ContactMap {
-  try {
-    const raw = localStorage.getItem(key(myPubkeyHex))
-    if (!raw) return {}
-    return JSON.parse(raw) as ContactMap
-  } catch { return {} }
+  return loadStore(key(myPubkeyHex), parse, () => ({}))
 }
 
 // Set a peer's contact state (read-modify-write). Returns the next map (React-state friendly).

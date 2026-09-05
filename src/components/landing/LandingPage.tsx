@@ -38,6 +38,7 @@ import { useCallback, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useTheme } from '../../hooks/useTheme'
 import ThemeToggle from '../primitives/ThemeToggle'
+import ChatStill from './ChatStill'
 import WalletStill from './WalletStill'
 
 // ── Icons ─────────────────────────────────────────────────────────────────────
@@ -62,10 +63,6 @@ const Message = ({ size = 16, color = 'currentColor', strokeWidth = 1.8 }: IconP
 )
 const AtSign = ({ size = 16, color = 'currentColor', strokeWidth = 1.8 }: IconProps) => (
   <svg {...svgBase(size, color, strokeWidth)}><circle cx="12" cy="12" r="4" /><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8" /></svg>
-)
-/** Private. A closed padlock — the design's private/confidential mark. */
-const Lock = ({ size = 16, color = 'currentColor', strokeWidth = 2 }: IconProps) => (
-  <svg {...svgBase(size, color, strokeWidth)}><rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></svg>
 )
 const ArrowOut = ({ size = 16, color = 'currentColor', strokeWidth = 2 }: IconProps) => (
   <svg {...svgBase(size, color, strokeWidth)}><path d="M7 17L17 7" /><path d="M9 7h8v8" /></svg>
@@ -327,31 +324,6 @@ const vaultCard = (extra: React.CSSProperties = {}): React.CSSProperties => ({
   background: 'var(--nav-ground)', border: '1px solid var(--border)', borderRadius: 18, ...extra,
 })
 
-function ChatCard() {
-  return (
-    <div style={vaultCard({ padding: 22, display: 'flex', flexDirection: 'column', gap: 12 })}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 9, paddingBottom: 12, borderBottom: '1px solid var(--border)' }}>
-        <span style={{ width: 30, height: 30, borderRadius: 9, background: 'var(--vault-card)', color: 'var(--accent-300)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 600, flexShrink: 0 }}>@</span>
-        <div style={{ flex: 1, textAlign: 'left', minWidth: 0 }}>
-          <div style={{ fontSize: 13.5, fontWeight: 600, color: '#FFFFFF' }}>@okz61</div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'var(--vault-label)', marginTop: 1 }}>
-            <Lock size={9} color="var(--vault-label)" />End-to-end encrypted
-          </div>
-        </div>
-      </div>
-      <div style={{ alignSelf: 'flex-start', maxWidth: '78%', background: 'var(--vault-card)', color: '#F2F6FA', borderRadius: '12px 12px 12px 4px', padding: '9px 13px', fontSize: 13, lineHeight: 1.5, textAlign: 'left' }}>
-        Dinner was on me last time. Your turn.
-      </div>
-      <div style={{ alignSelf: 'flex-end', maxWidth: '78%', background: 'var(--accent-400)', color: '#FFFFFF', borderRadius: '12px 12px 4px 12px', padding: '9px 13px', fontSize: 13, lineHeight: 1.5, textAlign: 'left' }}>
-        Fair. Sending it now, privately.
-      </div>
-      <div style={{ alignSelf: 'flex-end', display: 'inline-flex', alignItems: 'center', gap: 7, padding: '6px 12px', borderRadius: 'var(--r-pill)', border: '1px solid var(--border-strong)', fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--vault-label)' }}>
-        <Lock size={10} color="var(--vault-label)" />Confidential payment · 33 XTR
-      </div>
-    </div>
-  )
-}
-
 function NameCard() {
   return (
     <div style={vaultCard({ padding: 26, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14 })}>
@@ -384,7 +356,7 @@ function Services() {
         flip
         title="Chat"
         body="End-to-end encrypted messaging, tied to your wallet. Private money and private words, one conversation."
-        card={<ChatCard />}
+        card={<ChatStill />}
       />
       <ServiceRow
         title="Name"

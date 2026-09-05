@@ -138,10 +138,17 @@ function StillHeader() {
 }
 
 /**
- * @param compact  Drops the header and the assets block — the services showcase, where this sits in
- *                 a ~454px grid column beside a paragraph and the full stack would tower over it.
- *                 The hero and the Privacy card are the two that carry the private/public story
- *                 that section's copy is about.
+ * @param compact  The balance hero ALONE — the services showcase tile.
+ *
+ * TWO GRAPHICS, TWO JOBS. The hero mockup at the top of the page is the detailed one: shell,
+ * header, hero, Privacy card, assets. The showcase further down is a glanceable tile beside a
+ * paragraph, and repeating the privacy split and the assets row there made it compete with the
+ * mockup rather than complement it — the same facts, twice, the second time smaller. So compact
+ * keeps the one thing a wallet tile should say at a glance: what you have.
+ *
+ * IT IS STILL THE REAL TotalHero, which is the point of the flag rather than a second component.
+ * The tile cannot drift from the mockup above it, because they are the same component over the
+ * same props.
  */
 export default function WalletStill({ compact = false }: { compact?: boolean }) {
   return (
@@ -154,12 +161,12 @@ export default function WalletStill({ compact = false }: { compact?: boolean }) 
           total={total} privateBalance={privateBalance} publicBalance={publicBalance}
           hidden={false} onSend={noop} onReceive={noop}
         />
-        <PrivacyCard
-          privateBalance={privateBalance} publicBalance={publicBalance}
-          total={total} hidden={false} entries={entries}
-        />
         {!compact && (
           <>
+            <PrivacyCard
+              privateBalance={privateBalance} publicBalance={publicBalance}
+              total={total} hidden={false} entries={entries}
+            />
             <SectionHead title="Assets" />
             <AssetsPanel total={total} hidden={false} onOpen={noop} />
           </>

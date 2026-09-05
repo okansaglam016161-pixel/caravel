@@ -234,17 +234,25 @@
 }
 
 /* ══ LIGHT ROLE TOKENS ════════════════════════════════════════════════════
-   Reachable two ways, and the second one is the point:
+   Reachable two ways, and the second one is still the point:
 
-     :root[data-theme="light"]   the whole app, once the composition pass lands
-     [data-theme="light"]        ANY SUBTREE, right now
+     :root[data-theme="light"]   the whole app — hooks/useTheme writes it on <html>
+     [data-theme="light"]        ANY SUBTREE
 
-   Custom properties inherit, so putting data-theme="light" on one element
-   re-declares the role tokens for that subtree and nothing else. That is what
-   lets the landing page ship a working light theme today while /app — which
-   still holds dark-only literals in chat and the wallet containers — stays
-   dark regardless of what the landing's toggle is set to. A global attribute
-   would flip both, and the half of it that is not ready would break. */
+   Custom properties inherit, so putting data-theme on one element re-declares
+   the role tokens for that subtree and nothing else.
+
+   THE COMPOSITION PASS HAS LANDED. This used to say the landing page shipped a
+   working light theme while /app "stays dark regardless of what the landing's
+   toggle is set to" — that stopped being true when chat lost its dark pin and
+   started following the app theme. The attribute is global now, and the wallet
+   page, chat, Name and the gate screens all follow it.
+
+   THE SUBTREE FORM STILL EARNS ITS KEEP, in the other direction: the balance
+   hero, the service spine and the confidential-payment card carry
+   data-theme="dark" so they resolve the dark ramp inside a light page. The
+   foundation keeps those surfaces on navy in both themes; see the dark block
+   above, which is matched on [data-theme="dark"] for exactly that reason. */
 :root[data-theme="light"],
 [data-theme="light"] {
   --surface-void: #F6F8FA;

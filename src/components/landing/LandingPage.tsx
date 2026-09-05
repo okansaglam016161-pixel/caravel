@@ -50,11 +50,11 @@ const Message = ({ size = 16, color = 'currentColor', strokeWidth = 1.8 }: IconP
 const AtSign = ({ size = 16, color = 'currentColor', strokeWidth = 1.8 }: IconProps) => (
   <svg {...svgBase(size, color, strokeWidth)}><circle cx="12" cy="12" r="4" /><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8" /></svg>
 )
-/** Shielded. A closed padlock — the design's private/confidential mark. */
+/** Private. A closed padlock — the design's private/confidential mark. */
 const Lock = ({ size = 16, color = 'currentColor', strokeWidth = 2 }: IconProps) => (
   <svg {...svgBase(size, color, strokeWidth)}><rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></svg>
 )
-/** Unshielded. An open eye — visible on chain. */
+/** Public. An open eye — visible on chain. */
 const Eye = ({ size = 16, color = 'currentColor', strokeWidth = 2 }: IconProps) => (
   <svg {...svgBase(size, color, strokeWidth)}><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z" /><circle cx="12" cy="12" r="3" /></svg>
 )
@@ -173,22 +173,39 @@ function Pill({ tone, children }: { tone: 'live' | 'quiet' | 'mono'; children: R
 // nothing here reads real state, and it deliberately does not import anything from the wallet — a
 // marketing still that could break when the wallet's types move would be the worst of both.
 //
-// TERMINOLOGY: Shielded / Unshielded, and XTR. Product-wide vocabulary as of the v0.3 rebrand.
+// TERMINOLOGY: PRIVATE / PUBLIC, and XTR. The app purged "shielded / unshielded" outright —
+// wallet/v2/total.ts puts the rule as "the words here have to be the words the screen around them
+// uses", and moveCopy.test.ts pins it with a case-insensitive assertion that no derived string may
+// match /shielded/i ("Nothing may bring it back"). This page was the last surface still saying it.
 
 const VAULT_LABEL = { fontSize: 11.5, fontWeight: 500, color: 'var(--vault-label)' } as const
 const VAULT_NUM = { fontWeight: 600, color: '#FFFFFF', fontFeatureSettings: "'tnum'" } as const
 
-function BalanceSide({ kind, amount }: { kind: 'shielded' | 'unshielded'; amount: string }) {
-  const Icon = kind === 'shielded' ? Lock : Eye
+/**
+ * One side of the balance split: private behind a padlock, public behind an open eye.
+ *
+ * TWO SIZES, ONE DEFINITION — `big` is the services showcase, the default is the hero mockup.
+ * These were two copies of the same markup, and the vocabulary drifted in exactly the way a second
+ * copy invites: both said "Shielded / Unshielded" long after the app had purged the words, and
+ * fixing one would have left the other. The WORDS are what this component is for, so the geometry
+ * takes a flag rather than a fork. Same `big` convention as LaunchButton above.
+ */
+function BalanceSide({ kind, amount, big = false }: {
+  kind: 'private' | 'public'; amount: string; big?: boolean
+}) {
+  const Icon = kind === 'private' ? Lock : Eye
   return (
-    <div style={{ background: 'var(--vault-card)', borderRadius: 9, padding: '9px 11px', textAlign: 'left' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-        <Icon size={10} color="var(--vault-label)" />
-        <span style={{ fontSize: 10.5, fontWeight: 500, color: 'var(--navy-200)' }}>
-          {kind === 'shielded' ? 'Shielded' : 'Unshielded'}
+    <div style={{
+      background: 'var(--vault-card)', textAlign: 'left',
+      borderRadius: big ? 'var(--r-md)' : 9, padding: big ? '11px 13px' : '9px 11px',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: big ? 6 : 5 }}>
+        <Icon size={big ? 11 : 10} color="var(--vault-label)" />
+        <span style={{ fontSize: big ? 11.5 : 10.5, fontWeight: 500, color: 'var(--navy-200)' }}>
+          {kind === 'private' ? 'Private' : 'Public'}
         </span>
       </div>
-      <div style={{ ...VAULT_NUM, fontSize: 13, marginTop: 3 }}>{amount}</div>
+      <div style={{ ...VAULT_NUM, fontSize: big ? 15 : 13, marginTop: big ? 5 : 3 }}>{amount}</div>
     </div>
   )
 }
@@ -265,8 +282,8 @@ function AppMockup() {
             <div style={{ ...VAULT_LABEL, textAlign: 'left' }}>Total balance</div>
             <div style={{ ...VAULT_NUM, fontSize: 30, fontWeight: 700, letterSpacing: '-0.03em', marginTop: 4, textAlign: 'left' }}>$340.00</div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 12 }}>
-              <BalanceSide kind="shielded" amount="$250.00" />
-              <BalanceSide kind="unshielded" amount="$90.00" />
+              <BalanceSide kind="private" amount="$250.00" />
+              <BalanceSide kind="public" amount="$90.00" />
             </div>
             <div style={{ display: 'flex', gap: 7, marginTop: 12 }}>
               <span style={{ flex: 1, textAlign: 'center', padding: '8px 6px', borderRadius: 8, fontSize: 11.5, fontWeight: 600, background: 'var(--accent-400)', color: '#FFFFFF' }}>Send</span>
@@ -372,18 +389,8 @@ function WalletCard() {
       <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--vault-label)' }}>Total balance</div>
       <div style={{ ...VAULT_NUM, fontSize: 34, fontWeight: 700, letterSpacing: '-0.03em', marginTop: 6 }}>$340.00</div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 16 }}>
-        {(['shielded', 'unshielded'] as const).map((kind, i) => {
-          const Icon = kind === 'shielded' ? Lock : Eye
-          return (
-            <div key={kind} style={{ background: 'var(--vault-card)', borderRadius: 'var(--r-md)', padding: '11px 13px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <Icon size={11} color="var(--vault-label)" />
-                <span style={{ fontSize: 11.5, fontWeight: 500, color: 'var(--navy-200)' }}>{kind === 'shielded' ? 'Shielded' : 'Unshielded'}</span>
-              </div>
-              <div style={{ ...VAULT_NUM, fontSize: 15, marginTop: 5 }}>{i === 0 ? '$250.00' : '$90.00'}</div>
-            </div>
-          )
-        })}
+        <BalanceSide big kind="private" amount="$250.00" />
+        <BalanceSide big kind="public" amount="$90.00" />
       </div>
       <div style={{ display: 'flex', gap: 9, marginTop: 14 }}>
         <span style={{ flex: 1, textAlign: 'center', padding: '10px 6px', borderRadius: 9, fontSize: 12.5, fontWeight: 600, background: 'var(--accent-400)', color: '#FFFFFF' }}>Send</span>
@@ -412,7 +419,7 @@ function ChatCard() {
         Fair. Sending it now, privately.
       </div>
       <div style={{ alignSelf: 'flex-end', display: 'inline-flex', alignItems: 'center', gap: 7, padding: '6px 12px', borderRadius: 'var(--r-pill)', border: '1px solid var(--border-strong)', fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--vault-label)' }}>
-        <Lock size={10} color="var(--vault-label)" />Shielded send to @okz61 · 33 XTR
+        <Lock size={10} color="var(--vault-label)" />Confidential payment · 33 XTR
       </div>
     </div>
   )
@@ -443,7 +450,7 @@ function Services() {
       <H2 narrow>One app. A growing set of private services.</H2>
       <ServiceRow
         title="Wallet"
-        body="Shielded and unshielded balances in one place. Send, receive, and shield. Your money, your call."
+        body="Private and public balances in one place. Make funds private or public. Your money, your call."
         card={<WalletCard />}
       />
       <ServiceRow
@@ -516,7 +523,7 @@ function Backing() {
 const FAQS: { q: string; a: string }[] = [
   { q: 'Is Caravel really self-custodial?', a: 'Yes. Your keys are generated on your device and never leave it. Not even Caravel can access your funds.' },
   { q: 'What if I lose my recovery phrase?', a: 'Your 24 words are the only way back in. Caravel cannot recover them for you, that is the nature of self-custody. Store them safely offline.' },
-  { q: 'How is my activity kept private?', a: 'Balances can be shielded as confidential on the Ootle, and messages are end-to-end encrypted. You choose what stays visible.' },
+  { q: 'How is my activity kept private?', a: 'Balances can be made private and confidential on the Ootle, and messages are end-to-end encrypted. You choose what stays visible.' },
   { q: 'Can I use real funds?', a: 'Not yet. Caravel runs on the Tari Esmeralda testnet. It is experimental and for testing, not for real value.' },
   { q: 'What are Tari and the Ootle?', a: 'Tari is the ecosystem Caravel is built on. The Ootle is its layer two for private, confidential transactions.' },
   { q: 'What is coming next?', a: 'Swap, Bridge, and Pools are on the way, expanding Caravel into the everything app for private crypto.' },

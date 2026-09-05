@@ -25,14 +25,20 @@
 //   pane simply take the width — the rail is decoration here; the balance card is the point", and
 //   both halves of that stopped being true. The rail was 190px and carried a balance card; it is
 //   the app's 64px icon spine now, it carries no figure, and at that width there is nothing to drop
-//   until roughly 420 — see the breakpoint's own note below. It is also no longer decoration: with
+//   until roughly 460 — see the breakpoint's own note below. It is also no longer decoration: with
 //   it gone the mockup is a wallet pane floating in a browser window, which is a picture of no
 //   product. The one thing left that must go early is nothing; the spine is the shell.
+//
+//   WHAT NARROWS INSTEAD IS THE WALLET HEADER, which wraps at 640 — the title on one line, the
+//   network chip and its three controls on the next. That row is the mockup's least compressible
+//   thing (a nowrap chip beside three fixed boxes), so wrapping it rather than hiding the spine is
+//   what keeps the shell on screen down to the low 400s.
 
 import { useCallback, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useTheme } from '../../hooks/useTheme'
 import ThemeToggle from '../primitives/ThemeToggle'
+import WalletStill from './WalletStill'
 
 // ── Icons ─────────────────────────────────────────────────────────────────────
 //
@@ -61,10 +67,6 @@ const AtSign = ({ size = 16, color = 'currentColor', strokeWidth = 1.8 }: IconPr
 const Lock = ({ size = 16, color = 'currentColor', strokeWidth = 2 }: IconProps) => (
   <svg {...svgBase(size, color, strokeWidth)}><rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></svg>
 )
-/** Public. An open eye — visible on chain. */
-const Eye = ({ size = 16, color = 'currentColor', strokeWidth = 2 }: IconProps) => (
-  <svg {...svgBase(size, color, strokeWidth)}><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z" /><circle cx="12" cy="12" r="3" /></svg>
-)
 const ArrowOut = ({ size = 16, color = 'currentColor', strokeWidth = 2 }: IconProps) => (
   <svg {...svgBase(size, color, strokeWidth)}><path d="M7 17L17 7" /><path d="M9 7h8v8" /></svg>
 )
@@ -83,14 +85,8 @@ const Bridge = ({ size = 15, color = 'currentColor', strokeWidth = 1.8 }: IconPr
 const Pools = ({ size = 15, color = 'currentColor', strokeWidth = 1.8 }: IconProps) => (
   <svg {...svgBase(size, color, strokeWidth)}><circle cx="12" cy="7.5" r="3.2" /><circle cx="7.5" cy="15.5" r="3.2" /><circle cx="16.5" cy="15.5" r="3.2" /></svg>
 )
-const Plus = ({ size = 11, color = 'currentColor', strokeWidth = 2 }: IconProps) => (
-  <svg {...svgBase(size, color, strokeWidth)}><path d="M12 5v14M5 12h14" /></svg>
-)
 const Chevron = ({ size = 16, color = 'currentColor', dir = 'down' }: IconProps & { dir?: 'up' | 'down' }) => (
   <svg {...svgBase(size, color, 2)}>{dir === 'up' ? <path d="M18 15l-6-6-6 6" /> : <path d="M6 9l6 6 6-6" />}</svg>
-)
-const ChevronRight = ({ size = 11, color = 'currentColor', strokeWidth = 2 }: IconProps) => (
-  <svg {...svgBase(size, color, strokeWidth)}><path d="M9 18l6-6-6-6" /></svg>
 )
 
 // ── Small shared pieces ───────────────────────────────────────────────────────
@@ -176,54 +172,26 @@ function Pill({ tone, children }: { tone: 'live' | 'quiet' | 'mono'; children: R
 
 // ── The app mockup ────────────────────────────────────────────────────────────
 //
-// A still of the product, not a live embed. Every figure is a literal chosen to match the design;
-// nothing here reads real state, and it deliberately does not import anything from the wallet — a
-// marketing still that could break when the wallet's types move would be the worst of both.
+// A still of the product, not a live embed. Nothing here reads real state.
+//
+// THE WALLET HALF IS NO LONGER DRAWN HERE. It used to be, and this note used to say the mockup
+// "deliberately does not import anything from the wallet — a marketing still that could break when
+// the wallet's types move would be the worst of both". The reasoning inverted itself in practice:
+// what actually happened is that the wallet's types moved, this file did NOT break, and the page
+// went on showing a layout the app had deleted — a two-card Shielded/Unshielded breakdown, no
+// Privacy card, an assets row with two features that no longer exist. Silence was the failure.
+//
+// So the vault, the Privacy card and the assets row are the REAL components now, over mock props,
+// in WalletStill next door. Breaking on a type change is the alarm this picture never had. What is
+// still hand-drawn is what has no component to borrow: the browser chrome, the service spine, and
+// the header cluster — and the spine and header are copied measurement-for-measurement from
+// ServiceNav and RootHeader, with their geometry imported where a module exists to import it from.
 //
 // TERMINOLOGY: PRIVATE / PUBLIC, and XTR. The app purged "shielded / unshielded" outright —
 // wallet/v2/total.ts puts the rule as "the words here have to be the words the screen around them
 // uses", and moveCopy.test.ts pins it with a case-insensitive assertion that no derived string may
 // match /shielded/i ("Nothing may bring it back"). This page was the last surface still saying it.
 
-const VAULT_LABEL = { fontSize: 11.5, fontWeight: 500, color: 'var(--vault-label)' } as const
-const VAULT_NUM = { fontWeight: 600, color: '#FFFFFF', fontFeatureSettings: "'tnum'" } as const
-
-/**
- * One side of the balance split: private behind a padlock, public behind an open eye.
- *
- * TWO SIZES, ONE DEFINITION — `big` is the services showcase, the default is the hero mockup.
- * These were two copies of the same markup, and the vocabulary drifted in exactly the way a second
- * copy invites: both said "Shielded / Unshielded" long after the app had purged the words, and
- * fixing one would have left the other. The WORDS are what this component is for, so the geometry
- * takes a flag rather than a fork. Same `big` convention as LaunchButton above.
- */
-function BalanceSide({ kind, amount, big = false }: {
-  kind: 'private' | 'public'; amount: string; big?: boolean
-}) {
-  const Icon = kind === 'private' ? Lock : Eye
-  return (
-    <div style={{
-      background: 'var(--vault-card)', textAlign: 'left',
-      borderRadius: big ? 'var(--r-md)' : 9, padding: big ? '11px 13px' : '9px 11px',
-    }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: big ? 6 : 5 }}>
-        <Icon size={big ? 11 : 10} color="var(--vault-label)" />
-        <span style={{ fontSize: big ? 11.5 : 10.5, fontWeight: 500, color: 'var(--navy-200)' }}>
-          {kind === 'private' ? 'Private' : 'Public'}
-        </span>
-      </div>
-      <div style={{ ...VAULT_NUM, fontSize: big ? 15 : 13, marginTop: big ? 5 : 3 }}>{amount}</div>
-    </div>
-  )
-}
-
-/**
- * One service in the mockup's spine.
- *
- * ICON-ONLY, because the app's is: V3 dropped the labels to tooltips, which a still has no way to
- * show and no reason to. The selected service is the only one that says anything, and it says it
- * the way ServiceNav does — a filled tile, not a colour change on the glyph.
- */
 function SpineItem({ icon, active = false }: { icon: React.ReactNode; active?: boolean }) {
   return (
     <span style={{
@@ -289,62 +257,10 @@ function AppMockup() {
           }}>@</span>
         </div>
 
-        {/* Wallet pane */}
+        {/* The wallet pane — the real components, over mock props. See WalletStill: the header
+            cluster is drawn there too, because it belongs inside the same inert subtree. */}
         <div style={{ flex: 1, padding: '20px 24px 24px', minWidth: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <span style={{ fontSize: 16, fontWeight: 600, letterSpacing: '-0.01em', flex: 1, color: 'var(--text-primary)' }}>Wallet</span>
-            <span style={{
-              display: 'inline-flex', alignItems: 'center', gap: 5, padding: '4px 10px',
-              borderRadius: 'var(--r-pill)', border: '1px solid var(--border)',
-              fontFamily: 'var(--font-mono)', fontSize: 9, letterSpacing: '0.08em', color: 'var(--text-muted-dim)', whiteSpace: 'nowrap',
-            }}>
-              <span style={{ width: 4, height: 4, borderRadius: 'var(--r-pill)', background: 'var(--warn)' }} />ESMERALDA TESTNET
-            </span>
-            <span style={{ width: 26, height: 26, borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text-body-dim)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-              <Eye size={12} />
-            </span>
-          </div>
-
-          {/* The vault. Navy in both themes — the balance hero does not follow the page theme. */}
-          <div style={{ background: 'var(--nav-ground)', border: '1px solid var(--border)', borderRadius: 'var(--r-lg)', padding: 18, marginTop: 12 }}>
-            <div style={{ ...VAULT_LABEL, textAlign: 'left' }}>Total balance</div>
-            <div style={{ ...VAULT_NUM, fontSize: 30, fontWeight: 700, letterSpacing: '-0.03em', marginTop: 4, textAlign: 'left' }}>$340.00</div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 12 }}>
-              <BalanceSide kind="private" amount="$250.00" />
-              <BalanceSide kind="public" amount="$90.00" />
-            </div>
-            <div style={{ display: 'flex', gap: 7, marginTop: 12 }}>
-              <span style={{ flex: 1, textAlign: 'center', padding: '8px 6px', borderRadius: 8, fontSize: 11.5, fontWeight: 600, background: 'var(--accent-400)', color: '#FFFFFF' }}>Send</span>
-              <span style={{ flex: 1, textAlign: 'center', padding: '8px 6px', borderRadius: 8, fontSize: 11.5, fontWeight: 600, background: 'var(--vault-card)', color: '#FFFFFF' }}>Receive</span>
-            </div>
-          </div>
-
-          {/* Assets */}
-          <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: 5, marginTop: 10, boxShadow: 'var(--e1)' }}>
-            <div style={{ padding: '8px 11px 5px', fontSize: 11.5, fontWeight: 600, textAlign: 'left', color: 'var(--text-primary)' }}>Assets</div>
-            <div className="cv-lp-asset" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 11px' }}>
-              <span style={{ width: 28, height: 28, borderRadius: 9, overflow: 'hidden', border: '1px solid var(--border)', flexShrink: 0 }}>
-                <img src="/partner-tari.jpg" alt="" aria-hidden="true" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
-              </span>
-              <div style={{ flex: 1, minWidth: 0, textAlign: 'left' }}>
-                <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>XTR</div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 1, fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--text-muted-dim)', flexWrap: 'wrap' }}>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><Lock size={8} />625,000.000000</span>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><Eye size={8} />225,000.000000</span>
-                </div>
-              </div>
-              <div style={{ textAlign: 'right' }}>
-                <div style={{ fontSize: 12, fontWeight: 600, fontFeatureSettings: "'tnum'", color: 'var(--text-primary)' }}>$340.00</div>
-                <div style={{ fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--text-muted-dim)', marginTop: 1, whiteSpace: 'nowrap' }}>850,000.000000 XTR</div>
-              </div>
-              <ChevronRight color="var(--text-muted-dim)" />
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 11px', opacity: 0.65 }}>
-              <span style={{ width: 28, height: 28, borderRadius: 9, border: '1px dashed var(--border-strong)', color: 'var(--text-muted-dim)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Plus /></span>
-              <span style={{ flex: 1, fontSize: 11.5, fontWeight: 500, color: 'var(--text-muted-dim)', textAlign: 'left' }}>More assets coming</span>
-              <span style={{ padding: '2px 8px', borderRadius: 'var(--r-pill)', border: '1px solid var(--border)', fontSize: 9, fontWeight: 600, color: 'var(--text-muted-dim)', flexShrink: 0 }}>Soon</span>
-            </div>
-          </div>
+          <WalletStill />
         </div>
       </div>
     </div>
@@ -411,23 +327,6 @@ const vaultCard = (extra: React.CSSProperties = {}): React.CSSProperties => ({
   background: 'var(--nav-ground)', border: '1px solid var(--border)', borderRadius: 18, ...extra,
 })
 
-function WalletCard() {
-  return (
-    <div style={vaultCard({ padding: 24 })}>
-      <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--vault-label)' }}>Total balance</div>
-      <div style={{ ...VAULT_NUM, fontSize: 34, fontWeight: 700, letterSpacing: '-0.03em', marginTop: 6 }}>$340.00</div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 16 }}>
-        <BalanceSide big kind="private" amount="$250.00" />
-        <BalanceSide big kind="public" amount="$90.00" />
-      </div>
-      <div style={{ display: 'flex', gap: 9, marginTop: 14 }}>
-        <span style={{ flex: 1, textAlign: 'center', padding: '10px 6px', borderRadius: 9, fontSize: 12.5, fontWeight: 600, background: 'var(--accent-400)', color: '#FFFFFF' }}>Send</span>
-        <span style={{ flex: 1, textAlign: 'center', padding: '10px 6px', borderRadius: 9, fontSize: 12.5, fontWeight: 600, background: 'var(--vault-card)', color: '#FFFFFF' }}>Receive</span>
-      </div>
-    </div>
-  )
-}
-
 function ChatCard() {
   return (
     <div style={vaultCard({ padding: 22, display: 'flex', flexDirection: 'column', gap: 12 })}>
@@ -479,7 +378,7 @@ function Services() {
       <ServiceRow
         title="Wallet"
         body="Private and public balances in one place. Make funds private or public. Your money, your call."
-        card={<WalletCard />}
+        card={<WalletStill compact />}
       />
       <ServiceRow
         flip
@@ -674,26 +573,35 @@ const LANDING_CSS = `
   .cv-lp-h2 { font-size: 26px; }
   .cv-lp-steps { grid-template-columns: 1fr; gap: 36px; }
   .cv-lp-hero-ctas { flex-direction: column; gap: 16px !important; }
-  .cv-lp-asset { flex-wrap: wrap; }
+  /* The mockup's wallet header: the title takes one line and the chip-plus-three-controls
+     cluster the next, rather than the row refusing to shrink. This is what keeps the spine's
+     breakpoint below where it would otherwise have to go — see the rule under this block.
+     (It replaces a .cv-lp-asset rule that did the same job for the hand-drawn assets row; that
+     row is AssetsPanel now, and brings its own.) */
+  .cv-lp-mockhead { flex-wrap: wrap; row-gap: 10px; }
   .cv-lp-footer { justify-content: flex-start; }
 }
 
-/* ── ≤420: the last width where the spine still leaves the pane room ──
-   THIS USED TO BE 880, when the rail was a 190px labelled sidebar. At 64px it
-   costs a third of that, so it now survives every tablet and laptop width and
-   most phones — which matters, because a wallet pane with no shell around it is
-   not a picture of the app at all.
+/* ── ≤460: the last width where the spine still leaves the pane room ──
+   THIS USED TO BE 880, when the rail was a 190px labelled sidebar carrying a
+   balance card. At 64px it costs a third of that, so it survives every tablet
+   and laptop width and most phones — which matters, because a wallet pane with
+   no shell around it is not a picture of the app at all.
 
-   WHERE THE FLOOR COMES FROM: the pane's narrowest element is the header row,
-   whose network chip is "white-space: nowrap" and so cannot shrink — roughly
-   227px of unshrinkable header, plus 48px of pane padding, plus the 64px spine
-   and the card's two borders, over the 20px section gutters below. That lands
-   near 380px; the rule sits at 420 to leave the estimate some room, since the
-   mockup's outer card is "overflow: hidden" and overshooting CLIPS rather than
-   scrolls. RE-MEASURE THIS IN STAGE 3, which rebuilds that header cluster (a
-   sentence-case chip and three boxed controls instead of one) and therefore
-   moves the very number this breakpoint is derived from. */
-@media (max-width: 420px) {
+   RE-DERIVED FOR THE V3 HEADER, which roughly doubled the row this number comes
+   from: one 26px control became a ~156px chip plus three 30px boxes, taking the
+   unshrinkable header from ~227px to ~344px. Straight through, that would have
+   forced the spine out at ~500px and lost it on every phone. The header wraps at
+   640 instead (.cv-lp-mockhead above), so the binding width is now the right-hand
+   cluster alone — about 270px, plus 48px of pane padding, the 64px spine and the
+   card's two borders, over the 20px section gutters. That lands near 424px.
+
+   THE FIGURES ARE DERIVED FROM THE FLEX CONSTRAINTS, NOT MEASURED, and carry
+   perhaps 15px of error each; 460 is where the rule sits so they have room to be
+   wrong. Erring high is the cheap direction: the mockup's outer card is
+   "overflow: hidden", so overshooting CLIPS the pane rather than scrolling it,
+   while undershooting only drops a 64px decoration slightly early. */
+@media (max-width: 460px) {
   .cv-lp-rail { display: none; }
 }
 

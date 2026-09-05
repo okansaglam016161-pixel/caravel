@@ -19,8 +19,15 @@
 //
 //   The app mockup narrows rather than scales. Its internals are fixed pixels, so a transform would
 //   need a paired negative margin to keep layout height in step — fiddly, and it makes the type
-//   blurry on the way down. Dropping the nav rail below 880 instead lets the right pane, which is
-//   already fluid, simply take the width. The rail is decoration here; the balance card is the point.
+//   blurry on the way down. The right pane is already fluid, so it simply takes the width instead.
+//
+//   THE SPINE NOW STAYS. That paragraph used to end "dropping the nav rail below 880 lets the right
+//   pane simply take the width — the rail is decoration here; the balance card is the point", and
+//   both halves of that stopped being true. The rail was 190px and carried a balance card; it is
+//   the app's 64px icon spine now, it carries no figure, and at that width there is nothing to drop
+//   until roughly 420 — see the breakpoint's own note below. It is also no longer decoration: with
+//   it gone the mockup is a wallet pane floating in a browser window, which is a picture of no
+//   product. The one thing left that must go early is nothing; the spine is the shell.
 
 import { useCallback, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
@@ -210,14 +217,21 @@ function BalanceSide({ kind, amount, big = false }: {
   )
 }
 
-function RailItem({ icon, label, active = false }: { icon: React.ReactNode; label: string; active?: boolean }) {
+/**
+ * One service in the mockup's spine.
+ *
+ * ICON-ONLY, because the app's is: V3 dropped the labels to tooltips, which a still has no way to
+ * show and no reason to. The selected service is the only one that says anything, and it says it
+ * the way ServiceNav does — a filled tile, not a colour change on the glyph.
+ */
+function SpineItem({ icon, active = false }: { icon: React.ReactNode; active?: boolean }) {
   return (
-    <div style={{
-      display: 'flex', alignItems: 'center', gap: 9, padding: '8px 10px', borderRadius: 9,
+    <span style={{
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      width: 38, height: 38, flexShrink: 0, borderRadius: 11,
       background: active ? 'var(--nav-selected)' : 'transparent',
-      color: active ? '#FFFFFF' : 'var(--navy-200)',
-      fontSize: 12, fontWeight: active ? 600 : 500,
-    }}>{icon}{label}</div>
+      color: active ? 'var(--text-bright)' : 'var(--text-body-dim)',
+    }}>{icon}</span>
   )
 }
 
@@ -233,32 +247,46 @@ function AppMockup() {
       </div>
 
       <div style={{ display: 'flex' }}>
-        {/* Service rail — hidden below 880; see the responsive note at the top of this file. */}
-        <div className="cv-lp-rail" style={{
-          width: 190, flexShrink: 0, background: 'var(--nav-ground)', padding: '16px 12px',
-          display: 'flex', flexDirection: 'column', gap: 4,
+        {/* ── The service spine ──────────────────────────────────────────────────
+            THE APP'S SHELL, AT 64px. This drew a 190px labelled sidebar with a "Total balance"
+            card under the lockup — the shell as it stood before V3. Three things went:
+
+              * THE LABELS became tooltips, which a still can neither show nor needs to.
+              * THE BALANCE CARD was deleted outright. shell/ServiceNav gives the reason: the
+                wallet's whole point is now one centred figure, and a second copy of that same
+                number 200px to its left is the screen saying the most important thing twice.
+              * THE ADDRESS went with the width. The identity is the bare "@" tile now; the full
+                value lives on `title` in the app, and a still has no hover.
+
+            HAND-DRAWN, NOT IMPORTED, like the rest of this mockup — ServiceNav reads useWallet()
+            for that tooltip and navigates on a click, and a marketing graphic wants neither. The
+            geometry is copied from it on purpose: 64 wide, a 32 mark, three 38 buttons, a 30
+            identity tile. NO RIGHT BORDER, also per the design — the pane beside it draws its own.
+
+            AN ALWAYS-DARK ISLAND, again like the real one: the spine is navy in both themes, so it
+            pins data-theme="dark" and everything inside resolves the dark ramp whatever the page
+            around it is set to. That is what lets it use ordinary role tokens rather than the
+            #FFFFFF and --navy-200 literals this rail used to carry. Same mechanism as the vault
+            hero below it; see the note over the LIGHT ROLE TOKENS block in index.css. */}
+        <div className="cv-lp-rail" data-theme="dark" style={{
+          width: 64, flexShrink: 0, background: 'var(--nav-ground)',
+          padding: '14px 0', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
         }}>
-          <div style={{ padding: '4px 8px 12px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ width: 24, height: 24, borderRadius: 7, background: 'var(--accent-400)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                <img src="/logo-light.png" alt="" aria-hidden="true" style={{ height: 13, width: 'auto', display: 'block' }} />
-              </span>
-              <span style={{ fontSize: 13.5, fontWeight: 600, color: '#FFFFFF' }}>Caravel</span>
-            </div>
-          </div>
-          <div style={{ background: 'var(--vault-card)', borderRadius: 'var(--r-md)', padding: '10px 12px', marginBottom: 10 }}>
-            <div style={{ fontSize: 10, fontWeight: 500, color: 'var(--vault-label)' }}>Total balance</div>
-            <div style={{ ...VAULT_NUM, fontSize: 15, marginTop: 2 }}>$340.00</div>
-          </div>
-          <RailItem icon={<Wallet size={13} />} label="Wallet" active />
-          <RailItem icon={<Message size={13} />} label="Chat" />
-          <RailItem icon={<AtSign size={13} />} label="Name" />
-          <div style={{ flex: 1, minHeight: 16 }} />
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 10px', borderTop: '1px solid var(--border)' }}>
-            <span style={{ width: 22, height: 22, borderRadius: 7, background: 'var(--vault-card)', color: 'var(--accent-300)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, fontWeight: 600, flexShrink: 0 }}>@</span>
-            <span style={{ flex: 1, fontSize: 11.5, fontWeight: 600, color: '#F2F6FA', minWidth: 0 }}>@okz61</span>
-            <Lock size={12} color="var(--vault-label)" />
-          </div>
+          <span style={{
+            width: 32, height: 32, borderRadius: 10, background: 'var(--accent-400)', marginBottom: 10,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+          }}>
+            <img src="/logo-light.png" alt="" aria-hidden="true" style={{ height: 17, width: 'auto', display: 'block' }} />
+          </span>
+          <SpineItem icon={<Wallet size={15} />} active />
+          <SpineItem icon={<Message size={15} />} />
+          <SpineItem icon={<AtSign size={15} />} />
+          <span style={{ flex: 1, minHeight: 24 }} />
+          <span style={{
+            width: 30, height: 30, borderRadius: 9, background: 'var(--accent-400)',
+            color: 'var(--ink-on-accent)', fontSize: 11, fontWeight: 600, flexShrink: 0,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>@</span>
         </div>
 
         {/* Wallet pane */}
@@ -638,11 +666,6 @@ const LANDING_CSS = `
   .cv-lp-footer { margin-top: 110px; }
 }
 
-/* ── ≤880: the mockup's fixed 190px rail stops fitting beside a fluid pane ── */
-@media (max-width: 880px) {
-  .cv-lp-rail { display: none; }
-}
-
 /* ── ≤640: single column throughout, and the display sizes come down again ── */
 @media (max-width: 640px) {
   .cv-lp-bar, .cv-lp-hero, .cv-lp-section, .cv-lp-footer { padding-left: 20px; padding-right: 20px; }
@@ -653,6 +676,25 @@ const LANDING_CSS = `
   .cv-lp-hero-ctas { flex-direction: column; gap: 16px !important; }
   .cv-lp-asset { flex-wrap: wrap; }
   .cv-lp-footer { justify-content: flex-start; }
+}
+
+/* ── ≤420: the last width where the spine still leaves the pane room ──
+   THIS USED TO BE 880, when the rail was a 190px labelled sidebar. At 64px it
+   costs a third of that, so it now survives every tablet and laptop width and
+   most phones — which matters, because a wallet pane with no shell around it is
+   not a picture of the app at all.
+
+   WHERE THE FLOOR COMES FROM: the pane's narrowest element is the header row,
+   whose network chip is "white-space: nowrap" and so cannot shrink — roughly
+   227px of unshrinkable header, plus 48px of pane padding, plus the 64px spine
+   and the card's two borders, over the 20px section gutters below. That lands
+   near 380px; the rule sits at 420 to leave the estimate some room, since the
+   mockup's outer card is "overflow: hidden" and overshooting CLIPS rather than
+   scrolls. RE-MEASURE THIS IN STAGE 3, which rebuilds that header cluster (a
+   sentence-case chip and three boxed controls instead of one) and therefore
+   moves the very number this breakpoint is derived from. */
+@media (max-width: 420px) {
+  .cv-lp-rail { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {

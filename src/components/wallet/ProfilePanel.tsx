@@ -1,19 +1,27 @@
 //   ProfilePanel — the wallet's own identity and keys, opened from the service rail's profile row.
 //
-//   ── WALLET-ONLY, AS OF V3 SERIES 6 ───────────────────────────────────────────
+//   ── TWO HANDLES AND A KEY ────────────────────────────────────────────────────
 //
-//   It used to carry three identities at once: the Tari address, the Nostr npub, and the @names
-//   this wallet owns on chain. That made it a drawer rather than a panel — three unrelated systems
-//   sharing one sheet because they all answered to the word "profile".
+//   V3 series 6 stripped this panel to the wallet alone. It had carried three identities at once —
+//   the Tari address, the Nostr npub, and the @names this wallet owns on chain — which made it a
+//   drawer rather than a panel, three unrelated systems sharing one sheet because they all answered
+//   to the word "profile". @names went to the Name page, which already owns registration, and that
+//   half was right and has stayed right.
 //
-//   The npub and the @names are GONE FROM THIS PANEL and will reappear where they belong: the npub
-//   in a messaging compartment, @names on the Name page, which already owns registration. Nothing
-//   was deleted to do it — `nostrNpub` is still on the wallet context and `ownedOnsNames` is still
-//   in crypto/ons, both untouched and both still used elsewhere. This file simply stopped
-//   rendering them.
+//   THE npub IS BACK, DELIBERATELY. It was to reappear "in a messaging compartment"; that surface
+//   was never built, and the removal commit recorded the resulting hole as a known, accepted gap —
+//   chat's sidebar profile opened this same panel, and this was the only way to copy an npub. It
+//   stayed the only way to copy an npub, so the gap was total: an app whose whole point is that
+//   people message each other had nowhere to see your own handle. `nostrNpub` was still on the
+//   context the entire time, used by @name registration and rendered nowhere.
 //
-//   What is left is what a WALLET panel is for: how to be paid, how to recover the wallet, and how
-//   to lock it.
+//   The distinction the first removal did not draw: @names are a SYSTEM — a list of on-chain
+//   registrations with their own lifecycle — while the address and the npub are two HANDLES FOR THE
+//   SAME PERSON. Both are public, both are pasted to strangers, and one panel opened by an `@` tile
+//   is where you go looking for either. That is not the drawer the strip was reacting to.
+//
+//   So: how to be paid, how to be messaged, how to recover the wallet, and how to lock it. The
+//   messaging compartment is no longer where the npub waits.
 //
 //   ── THE PASSWORD GATE IS LOAD-BEARING ────────────────────────────────────────
 //
@@ -46,6 +54,59 @@ const CheckIcon = () => (
 )
 const eyeOpen = (c: string) => (<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" /><circle cx="12" cy="12" r="3" /></svg>)
 const eyeOff = (c: string) => (<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" /><circle cx="12" cy="12" r="3" /><path d="M4 4l16 16" /></svg>)
+
+/**
+ * One identity row: a fixed-width label, the value, and a copy control.
+ *
+ * IT COPIES THE FULL VALUE, ALWAYS. What is drawn is a middle-truncated preview so the row fits;
+ * `value` is what reaches the clipboard. A partially-copied Tari address is an unrecoverable
+ * payment, so the two are kept deliberately separate — nothing here formats what it copies.
+ *
+ * RESTORED FROM THE PRE-SERIES-6 PANEL, because the reason it existed came back with the npub. The
+ * copy state is PER ROW: hoisted into the panel it would be one boolean behind two rows, and
+ * clicking either would make both claim "Copied" — saying the npub is on the clipboard when the
+ * address is. Two rows, two states, no shared flag to get wrong.
+ *
+ * Its own state rather than CopyBtn's, for the same reason as before: CopyBtn renders a pill or a
+ * text button, and V3 draws this as a bordered row with a bare icon at its end. Same 1800ms
+ * acknowledgement either way.
+ *
+ * The label column is FIXED WIDTH so the two mono values start at the same x — "Address" and "npub"
+ * are different lengths, and ragged value columns would read as two unrelated rows rather than one
+ * pair.
+ */
+function IdRow({ label, value, missing, mt }: { label: string; value: string | null; missing: string; mt: number }) {
+  const [copied, setCopied] = useState(false)
+
+  function copy() {
+    if (!value) return
+    void navigator.clipboard?.writeText(value)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1800)
+  }
+
+  const shown = value ? (value.length > 30 ? `${value.slice(0, 14)}…${value.slice(-10)}` : value) : missing
+
+  return (
+    <div
+      onClick={value ? copy : undefined}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 10, marginTop: mt,
+        padding: '12px 14px', borderRadius: 10,
+        background: 'var(--surface-void)', border: '1px solid var(--border)',
+        cursor: value ? 'pointer' : 'default',
+      }}
+    >
+      <span style={{ width: 54, flexShrink: 0, fontSize: 12, fontWeight: 600, color: 'var(--text-muted-dim)' }}>{label}</span>
+      <span style={{
+        flex: 1, minWidth: 0, fontFamily: MONO, fontSize: 11.5,
+        color: value ? 'var(--text-body-dim)' : 'var(--text-faint)',
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+      }}>{copied ? 'Copied' : shown}</span>
+      {value && (copied ? <CheckIcon /> : <CopyIcon />)}
+    </div>
+  )
+}
 
 /** The card, shared by all three steps — the V3 sheet card, same as Send and Receive. */
 const CARD: React.CSSProperties = { padding: 32 }
@@ -92,14 +153,13 @@ function PanelButton({ tone, onClick, children, mt, disabled = false }: {
 type Step = 'main' | 'phraseAuth' | 'phraseWords'
 
 export default function ProfilePanel({ onClose }: { onClose: () => void }) {
-  const { getMnemonic, lock, address } = useWallet()
+  const { getMnemonic, lock, address, nostrNpub } = useWallet()
   const [step, setStep] = useState<Step>('main')
   const [phrasePass, setPhrasePass] = useState('')
   const [showPhrasePass, setShowPhrasePass] = useState(false)
   const [phraseError, setPhraseError] = useState('')
   const [phraseLoading, setPhraseLoading] = useState(false)
   const [words, setWords] = useState<string[] | null>(null)
-  const [copied, setCopied] = useState(false)
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) { if (e.key === 'Escape') onClose() }
@@ -140,20 +200,6 @@ export default function ProfilePanel({ onClose }: { onClose: () => void }) {
 
   function handleLock() { lock(); onClose() }
 
-  function copyAddress() {
-    // THE FULL ADDRESS, never the truncated display. A partially-copied Tari address is an
-    // unrecoverable payment, so what is drawn and what is copied come from different expressions
-    // on purpose — see the row below.
-    if (!address) return
-    void navigator.clipboard?.writeText(address)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 1800)
-  }
-
-  const shownAddress = address
-    ? (address.length > 30 ? `${address.slice(0, 14)}…${address.slice(-10)}` : address)
-    : 'Resolving your account…'
-
   return (
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(6,12,21,0.72)', backdropFilter: 'blur(3px)', zIndex: 200 }} />
@@ -173,9 +219,11 @@ export default function ProfilePanel({ onClose }: { onClose: () => void }) {
           {step === 'main' && (
             <div style={CARD}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                {/* A WALLET MARK, not an avatar. The panel is about this wallet's keys now, not
-                    about who you are to other people — the identity that had a face left with the
-                    npub. */}
+                {/* A WALLET MARK, not an avatar — and it stays one now the npub is back. The
+                    original note said the identity that had a face left with the npub; the npub has
+                    returned and the face has not, deliberately. An avatar is a claim about who you
+                    are to other people, which is a messaging surface's job to make. This panel
+                    hands you two strings to give out. It does not need a portrait to do that. */}
                 <span style={{
                   width: 40, height: 40, borderRadius: 12, flexShrink: 0,
                   background: 'var(--accent-wash)', color: 'var(--accent-ink)',
@@ -189,26 +237,19 @@ export default function ProfilePanel({ onClose }: { onClose: () => void }) {
                 <CloseButton onClose={onClose} />
               </div>
 
-              {/* The address comes from the same context field the Receive sheet shows, so the two
-                  cannot disagree. Null until the account resolves after unlock — said as
-                  "resolving", never as an empty row somebody might copy. */}
-              <div
-                onClick={address ? copyAddress : undefined}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 10, marginTop: 24,
-                  padding: '12px 14px', borderRadius: 10,
-                  background: 'var(--surface-void)', border: '1px solid var(--border)',
-                  cursor: address ? 'pointer' : 'default',
-                }}
-              >
-                <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-muted-dim)', flexShrink: 0 }}>Address</span>
-                <span style={{
-                  flex: 1, minWidth: 0, fontFamily: MONO, fontSize: 11.5,
-                  color: address ? 'var(--text-body-dim)' : 'var(--text-faint)',
-                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                }}>{copied ? 'Copied' : shownAddress}</span>
-                {address && (copied ? <CheckIcon /> : <CopyIcon />)}
-              </div>
+              {/* THE TWO HANDLES, address first — being paid is what a wallet panel is for, and
+                  being messaged is the other thing this identity does.
+
+                  The address comes from the same context field the Receive sheet shows, so the two
+                  cannot disagree. It is null until the account resolves after unlock — said as
+                  "resolving", never as an empty row somebody might copy.
+
+                  The npub does NOT have that window: it is derived synchronously at adoptIdentity
+                  and set before this panel can be opened, so its missing state is effectively
+                  unreachable. It is written anyway, because the context type says `string | null`
+                  and a row that renders `null` as text is how you ship the word "null" to a user. */}
+              <IdRow label="Address" value={address} missing="Resolving your account…" mt={24} />
+              <IdRow label="npub" value={nostrNpub} missing="npub unavailable" mt={8} />
 
               <div
                 role="button" tabIndex={0}

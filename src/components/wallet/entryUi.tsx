@@ -9,9 +9,14 @@
 //   THEME HANDOFF PRESERVED. Nothing here is a literal except the logo tile's mark, which is the
 //   light mark on an accent ground in both themes by design. Everything else reads role tokens, so
 //   a visitor who chose dark on the landing page meets a dark unlock screen — see hooks/useTheme.
+//
+//   THE LOCKUP IS A LINK HOME. That makes this module depend on the router, which is new and worth
+//   saying out loud: every screen built from these pieces renders under /app, inside the same
+//   BrowserRouter the landing page uses, so the hook has a router to find. See Lockup.
 
 import { useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { MONO } from './entryStyles'
 
 /** The page ground. Flat, per V3 — the radial lift it replaced predates the foundation. */
@@ -41,15 +46,42 @@ export function EntryCard({ children, wide = false, centred = false, pad, style 
   )
 }
 
-/** The mark on its accent tile. One lockup, both themes — the light mark on a blue ground. */
+/**
+ * The mark on its accent tile, and the way back to the landing page. One lockup, both themes — the
+ * light mark on a blue ground.
+ *
+ * THE ROUTE HOME FROM THE GATES, matching the spine's logo inside the app. These are the two
+ * screens a visitor meets first, and until now arriving at either was a one-way door: someone who
+ * clicked through from the landing page to look, and was met by a password prompt, had the browser
+ * back button and nothing else.
+ *
+ * NOTHING TO UNWIND WHEN IT FIRES. The spine's version has to say it navigates without locking;
+ * here there is no session to keep or drop — these screens render precisely because there is no
+ * unlocked wallet. It is a plain navigate.
+ *
+ * A <button> rather than a <Link>, as in the spine: Enter, Space and the focus ring come from the
+ * element. The <img> stays decorative — the accessible name belongs on the control, not on the
+ * picture inside it.
+ *
+ * Rendered by the welcome step of create and by unlock. RestoreFlow draws no lockup, so it needs
+ * nothing here; its way back is the Back control it already has.
+ */
 export function Lockup() {
+  const navigate = useNavigate()
   return (
-    <span style={{
-      width: 44, height: 44, borderRadius: 13, background: 'var(--accent-400)',
-      display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-    }}>
+    <button
+      onClick={() => navigate('/')}
+      title="Caravel — home"
+      aria-label="Caravel — home"
+      className="cv-accent-tile"
+      style={{
+        width: 44, height: 44, borderRadius: 13, background: 'var(--accent-400)',
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        padding: 0, border: 'none', cursor: 'pointer',
+      }}
+    >
       <img src="/logo-light.png" alt="" aria-hidden="true" style={{ height: 23, width: 'auto', display: 'block' }} />
-    </span>
+    </button>
   )
 }
 

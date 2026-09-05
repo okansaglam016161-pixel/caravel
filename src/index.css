@@ -330,6 +330,25 @@ a:hover { color: var(--accent-200); }
 .cv-nav-item:hover { background: rgba(255, 255, 255, 0.05); color: #F2F6FA; }
 .cv-nav-item[aria-current="page"]:hover { background: var(--nav-selected); }
 
+/* ACCENT-FILLED TILES THAT ARE CONTROLS — the spine's logo and @ profile tiles, and the entry
+   screens' lockup. All three are a 32-44px accent square you can click, on three different grounds
+   (the navy spine, and the gate card in either theme).
+
+   THEY CANNOT USE .cv-nav-item ABOVE: it hovers by setting `background`, and every one of these
+   carries its own accent fill as an INLINE style, which a class selector loses to. That is not
+   hypothetical — it is why the @ tile had NO hover at all until this rule existed, having carried
+   .cv-nav-item since the spine was built. Hence the `!important`, the same one .cv-btn-primary and
+   .cv-lightbox-btn already use to hover an inline-filled control, and the same accent-hover token
+   as the primary button, so "the accent lifted" means one thing app-wide.
+
+   THE FOCUS RING SITS OUTSIDE THE TILE (offset 2px) and is the codebase's standard accent ring, as
+   on .cv-pick-row and .cv-emoji-cell. Outside is what makes one ring work on all three grounds: it
+   lands on the ground rather than on the tile, so it never becomes a blue ring on a blue square,
+   and a white ring — right for the always-dark spine — would have vanished on the light gate card. */
+.cv-accent-tile { transition: background 0.15s; }
+.cv-accent-tile:hover { background: var(--accent-hover) !important; }
+.cv-accent-tile:focus-visible { outline: 2px solid rgba(var(--accent-400-rgb), 0.5); outline-offset: 2px; }
+
 /* Rows in the pick lists (New group, Re-invite). They sit on --surface inside a modal card, so
    they hover to the page ground — the same relationship .cv-conv has with the list pane. */
 .cv-pick-row { transition: background 0.15s; }

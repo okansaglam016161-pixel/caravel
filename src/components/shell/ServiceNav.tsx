@@ -48,10 +48,28 @@
 //   tokens instead of the white literals it would otherwise need. Same mechanism, same reason: the
 //   foundation keeps the nav on navy in both themes.
 //
+//   ── THE MARK IS THE WAY HOME ─────────────────────────────────────────────────
+//
+//   REVERSES STAGE 1's CALL that the logo be inert ("a fourth clickable thing at the top that goes
+//   somewhere else is a trap in 64px"). The reasoning held for what it was weighing — a fourth
+//   NAVIGATION target competing with three service rows — but it left the app a one-way door: once
+//   inside, there was no route back to the landing page from anywhere. A logo that goes home is the
+//   most conventional affordance on the web, and its absence was the trap.
+//
+//   IT NAVIGATES AND NOTHING ELSE. The wallet stays unlocked in memory, so coming back in costs no
+//   password. Locking is the profile panel's Lock button and stays there: a logo click means "go
+//   home", never "log out", and conflating the two would make the safest-looking control in the
+//   shell the one that ends your session.
+//
+//   NO aria-current, unlike the service rows. Those three select a view within this shell and one of
+//   them is always the answer to "where am I"; this leaves the shell entirely, so it is never the
+//   current page while it is on screen.
+//
 //   NO BORDER ON THE RIGHT EDGE, per the design. The pane beside it draws its own — chat's list
 //   pane and the wallet page both do — and a second hairline between two surfaces that already
 //   differ by #0C1A2E vs the page ground is a line doing no work.
 
+import { useNavigate } from 'react-router-dom'
 import { useWallet } from '../../context/WalletContext'
 
 const SERVICES = ['wallet', 'chat', 'name'] as const
@@ -86,21 +104,35 @@ export default function ServiceNav({ service, onSelect, onProfile }: {
   onProfile: () => void
 }) {
   const { address } = useWallet()
+  // The same hook and the same shape as the landing page's own `navigate('/app')` — one router API
+  // across the two directions of this door, rather than a <Link> here and a navigate there.
+  const navigate = useNavigate()
 
   return (
     <nav data-theme="dark" style={{
       width: 64, flexShrink: 0, background: 'var(--nav-ground)',
       padding: '14px 0', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
     }}>
-      {/* The mark, on its accent tile. Not a control — the spine's rows are the navigation, and a
-          fourth clickable thing at the top that goes somewhere else is a trap in 64px. */}
-      <span style={{
-        width: 32, height: 32, borderRadius: 10, background: 'var(--accent-400)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-        marginBottom: 10,
-      }}>
+      {/* The mark, on its accent tile — and the way back to the landing page. A <button> rather
+          than a <Link>: it does the same thing the service rows do (a click that changes what is on
+          screen) and gets Enter, Space and the focus ring from the element rather than from us.
+
+          The image stays decorative — alt="" and aria-hidden — because the accessible name belongs
+          on the control, not on the picture inside it. Announcing it twice is how a screen reader
+          ends up saying "Caravel logo, Caravel — home, button". */}
+      <button
+        onClick={() => navigate('/')}
+        title="Caravel — home"
+        aria-label="Caravel — home"
+        className="cv-accent-tile"
+        style={{
+          width: 32, height: 32, borderRadius: 10, background: 'var(--accent-400)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+          marginBottom: 10, padding: 0, border: 'none', cursor: 'pointer',
+        }}
+      >
         <img src="/logo-light.png" alt="" aria-hidden="true" style={{ height: 17, width: 'auto', display: 'block' }} />
-      </span>
+      </button>
 
       {/* Services */}
       {SERVICES.map(s => {
@@ -129,12 +161,17 @@ export default function ServiceNav({ service, onSelect, onProfile }: {
       <span style={{ flex: 1, minHeight: 24 }} />
 
       {/* Identity — opens the profile panel (address, recovery phrase, lock). The full address on
-          hover: the tile shows none of it, and this is the only place in the spine it exists. */}
+          hover: the tile shows none of it, and this is the only place in the spine it exists.
+
+          ON .cv-accent-tile, NOT .cv-nav-item — it carried the latter since the spine was built and
+          got no hover from it, because that rule hovers by setting `background` and this tile's
+          accent fill is inline, which wins. It looked correct in the markup and did nothing on
+          screen. Same fix as the logo above, and the same rule. */}
       <button
         onClick={onProfile}
         title={address ?? 'Your profile'}
         aria-label="Your profile"
-        className="cv-nav-item"
+        className="cv-accent-tile"
         style={{
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           width: 30, height: 30, flexShrink: 0, padding: 0,

@@ -9,6 +9,7 @@ import { compareMessages, sortKey, type CaravelMessage, type Group } from '../..
 import GroupThread from './GroupThread'
 import CreateGroupModal, { type GroupContactOption } from './CreateGroupModal'
 import ModalCard from './ModalCard'
+import CnsOverlay from './CnsOverlay'
 import ReinviteModal, { type ReinviteMemberOption } from './ReinviteModal'
 import { useScrollToBottom } from './useScrollToBottom'
 import { useJumpToMessage } from './useJumpToMessage'
@@ -390,6 +391,9 @@ export default function ChatApp() {
   const [selectedPeer, setSelectedPeer] = useState<string | null>(null)
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null)
   const [createGroupOpen, setCreateGroupOpen] = useState(false)
+  // CNS lives in chat rather than in the spine: the [@] beside the two list actions opens it as
+  // an overlay over this view, which is why it is a boolean here and not a fourth service.
+  const [cnsOpen, setCnsOpen] = useState(false)
   // C-M2 re-invite picker, keyed on the group it was opened for.
   const [reinviteFor, setReinviteFor] = useState<string | null>(null)
 
@@ -1517,6 +1521,30 @@ export default function ChatApp() {
             >
               <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx={9} cy={7} r={4} /><path d="M19 8v6M22 11h-6" /></svg>
             </button>
+            {/* @ — YOUR NAMES. The third list action, and the glyph is the spine's own `name` icon:
+                CNS stops being a service beside Wallet and Chat and becomes a thing you open from
+                inside chat, so the mark moves with it rather than being redrawn.
+
+                IT SHOWS WHEN IT IS OPEN, unlike its two neighbours. They fire and forget — a modal
+                opens and the button behind it is irrelevant — but this one sits under a 520px
+                overlay the user can dismiss by clicking the ground, and a control that had no idea
+                whether its own panel was up would be the odd one out of three. */}
+            <button
+              onClick={() => setCnsOpen(true)}
+              title="Your @names"
+              aria-label="Your @names"
+              aria-expanded={cnsOpen}
+              className="cv-icon-btn"
+              style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'center', width: 34, height: 34,
+                flexShrink: 0, borderRadius: 10, cursor: 'pointer', padding: 0,
+                border: `1px solid ${cnsOpen ? 'var(--accent-400)' : 'var(--border)'}`,
+                background: cnsOpen ? 'var(--accent-wash)' : 'var(--surface)',
+                color: cnsOpen ? 'var(--accent-ink)' : 'var(--text-muted-dim)',
+              }}
+            >
+              <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round"><circle cx={12} cy={12} r={4} /><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8" /></svg>
+            </button>
           </div>
 
           {/* Ambient connection strip — click opens the relay-health panel. BELOW the search now,
@@ -2432,6 +2460,8 @@ export default function ChatApp() {
         onClose={() => setReinviteFor(null)}
       />
     )}
+
+    {cnsOpen && <CnsOverlay onClose={() => setCnsOpen(false)} />}
 
     {createGroupOpen && (
       <CreateGroupModal

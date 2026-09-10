@@ -25,7 +25,7 @@ import type { ReactNode } from 'react'
 
 const MODAL_Z = 300
 
-export default function ModalCard({ title, subtitle, onClose, maxWidth = 420, children }: {
+export default function ModalCard({ title, subtitle, onClose, maxWidth = 420, maxHeight = '88vh', children }: {
   title: string
   /**
    * A second line under the title, inside the header. Re-invite names its group here.
@@ -37,6 +37,12 @@ export default function ModalCard({ title, subtitle, onClose, maxWidth = 420, ch
   subtitle?: string
   onClose: () => void
   maxWidth?: number
+  /**
+   * The card's height CEILING, not its height — it still sizes to its content. Defaults to the
+   * 88vh every modal here has always used; the CNS overlay passes a smaller cap because it holds a
+   * scrolling list and the design caps it rather than letting it grow to the viewport.
+   */
+  maxHeight?: string
   children: ReactNode
 }) {
   return (
@@ -51,7 +57,7 @@ export default function ModalCard({ title, subtitle, onClose, maxWidth = 420, ch
       <div
         onClick={e => e.stopPropagation()}
         style={{
-          width: '100%', maxWidth, maxHeight: '88vh',
+          width: '100%', maxWidth, maxHeight,
           display: 'flex', flexDirection: 'column', gap: 13,
           borderRadius: 16, padding: 20,
           background: 'var(--surface)', border: '1px solid var(--border)', boxShadow: 'var(--e3)',

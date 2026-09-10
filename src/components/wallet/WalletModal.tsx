@@ -1185,9 +1185,9 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
       // THE ROW GOES INERT BY ITSELF. AssetsPanel keys its chevron, pointer, hover, focus and
       // click on whether `onOpen` was passed, so withholding it removes every affordance at once
       // rather than leaving a control that looks live and does nothing.
-      // The faucet is a quiet card in the extras slot. The @name card left the overview entirely —
-      // ONS lives on the Name page, which is where OnsRegisterPanel is mounted and where its state
-      // machine is untouched.
+      // The faucet is a quiet card in the extras slot, and now the only one. The @name card left the
+      // overview, then left the wallet: names are a property of the identity you message with, so
+      // CNS lives in chat, opened by the [@] on the conversation list's search row.
       overviewExtras={<FaucetClaimPanel />}
       send={{
         view: sendView, hidden: balanceHidden,

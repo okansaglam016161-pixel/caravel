@@ -26,7 +26,6 @@ import { useState } from 'react'
 import ChatApp from '../chat/ChatApp'
 import ProfilePanel from '../wallet/ProfilePanel'
 import WalletPage from '../wallet/WalletPage'
-import NamePage from './NamePage'
 import ServiceNav, { type Service } from './ServiceNav'
 
 /** Hidden panes keep their state and their effects; they just stop taking space. */
@@ -54,7 +53,6 @@ export default function AppShell() {
           follows the app theme like every other service — and so does the wallet modal inside it,
           which used to inherit the pin. */}
       <Pane show={service === 'chat'}><ChatApp onOpenWallet={() => setService('wallet')} /></Pane>
-      <Pane show={service === 'name'}><NamePage /></Pane>
 
       {profileOpen && (
         <ProfilePanel onClose={() => setProfileOpen(false)} />

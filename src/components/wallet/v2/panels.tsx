@@ -14,12 +14,9 @@
 
 import type { ReactNode } from 'react'
 import { QRCodeSVG } from 'qrcode.react'
-import { C, MONO, tealBorder } from './tokens'
-import { Alert, Check, Clock, Copy, Eye, Lock, Shield, Spinner } from './icons'
-import {
-  Body, Button, DetailCard, DetailRow, Panel, PanelText,
-  SubHeader, TextField, TxRow,
-} from './primitives'
+import { C, MONO } from './tokens'
+import { Check, Clock, Copy, Eye, Lock, Shield, Spinner } from './icons'
+import { Body, SubHeader } from './primitives'
 import { fmt6, formatCooldown } from './format'
 
 const XTR = (n: bigint) => `${fmt6(n)} XTR`
@@ -63,59 +60,6 @@ export interface FaucetPanelProps {
    * missing timer can never render a dangling "Next claim available in".
    */
   cooldownRemainingMs?: number
-}
-
-/**
- * The extras-row card.
- *
- * ONE SHELL FOR the @name entry — a tile, two lines, and one control on the right. The faucet had
- * this shape too until V3 gave it its own frame; anything that needs more than this is not an
- * entry point.
- */
-function ExtraCard({ tile, title, sub, right, muted = false }: {
-  tile: ReactNode; title: ReactNode; sub: ReactNode; right?: ReactNode; muted?: boolean
-}) {
-  return (
-    <div style={{
-      border: '1px solid var(--border)', background: 'var(--surface)', borderRadius: 'var(--r-lg)',
-      padding: '16px 18px', display: 'flex', alignItems: 'center', gap: 12,
-      opacity: muted ? 0.75 : 1,
-    }}>
-      <span style={{
-        width: 34, height: 34, borderRadius: 'var(--r-md)', flexShrink: 0,
-        background: 'var(--accent-wash)', color: 'var(--accent-ink)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        fontSize: 14, fontWeight: 600,
-      }}>{tile}</span>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 14, fontWeight: 600, color: C.primary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</div>
-        <div style={{ fontSize: 12.5, color: C.mutedDim, marginTop: 1, lineHeight: 1.45 }}>{sub}</div>
-      </div>
-      {right}
-    </div>
-  )
-}
-
-/** The card's own small button. Accent for the one action worth taking, quiet for everything else. */
-function CardAction({ tone, onClick, children }: {
-  tone: 'primary' | 'quiet' | 'dead'; onClick?: () => void; children: ReactNode
-}) {
-  const dead = tone === 'dead'
-  return (
-    <span
-      role={dead ? undefined : 'button'} tabIndex={dead ? -1 : 0} aria-disabled={dead}
-      onClick={dead ? undefined : onClick}
-      onKeyDown={e => { if (!dead && e.key === 'Enter') onClick?.() }}
-      style={{
-        padding: '8px 14px', borderRadius: 9, fontSize: 12.5, fontWeight: 600,
-        flexShrink: 0, userSelect: 'none', whiteSpace: 'nowrap',
-        cursor: dead ? 'default' : 'pointer',
-        background: tone === 'primary' ? 'var(--accent-400)' : 'transparent',
-        color: tone === 'primary' ? '#FFFFFF' : dead ? C.mutedDim : C.primary,
-        border: tone === 'primary' ? 'none' : `1px solid var(--border${dead ? '' : '-strong'})`,
-      }}
-    >{children}</span>
-  )
 }
 
 const FAUCET_ICON = (
@@ -218,7 +162,7 @@ export function FaucetPanel({ phase, received, message, onClaim, cooldownRemaini
   )
 }
 
-/** The faucet card's small action — V3 sizing, distinct from the @name card's CardAction. */
+/** The faucet card's small action. The only card in the extras slot now, so the only one of these. */
 function FaucetAction({ tone, onClick, children }: {
   tone: 'primary' | 'quiet'; onClick: () => void; children: ReactNode
 }) {
@@ -237,48 +181,6 @@ function FaucetAction({ tone, onClick, children }: {
     >{children}</span>
   )
 }
-
-/**
- * The @name entry point, collapsed.
- *
- * `claimed` is a FACT ABOUT THE CHAIN, not about this session: the card has to be able to say "you
- * already have one" to somebody who registered months ago on another device, so the owning name is
- * looked up rather than remembered. See OnsRegisterPanel.
- */
-export function NameCard({ claimedName, onClaim, loading }: {
-  claimedName: string | null
-  onClaim: () => void
-  loading?: boolean
-}) {
-  if (claimedName) {
-    return (
-      <ExtraCard
-        tile="@"
-        title={`@${claimedName}`}
-        sub="Registered to this wallet."
-        right={
-          <span style={{
-            display: 'inline-flex', alignItems: 'center', gap: 6, padding: '5px 12px',
-            borderRadius: 'var(--r-pill)', background: 'rgba(var(--positive-rgb),0.12)',
-            color: 'var(--positive)', fontSize: 11.5, fontWeight: 600, flexShrink: 0,
-          }}>
-            <span style={{ width: 5, height: 5, borderRadius: 'var(--r-pill)', background: 'var(--positive)' }} />
-            Registered
-          </span>
-        }
-      />
-    )
-  }
-  return (
-    <ExtraCard
-      tile="@"
-      title="Claim your @name"
-      sub="One identity for payments and messages."
-      right={loading ? <Spinner size={15} /> : <CardAction tone="quiet" onClick={onClaim}>Claim</CardAction>}
-    />
-  )
-}
-
 
 // ══ SEND ══════════════════════════════════════════════════════════════════════
 
@@ -970,103 +872,6 @@ export function ReceivePanel({ address, copied, onCopy, onClose }: {
         </div>
       </div>
     </div>
-  )
-}
-
-// ══ ONS — register a name ═════════════════════════════════════════════════════
-
-export type OnsStatus = 'idle' | 'checking' | 'available' | 'taken' | 'estimating' | 'confirm' | 'registering' | 'done' | 'error'
-
-export interface OnsPanelProps {
-  status: OnsStatus
-  name: string
-  /** Policy problem with what has been typed — shown live, before any lookup. */
-  policyError?: string
-  message?: string
-  feeMicrotari?: bigint
-  txId?: string
-  onName: (v: string) => void
-  onCheck: () => void
-  onRegister: () => void
-  onConfirm: () => void
-  onReset: () => void
-  onCopyTx: (t: string) => void
-}
-
-/** A small positive dot, for a success headline. Lived in the faucet card until it was reskinned. */
-const CheckDot = () => (
-  <span style={{
-    width: 18, height: 18, borderRadius: 'var(--r-pill)', flexShrink: 0,
-    background: 'rgba(var(--positive-rgb),0.12)', color: 'var(--positive)',
-    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-  }}><Check size={11} color="currentColor" /></span>
-)
-
-export function OnsPanel({ status, name, policyError, message, feeMicrotari, txId, onName, onCheck, onRegister, onConfirm, onReset, onCopyTx }: OnsPanelProps) {
-  if (status === 'done') {
-    return (
-      <Panel tone="teal" titleColor={C.bright} title={<><CheckDot />@{name} is yours</>}>
-        <PanelText color={C.tealLabel}>{message ?? 'People can now find you by name instead of an address.'}</PanelText>
-        {txId && <div style={{ marginBottom: 12 }}><TxRow txId={txId} onCopy={() => onCopyTx(txId)} /></div>}
-        <Button tone="neutral" onClick={onReset}>Register another</Button>
-      </Panel>
-    )
-  }
-
-  if (status === 'error') {
-    return (
-      <Panel tone="danger" titleColor={C.dangerText} title={<><Alert size={16} color={C.danger} />Couldn’t register that name</>}>
-        <PanelText>{message ?? 'Something went wrong. Nothing was registered.'}</PanelText>
-        <Button tone="neutral" onClick={onReset}>Try again</Button>
-      </Panel>
-    )
-  }
-
-  // Fee approved explicitly before anything is written — the same discipline as the move flow.
-  if (status === 'confirm') {
-    return (
-      <Panel title={`Register @${name}`}>
-        <PanelText>This writes your name to the network so people can pay you by it.</PanelText>
-        <div style={{ marginBottom: 12 }}>
-          <DetailCard><DetailRow label="Network fee" value={feeMicrotari !== undefined ? XTR(feeMicrotari) : '—'} last /></DetailCard>
-        </div>
-        <div style={{ display: 'flex', gap: 10 }}>
-          <Button tone="neutral" flex={1} onClick={onReset}>Cancel</Button>
-          <Button tone="primary" flex={2} onClick={onConfirm}>Register</Button>
-        </div>
-      </Panel>
-    )
-  }
-
-  const busy = status === 'checking' || status === 'estimating' || status === 'registering'
-  const busyLabel = status === 'checking' ? 'Checking…' : status === 'estimating' ? 'Checking the fee…' : 'Registering…'
-  const tone = status === 'available' ? 'teal' : status === 'taken' ? 'amber' : 'neutral'
-
-  return (
-    <Panel tone={tone} title="Register a name" meta={status === 'available' ? 'available' : status === 'taken' ? 'taken' : undefined}
-      metaColor={status === 'available' ? C.teal300 : status === 'taken' ? C.warn300 : undefined}>
-      <PanelText>
-        {status === 'available' ? `@${name} is free. Claim it before someone else does.`
-          : status === 'taken' ? `@${name} is already registered. Try another.`
-          : 'Pick a short name so people can pay you without copying an address.'}
-      </PanelText>
-      <div style={{ marginBottom: 12 }}>
-        <TextField
-          value={name} onChange={onName} placeholder="yourname" invalid={!!policyError} ariaLabel="Name to register"
-          prefix={<span style={{ fontFamily: MONO, fontSize: 15, color: C.tealDim }}>@</span>}
-        />
-      </div>
-      {policyError && <div style={{ fontSize: 12, color: C.dangerText, marginBottom: 12, lineHeight: 1.5 }}>{policyError}</div>}
-      {busy ? (
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, padding: 12, borderRadius: 'var(--r-md)', background: C.inset, border: tealBorder(0.22), color: C.teal300, fontSize: 14, fontWeight: 600 }}>
-          <Spinner size={15} />{busyLabel}
-        </div>
-      ) : status === 'available' ? (
-        <Button tone="primary" onClick={onRegister}>Register @{name}</Button>
-      ) : (
-        <Button tone={name && !policyError ? 'neutral' : 'disabled'} onClick={name && !policyError ? onCheck : undefined}>Check availability</Button>
-      )}
-    </Panel>
   )
 }
 

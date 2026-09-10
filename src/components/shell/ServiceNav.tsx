@@ -7,8 +7,8 @@
 //
 //   ── WHY ICON-ONLY, AND WHY APP-WIDE ──────────────────────────────────────────
 //
-//   The spine is the shell, not a chat component: Wallet and Name render beside it too, so it
-//   narrows for all three or none. Chat is what forced the question — it brings its own 380px
+//   The spine is the shell, not a chat component: the wallet renders beside it too, so it narrows
+//   for both services or neither. Chat is what forced the question — it brings its own 380px
 //   sidebar, so a labelled 210px rail put 590px of navy in two abutting columns before the thread
 //   started. 64px is the design's answer, and the 146px it gives back go to the content pane on
 //   every service.
@@ -51,8 +51,8 @@
 //   ── THE MARK IS THE WAY HOME ─────────────────────────────────────────────────
 //
 //   REVERSES STAGE 1's CALL that the logo be inert ("a fourth clickable thing at the top that goes
-//   somewhere else is a trap in 64px"). The reasoning held for what it was weighing — a fourth
-//   NAVIGATION target competing with three service rows — but it left the app a one-way door: once
+//   somewhere else is a trap in 64px"). The reasoning held for what it was weighing — another
+//   NAVIGATION target competing with the service rows — but it left the app a one-way door: once
 //   inside, there was no route back to the landing page from anywhere. A logo that goes home is the
 //   most conventional affordance on the web, and its absence was the trap.
 //
@@ -61,8 +61,8 @@
 //   home", never "log out", and conflating the two would make the safest-looking control in the
 //   shell the one that ends your session.
 //
-//   NO aria-current, unlike the service rows. Those three select a view within this shell and one of
-//   them is always the answer to "where am I"; this leaves the shell entirely, so it is never the
+//   NO aria-current, unlike the service rows. Those select a view within this shell and one of them
+//   is always the answer to "where am I"; this leaves the shell entirely, so it is never the
 //   current page while it is on screen.
 //
 //   NO BORDER ON THE RIGHT EDGE, per the design. The pane beside it draws its own — chat's list
@@ -72,13 +72,22 @@
 import { useNavigate } from 'react-router-dom'
 import { useWallet } from '../../context/WalletContext'
 
-const SERVICES = ['wallet', 'chat', 'name'] as const
+// ── TWO SERVICES, NOT THREE ──────────────────────────────────────────────────
+//
+// The @ row is gone. Names were never a service in the way the wallet and chat are — they are a
+// property of the identity you message with, so CNS moved inside chat, opened by the [@] beside the
+// two list actions, and the glyph that used to sit here went with it. A rail row for a thing you
+// touch twice a year, beside two you live in, was the spine spending its scarcest space badly.
+//
+// NOTHING NEEDS A FALLBACK. AppShell defaults to 'wallet' and always did, and this union is only
+// ever compared by equality, never switched on exhaustively.
+const SERVICES = ['wallet', 'chat'] as const
 
 /** Type-only export: keeps this file a component module, which is what fast refresh wants. */
 export type Service = (typeof SERVICES)[number]
 
 /** The tooltip text, and the accessible name. Both, from one string — see the header note. */
-const LABEL: Record<Service, string> = { wallet: 'Wallet', chat: 'Chat', name: 'Name' }
+const LABEL: Record<Service, string> = { wallet: 'Wallet', chat: 'Chat' }
 
 const ICON: Record<Service, React.ReactNode> = {
   wallet: (
@@ -89,11 +98,6 @@ const ICON: Record<Service, React.ReactNode> = {
   chat: (
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
       <path d="M21 11.5a8.5 8.5 0 1 0-16.9 1.6L3 20l3.8-1.1A8.5 8.5 0 0 0 21 11.5z" />
-    </svg>
-  ),
-  name: (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
-      <circle cx="12" cy="12" r="4" /><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8" />
     </svg>
   ),
 }

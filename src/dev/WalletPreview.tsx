@@ -15,7 +15,7 @@
 
 import { useState } from 'react'
 import WalletModalV2, { WALLET_TABS, type MoveView, type WalletModalV2Props, type WalletTab } from '../components/wallet/v2/WalletModalV2'
-import { ActivityRowShell, FaucetPanel, NameCard, OnsPanel, type ActivityRowView, type FaucetPhase, type OnsStatus, type SendView } from '../components/wallet/v2/panels'
+import { ActivityRowShell, FaucetPanel, type ActivityRowView, type FaucetPhase, type SendView } from '../components/wallet/v2/panels'
 import type { BalanceView } from '../components/wallet/v2/balances'
 import { computeTotal } from '../components/wallet/v2/total'
 import type { EntryProps } from '../components/wallet/v2/move'
@@ -31,7 +31,6 @@ const RESERVE = 51_000n               // REVEAL_FEE_RESERVE + MIN_STEALTH_CHANGE
 const TXID = '723d6720fb6225a3b7910c9076fb1026f591e910b098ab1fc8587f88a0623481'
 const ADDRESS = 'otl_esm_1tnay4uzgpe0cvu4tzwfmhdhtvc3pq97szrnteetuz2dvqmjk2ecwq34fnsm8hz7tk43xrur8d2y6mye4w3shjq4qj5sm7xvpq7yqqngs8224p'
 const SEND_FEE = 16_138n
-const ONS_FEE = 21_400n
 const SEND_ERROR =
   'The network rejected this transaction: InsufficientFeesPaid { required: 16138, paid: 12000 }'
 const REAL_ERROR =
@@ -131,8 +130,6 @@ function Drive() {
   const [move, setMove] = useState<MoveView>({ step: 'idle' })
   const [tab, setTab] = useState<WalletTab>('overview')
   const [faucet, setFaucet] = useState<FaucetPhase>('idle')
-  const [ons, setOns] = useState<OnsStatus>('idle')
-  const [onsName, setOnsName] = useState('')
   const [copied, setCopied] = useState(false)
   const [addrReady, setAddrReady] = useState(true)
   const [send, setSend] = useState<SendView>({ step: 'form', recipient: '', amount: '', note: '', available: PRIVATE, canReview: false, source: 'private', canChooseSource: true })
@@ -247,7 +244,6 @@ function Drive() {
 
     tab, onTab: setTab,
     overviewExtras: (
-      <>
       <FaucetPanel
         phase={faucet}
         received={1_000_000_000n}
@@ -258,17 +254,6 @@ function Drive() {
         }}
         cooldownRemainingMs={faucet === 'cooldown' ? 42_000 : undefined}
       />
-      <OnsPanel
-        status={ons} name={onsName || 'yourname'} feeMicrotari={ONS_FEE} txId={TXID}
-        policyError={/[^a-z0-9_]/.test(onsName) ? 'Letters, numbers and underscores only.' : undefined}
-        onName={(v: string) => { setOnsName(v.toLowerCase()); setOns('idle') }}
-        onCheck={() => { setOns('checking'); setTimeout(() => setOns(onsName === 'taken' ? 'taken' : 'available'), 1200) }}
-        onRegister={() => { setOns('estimating'); setTimeout(() => setOns('confirm'), 1200) }}
-        onConfirm={() => { setOns('registering'); setTimeout(() => setOns('done'), 1600) }}
-        onReset={() => setOns('idle')}
-        onCopyTx={(t: string) => { navigator.clipboard?.writeText(t).catch(() => {}) }}
-      />
-      </>
     ),
     receive: {
       address: addrReady ? ADDRESS : null, copied,
@@ -336,11 +321,6 @@ function Drive() {
         <Group title="Faucet panel" note="Shown on Overview">
           {(['idle', 'locked', 'claiming', 'verifying', 'done', 'lagging', 'error', 'cooldown', 'plenty'] as FaucetPhase[]).map(f => (
             <button key={f} onClick={() => { setFaucet(f); setTab('overview') }} style={btn(faucet === f)}>{f}</button>
-          ))}
-        </Group>
-        <Group title="Name panel" note="Type “taken” in the field to see the taken state">
-          {(['idle', 'checking', 'available', 'taken', 'estimating', 'confirm', 'registering', 'done', 'error'] as OnsStatus[]).map(o => (
-            <button key={o} onClick={() => { setOns(o); setTab('overview') }} style={btn(ons === o)}>{o}</button>
           ))}
         </Group>
         <Group title="Send state">
@@ -427,13 +407,11 @@ function still(over: Partial<WalletModalV2Props>): WalletModalV2Props {
 }
 
 /** Shorthands so the gallery entries below stay one line each. */
-// The faucet and ONS are rendered NODES now rather than data props — the wallet stopped describing
-// them and started taking them pre-built, so the gallery builds them the same way the app does.
+// The faucet is a rendered NODE now rather than a data prop — the wallet stopped describing it and
+// started taking it pre-built, so the gallery builds it the same way the app does.
 const faucetAt = (phase: FaucetPhase): Partial<WalletModalV2Props> =>
   // A live countdown on the cooldown case, so the gallery shows 10g as it actually renders.
   ({ overviewExtras: <FaucetPanel phase={phase} received={1_000_000_000n} onClaim={noop} cooldownRemainingMs={phase === 'cooldown' ? 42_000 : undefined} /> })
-const onsAt = (status: OnsStatus, name = 'okan'): Partial<WalletModalV2Props> =>
-  ({ overviewExtras: <OnsPanel status={status} name={name} feeMicrotari={ONS_FEE} txId={TXID} onName={noop} onCheck={noop} onRegister={noop} onConfirm={noop} onReset={noop} onCopyTx={noop} /> })
 const sendAt = (view: SendView) =>
   ({ tab: 'send' as WalletTab, send: { view, hidden: false, onSource: noop, onRecipient: noop, onAmount: noop, onNote: noop, onMax: noop, onReview: noop, onBack: noop, onConfirm: noop, onDone: noop, onRetry: noop, onCopyTx: noop, onViewActivity: noop } })
 
@@ -481,20 +459,11 @@ function Gallery() {
     { label: 'ASSET · XTR', props: still({ assetOpen: true, onCloseAsset: noop, onOpenAsset: noop }) },
     { label: 'ASSET · BALANCES HIDDEN', props: still({ assetOpen: true, hidden: true, onCloseAsset: noop, onOpenAsset: noop }) },
 
-    // ── The @name entry card. The overview slot the app shows before the flow is opened. ──
-    { label: 'NAME CARD · UNCLAIMED', props: still({ overviewExtras: <NameCard claimedName={null} onClaim={noop} /> }) },
-    { label: 'NAME CARD · CLAIMED', props: still({ overviewExtras: <NameCard claimedName="okz61" onClaim={noop} /> }) },
-    { label: 'NAME CARD · LOOKING UP', props: still({ overviewExtras: <NameCard claimedName={null} loading onClaim={noop} /> }) },
-
-    // ── Name (ONS) ──
-    { label: 'NAME · IDLE', props: still(onsAt('idle', '')) },
-    { label: 'NAME · CHECKING', props: still(onsAt('checking')) },
-    { label: 'NAME · AVAILABLE', props: still(onsAt('available')) },
-    { label: 'NAME · TAKEN', props: still(onsAt('taken')) },
-    { label: 'NAME · CONFIRM THE FEE', props: still(onsAt('confirm')) },
-    { label: 'NAME · REGISTERING', props: still(onsAt('registering')) },
-    { label: 'NAME · REGISTERED', props: still(onsAt('done')) },
-    { label: 'NAME · FAILED', props: still(onsAt('error')) },
+    // ── @names are not here any more ──
+    //
+    // The eleven NAME and NAME CARD stills went with the panel they drew. CNS lives in chat now and
+    // is not a wallet surface, so a gallery of a deleted component's states would be a spec for
+    // something that does not exist.
 
     // ── Send ──
     { label: 'SEND · FORM', props: still(sendAt({ step: 'form', recipient: '', amount: '', note: '', available: PRIVATE, canReview: false, source: 'private', canChooseSource: true })) },

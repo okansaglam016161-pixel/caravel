@@ -21,8 +21,11 @@ import * as nip19 from 'nostr-tools/nip19'
  * A REDEPLOY IS A NEW ADDRESS, ALWAYS. Nothing migrates: every name registered against the old
  * registry is gone with it, and this constant is the only place Caravel learns where the registry
  * lives — so it must be updated in lockstep with any republish of the template.
+ *
+ * NOT EXPORTED. Its one consumer is the client below it; nothing outside this module has ever
+ * needed the address, and the `ons` client is what callers actually want.
  */
-export const ONS_COMPONENT =
+const ONS_COMPONENT =
   'component_fe93e87e362a263ee65d382047b5adcc92c2a1dc08051a770032aefdda45c787'
 
 /** Configured client. Same indexer Caravel already uses for UTXOs; network defaults to Esmeralda. */
@@ -31,19 +34,18 @@ export const ons = createOnsClient({
   indexerUrl: 'https://ootle-indexer-a.tari.com',
 })
 
-/** True if a compose input should be treated as an ONS name (an `@name`, or a bare non-npub word). */
-export function looksLikeOnsName(raw: string): boolean {
-  const s = raw.trim()
-  return s.length > 0 && !s.startsWith('npub1')
-}
-
 /** Normalise a compose input to a bare ONS name: strip a leading `@`, lowercase. */
 export function toOnsName(raw: string): string {
   return raw.trim().replace(/^@+/, '').toLowerCase()
 }
 
-/** Convert a stored `"nostr"` record value (npub bech32 OR 64-char hex) to x-only pubkey hex. */
-export function nostrValueToHex(value: string): string | null {
+/**
+ * Convert a stored `"nostr"` record value (npub bech32 OR 64-char hex) to x-only pubkey hex.
+ *
+ * NOT EXPORTED: `resolveOnsNameToHex` is the one caller, and it is the shape a consumer wants —
+ * this is the step in the middle of it, not a service of its own.
+ */
+function nostrValueToHex(value: string): string | null {
   const v = value.trim()
   if (/^[0-9a-fA-F]{64}$/.test(v)) return v.toLowerCase()
   try {

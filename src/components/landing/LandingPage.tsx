@@ -360,7 +360,7 @@ function Services() {
       />
       <ServiceRow
         title="Name"
-        body="Claim your @name. One identity for payments and messages. Your money, your name."
+        body="Claim your @name. One name people can message you by, instead of a key nobody can read."
         card={<NameCard />}
       />
       <div className="cv-lp-soon">

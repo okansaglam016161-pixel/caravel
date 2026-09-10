@@ -549,7 +549,7 @@ export function SendPanel({ view, hidden, onSource, onRecipient, onAmount, onNot
 
         <div style={{ marginTop: 28 }}>
           <Label>To</Label>
-          <SendInput value={view.recipient} onChange={onRecipient} placeholder="@name or Ootle address" mono ariaLabel="Recipient" />
+          <SendInput value={view.recipient} onChange={onRecipient} placeholder="Ootle address" mono ariaLabel="Recipient" />
         </div>
 
         {view.canChooseSource && <SourceToggle source={view.source} onSource={onSource} />}

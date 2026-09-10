@@ -13,7 +13,7 @@ restores both your money and your messages.
   your recipient can read them.
 - **Confidential in-chat payments** — attach a Tari payment to any message; the amount is hidden
   on-chain and only the recipient sees the note.
-- **Pay by name** — register an on-chain `@name` (ONS) that resolves to your messaging key.
+- **Message by name** — register an on-chain `@name` that resolves to your messaging key.
 - **Self-custodial browser wallet** — keys created and held on your device; no server, no custody.
 - **Contact requests & address exchange** — accept/decline incoming requests; Tari addresses are
   exchanged in-band, never resolved from a name.

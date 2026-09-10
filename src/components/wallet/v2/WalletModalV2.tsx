@@ -181,7 +181,8 @@ export interface WalletModalV2Props {
    * duplicate this slot are gone: the app passed `faucet={undefined}`, and they were dead render
    * branches. The preview harness drives this slot the same way the app does.
    *
-   * The @name card left the overview in V3 and lives on the Name page, so today this holds the
+   * The @name card left the overview in V3, and then left the wallet: names are a property of the
+   * identity you message with, so they live in chat now and the Name page is gone. This holds the
    * faucet alone.
    */
   overviewExtras?: ReactNode

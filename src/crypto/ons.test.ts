@@ -142,7 +142,7 @@ describe('ownedOnsNames — the failures, and that they stay apart', () => {
     const r = await ownedOnsNames(walletOk())
 
     expect(r.errorKind).toBe('unreachable')
-    expect(r.error).toBe('Could not reach the ONS registry — try again.')
+    expect(r.error).toBe('Could not reach the name registry — try again.')
   })
 })
 
@@ -228,7 +228,7 @@ describe('checkOnsAvailable — free, taken, and never asked', () => {
 
     const r = await checkOnsAvailable('okz')
 
-    expect(r.error).toBe('Could not reach the ONS registry — try again.')
+    expect(r.error).toBe('Could not reach the name registry — try again.')
   })
 })
 

@@ -76,9 +76,9 @@ export async function resolveOnsNameToHex(rawInput: string): Promise<OnsResolveR
   try {
     value = await ons.resolveToNostr(name)
   } catch {
-    return { ok: false, error: 'Could not reach the ONS registry — check your connection and try again.', errorKind: 'unreachable' }
+    return { ok: false, error: 'Could not reach the name registry — check your connection and try again.', errorKind: 'unreachable' }
   }
-  if (!value) return { ok: false, error: `No ONS name "@${name}" found.`, errorKind: 'not-found' }
+  if (!value) return { ok: false, error: `No @${name} found.`, errorKind: 'not-found' }
   const hex = nostrValueToHex(value)
   if (!hex) return { ok: false, error: `"@${name}" has no valid Nostr key on record.`, errorKind: 'no-key' }
   return { ok: true, hex }
@@ -135,7 +135,7 @@ export async function checkOnsAvailable(name: string): Promise<OnsAvailabilityRe
     return {
       ok: false,
       errorKind: 'unreachable',
-      error: (e as Error).message || 'Could not reach the ONS registry — try again.',
+      error: (e as Error).message || 'Could not reach the name registry — try again.',
     }
   }
 }
@@ -395,7 +395,7 @@ export async function ownedOnsNames(wallet: SecretKeyWallet): Promise<OwnedNames
     return {
       ok: false,
       errorKind: 'unreachable',
-      error: (e as Error).message || 'Could not reach the ONS registry — try again.',
+      error: (e as Error).message || 'Could not reach the name registry — try again.',
     }
   }
 }

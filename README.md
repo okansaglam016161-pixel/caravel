@@ -61,8 +61,8 @@ upstream. See [`vendor/README.md`](vendor/README.md).
 src/
   components/
     landing/      Public marketing landing page
-    chat/         Chat shell — conversations, thread view, compose, payments
-    wallet/       Create / unlock / restore, wallet modal, profile, ONS register
+    chat/         Chat shell — conversations, thread view, compose, payments, @names
+    wallet/       Create / unlock / restore, wallet modal, profile
     primitives/   Shared UI kit (tokens, Logo, buttons, inputs, …)
   context/        WalletContext — wallet + scan + messaging state
   crypto/         Key derivation, UTXO scan, confidential send, ONS, Nostr crypto

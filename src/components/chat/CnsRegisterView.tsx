@@ -144,7 +144,7 @@ export default function CnsRegisterView({ onBack, onDone, onOpenWallet }: {
     const r = await checkOnsAvailable(name)
     if (token.current !== mine) return   // the field moved on; this answer is about older text
     if (!r.ok) {
-      setPhase({ kind: 'unreachable', error: r.error ?? 'Could not reach the ONS registry — try again.' })
+      setPhase({ kind: 'unreachable', error: r.error ?? 'Could not reach the name registry — try again.' })
       return
     }
     // `available` is absent on a failed read, so there is no false here to mistake for "taken".

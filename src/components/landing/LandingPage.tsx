@@ -320,23 +320,6 @@ function ServiceRow({ title, body, card, flip = false }: {
   return <div className="cv-lp-service">{flip ? <>{card}{copy}</> : <>{copy}{card}</>}</div>
 }
 
-const vaultCard = (extra: React.CSSProperties = {}): React.CSSProperties => ({
-  background: 'var(--nav-ground)', border: '1px solid var(--border)', borderRadius: 18, ...extra,
-})
-
-function NameCard() {
-  return (
-    <div style={vaultCard({ padding: 26, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14 })}>
-      <span style={{ width: 52, height: 52, borderRadius: 15, background: 'var(--vault-card)', color: 'var(--accent-300)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, fontWeight: 600 }}>@</span>
-      <div style={{ fontSize: 24, fontWeight: 600, letterSpacing: '-0.015em', color: '#FFFFFF' }}>@okz61</div>
-      <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11.5, letterSpacing: '0.05em', color: 'var(--vault-label)' }}>a3f9 20c4 8b1e 77d2</div>
-      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '5px 12px', borderRadius: 'var(--r-pill)', background: 'rgba(59,214,149,0.12)', color: '#3BD695', fontSize: 11.5, fontWeight: 600 }}>
-        <span style={{ width: 5, height: 5, borderRadius: 'var(--r-pill)', background: '#3BD695' }} />Registered
-      </span>
-    </div>
-  )
-}
-
 const SOON = [
   { icon: <Swap />, label: 'Swap' },
   { icon: <Bridge />, label: 'Bridge' },
@@ -355,13 +338,8 @@ function Services() {
       <ServiceRow
         flip
         title="Chat"
-        body="End-to-end encrypted messaging, tied to your wallet. Private money and private words, one conversation."
+        body="End-to-end encrypted messaging, tied to your wallet. Claim an @name so people can reach you by name — private messaging and private money, one conversation."
         card={<ChatStill />}
-      />
-      <ServiceRow
-        title="Name"
-        body="Claim your @name. One name people can message you by, instead of a key nobody can read."
-        card={<NameCard />}
       />
       <div className="cv-lp-soon">
         {SOON.map(s => (

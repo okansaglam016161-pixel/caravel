@@ -29,6 +29,24 @@
 //   whose loss costs nothing to rebuild — the real card is a closure in ChatApp driven by a
 //   ten-state union, so a still could never have reused it anyway.
 //
+//   ── ONE ROW OF THAT HEADER IS BACK, AND WHY ──────────────────────────────────
+//
+//   Names stopped being a service of their own and became a property of the identity you message
+//   with, so the landing page's separate @name card went and its claim moved into this row's copy.
+//   Copy that says people can reach you by name, beside a picture of a conversation with nobody's
+//   name in it, is the paragraph doing all the work while the graphic sits out — so the thread
+//   header returns as far as the name and no further: an avatar and @okz61, from the parts listed
+//   above, which the note already said were still pure.
+//
+//   THAT IS NOT THE WINDOW THIS FILE REFUSED. What was cut was a header AND a composer AND a
+//   payment card AND the encryption line — a second detailed picture of the product two screens
+//   under the first. One name row is not a window, and it buys back some of the height the third
+//   bubble was added to find.
+//
+//   NO E2ELine, deliberately. It prints "End-to-end encrypted", and the paragraph beside this card
+//   opens with the same words. Saying it twice in one row is the duplication the rest of this note
+//   is about.
+//
 //   ── WHY IT IS STILL A COMPONENT OVER A REAL BUBBLE ───────────────────────────
 //
 //   MessageBubble is what keeps this honest. It owns the V3 geometry — 14px in 10/14 padding, the
@@ -45,8 +63,9 @@
 //   INERT, like WalletStill beside it. Nothing in a picture should take focus or a click; the
 //   attribute also removes the subtree from the accessibility tree, which is right for decoration.
 
+import Avatar from '../chat/Avatar'
 import MessageBubble from '../chat/MessageBubble'
-import { THREAD_SCROLLER } from '../chat/threadChrome'
+import { HEADER_LEFT, THREAD_HEADER, THREAD_SCROLLER, THREAD_TITLE } from '../chat/threadChrome'
 
 // TIMES ARE DERIVED, NOT LITERAL. MessageBubble prints them through toLocaleTimeString, so a
 // hardcoded epoch would read 03:14 for a visitor in Sydney — not a plausible dinner conversation.
@@ -61,6 +80,20 @@ export default function ChatStill() {
       background: 'var(--surface)', border: '1px solid var(--border)',
       borderRadius: 18, boxShadow: 'var(--e1)',
     }}>
+      {/* THE NAME, AND NOTHING ELSE FROM THE HEADER. THREAD_HEADER carries the app's own hairline
+          and 13/18 padding, so the row sits where a reader of the real thread would expect it. */}
+      <div style={THREAD_HEADER}>
+        <div style={HEADER_LEFT}>
+          {/* CARAVEL BLUE, DELIBERATELY, AND ONLY HERE. Avatar's normal job is a colour derived from
+              an identity, so a real thread shows a different tile per person — but nothing in this
+              picture resolves to anybody, so a generated colour would be arbitrary rather than
+              meaningful. The still uses the brand blue instead, via the fill props Avatar already
+              takes. Avatar itself is untouched; every real usage keeps its per-identity colour. */}
+          <Avatar icon={<span style={{ fontSize: 12, fontWeight: 700 }}>OK</span>} bg="var(--accent-400)" fg="var(--ink-on-accent)" size={30} radius={99} />
+          <span style={THREAD_TITLE}>@okz61</span>
+        </div>
+      </div>
+
       {/* THREAD_SCROLLER for the column and the 12px message gap — the app's spacing between
           bubbles, which is the part that would drift. Its padding is overridden: 18/24 is the
           measurement of a full-height thread pane, and this is a tile that has to sit at the same

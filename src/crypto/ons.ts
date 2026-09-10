@@ -175,10 +175,31 @@ export async function registerOnsName(
 
 export type { NameRecord }
 
+/**
+ * WHY THE TWO FAILURES ARE LABELLED, AND LABELLED SEPARATELY.
+ *
+ * Reading your names can fail before it ever reaches the network — deriving the owner key is a
+ * wallet operation, not a registry read — and the two say different things to a person. "Could not
+ * reach the registry" is worth retrying; "could not work out which identity you are" is not. They
+ * used to share one catch and one sentence, so a caller could only ever offer the wrong one.
+ *
+ * MIRRORS OnsResolveErrorKind above: the same flag + optionals + labelled kind. The union-shaping
+ * stays with the consumer, exactly as the compose modal shapes the resolve path's result.
+ */
+export type OnsOwnedErrorKind = 'unreachable' | 'no-identity'
+
 export interface OwnedNamesResult {
   ok: boolean
+  /**
+   * Present iff `ok`. AN EMPTY ARRAY IS A REAL ANSWER — this wallet owns no names — and is never a
+   * stand-in for a read that failed. A caller that treats `!names?.length` as "nothing here" has
+   * re-created the bug this shape exists to prevent: an unreachable registry rendering as an empty
+   * one, which invites somebody to claim a name they already hold.
+   */
   names?: NameRecord[]
   error?: string
+  /** Present iff `!ok`. Lets each failure render to its own state instead of one generic card. */
+  errorKind?: OnsOwnedErrorKind
 }
 
 function bytesToHex(bytes: Uint8Array): string {
@@ -191,13 +212,45 @@ function bytesToHex(bytes: Uint8Array): string {
  * The @names this wallet owns. Derives the owner key (the wallet's Ristretto public key, the same
  * identity recorded on-chain as a name's owner) and filters the registry by it — keyless, on-chain,
  * and identical on any device for the same wallet.
+ *
+ * ALL FOUR OUTCOMES ARE DISTINCT, and that is the whole point of this function's shape:
+ *
+ *   { ok: true,  names: […] }                          one or several — the full list, never the first
+ *   { ok: true,  names: [] }                            owns none — a real answer about the chain
+ *   { ok: false, errorKind: 'unreachable' }             the registry could not be read
+ *   { ok: false, errorKind: 'no-identity' }             this wallet's key could not be derived
+ *
+ * The list is NOT re-sorted here. The reader already sorts it by name (client/src/reader.ts), so
+ * there is one ordering in one place rather than two that can disagree.
+ *
+ * NO REGISTRATION DATE, AND NOTHING TO MAKE ONE FROM. The contract's NameRecord is {owner, records}
+ * and holds no time field; the NameRegistered event carries only the name; the indexer's substate
+ * `version` counts the whole registry's writes, not one name's. The only timestamp that exists is
+ * the local journal's, which is this device's clock at the moment we ACTED — "never a peer's, never
+ * a chain's" (journal.ts) — so it is not a registration date. The field is ABSENT rather than null,
+ * so nothing downstream can quietly fill it and call it one.
  */
 export async function ownedOnsNames(wallet: SecretKeyWallet): Promise<OwnedNamesResult> {
+  // TWO TRY BLOCKS, NOT ONE. A single catch around both calls is what let a wallet failure return
+  // the registry's sentence and a registry failure return the wallet's. The split is the fix.
+  let ownerHex: string
   try {
-    const ownerHex = bytesToHex(await wallet.getPublicKey())
-    const names = await ons.namesForOwner(ownerHex)
-    return { ok: true, names }
+    ownerHex = bytesToHex(await wallet.getPublicKey())
   } catch (e) {
-    return { ok: false, error: (e as Error).message || 'Could not load your names — try again.' }
+    return {
+      ok: false,
+      errorKind: 'no-identity',
+      error: (e as Error).message || 'Could not read this wallet’s identity key.',
+    }
+  }
+
+  try {
+    return { ok: true, names: await ons.namesForOwner(ownerHex) }
+  } catch (e) {
+    return {
+      ok: false,
+      errorKind: 'unreachable',
+      error: (e as Error).message || 'Could not reach the ONS registry — try again.',
+    }
   }
 }

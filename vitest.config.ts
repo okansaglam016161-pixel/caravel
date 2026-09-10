@@ -10,10 +10,14 @@ import { fileURLToPath } from 'url'
 // environment: 'node' — no jsdom. The only browser API the store touches is localStorage, which
 // the spec stubs in-memory (see messageStore.test.ts). That keeps the test dependency footprint at
 // exactly one package and the suite instant.
-// The one alias the tests DO need: tari-cipherseed is vendored as source (vendor/tari-cipherseed),
-// so specs importing it resolve through the same specifier the app uses. Kept in step with the
-// matching entries in vite.config.ts and tsconfig.app.json — all three must agree or the app and
-// its tests would silently exercise different code.
+// The two aliases the tests DO need, both to VENDORED code that is not in node_modules and so has
+// no resolution of its own: tari-cipherseed (vendored as source) and @ootle/name-service (the ONS
+// client, vendored as its built dist). Specs importing either resolve through the same specifier
+// the app uses. Kept in step with the matching entries in vite.config.ts and tsconfig.app.json —
+// all three must agree or the app and its tests would silently exercise different code.
+//
+// The ONS entry pulls in the reader only: index.js imports it statically and both writers behind
+// `await import()`, so a spec never loads the signing path or its SDK peers.
 const ROOT = path.dirname(fileURLToPath(import.meta.url))
 
 export default defineConfig({
@@ -24,6 +28,7 @@ export default defineConfig({
   resolve: {
     alias: {
       'tari-cipherseed': path.join(ROOT, 'vendor/tari-cipherseed/src/index.ts'),
+      '@ootle/name-service': path.join(ROOT, 'vendor/ons/dist/index.js'),
     },
   },
 })

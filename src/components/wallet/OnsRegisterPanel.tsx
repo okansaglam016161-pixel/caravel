@@ -47,7 +47,20 @@ export default function OnsRegisterPanel() {
     let cancelled = false
     setOwnedLoading(true)
     ownedOnsNames(wallet)
-      .then(r => { if (!cancelled) setOwned(r.ok && r.names?.length ? r.names[0].name : null) })
+      .then(r => {
+        if (cancelled) return
+        // ── THE COLLAPSE IS HERE, AND IT BELONGS TO THIS CARD, NOT TO THE READ LAYER ──
+        //
+        // ownedOnsNames now answers honestly: owns-several, owns-none and an unreachable registry
+        // are three distinct results (crypto/ons.ts). NameCard takes one nullable string, so it can
+        // carry exactly one of them, and this line is where the rest is thrown away — every name
+        // after the first, and the difference between "you own none" and "we could not ask".
+        //
+        // BEHAVIOUR IS UNCHANGED from before the read layer was fixed, deliberately. Rendering all
+        // five states honestly belongs to the CNS overlay that replaces this card; what this stage
+        // buys is that the lie is now visible, local, and deletable rather than inherited.
+        setOwned(r.ok && r.names?.length ? r.names[0].name : null)
+      })
       .catch(() => { /* leaves the card unclaimed — see above */ })
       .finally(() => { if (!cancelled) setOwnedLoading(false) })
     return () => { cancelled = true }

@@ -378,7 +378,11 @@ function PaymentMessageCard({ message, lid, flashed }: { message: CaravelMessage
 
 // ── Component ────────────────────────────────────────────────────────────────────
 
-export default function ChatApp() {
+export default function ChatApp({ onOpenWallet }: {
+  /** Switch the shell to the Wallet service. Chat cannot reach it otherwise — the service lives in
+   *  AppShell — and CNS's timeout screen sends people to Activity to check a transaction. */
+  onOpenWallet: () => void
+}) {
   const { wallet, address, scan, messages, nostrPubkeyHex, messagingStatus, contacts, acceptContact, contactAddresses, setManualTariAddress, createMessagingProvider, recordSentMessage, deleteConversation, editMessage, reactMessage, getRelayStates, reconnectAll, groups, createGroup, acceptGroup, declineGroup, leaveGroup, reinviteGroup, balanceHidden } = useWallet()
   // Logo has no theme awareness of its own — `onLight` is a manual prop. Both marks in this view
   // sit on surfaces that are now light in the light theme, so the white mark would vanish.
@@ -2461,7 +2465,7 @@ export default function ChatApp() {
       />
     )}
 
-    {cnsOpen && <CnsOverlay onClose={() => setCnsOpen(false)} />}
+    {cnsOpen && <CnsOverlay onClose={() => setCnsOpen(false)} onOpenWallet={onOpenWallet} />}
 
     {createGroupOpen && (
       <CreateGroupModal

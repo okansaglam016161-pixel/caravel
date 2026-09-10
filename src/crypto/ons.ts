@@ -138,12 +138,43 @@ export async function checkOnsAvailable(name: string): Promise<OnsAvailabilityRe
   }
 }
 
+/**
+ * HOW A REGISTRATION ENDED, as a label rather than as prose.
+ *
+ * The browser writer classifies the chain's answer properly — Accept, AcceptFeeRejectRest, Reject,
+ * Timeout — and then throws a SENTENCE, so the classification dies at this boundary and only English
+ * survives. These four labels carry it across, so a screen can render an outcome instead of matching
+ * a string. The matching happens once, here, with tests.
+ *
+ *   'accepted'       the chain applied it. The ONLY path to a success screen.
+ *   'fee-burned'     the fee left the wallet and no name was written. WHY IS NOT KNOWN — see below.
+ *   'timed-out'      we stopped waiting. NOT a failure: it may well have landed.
+ *   'not-submitted'  refused before anything was sent. Nothing happened and no fee moved.
+ *
+ * WHY 'fee-burned' CLAIMS NO CAUSE. The writer's message for this outcome asserts "the fee was too
+ * low", but it builds that sentence from the outcome alone — it captures the chain's actual reason
+ * into `reason` and then discards it. A name taken between check and submit panics INSIDE the
+ * register instruction, after the fee instructions have already run, which is exactly this outcome:
+ * so the sentence is wrong precisely when somebody has lost a name. We do not repeat a cause we
+ * cannot verify. Callers that want to know whether the name went instead ASK — a second keyless
+ * availability read costs nothing and is evidence rather than inference.
+ *
+ * (The real fix belongs in ootle-name-service's browser-writer, which should carry `reason` into
+ * that message or throw a typed error. That is a change in the other repo and a re-vendor.)
+ */
+export type OnsRegisterOutcome = 'accepted' | 'fee-burned' | 'timed-out' | 'not-submitted'
+
 export interface OnsRegisterResult {
   ok: boolean
   txId?: string
   fee?: bigint
   error?: string
+  /** Always present. `ok` is `outcome === 'accepted'`; the label is what the three failures need. */
+  outcome?: OnsRegisterOutcome
 }
+
+/** Why a fee estimate failed. Three different problems with three different things to do about them. */
+export type OnsEstimateErrorKind = 'no-balance' | 'fragmented' | 'unreachable' | 'policy'
 
 export interface OnsEstimateResult {
   ok: boolean
@@ -152,13 +183,57 @@ export interface OnsEstimateResult {
    *  refunded), so it's what we show on the confirm gate. */
   feeMicroTari?: bigint
   error?: string
+  /** Present iff `!ok`. Lets each problem render its own instruction instead of one generic card. */
+  errorKind?: OnsEstimateErrorKind
 }
 
-/** A small safety margin over the raw estimate. The whole budget is consumed on-chain (overcharge is
- *  not refunded), so keep it minimal — just enough to absorb tiny drift between estimate and submit. */
+/**
+ * The safety margin over the dry-run estimate. TEN PERCENT, and the number is not arbitrary.
+ *
+ * WHAT IT IS PROTECTING AGAINST. The whole revealed budget is consumed on this path — overcharge is
+ * not refunded — so the margin is money spent every time. But a budget BELOW the real cost is not a
+ * partial refund, it is `AcceptFeeRejectRest`: the fee goes anyway and no name is written. Losing
+ * the entire fee AND the registration costs far more than the margin ever saves, so the trade is
+ * asymmetric and should lean generous. The question is only how generous.
+ *
+ * WHY NOT THE 2% THIS USED TO BE. Measured dry-run-to-actual drift on this engine is 2.7%, which 2%
+ * does not cover. It has not been biting because of the 100 µtTARI FLOOR below, not because of the
+ * percentage — at ONS's real costs the floor is doing all the work:
+ *
+ *     real fee    2% of it    floor wins?   budget    effective margin
+ *     1 400          28          yes         1 500        +7.1%
+ *     2 451          49          yes         2 551        +4.1%
+ *     5 000         100          tie         5 100        +2.0%
+ *    10 000         200          no         10 200        +2.0%
+ *
+ * So the old formula was safe by coincidence and stopped being safe the moment a registration cost
+ * more than about 5 000 µtTARI — where it would burn the fee on every attempt. 10% is ~3.7x the
+ * measured drift at every scale rather than at some of them, and costs 140 µtTARI on a 1 400 µtTARI
+ * fee: a fortieth of a thousandth of a TARI, against losing the lot.
+ *
+ * WHY NOT THE WRITER'S 25%. Its own comment reaches that number by reasoning "lean generous", not
+ * from a measurement. 25% is ~9x the drift and is consumed on every single registration.
+ *
+ * The floor stays: it is what covers a fee small enough that a percentage rounds to nothing.
+ */
 function withOnsFeeMargin(required: bigint): bigint {
-  const margin = (required * 2n) / 100n // +2%
+  const margin = (required * 10n) / 100n
   return required + (margin > 100n ? margin : 100n)
+}
+
+/**
+ * Turn the writer's estimate failure into a label. THE STRING MATCHING LIVES HERE AND NOWHERE ELSE.
+ *
+ * These are the browser writer's own messages, thrown from a vendored build, so they are stable for
+ * a given vendoring and the spec pins them. Anything unrecognised falls to 'unreachable', which is
+ * the honest default: an estimate we could not complete for a reason we do not recognise is not a
+ * claim about this wallet's balance. The raw message is carried through either way, so nothing is
+ * swallowed.
+ */
+function classifyEstimateError(message: string): OnsEstimateErrorKind {
+  if (message.includes('No confidential UTXOs found')) return 'no-balance'
+  if (message.includes("Can't fund the fee from one UTXO")) return 'fragmented'
+  return 'unreachable'
 }
 
 /**
@@ -173,13 +248,14 @@ export async function estimateOnsRegistration(
   ownNpub: string,
 ): Promise<OnsEstimateResult> {
   const policy = validateOnsName(name)
-  if (policy) return { ok: false, error: policy }
+  if (policy) return { ok: false, errorKind: 'policy', error: policy }
   try {
     const writer = await ons.withBrowserSigner({ wallet, senderAddress })
     const { feeMicroTari } = await writer.estimateRegisterWithNostr(name, ownNpub)
     return { ok: true, feeMicroTari: withOnsFeeMargin(feeMicroTari) }
   } catch (e) {
-    return { ok: false, error: (e as Error).message || 'Could not estimate the fee.' }
+    const message = (e as Error).message || 'Could not estimate the fee.'
+    return { ok: false, errorKind: classifyEstimateError(message), error: message }
   }
 }
 
@@ -197,14 +273,45 @@ export async function registerOnsName(
   feeBudget: bigint,
 ): Promise<OnsRegisterResult> {
   const policy = validateOnsName(name)
-  if (policy) return { ok: false, error: policy }
+  // REFUSED BEFORE ANYTHING WAS SENT. No transaction exists, no fee moved, and a screen must be able
+  // to say that rather than implying a failed write.
+  if (policy) return { ok: false, outcome: 'not-submitted', error: policy }
   try {
     const writer = await ons.withBrowserSigner({ wallet, senderAddress })
     const res = await writer.submitRegisterWithNostr(name, ownNpub, feeBudget)
-    return { ok: true, txId: res.transactionId, fee: res.fee }
+    return { ok: true, outcome: 'accepted', txId: res.transactionId, fee: res.fee }
   } catch (e) {
-    return { ok: false, error: (e as Error).message || 'Registration failed.' }
+    const message = (e as Error).message || 'Registration failed.'
+    return { ok: false, outcome: classifyRegisterOutcome(message), txId: txIdFrom(message), error: message }
   }
+}
+
+/**
+ * Turn the writer's rejection sentence back into the outcome it was built from. As with the estimate
+ * classifier: the matching lives here, once, pinned by the spec.
+ *
+ * A THROW THAT REACHES HERE IS NOT NECESSARILY A REJECTION. It also covers a transport failure mid-
+ * submission, where we never learned what the chain did. That is the same not-knowing as a timeout
+ * and gets the same label, because the alternative is telling somebody their registration failed
+ * when it may be sitting on the ledger. `'timed-out'` is the honest default for this whole family.
+ */
+function classifyRegisterOutcome(message: string): OnsRegisterOutcome {
+  // BOTH REJECTION SHAPES SPENT THE FEE, and it is worth writing down why, because only one of them
+  // says so. AcceptFeeRejectRest is the explicit case: the fee committed, the rest did not. A plain
+  // Reject looks like it might have cost nothing — but the writer only ever sees a Reject INSIDE
+  // `execution_result.finalize.result`, which means the transaction was executed, and the fee
+  // instructions are the first instructions in it (stealth transfer → bucket → PayFeeFromBucket,
+  // built before the ONS calls). A transaction the chain got far enough to reject has already paid.
+  if (message.includes('the fee was still spent') || message.includes('was rejected on-chain')) return 'fee-burned'
+  // Everything else is NOT KNOWING: the poll gave up, or the submission threw before we learned what
+  // the chain did. Both may well have landed, so neither may be called a failure.
+  return 'timed-out'
+}
+
+/** The writer embeds the transaction id as `(tx …)`. Pulled out so every fee-spending outcome can
+ *  show its reference — which is the only thing that makes a burned fee checkable afterwards. */
+function txIdFrom(message: string): string | undefined {
+  return /\(tx ([^)\s]+)\)/.exec(message)?.[1]
 }
 
 // ── owned names (reverse lookup) ────────────────────────────────────────────────

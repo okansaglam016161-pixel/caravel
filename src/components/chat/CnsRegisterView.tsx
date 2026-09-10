@@ -43,6 +43,7 @@
 import { useRef, useState } from 'react'
 import { useWallet } from '../../context/WalletContext'
 import { checkOnsAvailable, toOnsName, validateOnsName } from '../../crypto/ons'
+import CnsCommitView from './CnsCommitView'
 
 /** What the last completed check said. The policy error is NOT here — see `policyErr` below. */
 type Phase =
@@ -80,10 +81,26 @@ const WarnTriangle = () => (
   <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><path d="M12 9v4M12 17h.01" /></svg>
 )
 
-export default function CnsRegisterView({ onBack }: { onBack: () => void }) {
+export default function CnsRegisterView({ onBack, onDone, onOpenWallet }: {
+  onBack: () => void
+  /** Finished with the whole flow — the overlay returns to the list and re-reads it. */
+  onDone: () => void
+  /** Switch to the Wallet service, for the timeout screen's "Check Activity". */
+  onOpenWallet: () => void
+}) {
   const { wallet, address, nostrNpub } = useWallet()
   const [raw, setRaw] = useState('')
   const [phase, setPhase] = useState<Phase>({ kind: 'idle' })
+  /**
+   * THE COMMIT SCREEN REPLACES THIS ONE'S BODY, rather than being pushed as a third view.
+   *
+   * This component stays mounted underneath, so Cancel comes back to an availability answer that is
+   * still on screen and still true — re-checking on the way back would spend a round trip to
+   * re-learn something we were told a second ago, and could contradict the answer the user just
+   * acted on. The design drops the field entirely in every 10D card, which is why this is a swap
+   * and not an addition.
+   */
+  const [committing, setCommitting] = useState(false)
 
   // A GENERATION, not a cancellation flag. This check is fired by a button rather than by an
   // effect, so there is no teardown to hang a flag on — the guard has to survive across calls. Same
@@ -141,6 +158,20 @@ export default function CnsRegisterView({ onBack }: { onBack: () => void }) {
   const fieldLit = !policyErr && (checking || phase.kind === 'available')
 
   const showRegister = phase.kind === 'available'
+
+  if (committing) {
+    return (
+      <CnsCommitView
+        name={name}
+        onCancel={() => setCommitting(false)}
+        onDone={onDone}
+        // Back to a clean field: the name that was just registered — or just lost — is not the one
+        // to offer next.
+        onTryAnother={() => { setCommitting(false); setRaw(''); setPhase({ kind: 'idle' }) }}
+        onOpenWallet={onOpenWallet}
+      />
+    )
+  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
@@ -291,13 +322,19 @@ export default function CnsRegisterView({ onBack }: { onBack: () => void }) {
           leads to §10D, which does not exist yet, so it is drawn in the disabled fill rather than
           as a control that looks live and swallows the click. */}
       {showRegister ? (
-        <div style={{
-          marginTop: 11, padding: 10, borderRadius: 10, textAlign: 'center',
-          background: 'var(--msg-received)', color: 'var(--text-muted-dim)',
-          fontSize: 13, fontWeight: 600,
-        }}>
+        // LIVE AT LAST. It waited three stages in the disabled fill because it opened nothing; it
+        // opens the fee gate — which spends no money until the fee has been shown and approved.
+        <button
+          onClick={() => setCommitting(true)}
+          className="cv-btn-primary"
+          style={{
+            width: '100%', marginTop: 11, padding: 10, borderRadius: 10, border: 'none',
+            background: 'var(--accent-400)', color: 'var(--ink-on-accent)',
+            fontSize: 13, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer',
+          }}
+        >
           Register @{name}
-        </div>
+        </button>
       ) : (
         <button
           onClick={() => { if (canCheck) void check() }}

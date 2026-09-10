@@ -53,7 +53,7 @@ export default function AppShell() {
       {/* No longer pinned dark. Chat's literals now resolve through the v0.3 role tokens, so it
           follows the app theme like every other service — and so does the wallet modal inside it,
           which used to inherit the pin. */}
-      <Pane show={service === 'chat'}><ChatApp /></Pane>
+      <Pane show={service === 'chat'}><ChatApp onOpenWallet={() => setService('wallet')} /></Pane>
       <Pane show={service === 'name'}><NamePage /></Pane>
 
       {profileOpen && (

@@ -18,7 +18,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { SecretKeyWallet } from '@tari-project/ootle-secret-key-wallet'
-import { checkOnsAvailable, ons, ownedOnsNames, type NameRecord } from './ons'
+import { checkOnsAvailable, estimateOnsRegistration, ons, ownedOnsNames, registerOnsName, type NameRecord } from './ons'
 
 // A 32-byte key whose hex is easy to assert against: 0x00, 0x01, … 0x1f.
 const KEY = new Uint8Array(Array.from({ length: 32 }, (_, i) => i))
@@ -252,6 +252,169 @@ describe('validateOnsName — the contract\'s rules, in the product\'s words', (
     expect(validateOnsName('x'.repeat(33))).toBe('Too long, 32 characters max.')
     for (const bad of ['Okz', 'okz 61', 'okz.61', 'okz@61', 'ökz']) {
       expect(validateOnsName(bad), bad).toBe('Only lowercase letters, numbers, hyphen and underscore.')
+    }
+  })
+})
+
+// ── The write path: estimate, submit, and what the chain actually said ────────
+//
+// THE MONEY STAGE, AND THE ONE PLACE STRING MATCHING IS ALLOWED. The vendored browser writer
+// classifies the chain's answer properly and then throws a SENTENCE, so the classification dies at
+// ons.ts's boundary. These specs pin the translation back — and they are the tripwire if the ONS
+// client is ever re-vendored with different prose, which is exactly why they exist.
+//
+// Both writers are reached through `ons.withBrowserSigner`, so one stub covers both calls.
+
+const WALLET = { getPublicKey: async () => new Uint8Array(32) } as unknown as SecretKeyWallet
+const ADDR = 'otl_esm_1test'
+const NPUB = 'npub1test'
+
+/** Stub the browser writer. `estimate` and `submit` are whatever the test needs them to do. */
+function stubWriter(impl: { estimate?: () => Promise<{ feeMicroTari: bigint }>; submit?: () => Promise<{ transactionId: string; fee: bigint }> }) {
+  return vi.spyOn(ons, 'withBrowserSigner').mockResolvedValue({
+    estimateRegisterWithNostr: impl.estimate ?? (async () => ({ feeMicroTari: 1_000n })),
+    submitRegisterWithNostr: impl.submit ?? (async () => ({ transactionId: 'tx1', fee: 1_000n })),
+  } as unknown as Awaited<ReturnType<typeof ons.withBrowserSigner>>)
+}
+
+const throwing = (message: string) => async () => { throw new Error(message) }
+
+describe('estimateOnsRegistration — three problems, three instructions', () => {
+  it('an empty wallet is "no-balance"', async () => {
+    stubWriter({ estimate: throwing('No confidential UTXOs found — this wallet needs a balance to pay the fee.') })
+
+    const r = await estimateOnsRegistration(WALLET, ADDR, 'okz', NPUB)
+
+    expect(r.ok).toBe(false)
+    expect(r.errorKind).toBe('no-balance')
+    expect(r.feeMicroTari).toBeUndefined()
+  })
+
+  it('a balance the fee cannot be paid from in one piece is "fragmented"', async () => {
+    stubWriter({ estimate: throwing("Can't fund the fee from one UTXO: need more than 1500 µtTARI in a single UTXO, but the largest is 900 µtTARI.") })
+
+    const r = await estimateOnsRegistration(WALLET, ADDR, 'okz', NPUB)
+
+    expect(r.errorKind).toBe('fragmented')
+    // A DIFFERENT PROBLEM FROM AN EMPTY WALLET: there is money, it is just in the wrong shape.
+    expect(r.errorKind).not.toBe('no-balance')
+  })
+
+  it('a network failure is "unreachable"', async () => {
+    stubWriter({ estimate: throwing('UTXO scan HTTP 503') })
+
+    expect((await estimateOnsRegistration(WALLET, ADDR, 'okz', NPUB)).errorKind).toBe('unreachable')
+  })
+
+  it('an unrecognised message falls to "unreachable", never to a claim about the wallet', async () => {
+    stubWriter({ estimate: throwing('something nobody has written a branch for yet') })
+
+    const r = await estimateOnsRegistration(WALLET, ADDR, 'okz', NPUB)
+
+    expect(r.errorKind).toBe('unreachable')
+    // The raw message survives — nothing is swallowed just because it was not recognised.
+    expect(r.error).toBe('something nobody has written a branch for yet')
+  })
+
+  it('a name that fails policy never reaches the network at all', async () => {
+    const spy = stubWriter({})
+
+    const r = await estimateOnsRegistration(WALLET, ADDR, 'Okz 61', NPUB)
+
+    expect(r.errorKind).toBe('policy')
+    expect(spy).not.toHaveBeenCalled()
+  })
+})
+
+describe('registerOnsName — the outcome, not the sentence', () => {
+  it('a true on-chain Accept is the only "accepted"', async () => {
+    stubWriter({ submit: async () => ({ transactionId: 'a41c9f27b3', fee: 1_500n }) })
+
+    const r = await registerOnsName(WALLET, ADDR, 'okz', NPUB, 1_500n)
+
+    expect(r.ok).toBe(true)
+    expect(r.outcome).toBe('accepted')
+    expect(r.txId).toBe('a41c9f27b3')
+    expect(r.fee).toBe(1_500n)
+  })
+
+  it('a fee-committed rejection is "fee-burned", and keeps its tx reference', async () => {
+    stubWriter({ submit: throwing('ONS register+set_record was rejected on-chain: the fee was too low, so no name was registered — but the fee was still spent (tx a41c9f27b3).') })
+
+    const r = await registerOnsName(WALLET, ADDR, 'okz', NPUB, 1_500n)
+
+    expect(r.ok).toBe(false)
+    expect(r.outcome).toBe('fee-burned')
+    // THE REFERENCE IS THE POINT. A burned fee that cannot be looked up afterwards is just a number
+    // somebody has to take on trust.
+    expect(r.txId).toBe('a41c9f27b3')
+  })
+
+  it('a plain on-chain reject is also "fee-burned" — execution ran, and the fee runs first', async () => {
+    stubWriter({ submit: throwing('ONS register+set_record was rejected on-chain (tx a41c9f27b3): {"Reject":"…"}. If a name was just taken by someone else, it may already be registered.') })
+
+    const r = await registerOnsName(WALLET, ADDR, 'okz', NPUB, 1_500n)
+
+    expect(r.outcome).toBe('fee-burned')
+    expect(r.txId).toBe('a41c9f27b3')
+  })
+
+  it('a timeout is "timed-out" — pending, and never a failure', async () => {
+    stubWriter({ submit: throwing('ONS register+set_record did not confirm in time (tx a41c9f27b3). Check Activity before retrying.') })
+
+    const r = await registerOnsName(WALLET, ADDR, 'okz', NPUB, 1_500n)
+
+    expect(r.outcome).toBe('timed-out')
+    expect(r.outcome).not.toBe('fee-burned')
+    expect(r.txId).toBe('a41c9f27b3')
+  })
+
+  it('a throw we do not recognise is treated as NOT KNOWING, not as a failure', async () => {
+    stubWriter({ submit: throwing('socket hang up') })
+
+    // The submission may well have landed. Calling that a failure is the lie this whole feature
+    // exists to remove, so the unrecognised case defaults to pending.
+    expect((await registerOnsName(WALLET, ADDR, 'okz', NPUB, 1_500n)).outcome).toBe('timed-out')
+  })
+
+  it('a policy refusal is "not-submitted" — nothing was sent and no fee moved', async () => {
+    const spy = stubWriter({})
+
+    const r = await registerOnsName(WALLET, ADDR, 'Okz 61', NPUB, 1_500n)
+
+    expect(r.outcome).toBe('not-submitted')
+    expect(r.txId).toBeUndefined()
+    expect(spy).not.toHaveBeenCalled()
+  })
+})
+
+describe('the fee margin — 10%, and the floor that used to hide behind it', () => {
+  // Pinned at four scales because the OLD formula (2% + a 100 µtTARI floor) was safe only where the
+  // floor happened to exceed the measured 2.7% drift, and stopped being safe above ~5 000 µtTARI —
+  // where it would have burned the fee on every attempt. These numbers are the evidence for 10%.
+  const budgetFor = async (realFee: bigint) => {
+    stubWriter({ estimate: async () => ({ feeMicroTari: realFee }) })
+    const r = await estimateOnsRegistration(WALLET, ADDR, 'okz', NPUB)
+    return r.feeMicroTari!
+  }
+
+  it('adds 10% once the percentage clears the floor', async () => {
+    expect(await budgetFor(1_400n)).toBe(1_540n)   // +140, was +100 under 2%+floor
+    expect(await budgetFor(2_451n)).toBe(2_696n)   // +245, was +100
+    expect(await budgetFor(5_000n)).toBe(5_500n)   // +500, was +100 — the old cliff
+    expect(await budgetFor(10_000n)).toBe(11_000n) // +1000, was +200
+  })
+
+  it('the floor still covers a fee too small for a percentage to matter', async () => {
+    expect(await budgetFor(500n)).toBe(600n)   // 10% = 50, below the floor → 100
+    expect(await budgetFor(1n)).toBe(101n)
+  })
+
+  it('clears the measured 2.7% drift at every scale, which 2% did not', async () => {
+    for (const fee of [1_400n, 2_451n, 5_000n, 10_000n, 100_000n]) {
+      const budget = await budgetFor(fee)
+      const drifted = fee + (fee * 27n) / 1000n   // +2.7%
+      expect(budget, `budget for ${fee} must cover a 2.7% drift`).toBeGreaterThanOrEqual(drifted)
     }
   })
 })

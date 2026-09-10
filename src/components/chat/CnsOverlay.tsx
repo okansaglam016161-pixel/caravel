@@ -48,9 +48,10 @@
 //   centres itself in a thread and carries a lock glyph, and widening it for a modal's benefit
 //   would make one component answer to two screens.
 
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useOwnedNames, type OwnedNamesState } from '../../hooks/useOwnedNames'
 import type { NameRecord } from '../../crypto/ons'
+import CnsRegisterView from './CnsRegisterView'
 import ModalCard from './ModalCard'
 
 /** The card's height ceiling. 560 is the design's cap; the viewport still wins on a short screen. */
@@ -96,20 +97,28 @@ const Ring = () => (
 /**
  * The way into §10C, in the two states that may offer one.
  *
- * INERT UNTIL §10C EXISTS — no pointer, no hover, no chevron. The design draws a chevron here; it
- * arrives with the thing it points at.
+ * LIVE NOW, AND DRESSED AS IT ACTS. It waited two stages without a pointer, a hover or the design's
+ * chevron because it opened nothing; it opens the register view, so it gets all three back.
  */
-function RegisterRow() {
+function RegisterRow({ onOpen }: { onOpen: () => void }) {
   return (
-    <div style={{
-      display: 'flex', alignItems: 'center', gap: 11, flexShrink: 0,
-      padding: '11px 12px', borderRadius: 11,
-      border: '1px dashed var(--border-strong)', color: 'var(--accent-ink)',
-    }}>
+    <div
+      onClick={onOpen}
+      role="button"
+      tabIndex={0}
+      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen() } }}
+      className="cv-pick-row"
+      style={{
+        display: 'flex', alignItems: 'center', gap: 11, flexShrink: 0,
+        padding: '11px 12px', borderRadius: 11, cursor: 'pointer',
+        border: '1px dashed var(--border-strong)', color: 'var(--accent-ink)',
+      }}
+    >
       <span style={TILE}>
         <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>
       </span>
       <div style={{ flex: 1, fontSize: 13, fontWeight: 600 }}>Register a new name</div>
+      <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><path d="M9 18l6-6-6-6" /></svg>
     </div>
   )
 }
@@ -140,6 +149,14 @@ function NameRow({ record }: { record: NameRecord }) {
 export default function CnsOverlay({ onClose }: { onClose: () => void }) {
   const { state, retry } = useOwnedNames()
 
+  /**
+   * ONE OVERLAY, TWO VIEWS. CNS is a place you move around inside rather than a stack of modals —
+   * the design draws §10C as a panel with its own 14px heading and no close of its own, against
+   * §6A's variants which each carry the full modal frame. So this switch sits ABOVE the list's
+   * state switch: the register view is not a fifth thing the list can be.
+   */
+  const [view, setView] = useState<'list' | 'register'>('list')
+
   // Escape closes, the way every other modal here does it — ModalCard owns the backdrop and the ×,
   // each caller owns the key.
   useEffect(() => {
@@ -148,9 +165,17 @@ export default function CnsOverlay({ onClose }: { onClose: () => void }) {
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
 
+  // COMING BACK RE-READS. Nothing registers yet — that is §10D — but the read is cheap, the list is
+  // the thing you came back to look at, and wiring it now means a name claimed in a later stage
+  // appears without closing and reopening the overlay.
+  const backToList = () => { setView('list'); retry() }
+  const openRegister = () => setView('register')
+
   return (
     <ModalCard title="Your @names" onClose={onClose} maxWidth={520} maxHeight={MAX_HEIGHT}>
-      {body(state, retry)}
+      {view === 'register'
+        ? <CnsRegisterView onBack={backToList} />
+        : body(state, retry, openRegister)}
     </ModalCard>
   )
 }
@@ -159,7 +184,7 @@ export default function CnsOverlay({ onClose }: { onClose: () => void }) {
  * The one body switch. Exhaustive by construction: the `never` binding below stops compiling the
  * moment a state is added without a body, which is how §10C and §10D will find out they own one.
  */
-function body(state: OwnedNamesState, retry: () => void) {
+function body(state: OwnedNamesState, retry: () => void, onRegister: () => void) {
   switch (state.kind) {
     case 'checking':
       return (
@@ -169,7 +194,7 @@ function body(state: OwnedNamesState, retry: () => void) {
             <div style={{ fontSize: 12.5, color: 'var(--text-muted-dim)' }}>Loading your names…</div>
           </div>
           {/* The way in stays put while the list loads. No rows are guessed at above it. */}
-          <RegisterRow />
+          <RegisterRow onOpen={onRegister} />
         </>
       )
 
@@ -187,7 +212,7 @@ function body(state: OwnedNamesState, retry: () => void) {
           <div style={{ flex: '0 1 auto', minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
             {state.names.map(n => <NameRow key={n.name} record={n} />)}
           </div>
-          <RegisterRow />
+          <RegisterRow onOpen={onRegister} />
         </>
       )
 
@@ -209,16 +234,20 @@ function body(state: OwnedNamesState, retry: () => void) {
               Claim one so people can reach you by name instead of your npub.
             </div>
           </div>
-          {/* THE PRIMARY ACTION, DRAWN AS IT CAN ACT. §10C has not been built, so this cannot open
-              anything yet, and it wears the disabled fill every other CTA in chat wears when it
-              cannot act rather than a full accent that would swallow the click. */}
-          <div style={{
-            width: '100%', flexShrink: 0, padding: 11, borderRadius: 11, textAlign: 'center',
-            background: 'var(--msg-received)', color: 'var(--text-muted-dim)',
-            fontSize: 13.5, fontWeight: 600,
-          }}>
+          {/* THE PRIMARY ACTION, AND NOW IT IS ONE. It wore the disabled fill while §10C did not
+              exist; it opens the register view, so it wears the accent. This is the one state where
+              registering is the point of the screen rather than a footnote to a list. */}
+          <button
+            onClick={onRegister}
+            className="cv-btn-primary"
+            style={{
+              width: '100%', flexShrink: 0, padding: 11, borderRadius: 11, border: 'none',
+              background: 'var(--accent-400)', color: 'var(--ink-on-accent)',
+              fontSize: 13.5, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer',
+            }}
+          >
             Register a name
-          </div>
+          </button>
         </>
       )
 

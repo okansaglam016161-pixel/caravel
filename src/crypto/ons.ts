@@ -84,21 +84,57 @@ export async function resolveOnsNameToHex(rawInput: string): Promise<OnsResolveR
 
 // ── register (write) ──────────────────────────────────────────────────────────
 
-/** Local name-policy check mirroring the contract's validate_name (so we fail fast before a fee). */
+/**
+ * Local name-policy check mirroring the contract's validate_name (so we fail fast before a fee).
+ *
+ * THE MESSAGES ARE THE PRODUCT'S, NOT THE CONTRACT'S. The rules are the contract's — 32 bytes, ASCII
+ * lowercase [a-z0-9_-] — and they live here so there is one place that says what a name may be. The
+ * sentences are written for the person typing, and every surface renders what this returns rather
+ * than translating it, because a view that rewrites its validator's copy is how two wordings start
+ * to disagree about one rule.
+ */
 export function validateOnsName(name: string): string | null {
   if (!name) return 'Enter a name.'
-  if (name.length > 32) return 'Too long (max 32 characters).'
-  if (!/^[a-z0-9_-]+$/.test(name)) return 'Only lowercase letters, digits, "_" and "-" are allowed.'
+  if (name.length > 32) return 'Too long, 32 characters max.'
+  if (!/^[a-z0-9_-]+$/.test(name)) return 'Only lowercase letters, numbers, hyphen and underscore.'
   return null
 }
 
-/** Courtesy availability preview via a keyless indexer read. The contract is the final authority. */
-export async function checkOnsAvailable(name: string): Promise<{ available: boolean; error?: string }> {
+/** Why a courtesy availability read failed. Only one way, but labelled — see below. */
+export type OnsAvailabilityErrorKind = 'unreachable'
+
+export interface OnsAvailabilityResult {
+  ok: boolean
+  /**
+   * Present iff `ok`. ABSENT ON FAILURE, and that is the whole shape of this type: a read that
+   * never happened has no answer to report, so there is no `false` lying around for a caller to
+   * render as "taken". This used to return `{ available: false }` on a network error — a registry
+   * we could not reach and a name somebody else owns, reported as the same value.
+   */
+  available?: boolean
+  error?: string
+  /** Present iff `!ok`. Lets the failure render as its own state rather than as a taken name. */
+  errorKind?: OnsAvailabilityErrorKind
+}
+
+/**
+ * Courtesy availability preview via a keyless indexer read.
+ *
+ * A PREVIEW, AND NEVER A GUARANTEE. This asks the indexer what the registry looked like a moment
+ * ago; the contract decides at submit, atomically, and it is the only authority. Between a check
+ * and a registration somebody else can take the name — the transaction is then rejected on-chain
+ * and the fee is spent anyway, which is the outcome the register flow's own result states own.
+ * Nothing built on this may say a name IS yours, only that it was free when we looked.
+ */
+export async function checkOnsAvailable(name: string): Promise<OnsAvailabilityResult> {
   try {
-    const taken = await ons.isRegistered(name)
-    return { available: !taken }
-  } catch {
-    return { available: false, error: 'Could not reach the ONS registry — try again.' }
+    return { ok: true, available: !(await ons.isRegistered(name)) }
+  } catch (e) {
+    return {
+      ok: false,
+      errorKind: 'unreachable',
+      error: (e as Error).message || 'Could not reach the ONS registry — try again.',
+    }
   }
 }
 

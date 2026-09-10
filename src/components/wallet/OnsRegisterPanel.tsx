@@ -77,7 +77,10 @@ export default function OnsRegisterPanel() {
     if (!clean || policyErr) return
     reset('checking')
     const r = await checkOnsAvailable(clean)
-    if (r.error) { setStatus('error'); setMsg(r.error); return }
+    // `available` is absent on a failed read now, so the unreachable case cannot fall through as
+    // "taken" — it has no answer to fall through WITH. Checked on `ok` rather than on `error` so
+    // the branch says what it means.
+    if (!r.ok) { setStatus('error'); setMsg(r.error ?? 'Could not reach the ONS registry — try again.'); return }
     setStatus(r.available ? 'available' : 'taken')
     setMsg(r.available ? `@${clean} is available.` : `@${clean} is already registered.`)
   }

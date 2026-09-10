@@ -18,7 +18,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { SecretKeyWallet } from '@tari-project/ootle-secret-key-wallet'
-import { ons, ownedOnsNames, type NameRecord } from './ons'
+import { checkOnsAvailable, ons, ownedOnsNames, type NameRecord } from './ons'
 
 // A 32-byte key whose hex is easy to assert against: 0x00, 0x01, … 0x1f.
 const KEY = new Uint8Array(Array.from({ length: 32 }, (_, i) => i))
@@ -157,5 +157,101 @@ describe('ownedOnsNames — no registration date is invented', () => {
 
     expect(Object.keys(r).sort()).toEqual(['names', 'ok'])
     expect(Object.keys(r.names![0]).sort()).toEqual(['name', 'owner', 'records'])
+  })
+})
+
+// ── Availability ──────────────────────────────────────────────────────────────
+//
+// THE SAME PAIR, ONE LEVEL DOWN. `ownedOnsNames` had to stop reporting an unreachable registry as
+// an empty one; this had to stop reporting it as a TAKEN one. It used to return
+// `{ available: false }` on a network error, which is byte-identical to what it returns for a name
+// somebody else owns — so a caller that read `.available` told the user their chosen name was gone
+// when the truth was that nobody had asked. The fix is the same: no answer on a failed read, so
+// there is no false lying around to render.
+
+/** Stub the reader's existence check. Returns the spy so call arguments can be asserted. */
+function stubRegistered(result: boolean | Error) {
+  return vi.spyOn(ons, 'isRegistered').mockImplementation(async () => {
+    if (result instanceof Error) throw result
+    return result
+  })
+}
+
+describe('checkOnsAvailable — free, taken, and never asked', () => {
+  it('a name nobody holds is ok:true, available:true', async () => {
+    const spy = stubRegistered(false)
+
+    const r = await checkOnsAvailable('okz')
+
+    expect(r.ok).toBe(true)
+    expect(r.available).toBe(true)
+    expect(r.errorKind).toBeUndefined()
+    expect(spy).toHaveBeenCalledWith('okz')
+  })
+
+  it('a name somebody holds is ok:true, available:false', async () => {
+    stubRegistered(true)
+
+    const r = await checkOnsAvailable('okz')
+
+    expect(r.ok).toBe(true)
+    expect(r.available).toBe(false)
+    // A REAL ANSWER, not a failure. Nothing here may read as an error.
+    expect(r.errorKind).toBeUndefined()
+    expect(r.error).toBeUndefined()
+  })
+
+  it('an unreachable registry is ok:false with errorKind "unreachable"', async () => {
+    stubRegistered(new Error('ONS indexer request failed: fetch failed'))
+
+    const r = await checkOnsAvailable('okz')
+
+    expect(r.ok).toBe(false)
+    expect(r.errorKind).toBe('unreachable')
+    expect(r.error).toContain('ONS indexer request failed')
+  })
+
+  it('a failed read carries NO available field — there is no false to mistake for "taken"', async () => {
+    stubRegistered(new Error('ONS indexer HTTP 503'))
+
+    const r = await checkOnsAvailable('okz')
+
+    expect(r.available).toBeUndefined()
+    // Said the other way round too, because this is the assertion the bug would break: a caller
+    // reading `.available` off a failure must get nothing, never `false`.
+    expect(r.available).not.toBe(false)
+    expect(Object.keys(r).sort()).toEqual(['error', 'errorKind', 'ok'])
+  })
+
+  it('falls back to its own sentence when the throw carries no message', async () => {
+    stubRegistered(new Error(''))
+
+    const r = await checkOnsAvailable('okz')
+
+    expect(r.error).toBe('Could not reach the ONS registry — try again.')
+  })
+})
+
+// ── Name policy ───────────────────────────────────────────────────────────────
+//
+// The rules mirror the contract (template/src/lib.rs validate_name: non-empty, <= 32 bytes, ASCII
+// lowercase a-z 0-9 _ -). Pinned here because a local check that drifted from the contract's would
+// either refuse names the chain accepts, or wave through a transaction that panics after the fee.
+
+describe('validateOnsName — the contract\'s rules, in the product\'s words', () => {
+  it('accepts the charset the contract accepts', async () => {
+    const { validateOnsName } = await import('./ons')
+    for (const ok of ['okz', 'okz61', 'a', 'a-b_c', '0123456789', 'x'.repeat(32)]) {
+      expect(validateOnsName(ok), ok).toBeNull()
+    }
+  })
+
+  it('refuses what the contract refuses, one message per rule', async () => {
+    const { validateOnsName } = await import('./ons')
+    expect(validateOnsName('')).toBe('Enter a name.')
+    expect(validateOnsName('x'.repeat(33))).toBe('Too long, 32 characters max.')
+    for (const bad of ['Okz', 'okz 61', 'okz.61', 'okz@61', 'ökz']) {
+      expect(validateOnsName(bad), bad).toBe('Only lowercase letters, numbers, hyphen and underscore.')
+    }
   })
 })

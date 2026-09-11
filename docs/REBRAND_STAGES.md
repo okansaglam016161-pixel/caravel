@@ -23,11 +23,12 @@ different from each other a year later.
 | L2 | `3122973` | `LogoTile` component; the mark placed on its four surfaces. |
 | L3 | `d8ca0b8` | Tab icon becomes the new sail as geometry — small grade, the one case that drops the seam. |
 | L4 | `b74ef0d` | Platform icon set + `site.webmanifest`, rasterised from `favicon.svg` by `scripts/make-icons.mjs`. |
+| L5 | `d2f2a68` | The 1200×630 OG / link-preview card, drawn and wired into the head. |
 | L6 | `9993853` | Deleted the old mark's assets and an unused social sprite. (Landed out of order, ahead of L5.) |
 
 ## L5 — social OG / link-preview card
 
-Done, uncommitted as of this writing.
+Landed as `d2f2a68`.
 
 - `scripts/og-card.svg` — the 1200×630 card as geometry: brand blue `#378ADD`, the **detailed**
   grade of the sail (the seam is present, unlike the favicon's small grade), "Caravel", and the
@@ -59,7 +60,7 @@ which is what the design's `text-wrap: balance` resolves to.
 
 ## L7 — the teal rename (cosmetic alias cleanup)
 
-Not started.
+Done, uncommitted as of this writing.
 
 Purely cosmetic: rename the surviving `teal*` identifiers. **Nothing teal is left in the product** —
 the accent moved from teal `#2DE0C6` to cobalt `#378ADD` at the rebrand, and the colour pass was
@@ -80,11 +81,52 @@ behind them resolves to a cobalt token. `src/components/wallet/v2/tokens.ts` is 
 Consumers to update alongside the definitions: `tokens.ts`, `primitives.tsx`, `move.tsx`, and
 `src/dev/WalletPreview.tsx`.
 
-**This stage must not change a single rendered pixel.** It is a rename, not a colour pass — if the
-diff changes any resolved value, something has gone wrong. Note that `tealGradTop`/`tealGradBottom`
-are a trap: the gradient they were named for is gone (the foundation forbids gradients on the
-brand), so they want retiring or renaming to plain accent steps rather than a mechanical
-`teal`→`accent` substitution that preserves a gradient vocabulary nothing uses.
+### What was done
 
-Grep carefully: a case-insensitive search for `teal` also matches every occurrence of **`stealth`**,
-which is core protocol vocabulary in `src/crypto/` and must not be touched. Exclude it.
+`accent` was the right target name rather than anything invented: `panels.tsx` already ships
+`<Emblem tone="accent">`, so the vocabulary existed.
+
+- `C.teal` → `C.accent`, `C.teal300` → `C.accent300`, `C.inkOnTeal` → `C.inkOnAccent`,
+  `C.tealDim` → `C.accentDim`
+- `tealBorder()` → `accentBorder()`, `tealFill()` → `accentFill()`
+- `PanelTone`'s `'teal'` → `'accent'`; `AmountField`'s `accent` prop union and default likewise,
+  and its local `const teal` → `isAccent`
+- three comments that named the *current* vocabulary ("the teal/amber split", "teal only on the
+  selection") followed the rename. Comments describing HISTORY ("it was a teal gradient until V3")
+  were left alone — they are accurate, and rewriting them would erase the record.
+
+**Three aliases were dropped, not renamed**, because all three were already dead with zero
+consumers: `tealGradTop`, `tealGradBottom` (they named the retired brand gradient) and `tealLabel`.
+A renamed dead token is still dead. They were object properties on `C`, so unlike unused functions
+they were NOT tree-shaken and really did ship — removing them shrank the bundle.
+
+### The gradient
+
+`SettleBar`'s `linear-gradient(90deg, tealFill(0.15), C.teal)` was collapsed to a flat `C.accent`,
+which is what the "never teal, never gradients" rule asks for. **It renders nowhere**: `SettleBar`
+has zero call sites in the repo, and neither `linear-gradient(90deg` nor its `cv-slide` animation
+appears in the production bundle before OR after — it is tree-shaken out entirely. So even this,
+the one semantic change in the stage, moves no pixel. `SettleBar` is dead code and is a candidate
+for a future sweep; L7 deliberately left that decision alone.
+
+### Proving zero rendered change
+
+A screenshot diff was not available, so the check was done on the build output instead, which is
+stronger:
+
+- every resolved token value is byte-identical across the rename (each `teal*` and its `accent*`
+  replacement resolve to the same `var(--…)` string)
+- `dist/assets/index-*.css` is **byte-identical** between HEAD and L7
+- the app bundle differs only in identifier names and the dropped dead properties; `var(--accent-400)`
+  occurs 68 times in both
+- `dist/index.html` differs only by the bundle's content-hash in its `<script src>`
+- brand-`teal` identifiers in the shipped bundle: **9 at HEAD, 0 after**. Every remaining `teal`
+  substring (18, unchanged) is inside **`stealth`**
+
+### stealth is untouched
+
+Confirmed: no line of the diff contains `stealth` in any case, and `src/crypto/` is not among the
+changed files at all. The trap is real — a case-insensitive search for `teal` matches every
+occurrence of `stealth`, which is core protocol vocabulary — so exclude it in any future pass.
+
+Verified: `tsc -b` clean, `oxlint` 9 warnings (identical to HEAD, all pre-existing), 1436 tests pass.

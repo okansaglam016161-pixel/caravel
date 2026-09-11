@@ -5,7 +5,7 @@
 // proven fund logic keeps computing the numbers and simply hands them to these.
 
 import { useEffect, type CSSProperties, type ReactNode } from 'react'
-import { C, MODAL_WIDTH, MONO, border, tealBorder, tealFill, warnBorder } from './tokens'
+import { C, MODAL_WIDTH, MONO, accentBorder, accentFill, border, warnBorder } from './tokens'
 
 /**
  * Which surface the wallet is drawn on.
@@ -244,7 +244,7 @@ export type ButtonTone = 'primary' | 'neutral' | 'amber' | 'disabled'
 
 const toneStyle: Record<ButtonTone, CSSProperties> = {
   // The routine action. FLAT accent — the foundation forbids brand gradients.
-  primary: { background: C.teal, color: C.inkOnTeal, border: 'none' },
+  primary: { background: C.accent, color: C.inkOnAccent, border: 'none' },
   neutral: { background: C.inset, color: C.body, border: '1px solid var(--border-strong)' },
   // The permanent action. Amber ground and text, NOT red: it will work exactly as described.
   amber: { background: C.amberGround, color: C.warn300, border: warnBorder(0.40) },
@@ -349,7 +349,10 @@ export function SettleBar({ caption }: { caption: string }) {
       <div style={{ position: 'relative', height: 5, borderRadius: 3, background: C.raised, overflow: 'hidden' }}>
         <span style={{
           position: 'absolute', top: 0, bottom: 0, left: 0, width: '40%', borderRadius: 3,
-          background: `linear-gradient(90deg, ${tealFill(0.15)}, ${C.teal})`,
+          // FLAT, not a gradient. This bar's fade trail was the last surviving piece of the
+          // brand gradient the foundation retired ("never teal, never gradients"); L7 collapsed
+          // it to the accent rather than renaming a vocabulary whose artwork is gone.
+          background: C.accent,
           animation: 'cv-slide 1.6s ease-in-out infinite',
         }} />
       </div>
@@ -366,14 +369,14 @@ export const SectionLabel = ({ children }: { children: ReactNode }) => (
 //
 // Added for the panels the Claude Design canvas never covered — faucet, send, receive, ONS. They
 // are built from the SAME vocabulary the designed screens use (the card radii, the trough insets,
-// the four button tones, the teal/amber split) rather than a parallel set, so the modal reads as
+// the four button tones, the accent/amber split) rather than a parallel set, so the modal reads as
 // one product whichever tab you are on.
 
-export type PanelTone = 'neutral' | 'teal' | 'amber' | 'danger'
+export type PanelTone = 'neutral' | 'accent' | 'amber' | 'danger'
 
 const panelTone: Record<PanelTone, { bg: string; bd: string }> = {
   neutral: { bg: C.raised, bd: '1px solid var(--border)' },
-  teal: { bg: tealFill(0.08), bd: tealBorder(0.22) },
+  accent: { bg: accentFill(0.08), bd: accentBorder(0.22) },
   amber: { bg: 'var(--card-warn)', bd: '1px solid var(--card-warn-border)' },
   danger: { bg: 'var(--card-danger)', bd: '1px solid var(--card-danger-border)' },
 }
@@ -435,22 +438,22 @@ export function TextField({ value, onChange, placeholder, mono = true, invalid, 
  * The generic amount input shell. The move flow's AmountCard is this plus direction copy —
  * ONE visual treatment for "type a number of TARI", wherever it appears.
  */
-export function AmountField({ value, onChange, onMax, maxUsed, accent = 'teal', availableLabel, availableValue, note, error, readOnly }: {
+export function AmountField({ value, onChange, onMax, maxUsed, accent = 'accent', availableLabel, availableValue, note, error, readOnly }: {
   value: string; onChange: (v: string) => void
   onMax?: () => void; maxUsed?: boolean
   /** `amber` is the irreversible direction — see the move flow. */
-  accent?: 'teal' | 'neutral' | 'amber'
+  accent?: 'accent' | 'neutral' | 'amber'
   availableLabel?: string; availableValue?: ReactNode
   note?: ReactNode; error?: ReactNode; readOnly?: boolean
 }) {
-  const teal = accent === 'teal'
+  const isAccent = accent === 'accent'
   const amber = accent === 'amber'
   return (
     <div style={{
       padding: '16px 18px', borderRadius: 'var(--r-lg)', background: C.trough,
       border: error ? '1px solid var(--danger-500)'
         : amber ? warnBorder(0.35)
-        : teal ? tealBorder(0.28)
+        : isAccent ? accentBorder(0.28)
         : '1px solid var(--border-strong)',
     }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 8 }}>
@@ -467,13 +470,13 @@ export function AmountField({ value, onChange, onMax, maxUsed, accent = 'teal', 
           inputMode="decimal" placeholder="0.000000" aria-label="Amount in XTR"
           style={{ flex: 1, minWidth: 0, background: 'transparent', border: 'none', outline: 'none', padding: 0, fontFamily: MONO, fontSize: 26, fontWeight: 600, color: C.bright }}
         />
-        <span style={{ fontFamily: MONO, fontSize: 14, color: C.tealDim, flexShrink: 0 }}>XTR</span>
+        <span style={{ fontFamily: MONO, fontSize: 14, color: C.accentDim, flexShrink: 0 }}>XTR</span>
         {onMax && (
           <span role="button" tabIndex={0} onClick={onMax} onKeyDown={e => e.key === 'Enter' && onMax()} style={{
             padding: '5px 12px', borderRadius: 'var(--r-sm)', fontSize: 12, fontWeight: 600, cursor: 'pointer', flexShrink: 0, userSelect: 'none',
-            background: maxUsed ? C.maxActive : amber ? 'rgba(var(--warn-rgb),0.12)' : teal ? tealFill(0.1) : C.inset,
-            border: maxUsed ? border(0.4) : amber ? warnBorder(0.3) : teal ? tealBorder(0.3) : border(0.22),
-            color: maxUsed ? C.body : amber ? C.warn300 : teal ? C.teal300 : C.muted,
+            background: maxUsed ? C.maxActive : amber ? 'rgba(var(--warn-rgb),0.12)' : isAccent ? accentFill(0.1) : C.inset,
+            border: maxUsed ? border(0.4) : amber ? warnBorder(0.3) : isAccent ? accentBorder(0.3) : border(0.22),
+            color: maxUsed ? C.body : amber ? C.warn300 : isAccent ? C.accent300 : C.muted,
           }}>MAX</span>
         )}
       </div>
@@ -491,7 +494,7 @@ export function AmountField({ value, onChange, onMax, maxUsed, accent = 'teal', 
  * with a back arrow. But the shipped modal has four areas and dropping any of them would be an
  * information-architecture change, not a reskin. So both models coexist: tabs select the area,
  * and flows inside an area still push a sub-view. Styled from the same vocabulary — a trough rail
- * with a raised active pill, teal only on the selection.
+ * with a raised active pill, accent only on the selection.
  */
 export function TabBar<T extends string>({ tabs, active, onSelect }: {
   tabs: readonly T[]; active: T; onSelect: (t: T) => void

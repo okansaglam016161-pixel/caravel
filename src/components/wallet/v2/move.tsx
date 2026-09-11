@@ -14,7 +14,7 @@
 // place the user is looking. Nothing here decides the reason — Stage 2 passes it in from the same
 // balance and account state the builders already read.
 
-import { C, tealBorder, tealFill } from './tokens'
+import { C, accentBorder, accentFill } from './tokens'
 import { Spinner } from './icons'
 import type { Dir } from './moveCopy'
 
@@ -34,7 +34,7 @@ export function InFlightBanner({ text }: { text: string }) {
   return (
     <div style={{
       display: 'flex', alignItems: 'center', gap: 13, padding: '14px 17px', borderRadius: 13,
-      background: tealFill(0.05), border: tealBorder(0.26),
+      background: accentFill(0.05), border: accentBorder(0.26),
     }}>
       <Spinner size={16} />
       <span style={{ fontSize: 13.5, fontWeight: 700, color: C.bright }}>{text}</span>

@@ -20,9 +20,11 @@
 // ── WHAT CHANGED IN THE VALUES ───────────────────────────────────────────────
 //
 // The accent moved from teal #2DE0C6 to cobalt #378ADD, surfaces from blue-black to ink navy, and
-// the brand gradient is gone ("never teal, never gradients"). The `teal*` KEY NAMES survive this
-// pass as deprecated aliases for the same reason the CSS variables do: renaming them is a 207-site
-// mechanical commit, and mixing it into a colour change would make both unreviewable.
+// the brand gradient is gone ("never teal, never gradients"). The `teal*` KEY NAMES survived that
+// pass as deprecated aliases, for the same reason the CSS variables did: renaming them in the same
+// commit would have buried a colour change under a mechanical rename and made both unreviewable.
+// L7 finished the rename and the aliases went the same way the CSS ones did. Nothing in this file
+// is named teal any more.
 
 /**
  * The token table.
@@ -45,14 +47,14 @@ export const C = {
   errorGround: 'rgba(255,138,115,0.10)',  // the verbatim-error console
 
   // ── Accent (cobalt) ──
-  // `teal*` names kept as deprecated aliases — see the header. Nothing here is teal any more.
-  teal: 'var(--accent-400)',
-  teal300: 'var(--accent-300)',
-  tealGradTop: 'var(--accent-300)',
-  tealGradBottom: 'var(--accent-500)',
-  inkOnTeal: 'var(--ink-on-accent)',
-  tealLabel: 'var(--text-vault-label)',
-  tealDim: 'var(--text-accent-dim)',
+  // These replace the `teal*` aliases retired in L7. Three of those were DROPPED rather than
+  // renamed, because all three were already dead: tealGradTop/tealGradBottom named the brand
+  // gradient the foundation retired, and tealLabel had no consumer. A renamed dead token is
+  // still dead, and keeping one would have carried the gradient's vocabulary past its artwork.
+  accent: 'var(--accent-400)',
+  accent300: 'var(--accent-300)',
+  inkOnAccent: 'var(--ink-on-accent)',
+  accentDim: 'var(--text-accent-dim)',
   /** The balance hero's ground. FLAT now — the foundation forbids brand gradients. */
   heroGrad: 'var(--nav-ground)',
   /** The hero's two breakdown cards. Private and public share one ground on purpose: the
@@ -90,9 +92,9 @@ export const C = {
  * `--border-rgb`, `--accent-400-rgb` and `--warn-rgb` for exactly this.
  */
 export const border = (a: number) => `1px solid rgba(var(--border-rgb),${a})`
-export const tealBorder = (a: number) => `1px solid rgba(var(--accent-400-rgb),${a})`
+export const accentBorder = (a: number) => `1px solid rgba(var(--accent-400-rgb),${a})`
 export const warnBorder = (a: number) => `1px solid rgba(var(--warn-rgb),${a})`
-export const tealFill = (a: number) => `rgba(var(--accent-400-rgb),${a})`
+export const accentFill = (a: number) => `rgba(var(--accent-400-rgb),${a})`
 export const warnFill = (a: number) => `rgba(var(--warn-rgb),${a})`
 
 export const MONO = 'var(--font-mono)'

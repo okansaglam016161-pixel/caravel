@@ -2,7 +2,7 @@
 //
 // NOT NEW DESIGN LANGUAGE. Every one of these is assembled from the v2 vocabulary the canvas did
 // establish: the 14px card, the trough inset, the four button tones, StatusBlock for every terminal
-// state, TxRow for every hash, and the teal/amber split for routine-versus-considered. If a shape
+// state, TxRow for every hash, and the accent/amber split for routine-versus-considered. If a shape
 // exists in the designed screens it is reused rather than re-drawn, so the modal reads as one
 // product whichever tab you are on.
 //

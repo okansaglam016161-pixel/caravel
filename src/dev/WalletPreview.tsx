@@ -20,7 +20,7 @@ import type { BalanceView } from '../components/wallet/v2/balances'
 import { computeTotal } from '../components/wallet/v2/total'
 import type { EntryProps } from '../components/wallet/v2/move'
 import type { Dir } from '../components/wallet/v2/moveCopy'
-import { C, MONO, PAGE_MAX_WIDTH, border, tealBorder, tealFill } from '../components/wallet/v2/tokens'
+import { C, MONO, PAGE_MAX_WIDTH, accentBorder, accentFill, border } from '../components/wallet/v2/tokens'
 import { fmt6, toInput } from '../components/wallet/v2/format'
 
 // ── Mock figures, taken from the real seeded wallet so nothing is unrealistically round ──
@@ -531,9 +531,9 @@ function btn(active: boolean): React.CSSProperties {
   return {
     display: 'block', width: '100%', textAlign: 'left', padding: '9px 12px', borderRadius: 9,
     fontSize: 13, fontWeight: active ? 700 : 500, cursor: 'pointer', fontFamily: 'inherit',
-    background: active ? tealFill(0.1) : C.raised,
-    border: active ? tealBorder(0.35) : border(0.14),
-    color: active ? C.teal300 : C.bodyDim,
+    background: active ? accentFill(0.1) : C.raised,
+    border: active ? accentBorder(0.35) : border(0.14),
+    color: active ? C.accent300 : C.bodyDim,
   }
 }
 

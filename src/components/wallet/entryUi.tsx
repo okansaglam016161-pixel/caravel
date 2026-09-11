@@ -17,6 +17,7 @@
 import { useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
+import LogoTile from '../primitives/LogoTile'
 import { MONO } from './entryStyles'
 
 /** The page ground. Flat, per V3 — the radial lift it replaced predates the foundation. */
@@ -69,19 +70,7 @@ export function EntryCard({ children, wide = false, centred = false, pad, style 
 export function Lockup() {
   const navigate = useNavigate()
   return (
-    <button
-      onClick={() => navigate('/')}
-      title="Caravel — home"
-      aria-label="Caravel — home"
-      className="cv-accent-tile"
-      style={{
-        width: 44, height: 44, borderRadius: 13, background: 'var(--accent-400)',
-        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-        padding: 0, border: 'none', cursor: 'pointer',
-      }}
-    >
-      <img src="/logo-light.png" alt="" aria-hidden="true" style={{ height: 23, width: 'auto', display: 'block' }} />
-    </button>
+    <LogoTile size={44} onClick={() => navigate('/')} label="Caravel — home" />
   )
 }
 

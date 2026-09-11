@@ -38,6 +38,7 @@ import { useCallback, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useTheme } from '../../hooks/useTheme'
 import ThemeToggle from '../primitives/ThemeToggle'
+import LogoTile from '../primitives/LogoTile'
 import ChatStill from './ChatStill'
 import WalletStill from './WalletStill'
 
@@ -95,15 +96,12 @@ const Chevron = ({ size = 16, color = 'currentColor', dir = 'down' }: IconProps 
  * light mark on the vault — and the tile IS a vault-coloured surface, so the light mark is correct
  * whichever theme the page is in. It also keeps the lockup identical to the app's nav rail.
  */
-function Lockup({ tile, mark, text }: { tile: number; mark: number; text: number }) {
+function Lockup({ tile, text }: { tile: number; text: number }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: tile > 28 ? 10 : 9 }}>
-      <span style={{
-        width: tile, height: tile, borderRadius: tile > 28 ? 9 : 8, background: 'var(--accent-400)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-      }}>
-        <img src="/logo-light.png" alt="" aria-hidden="true" style={{ height: mark, width: 'auto', display: 'block' }} />
-      </span>
+      {/* The mark's height and the tile's radius both derive from the tile now, so the second and
+          third numbers this took are gone. `text` stays: the wordmark is not the mark's business. */}
+      <LogoTile size={tile} />
       <span style={{ fontSize: text, fontWeight: 600, letterSpacing: '-0.01em', color: 'var(--text-primary)' }}>Caravel</span>
     </div>
   )
@@ -237,12 +235,9 @@ function AppMockup() {
           width: 64, flexShrink: 0, background: 'var(--nav-ground)',
           padding: '14px 0', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
         }}>
-          <span style={{
-            width: 32, height: 32, borderRadius: 10, background: 'var(--accent-400)', marginBottom: 10,
-            display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-          }}>
-            <img src="/logo-light.png" alt="" aria-hidden="true" style={{ height: 17, width: 'auto', display: 'block' }} />
-          </span>
+          {/* Decorative — no onClick, so LogoTile draws a plain span with no hover and no focus
+              ring. It is a picture of the spine, not the spine. */}
+          <LogoTile size={32} style={{ marginBottom: 10 }} />
           <SpineItem icon={<Wallet size={15} />} active />
           <SpineItem icon={<Message size={15} />} />
           <SpineItem icon={<AtSign size={15} />} />
@@ -579,7 +574,7 @@ export default function LandingPage() {
 
       {/* Top bar */}
       <div className="cv-lp-bar">
-        <Lockup tile={32} mark={17} text={18} />
+        <Lockup tile={32} text={18} />
         <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
           <ThemeToggle />
           <LaunchButton onClick={onOpenApp} />
@@ -615,7 +610,7 @@ export default function LandingPage() {
 
       {/* Footer */}
       <footer className="cv-lp-footer">
-        <Lockup tile={26} mark={14} text={15} />
+        <Lockup tile={26} text={15} />
         <div style={{ display: 'flex', gap: 26, fontSize: 14 }}>
           {/* About and Docs have no destinations yet — deliberately inert rather than pointing
               somewhere wrong. The X link is real. */}

@@ -71,6 +71,7 @@
 
 import { useNavigate } from 'react-router-dom'
 import { useWallet } from '../../context/WalletContext'
+import LogoTile from '../primitives/LogoTile'
 
 // ── TWO SERVICES, NOT THREE ──────────────────────────────────────────────────
 //
@@ -117,26 +118,15 @@ export default function ServiceNav({ service, onSelect, onProfile }: {
       width: 64, flexShrink: 0, background: 'var(--nav-ground)',
       padding: '14px 0', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
     }}>
-      {/* The mark, on its accent tile — and the way back to the landing page. A <button> rather
-          than a <Link>: it does the same thing the service rows do (a click that changes what is on
-          screen) and gets Enter, Space and the focus ring from the element rather than from us.
+      {/* The mark, on its accent tile — and the way back to the landing page. LogoTile is a
+          <button> here because it is given an onClick; it does the same thing the service rows do
+          (a click that changes what is on screen) and gets Enter, Space and the focus ring from the
+          element rather than from us.
 
-          The image stays decorative — alt="" and aria-hidden — because the accessible name belongs
-          on the control, not on the picture inside it. Announcing it twice is how a screen reader
-          ends up saying "Caravel logo, Caravel — home, button". */}
-      <button
-        onClick={() => navigate('/')}
-        title="Caravel — home"
-        aria-label="Caravel — home"
-        className="cv-accent-tile"
-        style={{
-          width: 32, height: 32, borderRadius: 10, background: 'var(--accent-400)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-          marginBottom: 10, padding: 0, border: 'none', cursor: 'pointer',
-        }}
-      >
-        <img src="/logo-light.png" alt="" aria-hidden="true" style={{ height: 17, width: 'auto', display: 'block' }} />
-      </button>
+          The mark inside stays decorative — the accessible name belongs on the control, not on the
+          artwork. Announcing it twice is how a screen reader ends up saying "Caravel logo, Caravel
+          — home, button". */}
+      <LogoTile size={32} onClick={() => navigate('/')} label="Caravel — home" style={{ marginBottom: 10 }} />
 
       {/* Services */}
       {SERVICES.map(s => {

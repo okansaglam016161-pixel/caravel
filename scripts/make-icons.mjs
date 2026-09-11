@@ -1,4 +1,4 @@
-//   Renders the platform icon set from public/favicon.svg.
+//   Renders the platform icon set from public/favicon.svg, and the OG card from scripts/og-card.svg.
 //
 //   ── ONE SOURCE, RASTERISED — NOT A SECOND EXPORT ────────────────────────────
 //
@@ -20,7 +20,8 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Resvg } from '@resvg/resvg-js'
 
-const PUBLIC = join(dirname(fileURLToPath(import.meta.url)), '..', 'public')
+const HERE = dirname(fileURLToPath(import.meta.url))
+const PUBLIC = join(HERE, '..', 'public')
 const SOURCE = join(PUBLIC, 'favicon.svg')
 
 /**
@@ -45,3 +46,20 @@ for (const { file, size } of SIZES) {
   writeFileSync(join(PUBLIC, file), png)
   console.log(`  ${file.padEnd(22)} ${size}x${size}  ${png.length} bytes`)
 }
+
+//   ── THE SOCIAL CARD ─────────────────────────────────────────────────────────
+//
+//   Same principle, different source. og-card.svg is the 1200x630 composition with its text already
+//   baked to outlines — resvg has no webfont loader, and given a font it cannot find it substitutes
+//   Helvetica silently rather than failing, so a card built from <text> would ship the wrong face
+//   and still look plausible. Outlines take the font out of the render entirely.
+//
+//   Only the PNG ships: scrapers want a raster at a declared size and several will not read SVG.
+
+const OG_SOURCE = join(HERE, 'og-card.svg')
+const OG = { file: 'og-image.png', width: 1200, height: 630 }
+
+const ogSvg = readFileSync(OG_SOURCE)
+const ogPng = new Resvg(ogSvg, { fitTo: { mode: 'width', value: OG.width } }).render().asPng()
+writeFileSync(join(PUBLIC, OG.file), ogPng)
+console.log(`  ${OG.file.padEnd(22)} ${OG.width}x${OG.height}  ${ogPng.length} bytes`)

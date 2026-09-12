@@ -62,9 +62,6 @@ const Wallet = ({ size = 16, color = 'currentColor', strokeWidth = 1.8 }: IconPr
 const Message = ({ size = 16, color = 'currentColor', strokeWidth = 1.8 }: IconProps) => (
   <svg {...svgBase(size, color, strokeWidth)}><path d="M21 11.5a8.5 8.5 0 1 0-16.9 1.6L3 20l3.8-1.1A8.5 8.5 0 0 0 21 11.5z" /></svg>
 )
-const AtSign = ({ size = 16, color = 'currentColor', strokeWidth = 1.8 }: IconProps) => (
-  <svg {...svgBase(size, color, strokeWidth)}><circle cx="12" cy="12" r="4" /><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8" /></svg>
-)
 const ArrowOut = ({ size = 16, color = 'currentColor', strokeWidth = 2 }: IconProps) => (
   <svg {...svgBase(size, color, strokeWidth)}><path d="M7 17L17 7" /><path d="M9 7h8v8" /></svg>
 )
@@ -187,13 +184,33 @@ function Pill({ tone, children }: { tone: 'live' | 'quiet' | 'mono'; children: R
 // uses", and moveCopy.test.ts pins it with a case-insensitive assertion that no derived string may
 // match /shielded/i ("Nothing may bring it back"). This page was the last surface still saying it.
 
+/**
+ * A rail row, as a picture of one. ON .cv-nav-item, WHICH IS THE REAL RAIL'S OWN CLASS — the hover
+ * is not a look-alike written for this page, it is the rule ServiceNav's buttons carry, so the two
+ * cannot drift.
+ *
+ * THE RESTING STATE IS DELIBERATELY NOT INLINE HERE, and that is the whole reason the hover is
+ * visible at all. .cv-nav-item hovers by setting background and color; an inline "transparent" and
+ * an inline dim color outrank a class selector, so a row that declares its own resting appearance
+ * gets the class's hover silently thrown away. That is not a guess — the row was written that way
+ * first and measured doing nothing under the pointer. It is the same collision index.css records
+ * against .cv-accent-tile, which cost the real @ tile its hover for months.
+ *
+ * SO THE INACTIVE ROW DECLARES NOTHING: the dim color is inherited from the rail, and no background
+ * at all leaves the class free to paint one. THE ACTIVE ROW STILL DECLARES BOTH, which keeps it
+ * lit under the pointer instead of washing to the hover tint — the behaviour the real rail spells
+ * out as .cv-nav-item[aria-current="page"]:hover.
+ *
+ * WORTH KNOWING WHILE READING ServiceNav: the real rows DO set both inline, so their hover is
+ * currently dead on the same rule. That is the app's bug to fix on the app's own pass, not
+ * something for a marketing graphic to reach across and change.
+ */
 function SpineItem({ icon, active = false }: { icon: React.ReactNode; active?: boolean }) {
   return (
-    <span style={{
+    <span className="cv-nav-item" style={{
       display: 'flex', alignItems: 'center', justifyContent: 'center',
       width: 38, height: 38, flexShrink: 0, borderRadius: 11,
-      background: active ? 'var(--nav-selected)' : 'transparent',
-      color: active ? 'var(--text-bright)' : 'var(--text-body-dim)',
+      ...(active ? { background: 'var(--nav-selected)', color: 'var(--text-bright)' } : null),
     }}>{icon}</span>
   )
 }
@@ -219,7 +236,20 @@ function AppMockup() {
                 wallet's whole point is now one centred figure, and a second copy of that same
                 number 200px to its left is the screen saying the most important thing twice.
               * THE ADDRESS went with the width. The identity is the bare "@" tile now; the full
-                value lives on `title` in the app, and a still has no hover.
+                value lives on `title` in the app, which this tile has no equivalent of — it hovers
+                like the real one but explains nothing, and a graphic has nothing to explain.
+
+            THE @ SERVICE ROW IS NOT MISSING, IT IS GONE. A third row sat here, between chat and the
+            spacer, months after ServiceNav dropped it: CNS stopped being a service and became a
+            thing you open inside chat, and the rail row went with it. The tile at the BOTTOM is a
+            different @ entirely — that one is the identity, it is still in the real spine, and it
+            stays. See the "TWO SERVICES, NOT THREE" note in ServiceNav.
+
+            IT HOVERS NOW, AND ONLY HERE. The rail carries the app's own .cv-nav-item and
+            .cv-accent-tile, so the rows and the identity tile answer the pointer exactly as the
+            real ones do. The PANE beside it cannot: WalletStill is inert, and inert takes a subtree
+            out of hit testing, so its buttons never see a hover to respond to. The asymmetry is
+            measured rather than chosen — see the .cv-lp-mock block in LANDING_CSS.
 
             HAND-DRAWN, NOT IMPORTED, like the rest of this mockup — ServiceNav reads useWallet()
             for that tooltip and navigates on a click, and a marketing graphic wants neither. The
@@ -233,16 +263,24 @@ function AppMockup() {
             hero below it; see the note over the LIGHT ROLE TOKENS block in index.css. */}
         <div className="cv-lp-rail" data-theme="dark" style={{
           width: 64, flexShrink: 0, background: 'var(--nav-ground)',
+          // THE DIM INK LIVES HERE, not on the rows — see SpineItem. Inherited, it is something
+          // .cv-nav-item:hover can override; declared on each row, it is something that outranks it.
+          color: 'var(--text-body-dim)',
           padding: '14px 0', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
         }}>
           {/* Decorative — no onClick, so LogoTile draws a plain span with no hover and no focus
-              ring. It is a picture of the spine, not the spine. */}
+              ring. It is a picture of the spine, not the spine. LEFT STATIC WHILE THE ROWS BELOW IT
+              CAME ALIVE: the real mark is the way back to the landing page, and this IS the landing
+              page, so a hover here would advertise the one journey in the rail that has nowhere to
+              go. */}
           <LogoTile size={32} style={{ marginBottom: 10 }} />
           <SpineItem icon={<Wallet size={15} />} active />
           <SpineItem icon={<Message size={15} />} />
-          <SpineItem icon={<AtSign size={15} />} />
           <span style={{ flex: 1, minHeight: 24 }} />
-          <span style={{
+          {/* The identity tile — STILL A ROW IN THE REAL SPINE, unlike the @ service tab that used to
+              sit above it. .cv-accent-tile is ServiceNav's own class here too, `!important` and all,
+              which is what gets a hover past the inline accent fill. */}
+          <span className="cv-accent-tile" style={{
             width: 30, height: 30, borderRadius: 9, background: 'var(--accent-400)',
             color: 'var(--ink-on-accent)', fontSize: 11, fontWeight: 600, flexShrink: 0,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -478,6 +516,38 @@ const LANDING_CSS = `
 .cv-lp-h2 { font-size: 38px; }
 
 .cv-lp-mock { max-width: 920px; margin: 90px auto 0; }
+
+/* ── THE MOCKUP HOVERS, AND IS STILL NOT A BUTTON ─────────────────────────────
+   THE SPINE IS ALIVE AND THE PANE IS NOT, which is a measured outcome rather than a preference.
+   The rail reuses the app's own rules — .cv-nav-item on the rows, .cv-accent-tile on the @ tile —
+   so there is no second copy of either hover to drift from ServiceNav.
+
+   THE PANE CANNOT JOIN THEM WHILE IT IS INERT. Its controls already carry the right classes
+   (.cv-vault-action on Send and Receive, .cv-privacy-action, .cv-asset-row) and they already do
+   nothing, because "inert" removes the subtree from HIT TESTING and not merely from clicking:
+   probed in Chrome 152, Send under the pointer reports ":hover" unmatched and its filter still
+   "none". The only way to buy that hover back is to give up "inert", and with it the tab-order and
+   accessibility removals WalletStill exists to guarantee. A brightening button is not worth
+   announcing a fake balance to a screen reader, so the pane stays a still.
+
+   THE CURSOR IS THE HONESTY, and it is written for the graphic as a whole rather than for what
+   happens to hover today. Anything that ever does reach the pointer in here — the real components
+   carry "cursor: pointer" inline, in TotalHero's VaultAction, PrivacyCard's entries, the assets row
+   and iconBoxStyle — would otherwise be the picture claiming you can click into the app from the
+   landing page. The "!important" is what it takes to beat an inline declaration, the same reason
+   .cv-btn-primary and .cv-accent-tile already carry one.
+
+   A HOVER THAT RESPONDS UNDER A CURSOR THAT DOES NOT is the model: alive, not actionable. */
+.cv-lp-mock, .cv-lp-mock * { cursor: default !important; }
+
+/* STATIC ON TOUCH, deliberately. A touch browser fires :hover on tap and HOLDS it until you tap
+   something else, so on a tablet the rail would sit with one permanently-lit row — the opposite of
+   what the hover is for. Dropping the subtree out of hit testing is one declaration against
+   resetting every hovered property by hand, and it returns the graphic to exactly the still it is
+   on a device with no pointer. (Phones never reach this: the rail is display:none under 460.) */
+@media (hover: none) {
+  .cv-lp-mock { pointer-events: none; }
+}
 .cv-lp-steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 36px; margin-top: 64px; }
 .cv-lp-service { display: grid; grid-template-columns: 1fr 1fr; gap: 72px; align-items: center;
   max-width: 980px; margin: 80px auto 0; }
@@ -552,6 +622,11 @@ const LANDING_CSS = `
 
 @media (prefers-reduced-motion: reduce) {
   .cv-lp, .cv-lp-primary, .cv-icon-btn { transition: none; }
+  /* The rail's newly-live hovers, which ease in index.css. SCOPED TO THE MOCK, because these are
+     shared app classes: the setting is the visitor's rather than this page's, and the app answers
+     it on its own surfaces without the landing page reaching across into them. The pane's classes
+     are deliberately absent — nothing in there hovers; see the .cv-lp-mock note above. */
+  .cv-lp-mock .cv-nav-item, .cv-lp-mock .cv-accent-tile { transition: none; }
 }
 `
 

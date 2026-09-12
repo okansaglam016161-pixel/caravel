@@ -342,6 +342,11 @@ a:hover { color: var(--accent-200); }
    screens' lockup. All three are a 32-44px accent square you can click, on three different grounds
    (the navy spine, and the gate card in either theme).
 
+   AND ONE THAT IS NOT A CONTROL: the landing mockup's @ tile, a span in a picture of the spine. It
+   takes this rule to hover like the tile it depicts, and takes nothing else — no click, no focus,
+   and a cursor the landing page forces back to default. Nothing here is scoped to a button, so the
+   span gets the hover for free; the focus ring below simply never has occasion to draw.
+
    THEY CANNOT USE .cv-nav-item ABOVE: it hovers by setting `background`, and every one of these
    carries its own accent fill as an INLINE style, which a class selector loses to. That is not
    hypothetical — it is why the @ tile had NO hover at all until this rule existed, having carried

@@ -587,9 +587,6 @@ export default function LandingPage() {
         <div style={{ margin: '26px auto 0', fontSize: 22, fontWeight: 500, color: 'var(--text-body-dim)' }}>
           A Swiss bank account in your pocket.
         </div>
-        <div style={{ margin: '14px auto 0', maxWidth: 520, fontSize: 16, lineHeight: 1.6, color: 'var(--text-muted-dim)', textWrap: 'pretty' }}>
-          Consolidate your day-to-day crypto operations, privately, in one place.
-        </div>
         <div className="cv-lp-hero-ctas" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 22, marginTop: 38 }}>
           <LaunchButton onClick={onOpenApp} big />
           <a href="#how" style={{ fontSize: 15, fontWeight: 500 }}>See how it works.</a>

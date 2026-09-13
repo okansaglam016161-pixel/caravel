@@ -34,7 +34,7 @@
 //   thing (a nowrap chip beside three fixed boxes), so wrapping it rather than hiding the spine is
 //   what keeps the shell on screen down to the low 400s.
 
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useTheme } from '../../hooks/useTheme'
 import ThemeToggle from '../primitives/ThemeToggle'
@@ -306,11 +306,68 @@ const STEPS = [
   { icon: <ArrowOut size={18} />, title: 'Start transacting', body: 'Send, receive, message, and claim your @name on the Ootle.' },
 ]
 
+/**
+ * The four steps, revealed left to right as the section arrives.
+ *
+ * ── HIDDEN UNTIL THE SECTION IS PROPERLY ON SCREEN ───────────────────────────
+ *
+ * The steps rest hidden and the class reveals them, which is the ordinary way round and, here, the
+ * only one that produces a reveal at all. The inverse was tried first — resting visible so the
+ * animation could only ever be additive — and it failed on the thing it was for: a visitor
+ * scrolling down meets the steps ALREADY READABLE, and the cascade then plays over four columns
+ * they have been looking at for half a second. An entrance for something that already entered.
+ *
+ * THE COST IS REAL AND ACCEPTED: hidden at rest means a section that stays blank if the reveal
+ * never runs, rather than one that merely does not animate. The guard below is what keeps that
+ * down to a single failure — a browser with no IntersectionObserver reveals immediately instead of
+ * waiting for a scroll event that will never be reported.
+ *
+ * THE THRESHOLD IS PART OF THE EFFECT, not a tuning detail. At a fifth of the row the cascade
+ * starts while the steps are still entering, so the later ones land off the bottom of the window;
+ * at two fifths the row is genuinely on screen when step one moves, and the eye has somewhere to
+ * follow it to.
+ *
+ * ── REVEAL ONCE, AND MEAN IT ─────────────────────────────────────────────────
+ *
+ * The flag is one-way and the observer disconnects on the first intersection, so there is no path
+ * that un-reveals: scrolling back up, or past the section again, finds no observer to fire and a
+ * flag that only ever moved in one direction. Replaying the cascade every time the section crossed
+ * the fold would be the page fidgeting at someone trying to read it.
+ */
 function HowItWorks() {
+  const steps = useRef<HTMLDivElement>(null)
+  const [revealed, setRevealed] = useState(false)
+
+  useEffect(() => {
+    // REVEALS RATHER THAN RETURNS, and the difference is the whole section. Constructing a missing
+    // IntersectionObserver also throws inside an effect, which React propagates, so this cannot
+    // simply be left to fail — but bailing out silently would leave the steps at their hidden
+    // resting state with nothing left to move them. Showing them is the honest fallback: no
+    // cascade, which was never available here, and no blank column either.
+    if (typeof IntersectionObserver === 'undefined') { setRevealed(true); return }
+    const el = steps.current
+    if (!el) { setRevealed(true); return }
+
+    const io = new IntersectionObserver(
+      hits => {
+        if (!hits.some(h => h.isIntersecting)) return
+        setRevealed(true)
+        // Immediately, not on unmount: the work is finished the moment it fires, and disconnecting
+        // here is what makes the reveal unrepeatable rather than merely unrepeated.
+        io.disconnect()
+      },
+      // Two fifths of the row — see the note above on why this number is not arbitrary.
+      { threshold: 0.4 },
+    )
+    io.observe(el)
+    // For the section that never intersects before the page is left.
+    return () => io.disconnect()
+  }, [])
+
   return (
     <section id="how" className="cv-lp-section">
       <H2>How it works</H2>
-      <div className="cv-lp-steps">
+      <div ref={steps} className={revealed ? 'cv-lp-steps cv-lp-steps-in' : 'cv-lp-steps'}>
         {STEPS.map((s, i) => (
           <div key={s.title} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
             <span style={{
@@ -549,6 +606,33 @@ const LANDING_CSS = `
   .cv-lp-mock { pointer-events: none; }
 }
 .cv-lp-steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 36px; margin-top: 64px; }
+
+/* ── THE STEPS ARRIVE ONE AT A TIME ───────────────────────────────────────────
+   HIDDEN AT REST, revealed by the class the observer adds. A TRANSITION RATHER THAN A KEYFRAME,
+   which is what keeps this honest about where it ends: the revealed rule DECLARES the final
+   appearance, so a step that is revealed is simply a step with those values, whatever happens to
+   the animation carrying it there. A keyframe would have to be pinned in place by a fill mode to
+   hold the same ground, and an interrupted one pinned that way stays wherever it was stopped.
+
+   THE STAGGER IS A DELAY ON THE TRANSITION, not four animations racing. Each step waits its turn
+   and then takes the same 0.6s, so the four form one cascade the eye can follow left to right
+   rather than a cluster that happens to resolve in order. The last begins at 660ms and lands at
+   about 1.26s after the trigger — long enough to read as a sequence, short enough that nobody
+   waiting to read the section notices they were waiting.
+
+   THE ORDER SURVIVES THE REFLOW for free. The delays key off nth-child, the grid is plain 1fr
+   columns with no "order" or reversal anywhere, so source order is visual order at every width:
+   left to right across four, reading order through the 2x2 at 1024, and top to bottom once it
+   stacks at 640. */
+.cv-lp-steps > div {
+  opacity: 0; transform: translateY(12px);
+  transition: opacity 0.6s ease-out, transform 0.6s ease-out;
+}
+.cv-lp-steps-in > div { opacity: 1; transform: translateY(0); }
+.cv-lp-steps-in > div:nth-child(1) { transition-delay: 0ms; }
+.cv-lp-steps-in > div:nth-child(2) { transition-delay: 220ms; }
+.cv-lp-steps-in > div:nth-child(3) { transition-delay: 440ms; }
+.cv-lp-steps-in > div:nth-child(4) { transition-delay: 660ms; }
 .cv-lp-service { display: grid; grid-template-columns: 1fr 1fr; gap: 72px; align-items: center;
   max-width: 980px; margin: 80px auto 0; }
 .cv-lp-service ~ .cv-lp-service { margin-top: 96px; }

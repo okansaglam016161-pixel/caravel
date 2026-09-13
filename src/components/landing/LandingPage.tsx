@@ -517,7 +517,7 @@ function Backing() {
           <span style={logo}><img src="/partner-tari.jpg" alt="Tari" style={img} /></span>
           <h3 style={{ margin: '24px 0 0', fontSize: 20, fontWeight: 600, letterSpacing: '-0.015em', color: 'var(--text-primary)' }}>Built on Tari</h3>
           <div style={{ marginTop: 10 }}><Pill tone="mono">PROTOCOL</Pill></div>
-          <p style={{ margin: '24px 0 0', maxWidth: 340, fontSize: 15, lineHeight: 1.65, color: 'var(--text-body-dim)', textWrap: 'pretty' }}>
+          <p style={{ margin: '24px 0 0', maxWidth: 340, fontSize: 16.5, lineHeight: 1.6, fontWeight: 500, color: 'var(--text-primary)', textWrap: 'pretty' }}>
             Caravel runs on the Ootle, Tari&rsquo;s layer two for private, confidential transactions. Proven on chain.
           </p>
         </div>

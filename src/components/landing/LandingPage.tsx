@@ -307,6 +307,56 @@ const STEPS = [
 ]
 
 /**
+ * Reveal a section once, when it scrolls properly into view.
+ *
+ * LIFTED OUT OF HowItWorks WHEN THE SECOND CALLER ARRIVED, and not before — the landing page has
+ * an in-repo account of what the other order costs. LogoTile's header note records four hand-drawn
+ * copies of one tile that had already drifted to radii of 30%, 30%, 28% and 31%, "chosen by eye
+ * rather than by rule", because the thing all four drew was never a thing in the codebase.
+ *
+ * THE OBSERVER IS NOT THE VALUABLE PART. It is four lines, and anyone would write them the same
+ * way. The three decisions BELOW are the part worth having once: which way the guard fails, when
+ * the disconnect happens, and that the flag only ever moves forwards. Each is a line of code and a
+ * paragraph of reason, and duplicating that pair is how the second copy ends up with the code and
+ * an abbreviated version of the reason — which is the copy someone later "fixes".
+ *
+ * WHAT THE CALLER GETS is a ref to hang on the container and a flag to key a class off. The
+ * hidden-at-rest styling and the stagger stay with the section that owns them; two sections
+ * revealing the same way should not imply they MOVE the same way.
+ */
+function useRevealOnce(threshold = 0.4) {
+  const ref = useRef<HTMLDivElement>(null)
+  const [revealed, setRevealed] = useState(false)
+
+  useEffect(() => {
+    // REVEALS RATHER THAN RETURNS, and the difference is the whole section. Constructing a missing
+    // IntersectionObserver also throws inside an effect, which React propagates, so this cannot
+    // simply be left to fail — but bailing out silently would leave a hidden-at-rest section with
+    // nothing left to move it. Showing it is the honest fallback: no animation, which was never
+    // available here, and no blank column either.
+    if (typeof IntersectionObserver === 'undefined') { setRevealed(true); return }
+    const el = ref.current
+    if (!el) { setRevealed(true); return }
+
+    const io = new IntersectionObserver(
+      hits => {
+        if (!hits.some(h => h.isIntersecting)) return
+        setRevealed(true)
+        // Immediately, not on unmount: the work is finished the moment it fires, and disconnecting
+        // here is what makes the reveal unrepeatable rather than merely unrepeated.
+        io.disconnect()
+      },
+      { threshold },
+    )
+    io.observe(el)
+    // For the section that never intersects before the page is left.
+    return () => io.disconnect()
+  }, [threshold])
+
+  return [ref, revealed] as const
+}
+
+/**
  * The four steps, revealed left to right as the section arrives.
  *
  * ── HIDDEN UNTIL THE SECTION IS PROPERLY ON SCREEN ───────────────────────────
@@ -325,44 +375,16 @@ const STEPS = [
  * THE THRESHOLD IS PART OF THE EFFECT, not a tuning detail. At a fifth of the row the cascade
  * starts while the steps are still entering, so the later ones land off the bottom of the window;
  * at two fifths the row is genuinely on screen when step one moves, and the eye has somewhere to
- * follow it to.
+ * follow it to. That two fifths is now useRevealOnce's default, which is where the number should
+ * live: the partners section wants the same one, and two sections agreeing by accident is a
+ * weaker thing than two sections agreeing by construction.
  *
- * ── REVEAL ONCE, AND MEAN IT ─────────────────────────────────────────────────
- *
- * The flag is one-way and the observer disconnects on the first intersection, so there is no path
- * that un-reveals: scrolling back up, or past the section again, finds no observer to fire and a
- * flag that only ever moved in one direction. Replaying the cascade every time the section crossed
- * the fold would be the page fidgeting at someone trying to read it.
+ * REVEAL-ONCE, THE DISCONNECT AND THE FALLBACK all moved into that hook with the observer. The
+ * stagger and the hidden-at-rest rules did NOT: how a section reveals is shared, what it does
+ * while revealing is its own.
  */
 function HowItWorks() {
-  const steps = useRef<HTMLDivElement>(null)
-  const [revealed, setRevealed] = useState(false)
-
-  useEffect(() => {
-    // REVEALS RATHER THAN RETURNS, and the difference is the whole section. Constructing a missing
-    // IntersectionObserver also throws inside an effect, which React propagates, so this cannot
-    // simply be left to fail — but bailing out silently would leave the steps at their hidden
-    // resting state with nothing left to move them. Showing them is the honest fallback: no
-    // cascade, which was never available here, and no blank column either.
-    if (typeof IntersectionObserver === 'undefined') { setRevealed(true); return }
-    const el = steps.current
-    if (!el) { setRevealed(true); return }
-
-    const io = new IntersectionObserver(
-      hits => {
-        if (!hits.some(h => h.isIntersecting)) return
-        setRevealed(true)
-        // Immediately, not on unmount: the work is finished the moment it fires, and disconnecting
-        // here is what makes the reveal unrepeatable rather than merely unrepeated.
-        io.disconnect()
-      },
-      // Two fifths of the row — see the note above on why this number is not arbitrary.
-      { threshold: 0.4 },
-    )
-    io.observe(el)
-    // For the section that never intersects before the page is left.
-    return () => io.disconnect()
-  }, [])
+  const [steps, revealed] = useRevealOnce()
 
   return (
     <section id="how" className="cv-lp-section">
@@ -447,7 +469,24 @@ function Services() {
   )
 }
 
+/**
+ * The two partner cards, flipping in from edge-on as the pair arrives.
+ *
+ * THE SAME ARRIVAL AS THE STEPS, DELIBERATELY — useRevealOnce at the same threshold, revealed once,
+ * hidden at rest, the same 220ms beat between siblings. The two sections should read as one design
+ * language rather than two people's ideas about scroll animation.
+ *
+ * A DIFFERENT MOVE WITHIN IT, equally deliberately: the steps rise, these turn. Four small items
+ * introducing a sequence want the lightest possible motion; two large cards presenting who stands
+ * behind the product can afford a gesture with some weight, and a flip gives them one without
+ * either section borrowing the other's.
+ *
+ * THE CARDS ARE HAND-WRITTEN, NOT MAPPED, unlike STEPS — and it costs the reveal nothing, because
+ * the stagger keys off nth-child and DOM position does not care how the markup was produced. That
+ * is also why neither card needed touching: the ref and the class go on the container.
+ */
 function Backing() {
+  const [partners, revealed] = useRevealOnce()
   const card = (extra: React.CSSProperties = {}): React.CSSProperties => ({
     background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 18,
     padding: '44px 40px', boxShadow: 'var(--e1)',
@@ -461,7 +500,7 @@ function Backing() {
   return (
     <section className="cv-lp-section">
       <H2>Backing and ecosystem</H2>
-      <div className="cv-lp-partners">
+      <div ref={partners} className={revealed ? 'cv-lp-partners cv-lp-partners-in' : 'cv-lp-partners'}>
         <div style={card()}>
           {/* White plate behind the DNC mark — its artwork is drawn for a light ground. */}
           <span style={{ ...logo, background: '#FFFFFF' }}>
@@ -639,7 +678,47 @@ const LANDING_CSS = `
 .cv-lp-soon { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px;
   max-width: 980px; margin: 96px auto 0; }
 .cv-lp-partners { display: grid; grid-template-columns: 1fr 1fr; gap: 18px;
-  max-width: 880px; margin: 56px auto 0; }
+  max-width: 880px; margin: 56px auto 0;
+  /* THE PERSPECTIVE BELONGS TO THE CONTAINER AND NOWHERE ELSE. This property applies to an
+     element's DIRECT CHILDREN, so here it is what gives the two cards their depth; moved onto a
+     card it would apply to that card's CONTENTS instead, and the card's own rotation would project
+     flat — the horizontal squash that looks like a broken animation rather than a misplaced line.
+     The cards are direct children of this grid, with no wrapper between, which is what makes one
+     declaration reach both.
+
+     1200px BECAUSE THE PAIR IS 880px WIDE. The two centres sit about 215px either side of the
+     vanishing point, near enough that they read as two panels in one scene; nearer 600px and the
+     off-axis edges visibly shear. */
+  perspective: 1200px;
+}
+
+/* ── THE PAIR TURNS TO FACE YOU ───────────────────────────────────────────────
+   HIDDEN AT REST AT A QUARTER TURN. At exactly 90 degrees a card projects to zero width, so it is
+   genuinely not on screen rather than merely transparent — the rotation IS the hiding, and the
+   opacity beside it only covers the sub-pixel sliver a browser can leave at the exact edge. It
+   goes solid in 0.35s against the turn's 0.6s, so the card is a card early and the FLIP is the
+   thing you watch, rather than a fade that happens to be rotating.
+
+   NO backface-visibility, deliberately rather than by omission: this never travels past 90
+   degrees, so the reverse face is never turned toward the viewer and there is nothing to hide.
+   Adding it would promote a layer to solve a problem this animation does not have.
+
+   THE REVEALED STATE IS "none", NOT "rotateY(0deg)", and the two are not the same thing at rest.
+   They interpolate identically — "none" is the identity — but a card left holding a transform
+   stays on a composited layer afterwards, where text is resampled and reads faintly soft. Ending
+   at no transform at all hands the card back to ordinary rendering the moment it lands.
+
+   SAME 220ms BEAT AS THE STEPS, and the same 0.4 threshold through useRevealOnce, so the two
+   sections are consistent by construction rather than by two people choosing similar numbers.
+   nth-child means the order survives the reflow: side by side above 1024, and top then bottom
+   once the grid drops to one column beneath it. */
+.cv-lp-partners > div {
+  opacity: 0; transform: rotateY(90deg);
+  transition: opacity 0.35s ease-out, transform 0.6s ease-out;
+}
+.cv-lp-partners-in > div { opacity: 1; transform: none; }
+.cv-lp-partners-in > div:nth-child(1) { transition-delay: 0ms; }
+.cv-lp-partners-in > div:nth-child(2) { transition-delay: 220ms; }
 .cv-lp-faq { max-width: 680px; margin: 48px auto 0; }
 .cv-lp-footer { max-width: 1120px; margin: 150px auto 0; padding: 34px 40px 44px;
   border-top: 1px solid var(--border); display: flex; align-items: center;

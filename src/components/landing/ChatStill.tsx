@@ -68,7 +68,7 @@ import MessageBubble from '../chat/MessageBubble'
 import { HEADER_LEFT, THREAD_HEADER, THREAD_SCROLLER, THREAD_TITLE } from '../chat/threadChrome'
 
 // TIMES ARE DERIVED, NOT LITERAL. MessageBubble prints them through toLocaleTimeString, so a
-// hardcoded epoch would read 03:14 for a visitor in Sydney — not a plausible dinner conversation.
+// hardcoded epoch would read 03:14 for a visitor in Sydney — not a plausible afternoon exchange.
 // Offsets from load keep it recent in the reader's own locale, wherever they are.
 const now = Date.now()
 const MIN = 60_000
@@ -100,9 +100,9 @@ export default function ChatStill() {
           visual weight as the balance hero across the row from it. The two other overrides are
           what make it a still — there is nothing to scroll, and no flex parent to weigh against. */}
       <div style={{ ...THREAD_SCROLLER, flex: 'none', overflowY: 'visible', padding: 24 }}>
-        <MessageBubble variant="received" text="Dinner was on me last time. Your turn." timestamp={now - 6 * MIN} />
-        <MessageBubble variant="sent" text="Fair. Sending it now, privately." timestamp={now - 5 * MIN} />
-        <MessageBubble variant="received" text="Got it. Thanks!" timestamp={now - 4 * MIN} />
+        <MessageBubble variant="received" text="Bank flagged my wire again 🙄 can you just send it on Caravel?" timestamp={now - 6 * MIN} />
+        <MessageBubble variant="sent" text="Done. 250 XTR, private." timestamp={now - 5 * MIN} />
+        <MessageBubble variant="received" text="Instant. Thank you." timestamp={now - 4 * MIN} />
       </div>
     </div>
   )

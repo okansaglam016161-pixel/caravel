@@ -175,11 +175,27 @@ export default function RestoreFlow({ onBack }: { onBack: () => void }) {
           onKeyDown={e => { if (e.key === 'Enter' && canSubmit) void submit() }}
           placeholder="Repeat password" invalid={!!confirm && confirm !== pass}
         />
-        {/* KEPT. Restore rewrites the wallet file, so any password already set on this device stops
-            working the moment this succeeds. Someone restoring onto a device they already use has
-            to be told that before they do it, not after. */}
+        {/* ── SAID BEFORE THE ACT, BECAUSE IT IS THE LAST MOMENT IT HELPS ──────────────────
+            The first sentence is unchanged and still true: restore rewrites the wallet record, so any
+            password already set on this device stops working the moment this succeeds.
+
+            The rest is NEW, and it says the opposite of what this screen would have had to say a few
+            commits ago. The store key used to come from a device-wide salt that restore re-minted, so
+            restoring any wallet silently destroyed whatever the previous one had written. It now comes
+            from each wallet's own seed, so the stores coexist and a phrase reopens its own — which
+            makes this a reassurance rather than a warning, and worth the extra line.
+
+            TWO THINGS IT MUST NOT IMPLY.
+            1. NOT A BACKUP. "on this device" is said twice on purpose. There is no server: the data
+               does not follow the phrase to a different browser, and nothing here may let someone
+               infer that their chats sync.
+            2. NOT PASSWORD-PROTECTED. The password is described as locking this device and nothing
+               more. Under seed-derived keys the phrase alone opens local history, so no copy may
+               suggest the password is what guards conversations. */}
         <div style={{ fontSize: 12.5, color: 'var(--text-muted-dim)', marginTop: 14, lineHeight: 1.5, textWrap: 'pretty' }}>
-          This replaces any password previously set on this device.
+          This replaces any password previously set on this device. Conversations and contacts are not
+          deleted — they stay on this device with the wallet they belong to, and come back when you
+          restore its phrase here.
         </div>
         {error && <EntryError mt={12}>{error}</EntryError>}
         <EntryButton tone="primary" mt={20} disabled={!canSubmit} onClick={() => void submit()}>Restore wallet</EntryButton>

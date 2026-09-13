@@ -5,13 +5,19 @@
 //   that one first.
 
 import { describe, expect, it } from 'vitest'
+import { DomainSeparatedHasher, importWalletSeed } from 'tari-cipherseed'
 import {
   type DerivationScheme,
   detectScheme,
   deriveIdentity,
   resolveScheme,
+  storeKeyForPhrase,
+  storeKeyFromSeedMaterial,
 } from './derivation'
 import type { StoredWallet } from './walletCrypto'
+
+const hex = (b: Uint8Array) => [...b].map(x => x.toString(16).padStart(2, '0')).join('')
+const unhex = (h: string) => Uint8Array.from(h.match(/../g)!.map(x => parseInt(x, 16)))
 
 // A CipherSeed phrase, proven byte-for-byte against tari_ootle_walletd 0.39.0.
 const CIPHERSEED =
@@ -282,5 +288,101 @@ describe("CipherSeed Nostr identity (C')", () => {
     const entropyHex = [...seed.entropy].map(b => b.toString(16).padStart(2, '0')).join('')
     const { nostr } = await deriveIdentity(CIPHERSEED, 'cipherseed')
     expect(nostr.privateKeyHex).not.toContain(entropyHex)
+  }, 30_000)
+})
+
+// ── The store key ───────────────────────────────────────────────────────────
+//
+// The key every sealed local store is encrypted under at rest, derived from the wallet's own seed so
+// that restoring a phrase always reproduces it. What it REPLACED was a single random salt in
+// localStorage, shared by every wallet and re-minted on every restore — which silently stranded the
+// previous wallet's messages, contacts and history, unrecoverably, with no error anywhere.
+//
+// So these tests carry the weight the salt never had: the derivation is now the only thing standing
+// between a phrase and its own data, and it can never change again.
+
+describe('store key derivation', () => {
+  // ── FROZEN VECTORS ────────────────────────────────────────────────────────
+  //
+  // These pin the domain string "com.caravel.store", its version, the label "store_key" (rotation 0),
+  // the 32-byte width, AND which seed material each scheme feeds in. Change any one of them and every
+  // wallet on every device derives a different store key from the same phrase: messages, contacts,
+  // nicknames, groups, the journal and the transaction history all stop decrypting at once, the
+  // never-clobber guards then refuse to write over them, and nothing reports a fault.
+  //
+  // IF EITHER OF THESE FAILS, THE DERIVATION DRIFTED — DO NOT UPDATE THE EXPECTED VALUE.
+
+  it('derives the pinned store key for a known CipherSeed phrase', async () => {
+    expect(hex(await storeKeyForPhrase(CIPHERSEED, 'cipherseed'))).toBe(
+      '517fd91a7236b8cb4b3dcd7f2dbe0a997a3baea620b88dd603d578c7840b246d',
+    )
+  }, 30_000)
+
+  it('derives the pinned store key for a known legacy BIP-39 phrase', async () => {
+    expect(hex(await storeKeyForPhrase(BIP39, 'bip39'))).toBe(
+      'dd39a38b31cc950f917243e686c64b7633ec70a847830f0d5c8e85c40fdeeeb0',
+    )
+  }, 30_000)
+
+  it('is 32 bytes — the width storeCrypto takes', async () => {
+    expect((await storeKeyForPhrase(BIP39, 'bip39')).length).toBe(32)
+    expect(storeKeyFromSeedMaterial(new Uint8Array(16).fill(3)).length).toBe(32)
+  })
+
+  it('is deterministic — the same phrase yields the same key every time', async () => {
+    const a = await storeKeyForPhrase(BIP39, 'bip39')
+    const b = await storeKeyForPhrase(BIP39, 'bip39')
+    expect(hex(a)).toBe(hex(b))
+  }, 30_000)
+
+  // THE POINT OF THE WHOLE CHANGE, in one assertion: no password appears in the signature, so no
+  // password change can move the key. A restore that sets a new password still opens the same stores.
+  it('takes no password, so a new password cannot move the key', async () => {
+    expect(storeKeyForPhrase.length).toBe(2)   // (phrase, scheme) — nothing else
+  })
+
+  it('is insensitive to case and surrounding whitespace, like every other phrase input', async () => {
+    const plain = await storeKeyForPhrase(BIP39, 'bip39')
+    const messy = await storeKeyForPhrase(`  ${BIP39.toUpperCase()}\n`, 'bip39')
+    expect(hex(messy)).toBe(hex(plain))
+  }, 30_000)
+
+  // Different schemes hash different material (16-byte CipherSeed entropy vs the 64-byte BIP-39
+  // seed), so the same 24 words belong to two different wallets with two different store keys. Their
+  // stores are namespaced apart on disk too; this pins that the KEYS cannot collide either.
+  it('separates the schemes — the same words under each arm give different keys', async () => {
+    const asCipherSeed = await storeKeyForPhrase(CIPHERSEED, 'cipherseed')
+    const asBip39 = await storeKeyForPhrase(CIPHERSEED, 'bip39')
+    expect(hex(asCipherSeed)).not.toBe(hex(asBip39))
+  }, 30_000)
+
+  // Domain separation against the OTHER thing derived from the very same CipherSeed entropy. Both
+  // hash that entropy with Blake2b; only the domain and label keep them apart, so that is what this
+  // asserts. Without it, the Nostr identity and the storage key could be one value.
+  it('does not collide with the Nostr derivation over the same entropy', async () => {
+    const { entropy } = await importWalletSeed(CIPHERSEED)
+    const nostrSide = new DomainSeparatedHasher('com.caravel.nostr', 1, 'nostr_entropy', 32)
+      .chain(entropy)
+      .finalize()
+    expect(hex(storeKeyFromSeedMaterial(entropy))).not.toBe(hex(nostrSide))
+  }, 30_000)
+
+  // ── THE CONSTRAINT, ENCODED ───────────────────────────────────────────────
+  //
+  // The store key must come from the wallet SEED, never from the Nostr key. `nsec` is meant to
+  // leave — exporting it to another Nostr client is an ordinary thing to do — and it must not also
+  // hand over the key to every message on disk.
+  //
+  // The middle assertion is the one that bites: if anyone ever reimplements this over the Nostr
+  // secret, storeKeyForPhrase would equal storeKeyFromSeedMaterial(nsec bytes), and this fails. A
+  // comment could not have caught that.
+  it('is not derived from the Nostr key, at any remove', async () => {
+    const { nostr } = await deriveIdentity(CIPHERSEED, 'cipherseed')
+    const storeKey = hex(await storeKeyForPhrase(CIPHERSEED, 'cipherseed'))
+
+    expect(storeKey).not.toBe(nostr.privateKeyHex)
+    expect(storeKey).not.toBe(hex(storeKeyFromSeedMaterial(unhex(nostr.privateKeyHex))))
+    expect(storeKey).not.toBe(nostr.publicKeyHex)
+    expect(storeKey).not.toBe(hex(storeKeyFromSeedMaterial(unhex(nostr.publicKeyHex))))
   }, 30_000)
 })

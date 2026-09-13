@@ -8,7 +8,7 @@ import {
   markScheme,
   saveStoredWallet,
 } from '../crypto/walletCrypto'
-import { clearStoreKey, deriveStoreKey, ensureKeyParams, newKeyParams, saveKeyParams, setStoreKey } from '../crypto/sessionKey'
+import { clearStoreKey, setStoreKey } from '../crypto/sessionKey'
 import {
   type DerivationScheme,
   type WalletIdentity,
@@ -698,14 +698,13 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   // New wallets are always CipherSeed — Tari's own format, importable by official Tari wallets.
   const createWallet = useCallback(async (mnemonic: string, password: string) => {
     saveStoredWallet(await encryptMnemonic(mnemonic, password, 'cipherseed'))
-    // A FRESH salt, minted beside the wallet record it belongs to. See sessionKey for why the store
-    // key derives from its own salt rather than the mnemonic's, and why it is set before
-    // adoptIdentity — which is where store reads will begin once a later stage encrypts them.
-    const keyParams = newKeyParams()
-    saveKeyParams(keyParams)
-    setStoreKey(await deriveStoreKey(password, keyParams))
+    // THE IDENTITY FIRST, because the store key now comes out of it — derived from this wallet's own
+    // seed rather than from a random salt stored beside it. Still set before adoptIdentity, which is
+    // where store reads begin; only setWalletExists sits between, and it touches no store.
+    const identity = await deriveIdentity(mnemonic, 'cipherseed')
+    setStoreKey(identity.storeKey)
     setWalletExists(true)
-    await adoptIdentity(await deriveIdentity(mnemonic, 'cipherseed'))
+    await adoptIdentity(identity)
   }, [adoptIdentity])
 
   const unlock = useCallback(async (password: string) => {
@@ -718,13 +717,21 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     const { scheme, markerWasMissing } = resolveScheme(stored, mnemonic)
     if (markerWasMissing) saveStoredWallet(markScheme(stored, scheme))
 
-    // AFTER the password has been proven by decryptMnemonic above, so a wrong password costs one
-    // PBKDF2 rather than two. ensureKeyParams self-heals the wallets that predate this record —
-    // which is every wallet on a device today — the same way resolveScheme repairs a missing
-    // derivation marker just above.
-    setStoreKey(await deriveStoreKey(password, ensureKeyParams()))
+    // THE IDENTITY FIRST, and the store key falls out of it at no extra cost: the seed material it
+    // hashes — CipherSeed entropy, or the 64-byte BIP-39 seed — is already computed in there.
+    //
+    // THE PASSWORD DOES NOT PARTICIPATE, which is the substance of the change. A store key derived
+    // from the password moved whenever the password did, and restore sets a new one every time, so a
+    // wallet coming back could no longer open the stores it had written itself. It also means unlock
+    // now does ONE key derivation rather than two: the 600 000-iteration PBKDF2 that proved the
+    // password in decryptMnemonic above is the only one left.
+    //
+    // Set BEFORE adoptIdentity — the invariant sessionKey states, and where store reads begin.
+    // Nothing between these two lines reads a store.
+    const identity = await deriveIdentity(mnemonic, scheme)
+    setStoreKey(identity.storeKey)
 
-    await adoptIdentity(await deriveIdentity(mnemonic, scheme))
+    await adoptIdentity(identity)
   }, [adoptIdentity])
 
   // `scheme` comes from the restore UI, which detects it from the phrase and — in the vanishingly
@@ -735,13 +742,15 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     // that fails to derive must not be allowed to destroy the record it was going to replace.
     const identity = await deriveIdentity(mnemonic, scheme)
     saveStoredWallet(await encryptMnemonic(mnemonic, password, scheme))
-    // FRESH, not ensureKeyParams: restore replaces the stored wallet outright, and a new wallet
-    // inheriting the replaced one's salt would derive the identical store key whenever the password
-    // was reused — coupling two unrelated wallet records through a shared parameter, which is the
-    // confusion an independent salt exists to prevent.
-    const keyParams = newKeyParams()
-    saveKeyParams(keyParams)
-    setStoreKey(await deriveStoreKey(password, keyParams))
+    // THE KEY COMES FROM THE PHRASE THAT WAS JUST TYPED, so restoring a wallet re-derives exactly the
+    // key its own stores were sealed with, and restoring a DIFFERENT wallet cannot reach them at all —
+    // two wallets on one device now have unrelated keys because their SEEDS are unrelated, with no
+    // shared parameter to couple or to lose.
+    //
+    // THIS IS THE LINE THE OLD DESIGN GOT WRONG. It minted a fresh random salt here, which silently
+    // stranded every store the previous wallet had written — undecryptable, unrecoverable, reported
+    // nowhere — and did the same to THIS wallet's own stores if it had ever been restored before.
+    setStoreKey(identity.storeKey)
     setWalletExists(true)
     await adoptIdentity(identity)
   }, [adoptIdentity])

@@ -1,12 +1,14 @@
 // The STORE KEY — a session-lived symmetric key for encrypting Caravel's local stores at rest.
 //
-// ⚠️ STAGE 1 OF THE ENCRYPTION-AT-REST WORK: NOTHING CONSUMES THIS YET.
+// ── WHAT THIS MODULE IS NOW: THE KEY'S LIFETIME, NOT ITS DERIVATION ──────────
 //
-// No store is encrypted. journalStore, messageStore, utxoLedger, txHistory and every other store
-// read and write exactly the plaintext they always have. This module only makes the key EXIST, be
-// derived at the right moment, and be cleared at the right moment — so that the stages which
-// actually encrypt something inherit a key lifecycle that is already correct and already tested,
-// rather than inventing one while also changing how data is stored.
+// The key is DERIVED IN derivation.ts, from the wallet's own seed — see storeKeyFromSeedMaterial
+// there. What is left here is the part that was always right: holding one key for the length of an
+// unlocked session, handing it to the stores that ask, and dropping it on lock.
+//
+// Everything below the lifecycle is MIGRATION-ONLY and goes in S3. It exists to read the old
+// `caravel.storekey.v1` record and re-derive the key the stores were sealed with BEFORE the change,
+// so the transition loses nothing. Nothing writes that record any more.
 //
 // ── WHY MODULE STATE AND NOT REACT STATE ─────────────────────────────────────
 //
@@ -17,36 +19,42 @@
 // already use for the same reason — see journalStore's `listeners`/`cachedEntries`, and
 // WalletContext's own nostrSecretKeyRef.
 //
-// ── WHY A SALT OF ITS OWN ────────────────────────────────────────────────────
+// ── WHY THERE IS NO LONGER A SALT OF ITS OWN ─────────────────────────────────
 //
-// The store key and the seed key are INDEPENDENT derivations from the same password. Reusing
-// StoredWallet.salt would make each a deterministic function of the other — recovering one would
-// hand over the other for free — and would couple the two lifecycles: re-encrypting the mnemonic,
-// or raising its iteration count, would silently invalidate every encrypted store. Separate salts
-// also let the store key change KDF later without touching wallet-critical code. It is the same
-// separation StoredWallet already draws between `version` (the envelope) and `scheme` (the
-// derivation), applied one level out.
+// There used to be: one random salt in localStorage, and a store key of PBKDF2(password, salt). The
+// argument for it was real — the store key and the seed key had to be independent derivations, so
+// that recovering one did not hand over the other. What that argument missed is what happens to the
+// salt.
 //
-// COST: one extra PBKDF2 at 600 000 iterations per unlock, so unlock does roughly twice the key
-// derivation work it used to. Accepted deliberately. If it is ever felt, the cheap win is that this
-// derivation is independent of deriveIdentity and the two could run under one Promise.all — not
-// done here, because the ORDERING below matters more than the milliseconds.
+// ONE SALT, SHARED BY EVERY WALLET ON THE DEVICE, RE-MINTED ON EVERY RESTORE. So restoring a second
+// wallet silently stranded the first one's messages, contacts, nicknames, groups, journal and
+// transaction history: sealed under a key whose only input had just been overwritten. No detection,
+// no signal, no way back. Restoring the SAME wallet did it too, because restore always mints a new
+// password and a new salt.
+//
+// The key now comes from the wallet's OWN SEED, so every wallet has its own, nothing is shared, and
+// a phrase always re-derives the key its data was sealed with. Independence is kept — a hash under
+// Caravel's store domain is not the seed key and cannot be walked back to it — without a stored
+// input that can be lost.
+//
+// IT ALSO COSTS NOTHING. The old design paid a second 600 000-iteration PBKDF2 on every unlock; the
+// new one is a Blake2b over material deriveIdentity already holds, so unlock does one key derivation
+// where it used to do two.
 
-import { b64Decode, b64Encode } from './base64'
+import { b64Decode } from './base64'
 
 // ── The parameters record ────────────────────────────────────────────────────
 
 /**
- * PARAMETERS ONLY. NEVER KEY MATERIAL.
+ * MIGRATION-ONLY — DELETED IN S3, ALONG WITH THE RECORD IT DESCRIBES.
  *
- * Worth stating plainly, because a record called `storekey` sitting in localStorage invites exactly
- * the wrong assumption: this holds a salt and a work factor, both of which are public inputs to the
- * KDF. The key itself is derived from the user's password and lives only in memory, only while
- * unlocked. Nothing here is a secret, and losing it costs no confidentiality.
+ * The shape of the retired `caravel.storekey.v1` record. Nothing writes it any more; it is read so
+ * that S3 can derive the key a device's stores were sealed with before the change and re-seal them
+ * under the seed-derived one.
  *
- * Same field set and the same discipline as StoredWallet, deliberately, so the two read as
- * siblings: `iterations` is stored per record and read back from it on every derivation, which is
- * what lets the work factor rise for new wallets without orphaning existing ones.
+ * PARAMETERS ONLY, NEVER KEY MATERIAL — a salt and a work factor, both public inputs to the KDF.
+ * `iterations` is read from the RECORD rather than a constant, which is what lets an old record
+ * still derive the key it was written with.
  */
 export interface StoreKeyParams {
   version: 1
@@ -57,29 +65,26 @@ export interface StoreKeyParams {
 
 const STORAGE_KEY = 'caravel.storekey.v1'
 
-/** OWASP 2023 minimum for PBKDF2-SHA-256 — the same figure walletCrypto uses for the mnemonic. */
-const KDF_ITERATIONS = 600_000
-
-const SALT_BYTES = 16
-/** 256-bit key, sized for the AES-256 / XChaCha20 class of cipher a later stage will use. */
+/** 256-bit key — the width storeCrypto's XChaCha20-Poly1305 takes. */
 const KEY_BYTES = 32
 
 /** The record versions this build knows how to read. */
 const SUPPORTED_VERSIONS = [1]
 
 /**
- * The stored parameters, or `null` when there are none this build can use — absent, unparseable, or
- * written by a newer Caravel.
+ * MIGRATION-ONLY — DELETED IN S3.
  *
- * RETURNS NULL RATHER THAN THROWING, which is the OPPOSITE of loadStoredWallet and is a considered
- * difference. That function throws because an unreadable wallet record must not be mistaken for
- * "no wallet" and send the user to a create screen that would overwrite irreplaceable ciphertext.
- * This record holds regenerable parameters and guards nothing: at this stage the worst case of
- * re-minting is that a salt changes while no store depends on it, which costs exactly nothing.
+ * The retired parameters record, or `null` when there is none this build can use. Present only so
+ * the S3 migration can re-derive the OLD key and re-seal what it opens.
  *
- * REVISIT AT THE STAGE THAT FIRST ENCRYPTS A STORE. From that point a lost or re-minted salt means
- * stores that can no longer be decrypted, and this quiet remint becomes a data-loss path that needs
- * a real answer. It is deliberately NOT pre-solved here.
+ * THE NOTE THAT USED TO SIT HERE has been answered rather than deleted, because it was right. It
+ * said: revisit this at the stage that first encrypts a store, because from that point a lost or
+ * re-minted salt means stores that can no longer be decrypted, and the quiet remint becomes a
+ * data-loss path. Six stages encrypted ten stores past it, the data-loss path duly arrived, and the
+ * answer turned out not to be a better-guarded salt but no salt at all — see the header.
+ *
+ * It still returns null rather than throwing, which no longer needs a justification: after S3 there
+ * is nothing here to guard.
  */
 export function loadKeyParams(): StoreKeyParams | null {
   let raw: string | null
@@ -104,46 +109,18 @@ export function loadKeyParams(): StoreKeyParams | null {
   return params
 }
 
-export function saveKeyParams(params: StoreKeyParams): void {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(params))
-  } catch { /* quota / private mode — the next unlock re-mints */ }
-}
-
-/** A fresh record: new random salt, current work factor. Never reuses an existing salt. */
-export function newKeyParams(): StoreKeyParams {
-  return {
-    version: 1,
-    kdf: 'pbkdf2',
-    iterations: KDF_ITERATIONS,
-    salt: b64Encode(crypto.getRandomValues(new Uint8Array(SALT_BYTES))),
-  }
-}
-
-/**
- * The device's parameters, minting and persisting them if there are none.
- *
- * THE SELF-HEAL PATH, for the unlock of a wallet that predates this record — which is every wallet
- * on a real device today. Same shape as resolveScheme's `markerWasMissing` repair: read what we
- * wrote, and write what we should have written if it is not there.
- *
- * create and restore deliberately do NOT call this — they mint fresh. See the note in
- * WalletContext: a restored wallet inheriting the replaced wallet's salt would derive the identical
- * store key whenever the password was reused, coupling two unrelated wallet records through a
- * shared parameter.
- */
-export function ensureKeyParams(): StoreKeyParams {
-  const existing = loadKeyParams()
-  if (existing) return existing
-  const fresh = newKeyParams()
-  saveKeyParams(fresh)
-  return fresh
-}
+// RETIRED WITH THE SALT: saveKeyParams, newKeyParams and ensureKeyParams. Nothing mints or writes
+// `caravel.storekey.v1` any more — a wallet's key comes from its own seed, so there is no device-wide
+// parameter to create, persist, or accidentally replace. The reader above stays until S3 has finished
+// converting the records that were sealed while they existed.
 
 // ── Derivation ───────────────────────────────────────────────────────────────
 
 /**
- * password + params → 32 raw key bytes.
+ * MIGRATION-ONLY — DELETED IN S3.
+ *
+ * password + params → 32 raw key bytes: the OLD derivation, kept so S3 can open what it sealed. The
+ * live derivation is storeKeyFromSeedMaterial in derivation.ts and takes no password at all.
  *
  * RAW BYTES, VIA deriveBits — and that is the one real difference from walletCrypto's deriveKey,
  * which produces a non-extractable CryptoKey. That form is right for a key that only ever feeds

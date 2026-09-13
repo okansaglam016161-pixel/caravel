@@ -1,4 +1,9 @@
-// Lifecycle tests for the store key (encryption-at-rest, stage 1).
+// Lifecycle tests for the store key.
+//
+// TWO HALVES, WITH DIFFERENT LIFESPANS. The session-state specs are permanent: holding one key for
+// an unlocked session and dropping it on lock is what this module still does. The parameters and
+// derivation specs are MIGRATION-ONLY and go in S3 with the code they cover — the live key is derived
+// in derivation.ts from the wallet's seed and takes no password, and its specs live there.
 //
 // Hermetic and offline: Node exposes WebCrypto on globalThis.crypto, so the REAL PBKDF2 runs here
 // rather than a shim — the same arrangement mediaCrypto.test.ts relies on.
@@ -12,8 +17,8 @@
 
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
-  clearStoreKey, deriveStoreKey, ensureKeyParams, getStoreKey, hasStoreKey,
-  loadKeyParams, newKeyParams, saveKeyParams, setStoreKey, type StoreKeyParams,
+  clearStoreKey, deriveStoreKey, getStoreKey, hasStoreKey,
+  loadKeyParams, setStoreKey, type StoreKeyParams,
 } from './sessionKey'
 
 // localStorage does not exist under Vitest's node environment. The same in-memory Storage
@@ -82,57 +87,37 @@ describe('session state — the lock/unlock contract', () => {
   })
 })
 
-describe('the parameters record', () => {
+// MIGRATION-ONLY (deleted in S3). Nothing writes this record any more, so what is left to cover is
+// the READ — the one S3 depends on to re-derive the key a device's stores were sealed with before the
+// change. The minting specs went with the minting code.
+describe('the retired parameters record — read path only', () => {
   it('reads back nothing when none has been written', () => {
     expect(loadKeyParams()).toBeNull()
   })
 
-  it('mints AND PERSISTS on first use', () => {
-    // The create/restore-then-unlock story: the record has to survive the call, not merely be
-    // returned by it. Asserted against storage directly.
-    const minted = ensureKeyParams()
-    expect(localStorage.getItem(KEY)).not.toBeNull()
-    expect(JSON.parse(localStorage.getItem(KEY)!)).toEqual(minted)
-  })
-
-  it('reuses the same salt on every later call', () => {
-    // "Created on first create/restore, reused on subsequent unlocks." If this ever regressed, every
-    // unlock would derive a different key from the same password — which is the whole failure mode
-    // stage 3 depends on this not having.
-    const first = ensureKeyParams()
-    const second = ensureKeyParams()
-    expect(second.salt).toBe(first.salt)
-    expect(second).toEqual(first)
-  })
-
-  it('mints a DIFFERENT salt each time one is explicitly requested', () => {
-    // What create and restore call. Two wallets on one device must not share a parameter.
-    expect(newKeyParams().salt).not.toBe(newKeyParams().salt)
-  })
-
-  it('round-trips its iterations, so an older work factor survives', () => {
-    saveKeyParams(params({ iterations: 12_345 }))
+  it('round-trips a record written by an older build, iterations and all', () => {
+    // Written directly rather than through a helper, because the writer is gone — which is exactly
+    // the situation S3 meets on a real device.
+    localStorage.setItem(KEY, JSON.stringify(params({ iterations: 12_345 })))
     expect(loadKeyParams()!.iterations).toBe(12_345)
+    expect(loadKeyParams()!.salt).toBe('AAAAAAAAAAAAAAAAAAAAAA==')
   })
 
-  it('carries the current work factor on a fresh record', () => {
-    expect(newKeyParams().iterations).toBe(600_000)
-  })
-
-  it('re-mints rather than throwing on a corrupt or unusable record', () => {
-    // The OPPOSITE of loadStoredWallet, deliberately: these are regenerable parameters guarding
-    // nothing yet, so an unreadable one costs a remint and no data. REVISIT at the stage that first
-    // encrypts a store, where a re-minted salt means stores that no longer open.
+  it('returns null rather than throwing on a corrupt or unusable record', () => {
+    // Still the OPPOSITE of loadStoredWallet, and now harmless: there is nothing left to re-mint.
+    // A record this build cannot read simply means S3 has nothing to convert from.
     for (const bad of ['not json at all', '{"version":99}', '{"version":1}', '{"version":1,"salt":"x","iterations":0}']) {
       globalThis.localStorage = memoryStorage()
       localStorage.setItem(KEY, bad)
       expect(loadKeyParams()).toBeNull()
-      expect(() => ensureKeyParams()).not.toThrow()
     }
   })
 })
 
-describe('derivation', () => {
+// MIGRATION-ONLY (deleted in S3): the OLD password-based derivation, kept so S3 can open what it
+// sealed. The live derivation is storeKeyFromSeedMaterial in derivation.ts — no password, no salt,
+// and its own golden vectors.
+describe('the retired derivation', () => {
   it('is deterministic for the same password and the same record', async () => {
     // The property every later stage rests on: unlock twice, decrypt the same stores.
     const p = params()
@@ -145,9 +130,10 @@ describe('derivation', () => {
     expect((await deriveStoreKey('pw', params())).length).toBe(32)
   })
 
-  it('GIVES A DIFFERENT KEY FOR A DIFFERENT SALT — the independent-salt property', async () => {
-    // This is the reason the store key does not reuse StoredWallet.salt. Same password, different
-    // salt, unrelated key: the seed key and the store key cannot be derived from one another.
+  it('gives a different key for a different salt', async () => {
+    // The property the old design rested on — and the one that sank it. Same password, different
+    // salt, unrelated key: which is precisely why re-minting that salt on restore stranded every
+    // store sealed under the previous one.
     const a = await deriveStoreKey('same password', params({ salt: 'AAAAAAAAAAAAAAAAAAAAAA==' }))
     const b = await deriveStoreKey('same password', params({ salt: 'BBBBBBBBBBBBBBBBBBBBBB==' }))
     expect([...a]).not.toEqual([...b])
@@ -168,10 +154,10 @@ describe('derivation', () => {
     expect([...a]).not.toEqual([...b])
   })
 
-  it('derives at the shipped 600 000 iterations', async () => {
-    // The one test that pays the real cost, so the figure the app actually uses is exercised rather
-    // than only asserted as a constant.
-    const key = await deriveStoreKey('pw', newKeyParams())
+  it('derives at the 600 000 iterations old records carry', async () => {
+    // The one test that pays the real cost, so the figure those records were written at is exercised
+    // rather than only asserted as a constant. S3 pays it once per migrating device.
+    const key = await deriveStoreKey('pw', params({ iterations: 600_000 }))
     expect(key.length).toBe(32)
   })
 })

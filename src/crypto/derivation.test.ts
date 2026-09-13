@@ -14,6 +14,7 @@ import {
   storeKeyForPhrase,
   storeKeyFromSeedMaterial,
 } from './derivation'
+import { open, seal } from './storeCrypto'
 import type { StoredWallet } from './walletCrypto'
 
 const hex = (b: Uint8Array) => [...b].map(x => x.toString(16).padStart(2, '0')).join('')
@@ -384,5 +385,71 @@ describe('store key derivation', () => {
     expect(storeKey).not.toBe(hex(storeKeyFromSeedMaterial(unhex(nostr.privateKeyHex))))
     expect(storeKey).not.toBe(nostr.publicKeyHex)
     expect(storeKey).not.toBe(hex(storeKeyFromSeedMaterial(unhex(nostr.publicKeyHex))))
+  }, 30_000)
+})
+
+// ── The store key, as the app actually gets it ──────────────────────────────
+//
+// create, unlock and restore do not call storeKeyForPhrase — they take the key off deriveIdentity,
+// which hashes seed material it has already computed rather than paying Argon2d a second time for
+// the same bytes. These tests bind the two together, so the frozen vectors above pin the path the
+// app runs and not merely the one the tests run.
+
+describe('deriveIdentity hands back the store key', () => {
+  it('agrees with the standalone derivation, on both schemes', async () => {
+    const cs = await deriveIdentity(CIPHERSEED, 'cipherseed')
+    expect(hex(cs.storeKey)).toBe(hex(await storeKeyForPhrase(CIPHERSEED, 'cipherseed')))
+
+    const legacy = await deriveIdentity(BIP39, 'bip39')
+    expect(hex(legacy.storeKey)).toBe(hex(await storeKeyForPhrase(BIP39, 'bip39')))
+  }, 30_000)
+
+  it('is the pinned vector — the frozen values cover the live path', async () => {
+    const cs = await deriveIdentity(CIPHERSEED, 'cipherseed')
+    expect(hex(cs.storeKey)).toBe('517fd91a7236b8cb4b3dcd7f2dbe0a997a3baea620b88dd603d578c7840b246d')
+
+    const legacy = await deriveIdentity(BIP39, 'bip39')
+    expect(hex(legacy.storeKey)).toBe('dd39a38b31cc950f917243e686c64b7633ec70a847830f0d5c8e85c40fdeeeb0')
+  }, 30_000)
+
+  it('gives two different wallets two unrelated store keys', async () => {
+    // What makes coexistence work: the stores were always namespaced per identity, and now the KEYS
+    // are unrelated too, because the seeds are. One device, two wallets, neither able to reach — or
+    // to strand — the other's data.
+    const a = await deriveIdentity(CIPHERSEED, 'cipherseed')
+    const b = await deriveIdentity(BIP39, 'bip39')
+    expect(hex(a.storeKey)).not.toBe(hex(b.storeKey))
+  }, 30_000)
+
+  // ── THE KEYSTONE ──────────────────────────────────────────────────────────
+  //
+  // Restore sets a NEW password every single time — the flow gives no way not to. Under the design
+  // this replaced, the store key was PBKDF2(password, salt) and restore also minted a fresh salt, so
+  // a wallet coming back could not open the stores it had written itself: "No conversations yet",
+  // contacts reverted to requests, every reload, forever.
+  //
+  // Here the password is not an input, so a store sealed in one session opens in the next no matter
+  // what password was chosen in between. Run through the REAL cipher, not just a byte comparison,
+  // because what matters is that the data comes back — not that two arrays match.
+  it('opens data sealed before a password change — the whole reason for this derivation', async () => {
+    const before = await deriveIdentity(CIPHERSEED, 'cipherseed')
+    const sealed = seal(before.storeKey, JSON.stringify({ conversations: ['still here'] }))
+
+    // A later restore of the SAME phrase, with a DIFFERENT password. Nothing about the password
+    // reaches the derivation, so the key comes back identical and the record opens.
+    const after = await deriveIdentity(CIPHERSEED, 'cipherseed')
+    const opened = open(after.storeKey, sealed)
+
+    expect(hex(after.storeKey)).toBe(hex(before.storeKey))
+    expect(opened.status).toBe('ok')
+    expect(opened.status === 'ok' && JSON.parse(opened.json)).toEqual({ conversations: ['still here'] })
+  }, 30_000)
+
+  it('refuses another wallet\'s sealed record, rather than returning garbage', async () => {
+    // The other half of coexistence: unrelated keys must FAIL to open, and fail authenticated —
+    // 'unreadable', which is what the never-clobber guards refuse to write over.
+    const mine = await deriveIdentity(CIPHERSEED, 'cipherseed')
+    const theirs = await deriveIdentity(BIP39, 'bip39')
+    expect(open(theirs.storeKey, seal(mine.storeKey, '{"a":1}')).status).toBe('unreadable')
   }, 30_000)
 })

@@ -44,6 +44,15 @@ export type DetectedScheme = DerivationScheme | 'ambiguous' | 'invalid'
 export interface WalletIdentity {
   wallet: SecretKeyWallet
   nostr: NostrIdentity
+  /**
+   * The key every sealed local store is encrypted under, for THIS wallet.
+   *
+   * Returned from here rather than derived beside it because this is where the seed material already
+   * is: the CipherSeed entropy after importWalletSeed, or the 64-byte seed after seedFromMnemonic.
+   * Deriving it anywhere else means paying for that material twice — Argon2d, in the CipherSeed case
+   * — to arrive at the same bytes. See storeKeyFromSeedMaterial.
+   */
+  storeKey: Uint8Array
 }
 
 /**
@@ -196,7 +205,11 @@ export function detectScheme(phrase: string): DetectedScheme {
 // ── Derivation ──────────────────────────────────────────────────────────────
 
 /**
- * Turns a phrase into the Tari wallet and the Nostr identity, by the given scheme.
+ * Turns a phrase into the Tari wallet, the Nostr identity, and the store key, by the given scheme.
+ *
+ * THE STORE KEY RIDES ALONG because the seed material it needs is computed here anyway. That is not
+ * tidiness: deriving it separately would re-run importWalletSeed's Argon2d for a value this function
+ * already has the input for, doubling the cost of every unlock to reach identical bytes.
  *
  * The scheme is a parameter rather than something this function sniffs: callers already know it,
  * either from the stored marker (resolveScheme) or from an explicit detection the user has
@@ -230,14 +243,24 @@ async function deriveFromCipherSeed(phrase: string): Promise<WalletIdentity> {
 
   const { ownerSecret, viewSecret } = deriveAccountKeys(seed.entropy, ACCOUNT_INDEX)
   const wallet = SecretKeyWallet.fromSecretKey(ownerSecret, Network.Esmeralda, viewSecret)
-  return { wallet, nostr: await nostrFromCipherSeedEntropy(seed.entropy) }
+  return {
+    wallet,
+    nostr: await nostrFromCipherSeedEntropy(seed.entropy),
+    // Free: `seed.entropy` is already here, and the hash is Blake2b over 16 bytes.
+    storeKey: storeKeyFromSeedMaterial(seed.entropy),
+  }
 }
 
 async function deriveFromBip39(phrase: string): Promise<WalletIdentity> {
   // Untouched legacy behaviour: one 64-byte BIP-39 seed feeding both branches, exactly as before
   // the migration. See legacyBip39.ts.
   const seed = await seedFromMnemonic(phrase)
-  return { wallet: await walletFromSeed(seed), nostr: deriveNostrKeyFromSeed(seed) }
+  return {
+    wallet: await walletFromSeed(seed),
+    nostr: deriveNostrKeyFromSeed(seed),
+    // The same 64-byte seed, hashed under Caravel's store domain — never used as a key directly.
+    storeKey: storeKeyFromSeedMaterial(seed),
+  }
 }
 
 // ── Nostr identity for CipherSeed wallets ───────────────────────────────────
@@ -317,9 +340,13 @@ export function storeKeyFromSeedMaterial(material: Uint8Array): Uint8Array {
  * wallets, with different addresses and different npubs, whose stores are already namespaced apart on
  * disk.
  *
- * INERT ON PURPOSE, for now. S2 folds this into deriveIdentity, which already computes both kinds of
- * material and can hand the key back for free instead of paying for the seed twice — Argon2d, in the
- * CipherSeed case. Until then nothing calls this, and it is provable without any of the wiring.
+ * NOT WHAT THE APP CALLS. deriveIdentity hands back the same key from material it already holds, and
+ * that is the path create, unlock and restore take — this one re-derives the seed from scratch, which
+ * would double the cost of every unlock for identical bytes.
+ *
+ * It stays because it is the STANDALONE PROVER: the golden vectors are asserted through it, and a
+ * test asserts deriveIdentity agrees with it. That pairing is what keeps the pinned values pinned to
+ * the live path rather than to a function nothing runs.
  */
 export async function storeKeyForPhrase(phrase: string, scheme: DerivationScheme): Promise<Uint8Array> {
   const normalised = normalise(phrase)

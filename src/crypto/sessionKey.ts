@@ -6,9 +6,9 @@
 // there. What is left here is the part that was always right: holding one key for the length of an
 // unlocked session, handing it to the stores that ask, and dropping it on lock.
 //
-// Everything below the lifecycle is MIGRATION-ONLY and goes in S3. It exists to read the old
-// `caravel.storekey.v1` record and re-derive the key the stores were sealed with BEFORE the change,
-// so the transition loses nothing. Nothing writes that record any more.
+// NOTHING ABOUT THE OLD SCHEME IS LEFT HERE. The reader for the retired `caravel.storekey.v1`
+// record, and the PBKDF2 derivation that went with it, live in storeKeyMigration.ts — together, so
+// that retiring the migration is one file deletion rather than an archaeology exercise across two.
 //
 // ── WHY MODULE STATE AND NOT REACT STATE ─────────────────────────────────────
 //
@@ -39,118 +39,11 @@
 //
 // IT ALSO COSTS NOTHING. The old design paid a second 600 000-iteration PBKDF2 on every unlock; the
 // new one is a Blake2b over material deriveIdentity already holds, so unlock does one key derivation
-// where it used to do two.
-
-import { b64Decode } from './base64'
-
-// ── The parameters record ────────────────────────────────────────────────────
-
-/**
- * MIGRATION-ONLY — DELETED IN S3, ALONG WITH THE RECORD IT DESCRIBES.
- *
- * The shape of the retired `caravel.storekey.v1` record. Nothing writes it any more; it is read so
- * that S3 can derive the key a device's stores were sealed with before the change and re-seal them
- * under the seed-derived one.
- *
- * PARAMETERS ONLY, NEVER KEY MATERIAL — a salt and a work factor, both public inputs to the KDF.
- * `iterations` is read from the RECORD rather than a constant, which is what lets an old record
- * still derive the key it was written with.
- */
-export interface StoreKeyParams {
-  version: 1
-  kdf: 'pbkdf2'
-  iterations: number
-  salt: string        // base64, 16 random bytes
-}
-
-const STORAGE_KEY = 'caravel.storekey.v1'
-
-/** 256-bit key — the width storeCrypto's XChaCha20-Poly1305 takes. */
-const KEY_BYTES = 32
-
-/** The record versions this build knows how to read. */
-const SUPPORTED_VERSIONS = [1]
-
-/**
- * MIGRATION-ONLY — DELETED IN S3.
- *
- * The retired parameters record, or `null` when there is none this build can use. Present only so
- * the S3 migration can re-derive the OLD key and re-seal what it opens.
- *
- * THE NOTE THAT USED TO SIT HERE has been answered rather than deleted, because it was right. It
- * said: revisit this at the stage that first encrypts a store, because from that point a lost or
- * re-minted salt means stores that can no longer be decrypted, and the quiet remint becomes a
- * data-loss path. Six stages encrypted ten stores past it, the data-loss path duly arrived, and the
- * answer turned out not to be a better-guarded salt but no salt at all — see the header.
- *
- * It still returns null rather than throwing, which no longer needs a justification: after S3 there
- * is nothing here to guard.
- */
-export function loadKeyParams(): StoreKeyParams | null {
-  let raw: string | null
-  try {
-    raw = localStorage.getItem(STORAGE_KEY)
-  } catch {
-    return null   // private mode / storage disabled
-  }
-  if (!raw) return null
-
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(raw)
-  } catch {
-    return null
-  }
-
-  const params = parsed as StoreKeyParams
-  if (!SUPPORTED_VERSIONS.includes(params?.version)) return null
-  if (typeof params.salt !== 'string' || !params.salt) return null
-  if (typeof params.iterations !== 'number' || !Number.isFinite(params.iterations) || params.iterations < 1) return null
-  return params
-}
-
-// RETIRED WITH THE SALT: saveKeyParams, newKeyParams and ensureKeyParams. Nothing mints or writes
-// `caravel.storekey.v1` any more — a wallet's key comes from its own seed, so there is no device-wide
-// parameter to create, persist, or accidentally replace. The reader above stays until S3 has finished
-// converting the records that were sealed while they existed.
-
-// ── Derivation ───────────────────────────────────────────────────────────────
-
-/**
- * MIGRATION-ONLY — DELETED IN S3.
- *
- * password + params → 32 raw key bytes: the OLD derivation, kept so S3 can open what it sealed. The
- * live derivation is storeKeyFromSeedMaterial in derivation.ts and takes no password at all.
- *
- * RAW BYTES, VIA deriveBits — and that is the one real difference from walletCrypto's deriveKey,
- * which produces a non-extractable CryptoKey. That form is right for a key that only ever feeds
- * crypto.subtle. This key must eventually feed a SYNCHRONOUS cipher, because the stores it will
- * protect are read inside useSyncExternalStore snapshots and React state updaters, neither of which
- * can await. Same KDF, same parameters, different output form — the same "same conventions,
- * different key model" relationship mediaCrypto has with walletCrypto.
- *
- * `iterations` comes from the RECORD, never from the constant, so a record written at an older work
- * factor still derives the key it was written with.
- */
-export async function deriveStoreKey(password: string, params: StoreKeyParams): Promise<Uint8Array> {
-  const salt = b64Decode(params.salt)
-  const keyMaterial = await crypto.subtle.importKey(
-    'raw',
-    new TextEncoder().encode(password),
-    'PBKDF2',
-    false,
-    ['deriveBits'],
-  )
-  // `salt as BufferSource`: the same TS lib-typing reconciliation walletCrypto documents — a
-  // Uint8Array IS a BufferSource at runtime, but TS's generic Uint8Array<ArrayBufferLike> default
-  // does not structurally match it. No runtime effect.
-  const bits = await crypto.subtle.deriveBits(
-    { name: 'PBKDF2', salt: salt as BufferSource, iterations: params.iterations, hash: 'SHA-256' },
-    keyMaterial,
-    KEY_BYTES * 8,
-  )
-  return new Uint8Array(bits)
-}
+// where it used to do two. Measured across the change: CipherSeed 121.7ms to 49.2ms, BIP-39 70.5ms
+// to 15.5ms.
+//
+// Devices that still hold stores sealed the old way are converted by storeKeyMigration.ts, once,
+// losslessly, at unlock.
 
 // ── Session state ────────────────────────────────────────────────────────────
 

@@ -9,6 +9,7 @@ import {
   saveStoredWallet,
 } from '../crypto/walletCrypto'
 import { clearStoreKey, setStoreKey } from '../crypto/sessionKey'
+import { hasLegacyStoreKey, migrateStoreKey } from '../crypto/storeKeyMigration'
 import {
   type DerivationScheme,
   type WalletIdentity,
@@ -730,6 +731,29 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     // Nothing between these two lines reads a store.
     const identity = await deriveIdentity(mnemonic, scheme)
     setStoreKey(identity.storeKey)
+
+    // ── THE ONE-TIME CONVERSION, BEFORE ANY STORE IS READ ─────────────────────
+    //
+    // Stores sealed under the retired password-and-salt key are re-sealed under the seed-derived one
+    // here, while the password is still in scope — it is the only input the old key needs, and the
+    // only reason this runs at unlock rather than somewhere tidier. It is not retained: it goes in as
+    // an argument and the derived old key leaves with the call.
+    //
+    // BEFORE adoptIdentity, which is where every store read begins. Converting afterwards would seed
+    // React state from records that had not been converted yet, and the user would see an empty
+    // wallet that silently filled in on the next unlock.
+    //
+    // The address is resolved here rather than taken from materialize's, because materialize has not
+    // run yet — three of the ten records are keyed by address. Guarded by hasLegacyStoreKey so a
+    // device with nothing to convert pays neither that call nor the PBKDF2 below.
+    if (hasLegacyStoreKey()) {
+      await migrateStoreKey({
+        password,
+        newKey: identity.storeKey,
+        pubkeyHex: identity.nostr.publicKeyHex,
+        walletAddress: await identity.wallet.getAddress(),
+      })
+    }
 
     await adoptIdentity(identity)
   }, [adoptIdentity])

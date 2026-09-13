@@ -105,7 +105,7 @@ export function resolveScheme(stored: StoredWallet, phrase: string): ResolvedSch
 
   // No marker. Expected for every pre-migration wallet, whose phrase must be valid BIP-39: it
   // either came from createMnemonic() (generateMnemonic, checksum-valid by construction) or from
-  // restore, which rejects a phrase that fails validateMnemonicDetail before ever storing it. Both
+  // restore, which rejects a phrase that fails detectScheme before ever storing it. Both
   // entry points are closed, so this check cannot be dodged by a real wallet.
   if (isValidBip39(phrase)) return { scheme: 'bip39', markerWasMissing: true }
 

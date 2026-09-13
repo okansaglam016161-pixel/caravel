@@ -221,21 +221,20 @@ export function EntryLink({ onClick, children, mt = 14, tone = 'accent' }: {
  * `minWidth: 0` on the flex child is what lets the ellipsis work at all — a flex item's default
  * `min-width: auto` refuses to shrink below its content, so `overflow: hidden` never engages.
  */
-export function WordChip({ n, word, tone = 'plain', selectable = false }: {
-  n: number; word: ReactNode; tone?: 'plain' | 'bad'; selectable?: boolean
+export function WordChip({ n, word, selectable = false }: {
+  n: number; word: ReactNode; selectable?: boolean
 }) {
-  const bad = tone === 'bad'
   return (
     <span style={{
       display: 'flex', alignItems: 'baseline', gap: 6, boxSizing: 'border-box',
       padding: '7px 10px', borderRadius: 8, minWidth: 0,
       background: 'var(--surface-void)',
-      border: `1px solid ${bad ? 'var(--danger-500)' : 'var(--border)'}`,
+      border: '1px solid var(--border)',
       fontFamily: MONO, fontSize: 11,
-      color: bad ? 'var(--danger-300)' : 'var(--text-primary)',
+      color: 'var(--text-primary)',
       userSelect: selectable ? 'all' : undefined,
     }}>
-      <span style={{ flexShrink: 0, color: bad ? 'var(--danger-300)' : 'var(--text-muted-dim)' }}>{n}</span>
+      <span style={{ flexShrink: 0, color: 'var(--text-muted-dim)' }}>{n}</span>
       <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{word}</span>
     </span>
   )

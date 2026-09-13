@@ -2,41 +2,58 @@
 //   Create/Welcome ("I have a recovery phrase") and Unlock ("Forgot password?"). Each caller
 //   passes its own onBack.
 //
-//   V3 frames 9a enter phrase and 9b set password. The two FAILURE screens are ours — the frames
-//   do not draw them, and they are the reason this flow is worth anything on a bad day:
+//   V3 frames 9a enter phrase and 9b set password.
 //
-//     badphrase  `validateMnemonicDetail` separates a wordlist miss (names the word, offers
-//                "Fix word #N" and focuses that cell) from a checksum failure (no single culprit,
-//                so no word number is invented).
-//     ambiguous  A phrase valid in BOTH formats — one in a trillion. Asked rather than guessed,
-//                because with funds involved the difference between "cannot happen" and "we picked
-//                one for you" is the whole point.
+//   ── ONE UNIFORM INVALID RESULT, AS A PRIVACY POSTURE ─────────────────────────
 //
-//   RESTORE LOGIC IS UNCHANGED: detectScheme, validateMnemonicDetail and restore() are exactly as
-//   they were, and the scheme is still established once, here, before any password is set.
+//   An invalid phrase gets a single word-agnostic line under the grid and nothing else: no word
+//   number, no marked cell, no button offering to jump to a cell. A word outside the wordlist, a
+//   checksum that does not verify, and a CipherSeed MAC that fails after the password step all
+//   say exactly the same thing.
+//
+//   This flow used to name the offending word. That was standard local BIP-39 behaviour and it
+//   leaked nothing exploitable — anyone holding 23 of someone's 24 words narrows the last one
+//   offline from a public wordlist, with no help from us. It was removed as a deliberate posture,
+//   not as a fix, and the detail was DELETED rather than hidden: nothing in the codebase can return
+//   a word position any more. See the note where the explainer used to live, in walletCrypto.ts.
+//   The UX argument for pointing at the word is real and was heard — do not reopen it here alone.
+//
+//   The one failure screen still drawn as a card is `ambiguous`: a phrase valid in BOTH formats,
+//   one in a trillion. It is a question rather than an error — asked instead of guessed, because
+//   with funds involved the difference between "cannot happen" and "we picked one for you" is the
+//   whole point.
+//
+//   detectScheme IS THE SOLE GATE, and the validation crypto is untouched by all of the above: the
+//   same wordlist, the same BIP-39 checksum, the same CipherSeed CRC32 and MAC. Only what is
+//   REPORTED changed. Nothing but detectScheme's verdict decides whether restore proceeds, and the
+//   scheme is still established once, here, before any password is set.
 //
 //   There is NO wrong-password state here: restore() OVERWRITES the wallet file with a fresh
 //   encryption, so no existing password is ever checked. Wrong-password lives on Unlock only.
 
 import { useState } from 'react'
+import { InvalidRecoveryPhraseError } from 'tari-cipherseed'
 import { useWallet } from '../../context/WalletContext'
-import { validateMnemonicDetail, type MnemonicDetail } from '../../crypto/walletCrypto'
 import { detectScheme, type DerivationScheme } from '../../crypto/derivation'
 import { CryptoBusy } from '../primitives'
 import { MONO } from './entryStyles'
 import {
-  EntryButton, EntryCard, EntryError, EntryField, EntryLink, EntryBlurb, EntryTitle, WordChip,
-  WordGrid,
+  EntryButton, EntryCard, EntryError, EntryField, EntryLink, EntryBlurb, EntryTitle, WordGrid,
 } from './entryUi'
 
-type Step = 'phrase' | 'badphrase' | 'ambiguous' | 'password' | 'restoring'
+type Step = 'phrase' | 'ambiguous' | 'password' | 'restoring'
+
+/**
+ * The one thing an invalid phrase is ever told, wherever it failed — the wordlist, the checksum, or
+ * the CipherSeed MAC three steps later. Shared by both call sites below so they cannot drift into
+ * two subtly different sentences, which is how a uniform result quietly stops being uniform.
+ */
+const INVALID_PHRASE = 'That phrase isn’t valid. Check it against your written copy.'
 
 export default function RestoreFlow({ onBack }: { onBack: () => void }) {
   const { restore } = useWallet()
   const [phraseInputs, setPhraseInputs] = useState<string[]>(() => Array(24).fill(''))
   const [focusedCell, setFocusedCell] = useState(-1)
-  const [autoFocusCell, setAutoFocusCell] = useState(-1)
-  const [detail, setDetail] = useState<MnemonicDetail | null>(null)
   const [pass, setPass] = useState('')
   const [confirm, setConfirm] = useState('')
   const [step, setStep] = useState<Step>('phrase')
@@ -46,6 +63,7 @@ export default function RestoreFlow({ onBack }: { onBack: () => void }) {
   const [scheme, setScheme] = useState<DerivationScheme | null>(null)
 
   function setWord(i: number, val: string) {
+    setError('')
     setPhraseInputs(prev => prev.map((w, j) => (j === i ? val.trim().toLowerCase() : w)))
   }
 
@@ -54,6 +72,7 @@ export default function RestoreFlow({ onBack }: { onBack: () => void }) {
     const parts = e.clipboardData.getData('text').trim().split(/\s+/)
     if (parts.length <= 1) return
     e.preventDefault()
+    setError('')
     setPhraseInputs(prev => {
       const next = [...prev]
       for (let k = 0; k < parts.length && i + k < 24; k++) next[i + k] = parts[k].trim().toLowerCase()
@@ -73,19 +92,19 @@ export default function RestoreFlow({ onBack }: { onBack: () => void }) {
 
     if (detected === 'cipherseed' || detected === 'bip39') {
       setScheme(detected)
-      setDetail(null)
+      setError('')
       setStep('password')
       return
     }
     if (detected === 'ambiguous') {
-      setDetail(null)
+      setError('')
       setStep('ambiguous')
       return
     }
-    // Invalid. validateMnemonicDetail still gives the best available explanation: the wordlist is
-    // shared by both formats, so a word that isn't in it is nameable either way.
-    setDetail(validateMnemonicDetail(phrase))
-    setStep('badphrase')
+    // Invalid — and this is ALL the user is told. A word outside the wordlist and a checksum that
+    // does not verify are reported IDENTICALLY, through one shared string, on this same screen.
+    // Nothing reachable from here knows which word it was: see the note in walletCrypto.ts.
+    setError(INVALID_PHRASE)
   }
 
   async function submit() {
@@ -98,6 +117,20 @@ export default function RestoreFlow({ onBack }: { onBack: () => void }) {
       await restore(phraseInputs.join(' '), pass, scheme)
       // On success the context sets `wallet` → AppRoute swaps to the shell → this unmounts.
     } catch (e) {
+      // A PHRASE CAN STILL FAIL HERE, and that is not a fault. detectScheme's CipherSeed test is
+      // the cheap structural one (version byte + CRC32); the MAC is only verified inside
+      // importWalletSeed, which runs here — after a password has been set. That is the one
+      // InvalidRecoveryPhraseError reachable from this point, it means "bad phrase", and so it gets
+      // the SAME uniform line as every other invalid phrase and goes back to the grid, which is the
+      // only place it can be fixed.
+      if (e instanceof InvalidRecoveryPhraseError) {
+        setError(INVALID_PHRASE)
+        setStep('phrase')
+        return
+      }
+      // ANYTHING ELSE IS NOT A BAD PHRASE. A wasm fault or a derivation bug keeps its own message
+      // and stays on this step, exactly as Unlock keeps "Incorrect password" away from real faults
+      // — a user retyping a correct phrase forever is the failure this distinction prevents.
       setError(e instanceof Error ? e.message : 'Something went wrong.')
       setStep('password')
     }
@@ -122,40 +155,6 @@ export default function RestoreFlow({ onBack }: { onBack: () => void }) {
         <EntryButton tone="primary" mt={20} onClick={() => choose('cipherseed')}>A Tari wallet, or a newer Caravel wallet</EntryButton>
         <EntryButton tone="quiet" mt={10} onClick={() => choose('bip39')}>An older Caravel wallet</EntryButton>
         <EntryLink onClick={() => { setStep('phrase'); setScheme(null) }} tone="muted" mt={14}>Back to my phrase</EntryLink>
-      </EntryCard>
-    )
-  }
-
-  // ── Bad phrase ───────────────────────────────────────────────────────────────
-  if (step === 'badphrase' && detail && !detail.valid) {
-    const isWordlist = detail.kind === 'wordlist'
-    const bad = isWordlist ? detail.index : 0                 // 1-indexed offending position
-    const cells = isWordlist ? [bad - 2, bad - 1, bad].filter(n => n >= 1) : []
-    return (
-      <EntryCard>
-        <EntryTitle big>That phrase isn’t valid</EntryTitle>
-        <EntryBlurb>
-          {isWordlist
-            // NAMES THE WORD. A phrase rejected without saying which word is 24 things to re-check.
-            ? <>Word #{detail.index} “{detail.word}” isn’t in the wordlist. Check your written copy.</>
-            // NO WORD NUMBER HERE, because there is no culprit to name — every word is in the list
-            // and it is the phrase as a whole that fails. Inventing a position would send someone
-            // to re-check a word that is probably correct.
-            : 'Every word is in the list, but the phrase doesn’t check out. Check the order against your written copy.'}
-        </EntryBlurb>
-        {isWordlist && (
-          <WordGrid mt={20}>
-            {cells.map(n => <WordChip key={n} n={n} word={phraseInputs[n - 1]} tone={n === bad ? 'bad' : 'plain'} />)}
-          </WordGrid>
-        )}
-        {isWordlist && (
-          <EntryButton tone="primary" mt={20} onClick={() => { setAutoFocusCell(bad - 1); setStep('phrase'); setDetail(null) }}>
-            Fix word #{detail.index}
-          </EntryButton>
-        )}
-        <EntryLink onClick={() => { setStep('phrase'); setDetail(null) }} tone="muted" mt={isWordlist ? 12 : 20}>
-          Back to my phrase
-        </EntryLink>
       </EntryCard>
     )
   }
@@ -213,7 +212,6 @@ export default function RestoreFlow({ onBack }: { onBack: () => void }) {
               <span style={{ fontFamily: MONO, fontSize: 11, color: 'var(--text-muted-dim)', flexShrink: 0 }}>{i + 1}</span>
               <input
                 value={word}
-                autoFocus={autoFocusCell === i}
                 onChange={e => setWord(i, e.target.value)}
                 onPaste={e => pasteFrom(i, e)}
                 onFocus={() => setFocusedCell(i)}
@@ -228,6 +226,11 @@ export default function RestoreFlow({ onBack }: { onBack: () => void }) {
           )
         })}
       </WordGrid>
+      {/* THE ONE THING AN INVALID PHRASE IS TOLD, and it is told HERE rather than on a card of
+          its own: with no word to point at, a separate screen would take the 24 words the user
+          now has to re-read against paper off the screen in order to say one sentence. Unlock
+          reports a mistyped password in exactly this shape — one calm line, no alert box. */}
+      {error && <EntryError mt={12}>{error}</EntryError>}
       {/* ANTI-PHISHING, KEPT. The frame omits it; it is the one line on this screen that protects
           against the attack this screen is the target of. A recovery phrase is only ever typed
           here, and anyone asking for it elsewhere is stealing it. */}

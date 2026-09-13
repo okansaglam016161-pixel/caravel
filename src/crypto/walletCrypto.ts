@@ -120,28 +120,25 @@ export function isMnemonicValid(phrase: string): boolean {
   return validateMnemonic(phrase.trim().toLowerCase(), wordlist)
 }
 
-// Fast membership set for the BIP-39 English wordlist (built once).
-const WORDSET = new Set(wordlist)
-
-// Says WHY a phrase is invalid, so restore can distinguish (and name) the failure:
-//  - 'wordlist': the first word not in the BIP-39 list (1-indexed position + the word). Drives the
-//    design's "Fix word #N" affordance — there IS a specific culprit to jump to.
-//  - 'checksum': every word is in the list but the 24-word checksum doesn't verify. No single
-//    culprit, so the UI shows a variant message without a word number ("Back", not "Fix").
-// The boolean isMnemonicValid above is left untouched; this is additive.
-export type MnemonicDetail =
-  | { valid: true }
-  | { valid: false; kind: 'wordlist'; index: number; word: string }
-  | { valid: false; kind: 'checksum' }
-
-export function validateMnemonicDetail(phrase: string): MnemonicDetail {
-  const words = phrase.trim().toLowerCase().split(/\s+/).filter(Boolean)
-  for (let i = 0; i < words.length; i++) {
-    if (!WORDSET.has(words[i])) return { valid: false, kind: 'wordlist', index: i + 1, word: words[i] }
-  }
-  if (validateMnemonic(words.join(' '), wordlist)) return { valid: true }
-  return { valid: false, kind: 'checksum' }
-}
+// ── THERE IS DELIBERATELY NO "WHICH WORD" EXPLAINER HERE ─────────────────────
+//
+// A per-word explainer used to live at this spot. It returned the position and spelling of the
+// first word outside the BIP-39 list, which the restore screen showed as "Word #N is not in the
+// wordlist" alongside a "Fix word #N" button.
+//
+// That was standard local BIP-39 behaviour and it leaked nothing exploitable — the wordlist and the
+// checksum are public, so anyone holding 23 of someone's 24 words narrows the last one offline
+// without help from us. It was removed as a deliberate privacy posture rather than as a fix: the
+// restore flow now reports only VALID or INVALID, with both failure kinds worded identically.
+//
+// IT WAS DELETED RATHER THAN LEFT UNUSED ON PURPOSE. With no function here that can return a word
+// position, the posture holds by construction instead of by convention. Anything reintroducing a
+// per-word signal — a position, a spelling, a per-cell valid/invalid — reopens that decision, so
+// take it back to the owner first. The UX argument for pointing at the word is real and was heard.
+//
+// What CHECKS a phrase is untouched by any of this and lives elsewhere: detectScheme() in
+// derivation.ts is the sole gate, over the same wordlist, the same BIP-39 checksum, and the same
+// CipherSeed CRC32 and MAC as before.
 
 // ── Mnemonic → Tari SecretKeyWallet ─────────────────────────────────────────
 // LEGACY (BIP-39) ONLY. The derivation itself now lives in legacyBip39.ts, moved there verbatim so

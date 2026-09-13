@@ -1,6 +1,7 @@
 import { Fragment, useState, useEffect, useCallback, useLayoutEffect, useMemo, useRef, type CSSProperties } from 'react'
 import * as nip19 from 'nostr-tools/nip19'
 import Logo from '../primitives/Logo'
+import Callout from '../primitives/Callout'
 import { useWallet } from '../../context/WalletContext'
 import { assertValidRecipient } from '../../crypto/publicSend'
 import { parseOotleAddress } from '@tari-project/ootle-wasm'
@@ -383,7 +384,7 @@ export default function ChatApp({ onOpenWallet }: {
    *  AppShell — and CNS's timeout screen sends people to Activity to check a transaction. */
   onOpenWallet: () => void
 }) {
-  const { wallet, address, scan, messages, nostrPubkeyHex, messagingStatus, contacts, acceptContact, contactAddresses, setManualTariAddress, createMessagingProvider, recordSentMessage, deleteConversation, editMessage, reactMessage, getRelayStates, reconnectAll, groups, createGroup, acceptGroup, declineGroup, leaveGroup, reinviteGroup, balanceHidden } = useWallet()
+  const { wallet, address, scan, messages, historyUnreadable, nostrPubkeyHex, messagingStatus, contacts, acceptContact, contactAddresses, setManualTariAddress, createMessagingProvider, recordSentMessage, deleteConversation, editMessage, reactMessage, getRelayStates, reconnectAll, groups, createGroup, acceptGroup, declineGroup, leaveGroup, reinviteGroup, balanceHidden } = useWallet()
   // Logo has no theme awareness of its own — `onLight` is a manual prop. Both marks in this view
   // sit on surfaces that are now light in the light theme, so the white mark would vanish.
   const { theme } = useTheme()
@@ -1663,6 +1664,16 @@ export default function ChatApp({ onOpenWallet }: {
 
           {/* Conversation list */}
           <div style={{ flex: 1, overflowY: 'auto', padding: '2px 8px 10px' }}>
+            {/* SAID OUT LOUD, because the alternative is a wallet that looks empty and quietly is not.
+                The stored history is present and could not be opened, which also means it will not be
+                written over — so messages arriving now are not being saved. Nothing has been deleted,
+                and the user is the only one who can decide what to do about it. */}
+            {historyUnreadable && (
+              <Callout tone="error" style={{ margin: '6px 2px 10px' }}>
+                Saved conversations on this device couldn’t be opened this session. Nothing has been
+                deleted, but new messages may not be saved until this is resolved.
+              </Callout>
+            )}
             {/* Group invites (A-M2) — pending groups render as accept/decline cards, NOT open-thread
                 rows. Mirrors the DM REQUESTS card (same frame/tokens/spinner), adapted to a group:
                 Avatar glyph, group name, member/roster subtitle. Placed above active group rows so

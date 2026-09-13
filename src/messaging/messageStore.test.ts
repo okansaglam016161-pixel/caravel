@@ -5,7 +5,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { clearStoreKey, setStoreKey } from '../crypto/sessionKey'
 import {
-  addReceivedMessage, addSentMessage, applyEdit, applyEditByLogicalId, applyReactionByLogicalId, deletePeerMessages, editReachOk, findByLogicalId, isReactableTarget, liveReactionCountBy, loadMessages, nextReactionSeq, nextRevision, targetsLeftGroup,
+  addReceivedMessage, addSentMessage, applyEdit, applyEditByLogicalId, applyReactionByLogicalId, deletePeerMessages, editReachOk, findByLogicalId, isReactableTarget, liveReactionCountBy, loadMessages, loadMessagesResult, nextReactionSeq, nextRevision, targetsLeftGroup,
 } from './messageStore'
 import { sortKey, type CaravelMessage } from './types'
 
@@ -913,5 +913,43 @@ describe('messages: refusing to write', () => {
     expect(localStorage.getItem(MSG_KEY)).toBeNull()
     addSentMessage(ME, [], msg())
     expect(loadMessages(ME)).toHaveLength(1)
+  })
+})
+
+// ── The unreadable/empty distinction ────────────────────────────────────────
+//
+// The whole point of the sibling read. loadMessages collapses both to [], which is right for
+// rendering and wrong for deciding: WalletContext seeds its "have I ever heard from this peer" set
+// from this read, and answering "no" from a read that FAILED made a relay replay downgrade every
+// accepted contact to a pending request on disk. These pin the two statuses apart.
+describe('loadMessagesResult — a failed read is not an empty one', () => {
+  it('reports empty when nothing is stored', () => {
+    expect(loadMessagesResult(ME)).toEqual({ status: 'empty' })
+  })
+
+  it('reports ok, with the rows, when the store opens', () => {
+    addSentMessage(ME, [], msg())
+    const read = loadMessagesResult(ME)
+    expect(read.status).toBe('ok')
+    expect(read.status === 'ok' && read.messages).toHaveLength(1)
+  })
+
+  it('reports UNREADABLE, not empty, under a wrong key', () => {
+    addSentMessage(ME, [], msg())
+    setStoreKey(new Uint8Array(32).fill(7))
+    expect(loadMessagesResult(ME)).toEqual({ status: 'unreadable' })
+    // The collapsing form still degrades to [] exactly as it always did — unchanged on purpose.
+    expect(loadMessages(ME)).toEqual([])
+  })
+
+  it('reports UNREADABLE with no store key at all', () => {
+    addSentMessage(ME, [], msg())
+    clearStoreKey()
+    expect(loadMessagesResult(ME)).toEqual({ status: 'unreadable' })
+  })
+
+  it('reports UNREADABLE for a record that decrypts but is not an array', () => {
+    localStorage.setItem(`caravel.messages.v1.${ME}`, JSON.stringify({ not: 'an array' }))
+    expect(loadMessagesResult(ME)).toEqual({ status: 'unreadable' })
   })
 })

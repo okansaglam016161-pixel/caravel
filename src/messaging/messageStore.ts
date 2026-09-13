@@ -57,12 +57,12 @@ const SELF_ECHO_WINDOW_MS = 60_000
 function key(pubkeyHex: string) { return `caravel.messages.v1.${pubkeyHex}` }
 
 /** Readable rows, nothing stored, or present-but-unopenable. See journalStore for the full note. */
-type ReadResult =
+export type MessagesRead =
   | { status: 'ok'; messages: CaravelMessage[] }
   | { status: 'empty' }
   | { status: 'unreadable' }
 
-function read(pubkeyHex: string): ReadResult {
+function read(pubkeyHex: string): MessagesRead {
   let raw: string | null
   try {
     raw = localStorage.getItem(key(pubkeyHex))
@@ -85,6 +85,23 @@ function read(pubkeyHex: string): ReadResult {
 export function loadMessages(pubkeyHex: string): CaravelMessage[] {
   const result = read(pubkeyHex)
   return result.status === 'ok' ? result.messages : []
+}
+
+/**
+ * The same read with its STATUS INTACT — `unreadable` kept apart from `empty`.
+ *
+ * loadMessages above collapses both to [], which is the right degradation for RENDERING and the
+ * wrong one for DECIDING. A caller about to act on the absence of history needs to know whether the
+ * history is absent or merely unopenable: unopenable means "I cannot tell", and inferring "this peer
+ * is new" from it is how a failed read of this store ended up rewriting a healthy contacts store.
+ * See the pending-contact rule in WalletContext's subscribe().
+ *
+ * Deliberately a SIBLING rather than a widened loadMessages: the collapsing form is correct for the
+ * seven mutation helpers below, which have no decision to make, and for the tests that read back
+ * what was written.
+ */
+export function loadMessagesResult(pubkeyHex: string): MessagesRead {
+  return read(pubkeyHex)
 }
 
 /**

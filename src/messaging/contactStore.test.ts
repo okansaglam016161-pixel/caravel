@@ -88,3 +88,40 @@ describe('never clobber', () => {
   })
 })
 
+
+// ── The no-downgrade invariant ──────────────────────────────────────────────
+//
+// 'pending' may never overwrite 'accepted'. Sound because declining is REMOVAL of the record (see
+// the store's header), so accepted → pending is a transition no caller has ever needed. It exists
+// because an unopenable message store made every sender in a relay replay look brand-new, and the
+// inbound handler answered that by writing 'pending' over accepted contacts — every session.
+describe('pending never overwrites accepted', () => {
+  it('refuses the downgrade, and writes nothing at all', () => {
+    const accepted = setContactState(ME, {}, PEER, 'accepted')
+    const onDisk = localStorage.getItem(SKEY)!
+
+    const next = setContactState(ME, accepted, PEER, 'pending')
+
+    expect(next).toBe(accepted)                          // same reference — React skips the re-render
+    expect(localStorage.getItem(SKEY)).toBe(onDisk)      // and the record is byte-for-byte untouched
+    expect(loadContacts(ME)[PEER].state).toBe('accepted')
+  })
+
+  it('still records pending for a peer with no record — the real request case', () => {
+    expect(setContactState(ME, {}, PEER, 'pending')[PEER].state).toBe('pending')
+    expect(loadContacts(ME)[PEER].state).toBe('pending')
+  })
+
+  it('still allows the accept it is named for: pending → accepted', () => {
+    const pending = setContactState(ME, {}, PEER, 'pending')
+    setContactState(ME, pending, PEER, 'accepted')
+    expect(loadContacts(ME)[PEER].state).toBe('accepted')
+  })
+
+  it('does not block a FRESH request after a decline — decline is removal, not a downgrade', () => {
+    const accepted = setContactState(ME, {}, PEER, 'accepted')
+    const gone = removeContact(ME, accepted, PEER)
+    expect(setContactState(ME, gone, PEER, 'pending')[PEER].state).toBe('pending')
+    expect(loadContacts(ME)[PEER].state).toBe('pending')
+  })
+})

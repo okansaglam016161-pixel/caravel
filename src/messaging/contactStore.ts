@@ -46,8 +46,32 @@ export function loadContacts(myPubkeyHex: string): ContactMap {
   return loadStore(key(myPubkeyHex), parse, () => ({}))
 }
 
-// Set a peer's contact state (read-modify-write). Returns the next map (React-state friendly).
+/**
+ * Set a peer's contact state (read-modify-write). Returns the next map (React-state friendly).
+ *
+ * ── 'pending' NEVER OVERWRITES 'accepted' ────────────────────────────────────
+ *
+ * Refused HERE, in the store, rather than only at the call site. The caller's guard was a test
+ * against React state (`prev[peerHex] ? prev : …`), which is a snapshot — correct when it is current
+ * and silently wrong when it is not. This one cannot be raced, because it reads the same map the
+ * write is built from.
+ *
+ * SOUND BECAUSE THE DOWNGRADE IS NEVER WANTED. Per the header above, 'declined' is not a stored
+ * state: declining is REMOVAL of the record, so the only transitions any caller needs are
+ * absent → pending, absent|pending → accepted, and anything → absent (removeContact). Nothing has
+ * ever had a reason to walk an accepted contact back to a request.
+ *
+ * WHAT IT PREVENTS. An unopenable message store makes every sender in a relay replay look
+ * brand-new, and the inbound handler answered that by writing 'pending' — turning accepted
+ * conversations back into requests on disk, every session, forever. That call site now checks
+ * readability too; this is the half that holds even if a future caller forgets.
+ *
+ * Same shape as tariAddressStore, which refuses to let a manual address overwrite a verified
+ * 'exchanged' one. Returning `current` unchanged means NO WRITE — the record on disk is left exactly
+ * as it was.
+ */
 export function setContactState(myPubkeyHex: string, current: ContactMap, peerHex: string, state: ContactState): ContactMap {
+  if (state === 'pending' && current[peerHex]?.state === 'accepted') return current
   const next: ContactMap = { ...current, [peerHex]: { state, updatedAt: Date.now() } }
   save(myPubkeyHex, next)
   return next

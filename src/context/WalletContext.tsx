@@ -20,7 +20,7 @@ import { scanWallet, type ScannedUtxo, type ScanProgress } from '../crypto/walle
 import { loadHistory, addSent, type SentEntry, type NewSentParams } from '../crypto/txHistory'
 import { NostrMessagingProvider } from '../messaging/NostrMessagingProvider'
 import type { MessagingProvider, MessagingConnectionStatus, CaravelMessage, RelayState } from '../messaging/types'
-import { loadMessages, addReceivedMessage, addSentMessage, deletePeerMessages, deleteGroupMessages, applyEditByLogicalId, editReachOk, targetsLeftGroup, nextRevision, applyReactionByLogicalId, nextReactionSeq, isReactableTarget, liveReactionCountBy, MAX_LIVE_REACTIONS_PER_REACTOR } from '../messaging/messageStore'
+import { loadMessagesResult, addReceivedMessage, addSentMessage, deletePeerMessages, deleteGroupMessages, applyEditByLogicalId, editReachOk, targetsLeftGroup, nextRevision, applyReactionByLogicalId, nextReactionSeq, isReactableTarget, liveReactionCountBy, MAX_LIVE_REACTIONS_PER_REACTOR } from '../messaging/messageStore'
 import { loadGroups, addOrUpdateGroup, ensureGroup, setGroupState, hasGroup, getGroupState, deleteGroup as removeGroupFromStore } from '../messaging/groupStore'
 import { loadDeletedGroupIdSet, recordDeletedGroup, clearDeletedGroup } from '../messaging/deletedGroupStore'
 import { loadSeenDefIdSet, recordSeenDef } from '../messaging/seenDefStore'
@@ -214,6 +214,8 @@ export interface WalletCtx {
   /** Sent + received messages for the current identity, persisted per-pubkey in localStorage
    *  and reloaded on unlock. React state is cleared on lock; the stored copy survives. */
   messages: CaravelMessage[]
+  /** True when this session could not OPEN the stored history — see WalletContext for what follows. */
+  historyUnreadable: boolean
   /** Persist + surface a message we just sent (the CaravelMessage returned by sendMessage). */
   recordSentMessage: (msg: CaravelMessage) => void
   /** Groups the current identity participates in (Phase 1: fan-out, in-message roster). Persisted
@@ -325,6 +327,11 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   // In-memory set of peers we have ANY message with — burst-safe "is this a brand-new peer?" test
   // for the pending-contact rule (React `messages` state is stale mid-burst). Seeded on unlock.
   const knownPeersRef = useRef<Set<string>>(new Set())
+  // Whether THIS session could open the persisted message history. When false, knownPeersRef was
+  // seeded from a read that FAILED rather than from a wallet with no history — so "no message with
+  // this peer" is not a fact about the peer, and nothing may be persisted on the strength of it.
+  // Read inside the subscribe closure, hence a ref: state would be stale there.
+  const historyReadableRef = useRef(true)
   const [groups, setGroups] = useState<Group[]>([])
   // Fresh-in-callback set of contact pubkeys (any state) for the group-sender gate — React
   // `contacts` state is stale inside the subscribe closure. Kept in sync via the effect below.
@@ -338,6 +345,12 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   // exactly-once against the relay's ~2-day replay window. Rehydrated on unlock before subscribing.
   const seenDefsRef = useRef<Set<string>>(new Set())
   const [messagingStatus, setMessagingStatus] = useState<MessagingConnectionStatus>('disconnected')
+  // The same fact as historyReadableRef, in the form the UI can render. A session running on history
+  // it could not open must SAY so rather than present itself as a wallet with nothing in it — the
+  // shape the journal already uses, where a degradation is recorded and consumers suppress rather
+  // than assert. Also the honest warning that writes are being refused: a store this build cannot
+  // open is one it will not overwrite, so messages arriving now are not being saved either.
+  const [historyUnreadable, setHistoryUnreadable] = useState(false)
   const [balanceHidden, setBalanceHidden] = useState(false)
   const [messages, setMessages] = useState<CaravelMessage[]>([])
   const [contacts, setContacts] = useState<ContactMap>({})
@@ -454,9 +467,23 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     messagingProviderRef.current?.disconnect()
     // Load persisted history for this identity before subscribing, so it's visible
     // immediately on unlock without waiting for a relay round-trip.
-    const loaded = loadMessages(pubkeyHex)
+    // THREE-STATE, not a bare array. `unreadable` (present, unopenable) must not arrive here
+    // disguised as `empty` (nothing stored): everything below that reasons from the ABSENCE of
+    // history keys off this flag, never off `loaded.length`.
+    const history = loadMessagesResult(pubkeyHex)
+    const loaded = history.status === 'ok' ? history.messages : []
+    historyReadableRef.current = history.status !== 'unreadable'
+    setHistoryUnreadable(history.status === 'unreadable')
     setMessages(loaded)
-    setContacts(loadContacts(pubkeyHex))
+    const loadedContacts = loadContacts(pubkeyHex)
+    setContacts(loadedContacts)
+    // SEEDED EAGERLY, for exactly the reason leftGroupsRef and tombstonesRef are below: setContacts
+    // only SCHEDULES a state update, so the [contacts] effect that maintains this ref does not run
+    // until after the commit — strictly after subscribe() here. The ingest gates for group messages
+    // and group defs both read this ref, and a stale-empty one drops real inbound traffic from real
+    // contacts on the floor. That drop is silent and permanent (nothing is stored), which makes it
+    // worse than the display fault it looks like.
+    contactsRef.current = new Set(Object.keys(loadedContacts))
     setContactAddresses(loadTariAddresses(pubkeyHex))
     // No React state to seed — the resolved-amount cache is read per card, not held here. This read
     // exists purely so the record is migrated to the sealed format at unlock like the loads around
@@ -529,7 +556,26 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         // commit the pending record is already present and the peer can't leak in as lazy-accepted.
         if (peerHex && !knownPeersRef.current.has(peerHex)) {
           knownPeersRef.current.add(peerHex)
-          setContacts(prev => (prev[peerHex] ? prev : setContactState(pubkeyHex, prev, peerHex, 'pending')))
+          // ── THE GUARD IS OUT HERE, NOT INSIDE THE UPDATER ──────────────────────────────────
+          //
+          // setContactState WRITES TO localStorage, so the updater below is already impure and React
+          // is free to invoke it more than once (StrictMode does, in development). A decision that
+          // can destroy stored data does not belong anywhere that may run twice, and must not wait
+          // on a commit to become true.
+          //
+          // WHY IT REFUSES. With the history unopenable, knownPeersRef was seeded from a FAILED read,
+          // so every sender in the relay's ~2-day replay looks brand-new. Writing 'pending' on that
+          // basis walked accepted contacts back to requests ON DISK — a failed read of one store
+          // corrupting another that was perfectly healthy, on every refresh, forever. Absent history
+          // is not evidence of a new peer.
+          //
+          // WHAT IT COSTS: a genuinely new peer's request is not recorded during a degraded session.
+          // They still surface — ChatApp's lazy default reads a peer with messages and no record as
+          // accepted — so the failure mode is a stranger appearing as a conversation rather than as a
+          // request, which is recoverable by deleting it. The other direction was not recoverable.
+          if (historyReadableRef.current) {
+            setContacts(prev => (prev[peerHex] ? prev : setContactState(pubkeyHex, prev, peerHex, 'pending')))
+          }
         }
         setMessages(prev => addReceivedMessage(pubkeyHex, prev, msg))
       },
@@ -710,6 +756,10 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     knownPeersRef.current = new Set()
     setMessagingStatus('disconnected')
     setMessages([])
+    // Re-read and re-decided on the next unlock. Left as they are, the next session would inherit
+    // this one's verdict about a store it has not opened yet.
+    historyReadableRef.current = true
+    setHistoryUnreadable(false)
     setGroups([])
     // Cleared eagerly, like contactsRef below: the [groups] effect would also clear this, but not
     // until after the commit, and the subscribe closure must not see another identity's ids.
@@ -1198,7 +1248,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     <Ctx.Provider value={{
       walletExists, wallet, address, nostrNpub, nostrPubkeyHex, scan, revealed, txHistory,
       settles, isSettling, settleLagged, beginSettle, acknowledgeSettle,
-      messagingStatus, messages,
+      messagingStatus, messages, historyUnreadable,
       createRecoveryPhrase, createWallet, unlock, restore, lock, getMnemonic, rescan, recordSent,
       recordSentMessage, contacts, acceptContact, contactAddresses, setManualTariAddress,
       deleteConversation, editMessage, reactMessage, createMessagingProvider, getRelayStates, reconnectAll,

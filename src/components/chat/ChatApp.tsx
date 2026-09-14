@@ -2599,7 +2599,20 @@ export default function ChatApp({ onOpenWallet }: {
     {createGroupOpen && (
       <CreateGroupModal
         contacts={groupContactOptions}
-        onCreate={(name, memberHexes) => { void createGroup(name, memberHexes).then(g => selectGroup(g.id)) }}
+        /* SELECTED DIRECTLY, NOT THROUGH selectGroup, AND DELIBERATELY SO.
+           selectGroup guards on `groups.find(...)?.state === 'active'`, which is right for a row
+           click and wrong here: this callback closes over the `groups` of the render that opened the
+           modal — from BEFORE the group existed — so the lookup returns undefined, the guard fails,
+           and nothing is selected. The group was created and the user landed nowhere.
+           The returned Group is well-formed and `state: 'active'` by construction (see createGroup in
+           WalletContext), so the very object in hand is the answer the guard was reaching for stale
+           state to find. Mirrors acceptInvite, which sets both directly for the same reason. */
+        onCreate={(name, memberHexes) => {
+          void createGroup(name, memberHexes).then(g => {
+            setSelectedGroupId(g.id)
+            setSelectedPeer(null)
+          })
+        }}
         onClose={() => setCreateGroupOpen(false)}
       />
     )}

@@ -34,6 +34,7 @@ import Avatar from './Avatar'
 import MessageBubble from './MessageBubble'
 import QuotedPreview from './QuotedPreview'
 import { canBeginEdit, canBeginReply, canReplyTo } from './replyCompose'
+import { canSubmit } from './composerSend'
 import { aggregateReactions, atReactionLimit, canReactTo, myReactions } from './reactionDisplay'
 import MessageActionRow from './MessageActionRow'
 import ReactionPills from './ReactionPills'
@@ -890,6 +891,10 @@ export default function ChatApp({ onOpenWallet }: {
   // copy and, only where it could work, a Retry. The File rides on the pending entry so Retry can
   // re-run it. ChatApp-local state only: never persisted, never on the wire.
   const [imageBusy, setImageBusy] = useState(false)
+  // The same fact as `imageBusy`, in the form a keypress can read. State does not settle until the
+  // next render, so two Enters in one tick would both pass a state check; this is written
+  // synchronously by sendAttachment before anything awaits. See sendAttachment.
+  const imageSendingRef = useRef(false)
   // The current pipeline stage, shown on the preview panel while a send runs. Null when idle.
   const [imageStage, setImageStage] = useState<string | null>(null)
 
@@ -956,6 +961,38 @@ export default function ChatApp({ onOpenWallet }: {
   async function sendImageToSelectedPeer(file: File, caption: string | undefined) {
     if (!selectedConvo) return
     await sendImage(file, caption, { peerHex: selectedConvo.peerHex })
+  }
+
+  /**
+   * Send the staged image with whatever is in the composer as its caption.
+   *
+   * ── ONE FUNCTION, THREE CONTROLS, WHICH IS THE WHOLE FIX ───────────────────
+   *
+   * The preview card's Send, the composer's arrow and Enter all reach this. Before, only the card
+   * knew an image was staged: the other two ran the text-only handleSend, which never reads
+   * `attachment` — so a caption typed under a picked photo was sent as a standalone message and the
+   * photo was silently left behind in the composer. Sharing the body is what stops the three drifting
+   * apart again, which is how they drifted in the first place.
+   *
+   * THE REF, NOT THE STATE, IS THE DOUBLE-SEND GUARD. sendImage already refuses while `imageBusy`,
+   * but that is React state read through a closure: two Enters in one tick both see it false, both
+   * pass, and both send. A ref is written synchronously, so the second caller sees the first's write
+   * in the same tick. It also covers the case sendImage's own guard cannot — an early return there
+   * resolves like a success, so without this the .then() below would clear the composer for a send
+   * that never happened.
+   */
+  function sendAttachment() {
+    const file = attachment
+    if (!file || imageSendingRef.current || !selectedConvo) return
+    imageSendingRef.current = true
+    const caption = draft.trim()
+    void sendImageToSelectedPeer(file, caption || undefined)
+      // CLEARED ON SETTLE, NOT ON SUCCESS, and deliberately unlike the text path. sendImage does not
+      // reject: a failure becomes a provisional bubble carrying the File AND the caption, with a
+      // Retry that re-runs both (see retryImage). Holding the composer's copy as well would leave the
+      // same photo staged in two places, and a second Send would send it twice.
+      .then(() => { setAttachment(null); setDraft('') })
+      .finally(() => { imageSendingRef.current = false })
   }
 
   // Retry a failed image send by re-running it with the File kept on the pending entry. Only
@@ -1193,6 +1230,11 @@ export default function ChatApp({ onOpenWallet }: {
       if (err) { setPayError(err, true); return }   // validation — nothing has been attempted
       setPayError(null)
       setConfirming(true)
+    } else if (attachment) {
+      // Reached only outside edit mode — both callers check `editing` first — and after the payment
+      // branch above. composerSend.ts owns that precedence and is where it is tested; this arm is
+      // the payment-mode half of it, which is local to the DM composer.
+      sendAttachment()
     } else {
       handleSend()
     }
@@ -2102,10 +2144,13 @@ export default function ChatApp({ onOpenWallet }: {
             // when the text is both non-empty and actually different (an unchanged save would burn a
             // revision for nothing).
             const editSubmittable = !!editing && isEditSubmittable(editing.original, draft)
-            const canSend = payBusy || confirming
-              ? false
-              : editing ? editSubmittable
-              : paymentMode ? paymentValid : (!!draft.trim() && !sending)
+            // The shared rule — see composerSend.ts, where the attachment clause and the precedence
+            // are tested. Both composers read it, so the arrow and Enter cannot disagree again.
+            const canSend = canSubmit({
+              editing: !!editing, paymentMode, attachment: !!attachment,
+              draft, sending, imageBusy, editSubmittable, paymentValid,
+              busy: payBusy || confirming,
+            })
             const showCounter = draft.length >= MAX_MESSAGE_LEN - 200
             const inputsDisabled = sending || payBusy || confirming
             return (
@@ -2298,14 +2343,7 @@ export default function ChatApp({ onOpenWallet }: {
                   file={attachment}
                   busy={imageBusy}
                   stageLabel={imageStage}
-                  onSend={() => {
-                    const file = attachment
-                    const caption = draft.trim()
-                    void sendImageToSelectedPeer(file, caption || undefined).then(() => {
-                      setAttachment(null)
-                      setDraft('')
-                    })
-                  }}
+                  onSend={sendAttachment}
                   onCancel={() => setAttachment(null)}
                 />
               )}

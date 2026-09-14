@@ -21,6 +21,7 @@ import { THREAD_HEADER, HEADER_LEFT, THREAD_TITLE, MENU_SCRIM, MENU_PANEL, MENU_
 import { E2ELine, ThreadMenuButton, ThreadEmptyState, DayDivider, ComposerChip, REPLY_RULE } from './ThreadFrame'
 import QuotedPreview from './QuotedPreview'
 import { canBeginEdit, canBeginReply, canReplyTo, quotedAuthorLabel } from './replyCompose'
+import { canSubmit, composerAction } from './composerSend'
 import { aggregateReactions, atReactionLimit, canReactTo, myReactions } from './reactionDisplay'
 import MessageActionRow from './MessageActionRow'
 import ReactionPills from './ReactionPills'
@@ -87,6 +88,9 @@ export default function GroupThread({
   // image waits here until Send; the textarea doubles as its caption field.
   const [attachment, setAttachment] = useState<File | null>(null)
   const [imageBusy, setImageBusy] = useState(false)
+  // The same fact as `imageBusy`, in the form a keypress can read — state does not settle until the
+  // next render, so two Enters in one tick would both pass a state check. See sendAttachment.
+  const imageSendingRef = useRef(false)
   const imageInputRef = useRef<HTMLInputElement | null>(null)
   // ── Emoji picker (B) ──
   // The textarea REF is new here. This composer never had one — it had no auto-grow and nothing
@@ -113,7 +117,9 @@ export default function GroupThread({
   // a modal. Leave hides a history the user has been reading and is irreversible until Phase C, so
   // it is guarded — Delete never was, but Delete was the weaker "forget until re-invited".
   const [confirmLeave, setConfirmLeave] = useState(false)
-  const canSend = draft.trim().length > 0 && !sending
+  // The shared rule — see composerSend.ts, where the attachment clause is tested. The DM composer
+  // reads the same one, so the two cannot diverge on it again. No payment mode in a group thread.
+  const canSend = canSubmit({ editing: !!editing, attachment: !!attachment, draft, sending, imageBusy })
   // Save is live only when the text is both non-empty and actually different — an unchanged save
   // would burn a revision for nothing.
   const editSubmittable = !!editing && isEditSubmittable(editing.original, draft)
@@ -290,7 +296,39 @@ export default function GroupThread({
     await onSaveEdit(logicalId, next)
   }
 
+  /**
+   * Send the staged image with whatever is in the composer as its caption.
+   *
+   * The DM composer's twin, and for the same reason: the preview card's Send, the arrow and Enter
+   * all reach this one body, where before only the card knew an image was staged and the other two
+   * ran the text-only path — sending the caption alone and leaving the photo behind.
+   *
+   * THE REF, NOT THE STATE, IS THE DOUBLE-SEND GUARD: `imageBusy` does not settle until the next
+   * render, so two Enters in one tick would both pass a state check. This is written synchronously
+   * before anything awaits.
+   */
+  function sendAttachment() {
+    const file = attachment
+    if (!file || imageSendingRef.current) return
+    imageSendingRef.current = true
+    const caption = draft.trim()
+    setImageBusy(true)
+    void onSendImage(file, caption || undefined)
+      // CLEARED ON SETTLE, NOT ON SUCCESS, unlike the text path below. A failed image send becomes a
+      // provisional bubble carrying the File and the caption with a Retry that re-runs both, so
+      // holding the composer's copy too would stage the same photo in two places.
+      .then(() => { setAttachment(null); setDraft('') })
+      .finally(() => { setImageBusy(false); imageSendingRef.current = false })
+  }
+
   async function send() {
+    // BEFORE the text guard, because a photo with no caption is a real send and `text` is empty for
+    // it. Both callers — the arrow and Enter — check `editing` first, so `save-edit` is unreachable
+    // here; routing through the shared decision anyway keeps this composer and the DM's on one rule.
+    if (composerAction({ editing: !!editing, attachment: !!attachment }) === 'send-attachment') {
+      sendAttachment()
+      return
+    }
     const text = draft.trim()
     if (!text || sending) return
     setSending(true)
@@ -558,14 +596,7 @@ export default function GroupThread({
             file={attachment}
             busy={imageBusy}
             stageLabel={imageStageLabel}
-            onSend={() => {
-              const file = attachment
-              const caption = draft.trim()
-              setImageBusy(true)
-              void onSendImage(file, caption || undefined)
-                .then(() => { setAttachment(null); setDraft('') })
-                .finally(() => setImageBusy(false))
-            }}
+            onSend={sendAttachment}
             onCancel={() => setAttachment(null)}
           />
         )}

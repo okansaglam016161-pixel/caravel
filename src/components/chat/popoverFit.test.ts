@@ -19,6 +19,10 @@ const QUICK = { width: 230, height: 38 }
 const PICKER = { width: 296, height: 300 }
 
 const above = (align: 'left' | 'right'): AnchorSpec => ({ placement: 'above', align, offset: 36 })
+// The "⋯" menu opens DOWNWARD from its button, at the 30px it was hand-positioned at before it was
+// measured. ~160px wide: minWidth 150 plus its 5px padding either side.
+const below = (align: 'left' | 'right'): AnchorSpec => ({ placement: 'below', align, offset: 30 })
+const MORE_MENU = { width: 160, height: 44 }
 
 // Where the panel actually lands once the correction is applied.
 function placed(anchor: Rect, size: { width: number; height: number }, spec: AnchorSpec, bounds = THREAD) {
@@ -149,5 +153,68 @@ describe('fitPopover — degenerate containers', () => {
     const again = fitPopover(anchor, PICKER, THREAD, above('right'))
     expect(again.dx).toBe(p.dx)
     expect(again.dy).toBe(p.dy)
+  })
+})
+
+// ── The "⋯" menu on a SENT bubble ──────────────────────────────────────────
+//
+// The second bug of this shape, one bubble side over from the one above. The menu is sent-only —
+// Edit needs a message of your own — so it always pins its LEFT edge and grows rightward across its
+// own bubble. The action row sits outboard-left of a right-aligned bubble, which means the anchor's
+// distance from the thread's right edge IS THE BUBBLE'S WIDTH. That is the whole reason the bug was
+// width-dependent, and why no fixed side could have avoided it.
+//
+// Geometry below matches the app: 24px scroller padding, an 8px gap between the row and the bubble,
+// and the "⋯" as the last of the three 26px buttons, hard against the bubble.
+describe('fitPopover — the "⋯" menu on a sent bubble', () => {
+  const CONTENT_RIGHT = THREAD.right - 24
+  /** The "⋯" button for a right-aligned bubble of the given width. */
+  const moreButton = (bubbleWidth: number) => button(CONTENT_RIGHT - bubbleWidth - 8 - 26, 400)
+
+  it('pulls the menu back inside on a short bubble — the reported bug', () => {
+    // A bubble reading "10": about forty pixels, so the menu would have started ~1002 and ended
+    // ~1162, seventy past a thread that stops at 1100. Clipped to "Edit mes…".
+    const p = placed(moreButton(40), MORE_MENU, below('left'))
+    expect(inside(p)).toBe(true)
+    expect(p.dx).toBeLessThan(0)
+    expect(p.right).toBe(THREAD.right - 8)
+  })
+
+  it('leaves a long bubble completely alone — no correction, no transform', () => {
+    // THE INVARIANT THAT MATTERS MOST HERE: a wide bubble already had room, so the fix must be a
+    // no-op for it. dx and dy of zero is what makes the hook emit no transform at all.
+    const p = placed(moreButton(400), MORE_MENU, below('left'))
+    expect(inside(p)).toBe(true)
+    expect(p.dx).toBe(0)
+    expect(p.dy).toBe(0)
+  })
+
+  it('opens downward without flipping — there is room below mid-thread', () => {
+    expect(placed(moreButton(40), MORE_MENU, below('left')).placement).toBe('below')
+  })
+
+  it('still fits a bubble at the exact width where the menu just stops overflowing', () => {
+    // The boundary: the menu needs ~126px of bubble before it clears the edge unaided. Either side
+    // of it must end up inside the thread — corrected below, untouched above.
+    for (const width of [120, 126, 132]) {
+      const p = placed(moreButton(width), MORE_MENU, below('left'))
+      expect(inside(p), `bubble ${width}px`).toBe(true)
+    }
+  })
+
+  it('flips above for a message at the very bottom of the thread', () => {
+    // The last message in a thread has no room below, which is exactly where a downward menu would
+    // otherwise be cut off by the composer.
+    const p = placed(button(1000, THREAD.bottom - 30), MORE_MENU, below('left'))
+    expect(inside(p)).toBe(true)
+  })
+
+  // A group thread's received bubbles pass align 'right' for the same row, and although the menu
+  // never renders there today (Edit is sent-only), the component takes the prop — so the mirror is
+  // pinned rather than assumed.
+  it('keeps a right-pinned menu inside near the thread left edge', () => {
+    const p = placed(button(THREAD.left + 30, 400), MORE_MENU, below('right'))
+    expect(inside(p)).toBe(true)
+    expect(p.left).toBe(THREAD.left + 8)
   })
 })

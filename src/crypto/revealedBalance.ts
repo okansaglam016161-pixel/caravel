@@ -38,6 +38,11 @@ import { getVaultIdsForAccount, Network, TARI_RESOURCE_ADDRESS, type Provider } 
 import { IndexerProvider } from '@tari-project/ootle-indexer'
 import type { SubstateValue } from '@tari-project/ootle-ts-bindings'
 import { loadAccountAddress } from './accountStore'
+import { isSubstateNotFound, type VaultIdResolver } from './substates'
+
+// The not-found predicate now lives in substates.ts — reveal, conceal and public send need the same
+// one, and a fund-critical test must not be able to drift from a balance-read test.
+export { isSubstateNotFound } from './substates'
 
 // Same indexer the scan and send paths use. Inlined here as they inline it, rather than introducing
 // a shared config module as a side effect of this milestone.
@@ -69,37 +74,6 @@ export function parseAmount(value: unknown): bigint | null {
     return BigInt(value)
   }
   return null
-}
-
-/**
- * Is this rejection "the thing is not there", as opposed to "we could not find out"?
- *
- * ── THE ONE REJECTION THAT MEANS ZERO ────────────────────────────────────────
- *
- * A substate that does not exist is a FACT about the chain: nothing has ever been written at that
- * address, so there is nothing to hold a balance, so the balance is zero. Every other rejection — a
- * timeout, a 503, DNS, a malformed response — is an absence of INFORMATION, and answering those with
- * a confident 0 is the precise failure this module's header exists to prevent.
- *
- * ── MIRRORS THE SDK'S OWN PREDICATE, BECAUSE IT IS NOT EXPORTED ──────────────
- *
- * @tari-project/ootle-indexer draws this exact line internally: getStealthUtxo wraps getSubstate and
- * maps a not-found rejection to null while rethrowing everything else, using a private helper that
- * tests `/not found/i` or a 404. That helper is not on the package's public surface (the only
- * exported *NotFoundError is KeyProviderNotFoundError, which is about signers), so the test is
- * reproduced here rather than imported.
- *
- * ── WHAT TO RE-CHECK ON AN SDK OR INDEXER BUMP ───────────────────────────────
- *
- * This matches on a MESSAGE, which is the fragile part and is worth knowing about rather than
- * hiding. If the indexer's wording or the SDK's error shape changes, this stops matching and a fresh
- * wallet goes back to reporting "unavailable" over a zero — annoying, visible, and the SAFE direction
- * to fail in: a missed match costs an honest error, never a false zero. Deliberately narrow for that
- * reason. Widen it only with the same care, and never to cover a failure whose meaning is "unknown".
- */
-export function isSubstateNotFound(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error)
-  return /not found/i.test(message) || message.includes('404')
 }
 
 /** Narrow an unknown to a plain object without asserting anything about its contents. */
@@ -138,13 +112,9 @@ export function decodeRevealedAmount(substate: unknown, resourceAddress: string)
   return parseAmount(stealth.revealed_amount)
 }
 
-/**
- * How vault ids are resolved for an account. Defaults to the SDK's walker; a test supplies a fake.
- *
- * The same injectable-seam pattern the SDK itself uses for its crypto provider — it keeps the
- * network out of the unit tests without mocking the module graph.
- */
-export type VaultIdResolver = (provider: Provider, account: string) => Promise<string[]>
+// Re-exported so this module's long-standing import surface is unchanged; it is DEFINED in
+// substates.ts, beside the existence rules that now share it.
+export type { VaultIdResolver }
 
 /**
  * The wallet's revealed TARI balance in µtTARI.

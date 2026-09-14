@@ -43,9 +43,9 @@ import {
 } from '@tari-project/ootle'
 import { IndexerProvider } from '@tari-project/ootle-indexer'
 import type { SecretKeyWallet } from '@tari-project/ootle-secret-key-wallet'
-import { getVaultIdsForAccount } from '@tari-project/ootle'
 import { extractAccountAddress } from './accountAddress'
 import { loadAccountAddress, saveAccountAddress } from './accountStore'
+import { resolveAccountInputs } from './substates'
 import { nextMaxEpoch } from './epoch'
 import { dryRunFee, withFeeMargin } from './feeProbe'
 import { readOutputSubstateIds } from './outputIds'
@@ -273,10 +273,19 @@ export async function prepareConceal(
   const crypto = new WasmStealthCrypto(Network.Esmeralda)
   const ownerPkHex = toHexStr(await wallet.getPublicKey())
 
-  // Every vault the account holds is declared, rather than picking out the TARI one: an account has
-  // few vaults, declaring a spare one costs nothing, and choosing wrongly costs a failed transaction.
-  const vaultIds = await getVaultIdsForAccount(provider, accountAddress)
-  const declaredInputs = [accountAddress, ...vaultIds]
+  // ── THE ACCOUNT MAY NOT EXIST YET, AND THAT IS NOT AN ERROR ────────────────
+  //
+  // A wallet funded only by RECEIVING holds real stealth UTXOs and has never created an account
+  // component — private send and receive never touch one. Declaring a component that is not there
+  // aborts with "Substate not found" before anything is signed, which is how every public action on
+  // such a wallet used to 404.
+  //
+  // So: declare the component and its vaults when it EXISTS (CreateAccount then reuses it), and
+  // declare NOTHING when it does not (CreateAccount then mints it, exactly as the faucet claim does
+  // — which is how every account in Caravel has ever come to exist). Getting that backwards on an
+  // account that DOES exist would deposit into a throwaway component and lose the funds silently,
+  // so resolveAccountInputs rethrows anything that is not a definite not-found rather than guessing.
+  const { declaredInputs } = await resolveAccountInputs(provider, accountAddress)
 
   // Read ONCE and reused for the dry run and the real submission, exactly as the claim does: the
   // two are seconds apart in a ~10-epoch window, so re-reading buys nothing and letting them differ

@@ -10,7 +10,7 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import { TARI_RESOURCE_ADDRESS } from '@tari-project/ootle'
-import { decodeRevealedAmount, isSubstateNotFound, parseAmount, readRevealedBalance, type VaultIdResolver } from './revealedBalance'
+import { decodeRevealedAmount, parseAmount, readRevealedBalance, type VaultIdResolver } from './revealedBalance'
 
 const ACCOUNT = 'component_5fdba3a627a929063e6769d0f420392fa752e0b8c2a2fb13d6b4993e214985fd'
 const VAULT = 'vault_5f6cd2ad4eb86b31db16d245406d29ab154cfeca4bfc0da729a9df3fef9679cc'
@@ -219,35 +219,10 @@ describe('readRevealedBalance — unavailable is NOT zero', () => {
 // rejection to zero is strictly worse than the bug it fixes: an honest error becomes a confident
 // lie about someone's money. So "not found" is the ONLY message that may reach 0n, and the rest of
 // these pin everything that must not.
-
-describe('isSubstateNotFound — the narrowest possible predicate', () => {
-  it('matches what the indexer says for a substate that is not there', () => {
-    expect(isSubstateNotFound(new Error('substate not found: component_abc'))).toBe(true)
-    expect(isSubstateNotFound(new Error('Not Found'))).toBe(true)
-    expect(isSubstateNotFound(new Error('HTTP 404: Not Found'))).toBe(true)
-    expect(isSubstateNotFound(new Error('-32000: 404'))).toBe(true)
-    expect(isSubstateNotFound('substate not found'))!.toBe(true)   // a non-Error rejection
-  })
-
-  it('does NOT match a failure that means "we could not find out"', () => {
-    for (const message of [
-      'indexer 503', 'HTTP 503: Service Unavailable', 'HTTP 500: Internal Server Error',
-      'The operation was aborted due to timeout', 'signal is aborted without reason',
-      'fetch failed', 'getaddrinfo ENOTFOUND ootle-indexer-a.tari.com',
-      'Unexpected token < in JSON at position 0', 'NetworkError when attempting to fetch resource',
-      '-32603: Internal error', 'rate limited',
-    ]) {
-      expect(isSubstateNotFound(new Error(message)), message).toBe(false)
-    }
-  })
-
-  // ENOTFOUND is the trap: a DNS failure whose message contains "NOTFOUND", which a looser test
-  // (case-insensitive, no word boundary) would read as "the account does not exist" and answer with
-  // a confident zero — on a wallet that might hold anything.
-  it('does not mistake a DNS failure for a missing substate', () => {
-    expect(isSubstateNotFound(new Error('getaddrinfo ENOTFOUND indexer.example'))).toBe(false)
-  })
-})
+//
+// The PREDICATE's own cases moved to substates.test.ts when reveal, conceal and public send came to
+// need the same one — a fund-critical test and a balance-read test must not be able to drift. What
+// stays here is this module's BEHAVIOUR: which rejection becomes a zero, and which stays an error.
 
 describe('readRevealedBalance — a never-created account reads as the zero it is', () => {
   const notFound: VaultIdResolver = vi.fn(async () => { throw new Error('substate not found: ' + ACCOUNT) })

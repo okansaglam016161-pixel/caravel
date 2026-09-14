@@ -15,6 +15,7 @@
 import { useEffect, useState } from 'react'
 import ModalCard from './ModalCard'
 import PickRow from './PickRow'
+import { pushEscape } from './escapeStack'
 
 export interface ReinviteMemberOption {
   hex: string
@@ -49,11 +50,10 @@ export default function ReinviteModal({
     () => new Set(members.filter(m => m.leftAt !== null).map(m => m.hex))
   )
 
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) { if (e.key === 'Escape') onClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+  // Escape closes, the way every other dismissible in the chat now does it — ModalCard owns the
+  // backdrop and the ×, the shared stack owns the key. Topmost wins, so the thread underneath does
+  // not close along with this. See escapeStack.ts.
+  useEffect(() => pushEscape(onClose), [onClose])
 
   const canSend = selected.size > 0
   function toggle(hex: string) {

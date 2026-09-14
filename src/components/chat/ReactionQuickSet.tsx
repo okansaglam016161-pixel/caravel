@@ -13,10 +13,11 @@
 // Deliberately NOT solved with a portal or by setting overflow-x on the scroller: a portal would
 // detach the panel from a message that scrolls, and the overflow change is global to both threads.
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import EmojiPicker from './EmojiPicker'
 import { QUICK_SET } from './emojiData'
 import { useAnchoredPopover } from './popoverFit'
+import { pushEscape } from './escapeStack'
 
 const CELL = 30
 // Anchor height (26px action button) plus a small gap.
@@ -42,6 +43,11 @@ export default function ReactionQuickSet({ mine, blocked, pending, align, onPick
   // popoverFit.ts for why a fixed side could not work on a received bubble. The picker behind "+"
   // gets its own measurement, since it is several times taller than this row.
   const { ref: rowRef, style: rowStyle } = useAnchoredPopover({ placement: 'above', align, offset: OFFSET })
+
+  // ESCAPE, WHICH THIS NEVER HAD. It dismissed by click-scrim alone, which was survivable while
+  // Escape did nothing in a thread — it is not now that Escape CLOSES THE CONVERSATION. Without a
+  // claim here, dismissing this panel and closing the whole chat would be the same keystroke.
+  useEffect(() => pushEscape(onClose), [onClose])
 
   return (
     <>

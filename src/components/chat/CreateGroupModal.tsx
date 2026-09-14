@@ -12,6 +12,7 @@ import { useEffect, useState } from 'react'
 import ModalCard from './ModalCard'
 import PickRow from './PickRow'
 import { MONO } from './chatDisplay'
+import { pushEscape } from './escapeStack'
 
 const MAX_NAME = 48
 
@@ -30,11 +31,10 @@ export default function CreateGroupModal({
   const [name, setName] = useState('')
   const [selected, setSelected] = useState<Set<string>>(new Set())
 
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) { if (e.key === 'Escape') onClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+  // Escape closes, the way every other dismissible in the chat now does it — ModalCard owns the
+  // backdrop and the ×, the shared stack owns the key. Topmost wins, so the thread underneath does
+  // not close along with this. See escapeStack.ts.
+  useEffect(() => pushEscape(onClose), [onClose])
 
   const canCreate = name.trim().length > 0 && selected.size > 0
   function toggle(hex: string) {

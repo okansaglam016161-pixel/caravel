@@ -24,6 +24,7 @@
 
 import { useEffect, useRef } from 'react'
 import { dayLabel, bubbleTime, readableSize, MONO } from './chatDisplay'
+import { pushEscape } from './escapeStack'
 
 const SCRIM = '#0A0F17'
 const INK = '#E7EDF5'      // toolbar + filename
@@ -72,13 +73,13 @@ export default function ImageLightbox({ url, filename, caption, size, width, hei
   useEffect(() => {
     returnFocusRef.current = document.activeElement
     closeRef.current?.focus()
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
-    window.addEventListener('keydown', onKey)
+    // Escape via the shared stack — see escapeStack.ts.
+    const releaseEscape = pushEscape(onClose)
     // Stop the thread scrolling underneath while the overlay is up.
     const prevOverflow = document.body.style.overflow
     document.body.style.overflow = 'hidden'
     return () => {
-      window.removeEventListener('keydown', onKey)
+      releaseEscape()
       document.body.style.overflow = prevOverflow
       ;(returnFocusRef.current as HTMLElement | null)?.focus?.()
     }

@@ -53,6 +53,7 @@ import { useOwnedNames, type OwnedNamesState } from '../../hooks/useOwnedNames'
 import type { NameRecord } from '../../crypto/ons'
 import CnsRegisterView from './CnsRegisterView'
 import ModalCard from './ModalCard'
+import { pushEscape } from './escapeStack'
 
 /** The card's height ceiling. 560 is the design's cap; the viewport still wins on a short screen. */
 const MAX_HEIGHT = 'min(560px, 88vh)'
@@ -162,13 +163,10 @@ export default function CnsOverlay({ onClose, onOpenWallet }: {
    */
   const [view, setView] = useState<'list' | 'register'>('list')
 
-  // Escape closes, the way every other modal here does it — ModalCard owns the backdrop and the ×,
-  // each caller owns the key.
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) { if (e.key === 'Escape') onClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+  // Escape closes, the way every other dismissible in the chat now does it — ModalCard owns the
+  // backdrop and the ×, the shared stack owns the key. Topmost wins, so the thread underneath does
+  // not close along with this. See escapeStack.ts.
+  useEffect(() => pushEscape(onClose), [onClose])
 
   // COMING BACK RE-READS. Nothing registers yet — that is §10D — but the read is cheap, the list is
   // the thing you came back to look at, and wiring it now means a name claimed in a later stage

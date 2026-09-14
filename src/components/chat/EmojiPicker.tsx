@@ -20,6 +20,7 @@ import { useAnchoredPopover } from './popoverFit'
 import { ALL_EMOJI, EMOJI_CATEGORIES } from './emojiData'
 import { searchEmoji } from './emojiSearch'
 import { MONO } from './chatDisplay'
+import { pushEscape } from './escapeStack'
 
 const COLUMNS = 8
 const CELL = 34
@@ -82,9 +83,9 @@ export default function EmojiPicker({ onPick, onClose, placement = 'above', alig
   // hold even after a pick has moved focus into the composer.
   useEffect(() => {
     searchRef.current?.focus()
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    // Escape is claimed through the shared stack — see escapeStack.ts. Unchanged when this is the
+    // only thing open; what it adds is that the thread underneath no longer closes as well.
+    return pushEscape(onClose)
   }, [onClose])
 
   // Recomputed per keystroke over ~170 entries, which is nothing; memoised anyway so the grid's

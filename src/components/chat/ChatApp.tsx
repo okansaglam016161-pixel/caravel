@@ -35,6 +35,7 @@ import MessageBubble from './MessageBubble'
 import QuotedPreview from './QuotedPreview'
 import { canBeginEdit, canBeginReply, canReplyTo } from './replyCompose'
 import { canSubmit } from './composerSend'
+import { pushEscape } from './escapeStack'
 import { aggregateReactions, atReactionLimit, canReactTo, myReactions } from './reactionDisplay'
 import MessageActionRow from './MessageActionRow'
 import ReactionPills from './ReactionPills'
@@ -551,17 +552,34 @@ export default function ChatApp({ onOpenWallet }: {
     () => allConvos.filter(c => contacts[c.peerHex]?.state === 'pending'),
     [allConvos, contacts],
   )
-  // Selected conversation. A composed (accepted) peer may have no messages yet — synthesise an
-  // empty thread for it so the composer can send the first message (it enters the list on send).
+  /**
+   * The selected conversation, or null when none is.
+   *
+   * A composed (accepted) peer may have no messages yet — synthesise an empty thread for it so the
+   * composer can send the first message (it enters the list on send).
+   *
+   * ── NO SELECTION MEANS NO SELECTION ────────────────────────────────────────
+   *
+   * This used to end `return conversations[0] ?? null` — a fallback to the most recent thread
+   * whenever nothing was chosen. It read as a convenience and it made a state UNREACHABLE: the
+   * resting pane renders on `selectedConvo === null`, so with the fallback in place it could only
+   * ever appear for someone with no conversations at all. Every attempt to return to rest — Escape,
+   * and deleting the open thread — set `selectedPeer` to null, re-derived straight back into
+   * `conversations[0]`, and looked like it had done nothing. Which is exactly what Escape appeared
+   * to do.
+   *
+   * So the app now OPENS at rest rather than in the last thread, and every flow that should land in
+   * a specific conversation says so explicitly — see the note on selectRow below. There is no
+   * implicit selection left anywhere.
+   */
   const selectedConvo: Conversation | null = (() => {
-    if (selectedPeer) {
-      const found = conversations.find(c => c.peerHex === selectedPeer)
-      if (found) return found
-      if (contacts[selectedPeer]?.state === 'accepted') {
-        return { peerHex: selectedPeer, messages: [], lastMessage: null, lastActivity: 0 }
-      }
+    if (!selectedPeer) return null
+    const found = conversations.find(c => c.peerHex === selectedPeer)
+    if (found) return found
+    if (contacts[selectedPeer]?.state === 'accepted') {
+      return { peerHex: selectedPeer, messages: [], lastMessage: null, lastActivity: 0 }
     }
-    return conversations[0] ?? null
+    return null
   })()
 
   const displayName = (peerHex: string) => nicknames[peerHex] ?? truncNpub(peerHex)
@@ -763,7 +781,10 @@ export default function ChatApp({ onOpenWallet }: {
       setNicknames(prev => setNickname(nostrPubkeyHex, prev, peer, ''))
       setAddressSent(prev => clearAddressSent(nostrPubkeyHex, prev, peer))  // re-exchange if re-added
     }
-    setSelectedPeer(null)   // fall back to most-recent remaining conversation, or the empty state
+    // Lands at REST, not in whichever thread happened to be next. Before the fallback was retired
+    // this line meant "fall back to the most recent remaining conversation", which dropped the user
+    // into someone else's thread the instant they deleted one.
+    setSelectedPeer(null)
     setConfirmDelete(false)
     setMenuOpen(false)
   }
@@ -776,7 +797,10 @@ export default function ChatApp({ onOpenWallet }: {
   function startWith(hex: string) {
     acceptContact(hex)      // initiate = accept (creates/promotes/refreshes the accepted record)
     sendAddressControl(hex) // M9.0d: exchange my Tari address (silent) — I initiated
+    // Explicit on BOTH, which the render ladder requires: an active group outranks a DM, so leaving
+    // `selectedGroupId` set would start a conversation and keep showing the group.
     setSelectedPeer(hex)    // open it (empty thread if brand-new, or the existing conversation)
+    setSelectedGroupId(null)
     setComposeOpen(false)
     setComposeNpub('')
     setComposeRes({ s: 'idle' })
@@ -816,7 +840,9 @@ export default function ChatApp({ onOpenWallet }: {
   function acceptRequest(peerHex: string) {
     acceptContact(peerHex)
     sendAddressControl(peerHex)
+    // Both, for the same reason as startWith: an active group outranks a DM in the render ladder.
     setSelectedPeer(peerHex)
+    setSelectedGroupId(null)
   }
 
   // Decline a pending request → M9.0a delete + tombstone + removeContact (hide-and-forget). A future
@@ -1421,6 +1447,43 @@ export default function ChatApp({ onOpenWallet }: {
   // draft, so it grows on Shift+Enter/wrap, shrinks on delete, and resets to one line on send.
   const composerRef = useRef<HTMLTextAreaElement>(null)
 
+  /**
+   * ESCAPE CLOSES THE CONVERSATION — registered at the BOTTOM of the stack, so it is reached only
+   * once nothing else claims the key. Every picker, menu and modal in the thread pushes above this,
+   * which is what keeps "dismiss the panel" and "close the chat" one keystroke apart.
+   *
+   * UNCONDITIONAL, and both selections are cleared: `selectedGroupId` because a group thread closes
+   * the same way, `selectedPeer` because since the fallback above was retired that genuinely means
+   * "nothing selected".
+   *
+   * AN UNSENT DRAFT SURVIVES, and that is worth knowing rather than assuming either way. `draft` is
+   * ONE piece of state for the whole DM side, not one per conversation, and nothing clears it on a
+   * change of selection — only a successful send does. So closing here and reopening finds the text
+   * still there, exactly as switching between two conversations always has. (The group side differs:
+   * GroupThread owns its own draft and unmounts when it closes, so that one is lost.)
+   *
+   * A two-step "blur first, close second" was built here and removed once that was established.
+   * Nothing is at stake to protect: it made the commonest key in the app behave differently
+   * depending on where the caret was, in defence of text that is not going anywhere.
+   */
+  const closeThread = useCallback(() => {
+    setSelectedPeer(null)
+    setSelectedGroupId(null)
+  }, [])
+
+  // EXACTLY ONE CLAIM PER OPEN THREAD. This mirrors the render ladder below: the group branch wins
+  // whenever an ACTIVE group is selected, and GroupThread then registers its own — it is the one
+  // that can see its own composer and its own draft, so a second claim from here would sit
+  // underneath it doing nothing, checking the wrong textarea. With the resting pane showing there is
+  // nothing to close at all, and a claim that did nothing would still take Escape from whatever sits
+  // beneath it.
+  const groupThreadOpen = !!(selectedGroupId && selectedGroup && selectedGroup.state === 'active')
+  const dmThreadOpen = !groupThreadOpen && selectedConvo !== null
+  useEffect(() => {
+    if (!dmThreadOpen) return
+    return pushEscape(closeThread)
+  }, [dmThreadOpen, closeThread])
+
   // logicalId → message for the OPEN thread, built once per render pass so a quote resolves with a
   // Map lookup instead of a scan. The alternative — messages.find() per rendered reply — is
   // O(rows × replies) over an array that holds every thread's messages, paid on every keystroke.
@@ -1447,8 +1510,10 @@ export default function ChatApp({ onOpenWallet }: {
     // A HIDDEN SUBTREE MEASURES ZERO, AND THAT ZERO IS PERMANENT.
     //
     // AppShell mounts all three services at once and hides the inactive ones with display:none, so
-    // this effect's first run happens before chat has ever been shown — and `selectedConvo` falls
-    // back to conversations[0], so the composer is already mounted when it does. scrollHeight is 0
+    // this effect can run while chat has never been shown. It used to be guaranteed to: `selectedConvo`
+    // fell back to conversations[0], so the composer was already mounted on the very first pass. That
+    // fallback is gone and the app now opens at rest, which makes the case rarer without making it
+    // impossible — anything that selects a thread while the pane is hidden reaches it. scrollHeight is 0
     // in a display:none subtree, and writing that to an inline height is a one-way door: React never
     // clears it (`height` is not in the textarea's style prop, only maxHeight), and this effect only
     // re-runs on `draft`, which cannot change through a zero-height textarea. The composer was dead
@@ -1907,6 +1972,9 @@ export default function ChatApp({ onOpenWallet }: {
               onLeave={() => handleLeaveGroup(selectedGroup)}
               /* Re-invite (C-M2): open the picker. Sending is the modal's confirm, not this click. */
               onReinvite={() => setReinviteFor(selectedGroup.id)}
+              /* Escape with nothing else open. GroupThread owns the key while it is mounted — it is
+                 the one that can see its own composer, its own draft and its own open panels. */
+              onClose={closeThread}
               /* GroupThread owns its own composer + preview; ChatApp owns the provider, so the
                  confirmed file comes back up here to be sent. */
               onSendImage={(file, caption) => sendImage(file, caption, { groupId: selectedGroup.id, members: selectedGroup.members })}

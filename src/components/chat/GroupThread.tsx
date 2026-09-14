@@ -22,6 +22,7 @@ import { E2ELine, ThreadMenuButton, ThreadEmptyState, DayDivider, ComposerChip, 
 import QuotedPreview from './QuotedPreview'
 import { canBeginEdit, canBeginReply, canReplyTo, quotedAuthorLabel } from './replyCompose'
 import { canSubmit, composerAction } from './composerSend'
+import { pushEscape } from './escapeStack'
 import { aggregateReactions, atReactionLimit, canReactTo, myReactions } from './reactionDisplay'
 import MessageActionRow from './MessageActionRow'
 import ReactionPills from './ReactionPills'
@@ -43,7 +44,7 @@ function groupTitle(g: Group): string {
 }
 
 export default function GroupThread({
-  group, messages, pending, nameFor, onSend, onRetryPending, onDismissPending, onLeave, onReinvite, sendNote, onSendImage, imageStageLabel,
+  group, messages, pending, nameFor, onSend, onRetryPending, onDismissPending, onLeave, onReinvite, onClose, sendNote, onSendImage, imageStageLabel,
   editFlights, onSaveEdit, onRetryEdit, onDismissEdit, mePubkeyHex, onReact,
 }: {
   group: Group
@@ -56,6 +57,8 @@ export default function GroupThread({
   onDismissPending: (id: string) => void
   onLeave: () => void
   onReinvite: () => void   // opens the member picker (C-M2); does not send on its own
+  /** Escape with nothing else open — deselects the group and returns to the resting pane. */
+  onClose: () => void
   // Honest partial-fan-out note for the composer footer, or null. Never claims delivery.
   // `kind` says whether the shortfall was the last MESSAGE or the last EDIT — both fan out the same
   // way, and both share this one slot (M4).
@@ -98,6 +101,17 @@ export default function GroupThread({
   // composer inserted at the cursor. Two composers that behave differently for the same button is
   // the asymmetry this closes (F8); everything below is deliberately identical to ChatApp's copy.
   const composerRef = useRef<HTMLTextAreaElement>(null)
+
+  /**
+   * ESCAPE CLOSES THE GROUP — the DM's twin, at the BOTTOM of the shared stack, reached only once no
+   * picker, menu, confirm or edit has claimed the key above it. Unconditional.
+   *
+   * An unsent draft IS lost here, unlike on the DM side: this component owns its own `draft` and
+   * unmounts when the group closes, where ChatApp's is one piece of state that outlives any single
+   * conversation. Noted rather than equalised — making the two match is a product decision, not a
+   * detail to settle inside an Escape handler.
+   */
+  useEffect(() => pushEscape(onClose), [onClose])
   const [emojiOpen, setEmojiOpen] = useState(false)
   // Where the caret goes after React commits an inserted draft. A CONTROLLED textarea drops the
   // caret at the end on every re-render, so without this an insert into the middle of a half-typed

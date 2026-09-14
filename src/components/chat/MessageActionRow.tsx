@@ -29,9 +29,10 @@
 // side of the anchor would not. A panel that already fits is corrected by zero and renders exactly
 // as it did before — so every wide bubble is untouched.
 
-import { useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { ACTION_BTN } from './chatDisplay'
 import { useAnchoredPopover } from './popoverFit'
+import { pushEscape } from './escapeStack'
 
 export default function MessageActionRow({ onReact, reactOpen, reactPopover, onReply, onEdit, menuAlign }: {
   // Each callback is optional; an omitted one drops its button. That is how a received bubble loses
@@ -118,6 +119,10 @@ function MoreMenu({ align, onClose, onEdit }: {
   // same edge pinned. Everything the hook adds is the part that was missing: the clamp back inside
   // the thread when the bubble is too narrow to leave room.
   const { ref: panelRef, style: panelStyle } = useAnchoredPopover({ placement: 'below', align, offset: 30 })
+
+  // ESCAPE, WHICH THIS NEVER HAD EITHER — the scrim was the only way out. Claimed on the shared
+  // stack so dismissing the menu does not also close the conversation underneath it.
+  useEffect(() => pushEscape(onClose), [onClose])
 
   return (
     <>

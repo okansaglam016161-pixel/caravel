@@ -145,6 +145,27 @@ export function TotalHero({ total, privateBalance, publicBalance, hidden, onRetr
     && publicBalance.status === 'ready' && publicBalance.microtari === 0n
     && privateBalance.status === 'ready' && privateBalance.microtari > 0n
 
+  // ── AN EMPTY WALLET, SAID WARMLY — AND ONLY WHEN IT IS ACTUALLY EMPTY ───────
+  //
+  // `ready` is the whole guard, and it is a strong one. computeTotal reaches it only when BOTH
+  // halves read cleanly, from the same refresh, with nothing settling and nothing incomplete — so a
+  // ready 0n is a balance we have read and confirmed, not a balance we failed to find. Every way of
+  // not knowing lands in another branch: unreadable, settling, or loading.
+  //
+  // THAT DISTINCTION IS THE POINT, not a technicality. Until b4da173 every brand-new wallet reported
+  // "Balance unreadable right now" over a balance that was plainly zero, because a never-created
+  // account came back as a thrown error rather than as the zero it was. Printing "nothing here yet,
+  // go top up" over an unknown balance would be the same lie with a friendlier face, and worse: it
+  // would tell someone whose read had failed that their money is gone.
+  //
+  // NO FLAG AND NO STATE. It is a function of the number, so it appears the moment a wallet is
+  // confirmed empty and leaves the moment anything lands — no persistence to go stale, nothing to
+  // dismiss, and nothing that can be left showing over a funded wallet.
+  //
+  // `hidden` counts as not-empty: someone who has masked their balance is not asking to be told
+  // what is in it.
+  const emptyWallet = !hidden && total.status === 'ready' && total.microtari === 0n
+
   return (
     <div data-theme="dark" style={{
       background: 'var(--nav-ground)', border: '1px solid var(--border)',
@@ -162,6 +183,19 @@ export function TotalHero({ total, privateBalance, publicBalance, hidden, onRetr
       {unreadableSide && (
         <div style={{ fontSize: 11.5, color: 'var(--vault-label)', marginTop: 10, lineHeight: 1.5 }}>
           The {unreadableSide} half could not be read, so the total is not shown.
+        </div>
+      )}
+
+      {/* THE FIGURE STAYS ABOVE THIS, deliberately. A confirmed zero is a real reading and the hero
+          prints it like any other; this is a supporting line, not a replacement for the number.
+          Hiding the 0.000000 would make an empty wallet look like a wallet that had not loaded.
+
+          BOTH ROUTES IT NAMES ARE ON THIS SCREEN: Receive is the button directly below, and the
+          faucet panel sits under the vault on the same overview, offering "free test funds" in those
+          words. Nothing here promises a capability that does not exist. */}
+      {emptyWallet && (
+        <div style={{ fontSize: 12.5, color: 'var(--vault-label)', marginTop: 12, lineHeight: 1.5, textWrap: 'pretty' }}>
+          Nothing here yet. Claim free test funds below, or receive a payment to get started.
         </div>
       )}
 

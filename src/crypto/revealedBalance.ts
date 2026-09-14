@@ -21,11 +21,18 @@
 // strict about this and refuses anything it cannot convert exactly.
 //
 // ZERO AND UNAVAILABLE ARE DIFFERENT, and this module keeps them apart. Every STRUCTURAL absence —
-// no account address, an account with no TARI vault, a vault holding zero — is a real, common,
-// correct zero and is returned as 0n. A NETWORK failure is not: it is thrown, so the caller can say
-// "unavailable" instead of drawing a confident 0. Collapsing those two would repeat the exact bug
-// this project's own research pass found in the UTXO scanner, where an unreadable output is
-// indistinguishable from an absent one and quietly understates the balance.
+// no account address, an account that does not exist yet, an account with no TARI vault, a vault
+// holding zero — is a real, common, correct zero and is returned as 0n. A NETWORK failure is not: it
+// is thrown, so the caller can say "unavailable" instead of drawing a confident 0. Collapsing those
+// two would repeat the exact bug this project's own research pass found in the UTXO scanner, where an
+// unreadable output is indistinguishable from an absent one and quietly understates the balance.
+//
+// ONE STRUCTURAL ABSENCE ARRIVES AS A THROW, and it took a user-visible bug to find it. A wallet that
+// has never claimed has an account ADDRESS — accountRecovery derives it from the owner key, whether
+// or not the account exists — but no account COMPONENT on chain. Reading that component does not come
+// back empty; the indexer answers "substate not found" and the SDK rejects. So every brand-new wallet
+// reported "Balance unreadable right now / your public balance couldn't be read" over a balance that
+// was simply, verifiably, zero. See isSubstateNotFound below.
 
 import { getVaultIdsForAccount, Network, TARI_RESOURCE_ADDRESS, type Provider } from '@tari-project/ootle'
 import { IndexerProvider } from '@tari-project/ootle-indexer'
@@ -62,6 +69,37 @@ export function parseAmount(value: unknown): bigint | null {
     return BigInt(value)
   }
   return null
+}
+
+/**
+ * Is this rejection "the thing is not there", as opposed to "we could not find out"?
+ *
+ * ── THE ONE REJECTION THAT MEANS ZERO ────────────────────────────────────────
+ *
+ * A substate that does not exist is a FACT about the chain: nothing has ever been written at that
+ * address, so there is nothing to hold a balance, so the balance is zero. Every other rejection — a
+ * timeout, a 503, DNS, a malformed response — is an absence of INFORMATION, and answering those with
+ * a confident 0 is the precise failure this module's header exists to prevent.
+ *
+ * ── MIRRORS THE SDK'S OWN PREDICATE, BECAUSE IT IS NOT EXPORTED ──────────────
+ *
+ * @tari-project/ootle-indexer draws this exact line internally: getStealthUtxo wraps getSubstate and
+ * maps a not-found rejection to null while rethrowing everything else, using a private helper that
+ * tests `/not found/i` or a 404. That helper is not on the package's public surface (the only
+ * exported *NotFoundError is KeyProviderNotFoundError, which is about signers), so the test is
+ * reproduced here rather than imported.
+ *
+ * ── WHAT TO RE-CHECK ON AN SDK OR INDEXER BUMP ───────────────────────────────
+ *
+ * This matches on a MESSAGE, which is the fragile part and is worth knowing about rather than
+ * hiding. If the indexer's wording or the SDK's error shape changes, this stops matching and a fresh
+ * wallet goes back to reporting "unavailable" over a zero — annoying, visible, and the SAFE direction
+ * to fail in: a missed match costs an honest error, never a false zero. Deliberately narrow for that
+ * reason. Widen it only with the same care, and never to cover a failure whose meaning is "unknown".
+ */
+export function isSubstateNotFound(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return /not found/i.test(message) || message.includes('404')
 }
 
 /** Narrow an unknown to a plain object without asserting anything about its contents. */
@@ -119,7 +157,8 @@ export type VaultIdResolver = (provider: Provider, account: string) => Promise<s
  *     its entire payout and leaves the vault at exactly zero.
  *
  * THROWS on a network or indexer failure, deliberately. A thrown error becomes "unavailable" in the
- * UI; a swallowed one would become a confident, wrong "0 public".
+ * UI; a swallowed one would become a confident, wrong "0 public". The single exception is an account
+ * component that does not exist — see the vault-id read below, and isSubstateNotFound.
  *
  * Amounts across vaults are SUMMED. The engine keys an account's state by resource, so exactly one
  * TARI vault is expected — but if more than one ever appeared, their sum is the honest answer to
@@ -132,9 +171,28 @@ export async function readRevealedBalance(
 ): Promise<bigint> {
   if (!accountAddress) return 0n
 
-  const vaultIds = await resolveVaultIds(provider, accountAddress)
+  // ── A COMPONENT THAT IS NOT THERE HOLDS NOTHING ────────────────────────────
+  //
+  // This reads the ACCOUNT COMPONENT to find its vaults, and it is the read that a never-claimed
+  // wallet fails: it has an address (derived from its owner key) and no component at that address
+  // yet. "Not found" here is therefore the same answer as "no account address at all" one line
+  // above — nothing has ever been written, so nothing is held — and it is returned as the zero it
+  // is. Every other failure still throws, because every other failure means we do not know.
+  let vaultIds: string[]
+  try {
+    vaultIds = await resolveVaultIds(provider, accountAddress)
+  } catch (e) {
+    if (isSubstateNotFound(e)) return 0n
+    throw e
+  }
   if (vaultIds.length === 0) return 0n
 
+  // ── AND THE SAME TOLERANCE DELIBERATELY DOES NOT APPLY BELOW ───────────────
+  //
+  // These ids came OUT of the component's own state, so the component asserts each vault exists. One
+  // that then cannot be read is an inconsistency, not an absence, and skipping it would drop a real
+  // holding and understate the total — the exact UTXO-scanner bug named in this file's header. A
+  // missing vault here therefore throws, like any other unreadable balance.
   let total = 0n
   for (const vaultId of vaultIds) {
     const res = await provider.getSubstate(vaultId)

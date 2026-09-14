@@ -10,7 +10,7 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import { TARI_RESOURCE_ADDRESS } from '@tari-project/ootle'
-import { decodeRevealedAmount, parseAmount, readRevealedBalance, type VaultIdResolver } from './revealedBalance'
+import { decodeRevealedAmount, isSubstateNotFound, parseAmount, readRevealedBalance, type VaultIdResolver } from './revealedBalance'
 
 const ACCOUNT = 'component_5fdba3a627a929063e6769d0f420392fa752e0b8c2a2fb13d6b4993e214985fd'
 const VAULT = 'vault_5f6cd2ad4eb86b31db16d245406d29ab154cfeca4bfc0da729a9df3fef9679cc'
@@ -205,6 +205,88 @@ describe('readRevealedBalance — unavailable is NOT zero', () => {
   it('throws when vault-id resolution fails', async () => {
     const boom: VaultIdResolver = vi.fn(async () => { throw new Error('network down') })
     await expect(readRevealedBalance(providerWith({}), ACCOUNT, boom)).rejects.toThrow('network down')
+  })
+})
+
+// ── An account that does not exist yet ──────────────────────────────────────
+//
+// A wallet that has never claimed has an account ADDRESS — derived from its owner key — and no
+// component at it. Reading that component does not come back empty: the indexer answers "substate
+// not found" and the SDK rejects, which is why every brand-new wallet reported "Balance unreadable
+// right now" over a balance that was verifiably zero.
+//
+// THE NEGATIVE CASES BELOW ARE THE POINT OF THIS SUITE, not the positive one. Mapping the wrong
+// rejection to zero is strictly worse than the bug it fixes: an honest error becomes a confident
+// lie about someone's money. So "not found" is the ONLY message that may reach 0n, and the rest of
+// these pin everything that must not.
+
+describe('isSubstateNotFound — the narrowest possible predicate', () => {
+  it('matches what the indexer says for a substate that is not there', () => {
+    expect(isSubstateNotFound(new Error('substate not found: component_abc'))).toBe(true)
+    expect(isSubstateNotFound(new Error('Not Found'))).toBe(true)
+    expect(isSubstateNotFound(new Error('HTTP 404: Not Found'))).toBe(true)
+    expect(isSubstateNotFound(new Error('-32000: 404'))).toBe(true)
+    expect(isSubstateNotFound('substate not found'))!.toBe(true)   // a non-Error rejection
+  })
+
+  it('does NOT match a failure that means "we could not find out"', () => {
+    for (const message of [
+      'indexer 503', 'HTTP 503: Service Unavailable', 'HTTP 500: Internal Server Error',
+      'The operation was aborted due to timeout', 'signal is aborted without reason',
+      'fetch failed', 'getaddrinfo ENOTFOUND ootle-indexer-a.tari.com',
+      'Unexpected token < in JSON at position 0', 'NetworkError when attempting to fetch resource',
+      '-32603: Internal error', 'rate limited',
+    ]) {
+      expect(isSubstateNotFound(new Error(message)), message).toBe(false)
+    }
+  })
+
+  // ENOTFOUND is the trap: a DNS failure whose message contains "NOTFOUND", which a looser test
+  // (case-insensitive, no word boundary) would read as "the account does not exist" and answer with
+  // a confident zero — on a wallet that might hold anything.
+  it('does not mistake a DNS failure for a missing substate', () => {
+    expect(isSubstateNotFound(new Error('getaddrinfo ENOTFOUND indexer.example'))).toBe(false)
+  })
+})
+
+describe('readRevealedBalance — a never-created account reads as the zero it is', () => {
+  const notFound: VaultIdResolver = vi.fn(async () => { throw new Error('substate not found: ' + ACCOUNT) })
+
+  it('resolves to 0 when the account component does not exist', async () => {
+    await expect(readRevealedBalance(providerWith({}), ACCOUNT, notFound)).resolves.toBe(0n)
+  })
+
+  it('resolves to 0 on a 404 from the component read', async () => {
+    const http404: VaultIdResolver = vi.fn(async () => { throw new Error('HTTP 404: Not Found') })
+    await expect(readRevealedBalance(providerWith({}), ACCOUNT, http404)).resolves.toBe(0n)
+  })
+
+  // ── THE NEGATIVES, PINNED HARDER THAN THE POSITIVE ────────────────────────
+  it.each([
+    ['a 503', 'HTTP 503: Service Unavailable'],
+    ['a timeout', 'The operation was aborted due to timeout'],
+    ['a malformed response', 'Unexpected token < in JSON at position 0'],
+    ['a DNS failure', 'getaddrinfo ENOTFOUND ootle-indexer-a.tari.com'],
+    ['a generic transport failure', 'fetch failed'],
+    ['an internal rpc error', '-32603: Internal error'],
+  ])('still THROWS on %s — never a false zero', async (_label, message) => {
+    const failing: VaultIdResolver = vi.fn(async () => { throw new Error(message) })
+    await expect(readRevealedBalance(providerWith({}), ACCOUNT, failing)).rejects.toThrow(message)
+  })
+
+  // The tolerance is for the COMPONENT read only. These ids came out of the component's own state,
+  // so it asserts each vault exists; one that then cannot be read is an inconsistency, not an
+  // absence, and skipping it would drop a real holding and understate the total.
+  it('still throws when a vault the component NAMED is missing', async () => {
+    // providerWith throws 'substate not found' for an id it does not hold — the same message that
+    // means zero one level up, and deliberately does not here.
+    await expect(readRevealedBalance(providerWith({}), ACCOUNT, resolver([VAULT]))).rejects.toThrow('substate not found')
+  })
+
+  it('does not swallow a not-found once a real balance is already known', async () => {
+    const a = 'vault_' + 'a'.repeat(64)
+    const p = providerWith({ [a]: stealthVault('999595988') })
+    await expect(readRevealedBalance(p, ACCOUNT, resolver([a, VAULT]))).rejects.toThrow('substate not found')
   })
 })
 

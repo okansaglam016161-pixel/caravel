@@ -20,10 +20,19 @@
 // recoverAccountAddress.
 //
 // WHAT IT IS NOT. It does not tell you whether the account EXISTS on-chain, only what its address
-// is. That distinction is deliberately left alone: the read path already handles a component that
-// is not there (getVaultIdsForAccount returns an empty array), so a never-claimed wallet stores the
-// address its account WILL have and correctly reads 0 revealed until something deposits into it.
-// Storing it early is harmless and, once the account does exist, already correct.
+// is. A never-claimed wallet therefore stores the address its account WILL have, which is harmless
+// and, once the account does exist, already correct.
+//
+// THIS PARAGRAPH USED TO SAY THE READ PATH HANDLED THAT ON ITS OWN, "because getVaultIdsForAccount
+// returns an empty array" for a component that is not there. IT DOES NOT. The SDK returns an empty
+// array only when the substate EXISTS and is not a Component; when nothing exists at the address, the
+// getSubstate underneath it rejects with "substate not found". So storing an address here made every
+// brand-new wallet's public balance read THROW, and the wallet reported "Balance unreadable right
+// now" over a balance that was plainly zero.
+//
+// revealedBalance.ts owns that distinction now — a not-found component reads as the zero it is, while
+// every other failure still surfaces as unavailable. Do not re-derive this claim from the SDK's
+// signature; it is the getSubstate underneath that decides.
 
 import { Network, TransactionBuilder, sealTransaction, signTransaction } from '@tari-project/ootle'
 import { IndexerProvider } from '@tari-project/ootle-indexer'

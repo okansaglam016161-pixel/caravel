@@ -682,7 +682,12 @@ describe('caravel-reaction — emoji validation', () => {
     for (const e of ALL_EMOJI) {
       expect(emoji(e.char), `curated ${e.char} must survive the wire validator`).toBe(e.char)
     }
-  })
+    // A RAISED TIMEOUT, NOT A SLOW TEST MADE FASTER. Several hundred emoji each go through the real
+    // validator, which is ~6.7s of genuine work — already past vitest's 5s default before any other
+    // file is competing for the CPU. So it passed alone and timed out under a parallel run, and grew
+    // likelier to as the suite gained files. It never failed an assertion, only the clock. 30_000 is
+    // what the derivation and wallet-storage specs use for the same reason.
+  }, 30_000)
 
   it('rejects joiners with nothing to join', () => {
     // At least one Extended_Pictographic codepoint is required, so a string of pure modifiers —

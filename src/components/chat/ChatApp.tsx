@@ -35,6 +35,7 @@ import MessageBubble from './MessageBubble'
 import QuotedPreview from './QuotedPreview'
 import { canBeginEdit, canBeginReply, canReplyTo } from './replyCompose'
 import { canSubmit } from './composerSend'
+import { buildGroupContactOptions } from './groupContacts'
 import { pushEscape } from './escapeStack'
 import { aggregateReactions, atReactionLimit, canReactTo, myReactions } from './reactionDisplay'
 import MessageActionRow from './MessageActionRow'
@@ -747,9 +748,20 @@ export default function ChatApp({ onOpenWallet }: {
   }, [reinviteFor, groups, messages, nostrPubkeyHex, nicknames])
 
   // Accepted contacts offered in the create-group modal, resolved to display names.
-  const groupContactOptions: GroupContactOption[] = Object.entries(contacts)
-    .filter(([, c]) => (c?.state ?? 'accepted') === 'accepted')
-    .map(([hex]) => ({ hex, name: displayName(hex) }))
+  //
+  // THE SAME POPULATION THE SIDEBAR SHOWS, which it was not: this read `Object.entries(contacts)`
+  // and so could only see peers with an explicit record, while the sidebar derives from messages and
+  // treats a record-less peer as accepted. Anyone predating the contact-state feature — or whose
+  // record was refused while the contacts store was unreadable — appeared in one and not the other,
+  // and the picker said "No contacts yet" about people visible one pane over. See groupContacts.ts.
+  const groupContactOptions: GroupContactOption[] = buildGroupContactOptions({
+    // allConvos, not `conversations`: the acceptance rule is applied once, inside, over the union
+    // with the contact records. Filtering here first would apply it twice and hide the seam.
+    conversationPeers: allConvos.map(c => c.peerHex),
+    contacts,
+    mePubkeyHex: nostrPubkeyHex,
+    nameFor: displayName,
+  })
 
   // Sidebar search (real) — filter conversations + requests by name, npub handle, or last-message text.
   const sq = sidebarQuery.trim().toLowerCase()

@@ -17,6 +17,7 @@ import { C, MODAL_WIDTH, MONO, accentBorder, accentFill, border, warnBorder } fr
 export type Chrome = 'modal' | 'page'
 import { Copy, Spinner } from './icons'
 import { iconBoxStyle } from '../../primitives/iconBox'
+import Chip from '../../primitives/Chip'
 
 // ── Shell ─────────────────────────────────────────────────────────────────────
 
@@ -147,18 +148,33 @@ export function RootHeader({ chip, right, chrome = 'modal' }: { chip?: string; r
           of the header now have one job each: the left names the screen, the right holds everything
           that describes or changes how you are looking at it. */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        {/* The network is a STATEMENT OF FACT, not an accent: mono, quiet, with an amber dot. It
-            used to wear the brand colour, which read as a badge of approval for a testnet. */}
+        {/* The network is a STATEMENT OF FACT, not an accent: mono, quiet, and now wordmark only.
+            It used to wear the brand colour, which read as a badge of approval for a testnet.
+
+            ON Chip NOW, NOT ON ITS OWN SPAN. This was eleven hand-written properties that happened
+            to describe a chip — 5/12 padding against Chip's 7/13, 0.08em tracking against 0.12em, a
+            5px dot against 6px, --border against --border-strong and no fill at all. None of those
+            differences meant anything; they were simply what got typed the day it was written, and
+            the drift only became visible once the Bridge tab put a second status pill in a second
+            header. Two pills doing the same job in the same position on sibling tabs have to be the
+            same object, so this is now the same component with the same overrides.
+
+            THE DOT IS GONE, from this pill and from Bridge's. It was amber here and accent there,
+            which was the right pair of colours for a distinction that should never have been drawn
+            in a dot at all: a small filled circle at the head of a pill is the vocabulary of a
+            CONNECTION INDICATOR, and both of these pills exist to say something other than "live".
+            Chat's ConnectionStatus is where that vocabulary belongs and still uses it.
+
+            THE CAPS ARE IN THE STRING, NOT IN A textTransform, which is how Bridge does it — that
+            pill's children are the literal characters "ROADMAP · IN DEVELOPMENT". So `chip` arrives
+            already upper-cased from its caller rather than being shouted at from here, and the two
+            pills are the same object fed the same shape of value. A textTransform would have
+            uppercased anything any future caller passed, which is a policy this component has no
+            business setting on someone else's string. */}
         {chip && (
-          <span style={{
-            display: 'inline-flex', alignItems: 'center', gap: 6,
-            padding: '5px 12px', borderRadius: 'var(--r-pill)', border: '1px solid var(--border)',
-            fontFamily: MONO, fontSize: 10.5, letterSpacing: '0.08em',
-            color: 'var(--text-muted-dim)', whiteSpace: 'nowrap',
-          }}>
-            <span style={{ width: 5, height: 5, borderRadius: 'var(--r-pill)', background: 'var(--warn)' }} />
+          <Chip mono style={{ letterSpacing: '0.12em', fontSize: 10.5, whiteSpace: 'nowrap' }}>
             {chip}
-          </span>
+          </Chip>
         )}
         {right}
       </div>

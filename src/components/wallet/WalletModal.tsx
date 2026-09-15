@@ -1139,7 +1139,7 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
       publicBalance={publicBalance}
       total={total}
       hidden={balanceHidden}
-      networkChip="Esmeralda testnet"
+      networkChip="ESMERALDA TESTNET"
       refreshing={refreshing}
       // The literal scan diagnostic, restored beside Refresh. Private scan only — the public
       // balance is a vault read with nothing to enumerate.

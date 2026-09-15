@@ -73,22 +73,29 @@ import { useNavigate } from 'react-router-dom'
 import { useWallet } from '../../context/WalletContext'
 import LogoTile from '../primitives/LogoTile'
 
-// ── TWO SERVICES, NOT THREE ──────────────────────────────────────────────────
+// ── THERE IS NO @ ROW ────────────────────────────────────────────────────────
 //
-// The @ row is gone. Names were never a service in the way the wallet and chat are — they are a
-// property of the identity you message with, so CNS moved inside chat, opened by the [@] beside the
-// two list actions, and the glyph that used to sit here went with it. A rail row for a thing you
-// touch twice a year, beside two you live in, was the spine spending its scarcest space badly.
+// Names were never a service in the way the wallet and chat are — they are a property of the
+// identity you message with, so CNS moved inside chat, opened by the [@] beside the two list
+// actions, and the glyph that used to sit here went with it. A rail row for a thing you touch
+// twice a year, beside ones you live in, was the spine spending its scarcest space badly.
+//
+// THAT ARGUMENT IS ABOUT WHAT EARNS A ROW, NOT ABOUT HOW MANY THERE ARE. Bridge earns one: it is a
+// destination you open, not a property of something else, even while it is still a roadmap page.
+//
+// ORDER IS RENDER ORDER — the map below walks this array — so a new service appends rather than
+// displacing the two anyone already has muscle memory for.
 //
 // NOTHING NEEDS A FALLBACK. AppShell defaults to 'wallet' and always did, and this union is only
-// ever compared by equality, never switched on exhaustively.
-const SERVICES = ['wallet', 'chat'] as const
+// ever compared by equality, never switched on exhaustively. The two tables under it are
+// Record<Service, …>, so adding a member here is a type error until both are filled in.
+const SERVICES = ['wallet', 'chat', 'bridge'] as const
 
 /** Type-only export: keeps this file a component module, which is what fast refresh wants. */
 export type Service = (typeof SERVICES)[number]
 
 /** The tooltip text, and the accessible name. Both, from one string — see the header note. */
-const LABEL: Record<Service, string> = { wallet: 'Wallet', chat: 'Chat' }
+const LABEL: Record<Service, string> = { wallet: 'Wallet', chat: 'Chat', bridge: 'Bridge' }
 
 const ICON: Record<Service, React.ReactNode> = {
   wallet: (
@@ -99,6 +106,19 @@ const ICON: Record<Service, React.ReactNode> = {
   chat: (
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
       <path d="M21 11.5a8.5 8.5 0 1 0-16.9 1.6L3 20l3.8-1.1A8.5 8.5 0 0 0 21 11.5z" />
+    </svg>
+  ),
+  // REDRAWN ON THIS FILE'S GRID, not transcribed. The design draws the same two-opposing-arrows
+  // mark on a 34×26 box at stroke-width 2.6 (Caravel Dapp (Bridge).dc.html, and again inside the
+  // teaser artwork itself, which is why the spine glyph and the graphic agree). Pasted here that
+  // would be a heavier, wider icon sitting beside two 24-grid 1.8s — correct in the markup and
+  // visibly wrong on screen. So the shape is kept and the metrics are this file's: the arrows span
+  // 16 of the 24 units, mirror-symmetric about both centre lines, with the same 6-unit gap between
+  // the shafts that the design's proportions give at this size.
+  bridge: (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 9h15M15.5 5.5L19 9l-3.5 3.5" />
+      <path d="M20 15H5M8.5 11.5L5 15l3.5 3.5" />
     </svg>
   ),
 }

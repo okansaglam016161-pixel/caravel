@@ -204,7 +204,7 @@ function Drive() {
   const props: WalletModalV2Props = {
     chrome,
     assetOpen, onOpenAsset: () => setAssetOpen(true), onCloseAsset: () => setAssetOpen(false),
-    privateBalance: priv, publicBalance: pub, hidden, networkChip: 'Esmeralda testnet',
+    privateBalance: priv, publicBalance: pub, hidden, networkChip: 'ESMERALDA TESTNET',
     total: computeTotal({
       privateBalance: priv, publicBalance: pub, privateGeneration: 1, publicGeneration: 1, settleLagged: false, privateIncomplete: incomplete,
       settling: move.step === 'settling',
@@ -386,7 +386,7 @@ const noop = () => {}
 function still(over: Partial<WalletModalV2Props>): WalletModalV2Props {
   return {
     privateBalance: ready(PRIVATE), publicBalance: ready(PUBLIC), hidden: false,
-    networkChip: 'Esmeralda testnet', move: { step: 'idle' },
+    networkChip: 'ESMERALDA TESTNET', move: { step: 'idle' },
     entries: [{ dir: 'conceal' }, { dir: 'reveal' }],
     onToggleHidden: noop, onRefresh: noop, onClose: noop, onBack: noop,
     onAmountChange: noop, onMax: noop, onReview: noop, onConfirm: noop,

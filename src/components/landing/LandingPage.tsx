@@ -518,7 +518,7 @@ function Backing() {
           <h3 style={{ margin: '24px 0 0', fontSize: 20, fontWeight: 600, letterSpacing: '-0.015em', color: 'var(--text-primary)' }}>Built on Tari</h3>
           <div style={{ marginTop: 10 }}><Pill tone="mono">PROTOCOL</Pill></div>
           <p style={{ margin: '24px 0 0', maxWidth: 340, fontSize: 16.5, lineHeight: 1.6, fontWeight: 500, color: 'var(--text-primary)', textWrap: 'pretty' }}>
-            Caravel runs on the Ootle, Tari&rsquo;s layer two for private, confidential transactions. Proven on chain.
+            Caravel runs on the Ootle, Tari&rsquo;s programmable layer two that supports confidential assets.
           </p>
         </div>
       </div>
@@ -529,10 +529,10 @@ function Backing() {
 const FAQS: { q: string; a: string }[] = [
   { q: 'Is Caravel really self-custodial?', a: 'Yes. Your keys are generated on your device and never leave it. Not even Caravel can access your funds.' },
   { q: 'What if I lose my recovery phrase?', a: 'Your 24 words are the only way back in. Caravel cannot recover them for you, that is the nature of self-custody. Store them safely offline.' },
-  { q: 'How is my activity kept private?', a: 'Balances can be made private and confidential on the Ootle, and messages are end-to-end encrypted. You choose what stays visible.' },
+  { q: 'How is my activity kept private?', a: 'On the Ootle, your balance can be held confidentially: amounts are hidden in cryptographic commitments, and the network verifies your transactions without ever seeing the values. You choose when to reveal funds publicly and when to keep them private. Messages are end to end encrypted over Nostr, wrapped so relays can’t read them or link who’s talking to whom.' },
   { q: 'Can I use real funds?', a: 'Not yet. Caravel runs on the Tari Esmeralda testnet. It is experimental and for testing, not for real value.' },
-  { q: 'What are Tari and the Ootle?', a: 'Tari is the ecosystem Caravel is built on. The Ootle is its layer two for private, confidential transactions.' },
-  { q: 'What is coming next?', a: 'Swap, Bridge, and Pools are on the way, expanding Caravel into the everything app for private crypto.' },
+  { q: 'What are Tari and the Ootle?', a: 'Tari is the base protocol Caravel is built on. The Ootle is its programmable layer two, a smart contract platform that supports confidential assets, which is what lets Caravel keep your balances and payments private.' },
+  { q: 'What is coming next?', a: 'Bridge, Swap, and Pools are on the way, expanding Caravel into a Swiss bank account in your pocket, one private service at a time.' },
 ]
 
 /**

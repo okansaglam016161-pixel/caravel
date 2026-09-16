@@ -23,7 +23,6 @@
 //   abstraction. The hidden subtree keeps its state and its effects, and pays no layout or paint.
 
 import { useState } from 'react'
-import BridgePage from '../bridge/BridgePage'
 import ChatApp from '../chat/ChatApp'
 import ProfilePanel from '../wallet/ProfilePanel'
 import WalletPage from '../wallet/WalletPage'
@@ -54,10 +53,6 @@ export default function AppShell() {
           follows the app theme like every other service — and so does the wallet modal inside it,
           which used to inherit the pin. */}
       <Pane show={service === 'chat'}><ChatApp onOpenWallet={() => setService('wallet')} /></Pane>
-      {/* Bridge holds no state worth preserving — it is an image and four paragraphs — so the
-          argument above does not apply to it. It stays a Pane anyway: a third code path in a
-          three-line component buys nothing, and the teaser's one asset is lazy. */}
-      <Pane show={service === 'bridge'}><BridgePage /></Pane>
 
       {profileOpen && (
         <ProfilePanel onClose={() => setProfileOpen(false)} />

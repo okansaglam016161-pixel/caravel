@@ -155,20 +155,17 @@ export function RootHeader({ chip, right, chrome = 'modal' }: { chip?: string; r
             to describe a chip — 5/12 padding against Chip's 7/13, 0.08em tracking against 0.12em, a
             5px dot against 6px, --border against --border-strong and no fill at all. None of those
             differences meant anything; they were simply what got typed the day it was written, and
-            the drift only became visible once the Bridge tab put a second status pill in a second
-            header. Two pills doing the same job in the same position on sibling tabs have to be the
-            same object, so this is now the same component with the same overrides.
+            every one of them was a way for this pill to drift away from every other pill in the
+            app. A status pill in a header is not a bespoke object, so it renders the shared one.
 
-            THE DOT IS GONE, from this pill and from Bridge's. It was amber here and accent there,
-            which was the right pair of colours for a distinction that should never have been drawn
-            in a dot at all: a small filled circle at the head of a pill is the vocabulary of a
-            CONNECTION INDICATOR, and both of these pills exist to say something other than "live".
-            Chat's ConnectionStatus is where that vocabulary belongs and still uses it.
+            THE DOT IS GONE. It was amber, which was a reasonable colour for a distinction that
+            should never have been drawn in a dot at all: a small filled circle at the head of a
+            pill is the vocabulary of a CONNECTION INDICATOR, and this pill exists to say something
+            other than "live" — it names the network. Chat's ConnectionStatus is where that
+            vocabulary belongs and still uses it.
 
-            THE CAPS ARE IN THE STRING, NOT IN A textTransform, which is how Bridge does it — that
-            pill's children are the literal characters "ROADMAP · IN DEVELOPMENT". So `chip` arrives
-            already upper-cased from its caller rather than being shouted at from here, and the two
-            pills are the same object fed the same shape of value. A textTransform would have
+            THE CAPS ARE IN THE STRING, NOT IN A textTransform. `chip` arrives already upper-cased
+            from its caller rather than being shouted at from here. A textTransform would have
             uppercased anything any future caller passed, which is a policy this component has no
             business setting on someone else's string. */}
         {chip && (

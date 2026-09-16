@@ -103,16 +103,23 @@ export const MONO = 'var(--font-mono)'
 export const MODAL_WIDTH = 480
 
 /**
- * The widest the wallet PAGE lets its content grow.
+ * A SAFETY CEILING, not a measure.
  *
- * The cap is a READING MEASURE, not a derivation from the shell's width, and that is what keeps it
- * correct as the shell changes: past roughly 1040 the vault hero stops reading as a card and the
- * assets rows put half a screen between a name and its amount, so the content centres rather than
- * stretching further.
+ * The wallet page is FLUID: it fills whatever the spine leaves it, with only its own side padding
+ * between the content and the pane. That is the whole layout, and on every ordinary screen this
+ * number never comes up — a 1440, a 1512 or a 1728 viewport is fully filled, because the pane is
+ * narrower than the cap.
  *
- * It was originally justified against "a 1280 shell with a 224 nav beside it, leaving roughly
- * 1050". That arithmetic is dead — the nav is now the 64px icon spine — and the value did not move,
- * which is the evidence the measure was doing the work rather than the subtraction. The pane is
- * simply wider than the cap more often now.
+ * What it stops is the absurd end. On a 2560 or a 3840 display an uncapped column draws the balance
+ * hero two and a half thousand pixels wide and puts half a metre of desk between an asset's name
+ * and its amount. 1600 is set where the fill stops being a fill and starts being a stretch: the
+ * first common width it bites at is 1920, and there it leaves ~128 either side rather than boxing
+ * the page.
+ *
+ * IT IS NOT THE DESIGN'S MEASURE, and nothing is proportioned against it. "Caravel Dapp (Wallet)
+ * V3" series 01 draws the overview in a 770 column, and this page ran at that measure briefly; the
+ * call after seeing it was that a wallet should own its page rather than sit in a card-shaped
+ * margin of it. The design's numbers still govern everything INSIDE the column — the hero's 32
+ * padding, the 12/24 rhythm — which is what survives the column getting wider.
  */
-export const PAGE_MAX_WIDTH = 1040
+export const PAGE_MAX_WIDTH = 1600

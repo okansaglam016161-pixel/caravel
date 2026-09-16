@@ -174,7 +174,14 @@ export interface WalletModalV2Props {
   tab?: WalletTab
   onTab?: (t: WalletTab) => void
   /**
-   * Rendered at the foot of Overview — the app's own stateful cards.
+   * Rendered at the HEAD of Overview — the app's own stateful notice, above the balance.
+   *
+   * IT MOVED, AND THE MOVE IS THE POINT. This was `overviewExtras`, a grid at the FOOT of the page
+   * holding stateful cards. Only the faucet was ever in it, and V3 series 01 does not draw the
+   * faucet as a card down there: it draws a thin dashed prompt at the top, above the hero, with a
+   * ✕ on it. A slot named for a row of extras could not hold that, and a second slot at the top
+   * would have made the faucet travel the length of the page the moment you claimed. So there is
+   * one slot, it is at the top, and what changes on a claim is the object inside it.
    *
    * NODES, NOT DATA. The faucet owns a claim/cooldown/settle machine, so it is passed
    * already-rendered rather than described here. The `faucet` and `ons` DATA props that used to
@@ -185,7 +192,7 @@ export interface WalletModalV2Props {
    * identity you message with, so they live in chat now and the Name page is gone. This holds the
    * faucet alone.
    */
-  overviewExtras?: ReactNode
+  overviewNotice?: ReactNode
   send?: SendPanelProps
   receive?: { address: string | null; copied: boolean; onCopy: () => void }
   /**
@@ -256,7 +263,11 @@ export default function WalletModalV2(p: WalletModalV2Props) {
           {p.chrome === 'page' && <ThemeToggle size={30} />}
           {p.onClose && <HeaderIcon label="Close" onClick={p.onClose}>✕</HeaderIcon>}
         </>} />
-        <Body gap={14} chrome={p.chrome}>
+        {/* THE PAGE RUNS AT V3's OWN RHYTHM. Series 01 draws the overview at 12 between blocks,
+            opening a section at 24 — see Body's pageGap, and the `lead` on the two section heads
+            below that spend the difference. The modal keeps its 14: it is a 480 card, and the
+            design's overlay frames are drawn on their own terms. */}
+        <Body gap={14} pageGap={12} chrome={p.chrome}>
           {showAsset ? (
             <AssetDetail
               privateBalance={p.privateBalance} publicBalance={p.publicBalance}
@@ -270,6 +281,9 @@ export default function WalletModalV2(p: WalletModalV2Props) {
           ) : (
           <>
             {p.inFlightText && <InFlightBanner text={p.inFlightText} />}
+            {/* The faucet's own notice, under a move in flight and above everything else. A
+                transaction of yours outranks an offer of test funds when both are on screen. */}
+            {p.overviewNotice}
             <TotalHero
               total={p.total} privateBalance={p.privateBalance} publicBalance={p.publicBalance}
               hidden={p.hidden} onRetry={p.onRetryBalance}
@@ -289,15 +303,10 @@ export default function WalletModalV2(p: WalletModalV2Props) {
             />
             {/* The portfolio. One real asset today — see assets.tsx for why that is a presentation
                 and not a model. */}
-            <SectionHead title="Assets" />
+            <SectionHead title="Assets" lead />
             <AssetsPanel total={p.total} hidden={p.hidden} onOpen={p.onOpenAsset} />
             {p.activity && p.onTab && (
-              <RecentActivity rows={p.activity} onViewAll={() => p.onTab!('activity')} />
-            )}
-            {p.overviewExtras && (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 12, alignItems: 'start' }}>
-                {p.overviewExtras}
-              </div>
+              <RecentActivity rows={p.activity} onViewAll={() => p.onTab!('activity')} lead />
             )}
           </>
           )}

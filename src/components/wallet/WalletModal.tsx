@@ -1185,10 +1185,12 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
       // THE ROW GOES INERT BY ITSELF. AssetsPanel keys its chevron, pointer, hover, focus and
       // click on whether `onOpen` was passed, so withholding it removes every affordance at once
       // rather than leaving a control that looks live and does nothing.
-      // The faucet is a quiet card in the extras slot, and now the only one. The @name card left the
-      // overview, then left the wallet: names are a property of the identity you message with, so
-      // CNS lives in chat, opened by the [@] on the conversation list's search row.
-      overviewExtras={<FaucetClaimPanel />}
+      // The faucet, and it decides its own shape and whether it is there at all — a thin prompt
+      // above the balance while it is offering, a card while a claim runs, nothing once the wallet
+      // is funded or the prompt has been dismissed. The @name card left the overview, then left the
+      // wallet: names are a property of the identity you message with, so CNS lives in chat, opened
+      // by the [@] on the conversation list's search row.
+      overviewNotice={<FaucetClaimPanel />}
       send={{
         view: sendView, hidden: balanceHidden,
         onSource: s => { setSendSource(s); setSendExact(null); setSendValidationError('') },

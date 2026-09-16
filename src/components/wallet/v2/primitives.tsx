@@ -236,13 +236,25 @@ export function SubHeader({ title, onBack, onClose }: { title: string; onBack?: 
 
 // Scrolls rather than growing: with tabs and panels the overview can outrun the viewport, and a
 // modal that pushes its own confirm button off-screen is worse than one that scrolls.
-export function Body({ children, gap = 12, chrome = 'modal' }: {
-  children: ReactNode; gap?: number; chrome?: Chrome
+export function Body({ children, gap = 12, pageGap, chrome = 'modal' }: {
+  children: ReactNode
+  gap?: number
+  /**
+   * The page's own rhythm, when it is not simply the modal's plus two.
+   *
+   * The +2 below is a nudge: the same stack, given a little more air once it is not inside a 480
+   * card. V3 draws the page's rhythm outright — series 01 sets 12 between every block of the
+   * overview and opens a section at 24 — so the wallet page states 12 here rather than arriving
+   * near it from the modal's number. Left unset, the +2 stands, which is what the landing page's
+   * still still wants.
+   */
+  pageGap?: number
+  chrome?: Chrome
 }) {
   const page = chrome === 'page'
   return (
     <div style={{
-      display: 'flex', flexDirection: 'column', gap: page ? gap + 2 : gap,
+      display: 'flex', flexDirection: 'column', gap: page ? pageGap ?? gap + 2 : gap,
       padding: page ? '4px 0 0' : '20px 22px 22px',
       // The page's own container scrolls. A second scroller here is what made the wallet page
       // scroll inside a box inside a scrolling pane.

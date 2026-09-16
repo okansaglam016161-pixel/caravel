@@ -19,10 +19,21 @@
 //   scrolling pane, which is two scrollbars for one list. `chrome="page"` drops the card, the
 //   height cap and the inner scroller; what is left is content in a column.
 //
-//   WIDTH IS CAPPED, NOT UNLIMITED. It fills the pane up to PAGE_MAX_WIDTH and centres beyond it.
-//   The design's proportions come from a 1280 shell with a 224 nav beside it; past roughly that the
-//   vault stops reading as a card and an assets row puts half a screen between a name and its
-//   amount. Below the cap it is fully fluid, so narrowing the window reflows rather than clipping.
+//   ── THE WALLET FILLS ITS PAGE ────────────────────────────────────────────────
+//
+//   The column is FLUID. It takes whatever width the spine leaves it, and the only thing between
+//   the content and the pane is this padding — which clamps, so a phone gets 16 and a desktop 32
+//   rather than a percentage that reads as a margin at one size and a hairline at another.
+//
+//   PAGE_MAX_WIDTH IS A CEILING, NOT A MEASURE. It exists for the 2560 and 3840 case and is set
+//   high enough that ordinary screens never reach it: a 1440, a 1512 and a 1728 viewport are all
+//   narrower than the cap once the spine is taken off, so on those the wallet is simply full width.
+//   `margin: '0 auto'` is what the ceiling needs to be worth having — past it the column centres
+//   instead of hugging the spine. Below it the margin resolves to zero and does nothing.
+//
+//   This page ran at 770 for one pass — the design's own column, drawn beside a 210 nav — and the
+//   verdict on seeing it was that the wallet should own its page rather than sit in a card-shaped
+//   margin of it. What the design still governs is everything inside the column.
 
 import WalletModal from './WalletModal'
 import { PAGE_MAX_WIDTH } from './v2/tokens'
@@ -31,7 +42,7 @@ export default function WalletPage() {
   return (
     <div style={{ flex: 1, minWidth: 0, overflowY: 'auto' }}>
       <div style={{
-        maxWidth: PAGE_MAX_WIDTH, margin: '0 auto',
+        width: '100%', maxWidth: PAGE_MAX_WIDTH, margin: '0 auto', boxSizing: 'border-box',
         padding: 'clamp(16px, 3vw, 32px) clamp(16px, 3vw, 32px) 48px',
       }}>
         <WalletModal chrome="page" />

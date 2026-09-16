@@ -12,9 +12,9 @@ import { claimFaucet, type ClaimResult } from '../../crypto/faucet'
 import { saveAccountAddress } from '../../crypto/accountStore'
 import { beginEntry, settleEntry } from '../../crypto/journalStore'
 import { settleVerdict, journalOutcomeFor, type SettleStartedBy } from './v2/settleVerdict'
-import { FaucetPanel, type FaucetPhase } from './v2/panels'
+import { FaucetBanner, FaucetPanel, type FaucetPhase } from './v2/panels'
 import { plainError } from './v2/plainError'
-import { fmt2 } from './v2/format'
+import { fmt2, formatCooldown } from './v2/format'
 
 type Phase = 'idle' | 'claiming' | 'verifying' | 'done' | 'lagging' | 'error'
 
@@ -24,6 +24,26 @@ const COOLDOWN_MS = 60_000
 // Was `Number(µt) / 1_000_000` — the same float-on-an-amount the rail forbids, hiding in a panel
 // rather than in crypto, which is why the C9 fix nearly stopped one site short. See fmt2.
 const shortTx = (t: string | null) => (t ? `${t.slice(0, 8)}…${t.slice(-6)}` : '')
+
+// ── DISMISSAL IS PER WALLET ───────────────────────────────────────────────────
+//
+// The faucet is a prompt about THIS wallet's funding, so "I don't need this" is a fact about this
+// wallet and the address is the key. A restore onto a different address gets the prompt back,
+// because for that wallet the question has not been asked yet.
+//
+// The try/catch is hooks/useTheme's: private mode and blocked storage throw on both the read and
+// the write, and neither is worth surfacing here. A blocked write costs the dismissal its memory —
+// the card comes back on the next reload — and nothing else.
+const dismissKey = (address: string) => `caravel-faucet-dismissed-${address}`
+
+function readDismissed(address: string | null): boolean {
+  if (!address) return false
+  try {
+    return localStorage.getItem(dismissKey(address)) === '1'
+  } catch {
+    return false
+  }
+}
 
 
 export default function FaucetClaimPanel() {
@@ -48,6 +68,17 @@ export default function FaucetClaimPanel() {
 
   const highBalance = balance !== null && balance >= HIGH_BALANCE
   const busy = p === 'claiming' || p === 'verifying'
+
+  // Read from storage rather than held across it: the address arrives after the first render on a
+  // fresh unlock, and it changes under this component when a different wallet is restored.
+  const [dismissed, setDismissed] = useState(() => readDismissed(address))
+  useEffect(() => { setDismissed(readDismissed(address)) }, [address])
+
+  function dismiss() {
+    setDismissed(true)
+    if (!address) return
+    try { localStorage.setItem(dismissKey(address), '1') } catch { /* blocked storage — the dismissal just won't survive a reload */ }
+  }
 
   // ── Reacting to the settle the CONTEXT is running ──────────────────────────
   //
@@ -193,6 +224,49 @@ export default function FaucetClaimPanel() {
     : !wallet || !address ? 'locked'
     : 'idle'
 
+  // ── A PROMPT, NOT A FIXTURE ─────────────────────────────────────────────────
+  //
+  // Two phases are the faucet declining, and a card that renders a decline is a permanent object
+  // on the overview saying nothing anyone can act on. `plenty` is the state every funded wallet
+  // ends in — the payout is 1000 tTARI against a 100 tTARI threshold, so one claim puts a wallet
+  // over it for good — which is exactly the shape V3 does not draw: series 01 gives the faucet a
+  // thin prompt with a ✕ on it, not a permanent card. `locked` is the same argument with a
+  // different reason: a card explaining why a control it is not showing would not work.
+  //
+  // The dismissal is honoured unconditionally and can be, because `dismiss` is only reachable from
+  // the ✕, the ✕ only renders on the two resting phases, and this card is the only way to start a
+  // claim. There is no path on which a claim is in flight and this is true.
+  if (phase === 'plenty' || phase === 'locked' || dismissed) return null
+
+  const remainingMs = cooldownUntil === null ? undefined : Math.max(0, cooldownUntil - nowTick)
+
+  // ── RESTING IS A NOTICE. A CLAIM IS A CARD. ─────────────────────────────────
+  //
+  // V3 draws these as two different objects in one place: series 01's thin dashed prompt above the
+  // hero while the faucet is just sitting there, and series 10's card once there is something to
+  // report. So this component picks between them by phase rather than dressing one as the other.
+  //
+  // THE ✕ FOLLOWS THE OFFER, NOT THE PROMPT. A banner that is OFFERING something can be declined,
+  // which is what the ✕ means — "not for this wallet". A banner counting down to the next claim is
+  // REPORTING one that already happened, and the only card that ever replaces it is reporting a
+  // transaction, so neither takes a ✕. There is no dismiss control on FaucetPanel at all, which is
+  // what makes "an in-flight claim cannot be dismissed" a fact about the component tree rather
+  // than a condition somebody has to keep true.
+  if (phase === 'idle' || phase === 'cooldown') {
+    const counting = remainingMs !== undefined && remainingMs > 0
+    return (
+      <FaucetBanner
+        text={
+          phase === 'idle' ? 'Testnet faucet is open.'
+          : counting ? `Next claim available in ${formatCooldown(remainingMs)}.`
+          : 'Just claimed. You can claim again shortly.'
+        }
+        action={phase === 'idle' ? { label: 'Claim test funds', onClick: claim } : undefined}
+        onDismiss={counting ? undefined : dismiss}
+      />
+    )
+  }
+
   return (
     <FaucetPanel
       phase={phase}
@@ -200,7 +274,7 @@ export default function FaucetClaimPanel() {
       // applied for the same reason it is everywhere else — a failure here can quote a fee.
       message={msg ? plainError(msg) : undefined}
       onClaim={claim}
-      cooldownRemainingMs={cooldownUntil === null ? undefined : Math.max(0, cooldownUntil - nowTick)}
+      cooldownRemainingMs={remainingMs}
     />
   )
 }

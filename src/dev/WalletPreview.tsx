@@ -15,7 +15,7 @@
 
 import { useState } from 'react'
 import WalletModalV2, { WALLET_TABS, type MoveView, type WalletModalV2Props, type WalletTab } from '../components/wallet/v2/WalletModalV2'
-import { ActivityRowShell, FaucetPanel, type ActivityRowView, type FaucetPhase, type SendView } from '../components/wallet/v2/panels'
+import { ActivityRowShell, FaucetBanner, FaucetPanel, type ActivityRowView, type FaucetPhase, type SendView } from '../components/wallet/v2/panels'
 import type { BalanceView } from '../components/wallet/v2/balances'
 import { computeTotal } from '../components/wallet/v2/total'
 import type { EntryProps } from '../components/wallet/v2/move'
@@ -243,17 +243,24 @@ function Drive() {
     activity: emptyActivity ? undefined : ACTIVITY.map(r => <ActivityRowShell key={r.id} row={r} hidden={hidden} />),
 
     tab, onTab: setTab,
-    overviewExtras: (
-      <FaucetPanel
-        phase={faucet}
-        received={1_000_000_000n}
-        onClaim={() => {
-          setFaucet('claiming')
-          setTimeout(() => setFaucet('verifying'), 1400)
-          setTimeout(() => setFaucet('done'), 3200)
-        }}
-        cooldownRemainingMs={faucet === 'cooldown' ? 42_000 : undefined}
+    // THE SLOT IS DRIVEN THE WAY THE APP DRIVES IT. FaucetClaimPanel shows a banner while the
+    // faucet is resting and the card once a claim is running, so the harness picks the same way —
+    // otherwise the one screen built to show what ships would be showing something that does not.
+    overviewNotice: faucet === 'idle' || faucet === 'cooldown' ? (
+      <FaucetBanner
+        text={faucet === 'idle' ? 'Testnet faucet is open.' : 'Next claim available in 42s.'}
+        action={faucet === 'idle' ? {
+          label: 'Claim test funds',
+          onClick: () => {
+            setFaucet('claiming')
+            setTimeout(() => setFaucet('verifying'), 1400)
+            setTimeout(() => setFaucet('done'), 3200)
+          },
+        } : undefined}
+        onDismiss={faucet === 'idle' ? () => setFaucet('plenty') : undefined}
       />
+    ) : (
+      <FaucetPanel phase={faucet} received={1_000_000_000n} onClaim={noop} />
     ),
     receive: {
       address: addrReady ? ADDRESS : null, copied,
@@ -411,7 +418,12 @@ function still(over: Partial<WalletModalV2Props>): WalletModalV2Props {
 // started taking it pre-built, so the gallery builds it the same way the app does.
 const faucetAt = (phase: FaucetPhase): Partial<WalletModalV2Props> =>
   // A live countdown on the cooldown case, so the gallery shows 10g as it actually renders.
-  ({ overviewExtras: <FaucetPanel phase={phase} received={1_000_000_000n} onClaim={noop} cooldownRemainingMs={phase === 'cooldown' ? 42_000 : undefined} /> })
+  //
+  // EVERY PHASE, INCLUDING THE ONES THE APP NO LONGER PUTS HERE. These entries are the series-10
+  // spec sheet: `idle` and `cooldown` now reach the overview as FaucetBanner and `plenty`/`locked`
+  // reach it as nothing at all, but the card still draws all nine, and a spec sheet with holes in
+  // it documents less than one without. The banner has its own entry beside them.
+  ({ overviewNotice: <FaucetPanel phase={phase} received={1_000_000_000n} onClaim={noop} cooldownRemainingMs={phase === 'cooldown' ? 42_000 : undefined} /> })
 const sendAt = (view: SendView) =>
   ({ tab: 'send' as WalletTab, send: { view, hidden: false, onSource: noop, onRecipient: noop, onAmount: noop, onNote: noop, onMax: noop, onReview: noop, onBack: noop, onConfirm: noop, onDone: noop, onRetry: noop, onCopyTx: noop, onViewActivity: noop } })
 
@@ -445,6 +457,9 @@ function Gallery() {
     { label: 'ERROR · VERBATIM NETWORK TEXT', props: still({ move: { step: 'error', dir: 'reveal', message: REAL_ERROR, txId: TXID } }) },
 
     // ── Faucet ──
+    { label: 'FAUCET · THE PROMPT, AS IT SHIPS', props: still({
+      overviewNotice: <FaucetBanner text="Testnet faucet is open." action={{ label: 'Claim test funds', onClick: noop }} onDismiss={noop} />,
+    }) },
     { label: 'FAUCET · IDLE', props: still(faucetAt('idle')) },
     { label: 'FAUCET · CLAIMING', props: still(faucetAt('claiming')) },
     { label: 'FAUCET · CHECKING BALANCE', props: still(faucetAt('verifying')) },

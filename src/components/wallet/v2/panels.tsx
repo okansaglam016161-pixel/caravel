@@ -29,9 +29,23 @@ const XTR = (n: bigint) => `${fmt6(n)} XTR`
  * row down, so a page of three cards read as nine bands. Outside, the heading is the label and the
  * card is the content, and the page has three things on it.
  */
-export function SectionHead({ title, action }: { title: string; action?: ReactNode }) {
+export function SectionHead({ title, action, lead = false }: {
+  title: string
+  action?: ReactNode
+  /**
+   * A SECTION BREAK, not a heading style. V3's overview runs at a 12 rhythm inside a section and
+   * opens a new one at 24 (series 01: hero 12 privacy, then 24 before Assets and 24 before Recent
+   * activity), so the head that starts a section carries the extra 12 and drops the -4 that pulls
+   * a plain head down onto the card under it. Off by default: the landing page's still draws these
+   * heads in a composition of its own, and it is not this pass's surface.
+   */
+  lead?: boolean
+}) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '0 6px', marginBottom: -4 }}>
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 12, padding: '0 6px',
+      ...(lead ? { marginTop: 12 } : { marginBottom: -4 }),
+    }}>
       <span style={{ flex: 1, fontSize: 15, fontWeight: 600, color: C.primary }}>{title}</span>
       {action}
     </div>
@@ -62,19 +76,91 @@ export interface FaucetPanelProps {
   cooldownRemainingMs?: number
 }
 
-const FAUCET_ICON = (
-  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+/** The design draws one faucet mark at two sizes: 14 in the card's tile, 13 in the banner. */
+const FaucetGlyph = ({ size }: { size: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
     <path d="M12 3v12M12 15l-4-4M12 15l4-4" /><path d="M5 21h14" />
   </svg>
 )
 
+/** The ✕ that retires a prompt. 12px and muted, as V3 draws it on the banner. */
+const DismissX = () => (
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+    <path d="M18 6L6 18M6 6l12 12" />
+  </svg>
+)
+
+/**
+ * The faucet AT REST — V3 series 01's thin prompt, above the balance.
+ *
+ * ── WHY THE RESTING STATE IS NOT THE CARD ────────────────────────────────────
+ *
+ * The overview's first job is to say what you have. A 44px card with a tile, a title and a button,
+ * sitting there from the first render of a fresh wallet, competes with that for the one thing on
+ * the page that should win. The design's answer is a strip: dashed, one line high, with the claim
+ * as a link rather than a button, which is the difference between an offer and an instruction.
+ *
+ * DASHED IS THE WHOLE SIGNAL. Every other bordered thing on this page is solid, and the border is
+ * what says this one is temporary — a notice, not furniture. It is the only dashed border in the
+ * wallet, and it should stay that way.
+ *
+ * IT CARRIES NO PHASE. A claim in flight is not a notice, so the moment one starts this is replaced
+ * by the card that can report it — same slot, different object. Everything here is therefore a
+ * sentence, an optional link, and an optional ✕; there is no spinner and no outcome.
+ */
+export function FaucetBanner({ text, action, onDismiss }: {
+  text: string
+  /** The claim, as a link. Absent while the faucet is declining — a cooldown offers nothing. */
+  action?: { label: string; onClick: () => void }
+  /** Absent when the prompt is reporting rather than offering — see FaucetClaimPanel. */
+  onDismiss?: () => void
+}) {
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 10,
+      padding: '9px 14px', borderRadius: 10,
+      border: '1px dashed var(--border-strong)', background: 'var(--surface)',
+    }}>
+      <span style={{ display: 'flex', flexShrink: 0, color: 'var(--accent-ink)' }}><FaucetGlyph size={13} /></span>
+      <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: C.bodyDim, textWrap: 'pretty' }}>{text}</span>
+      {action && (
+        <span
+          role="button" tabIndex={0}
+          onClick={action.onClick}
+          onKeyDown={e => e.key === 'Enter' && action.onClick()}
+          style={{
+            fontSize: 12.5, fontWeight: 600, color: 'var(--accent-ink)',
+            cursor: 'pointer', userSelect: 'none', flexShrink: 0, whiteSpace: 'nowrap',
+          }}
+        >{action.label}</span>
+      )}
+      {onDismiss && (
+        <button
+          onClick={onDismiss} aria-label="Dismiss" title="Dismiss"
+          style={{
+            background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+            color: C.mutedDim, display: 'flex', flexShrink: 0,
+          }}
+        ><DismissX /></button>
+      )}
+    </div>
+  )
+}
+
 /**
  * The testnet faucet — V3 series 10, all phases in one card.
  *
- * A TEMPORARY HELPER, DRAWN QUIETLY. It exists only while Caravel runs on Esmeralda, and it sits
- * in the extras slot at the foot of the overview. One shell for every phase: the tile and the
- * title never move, and only the line and the right-hand slot change — so the card never appears
- * to become a different component while a claim runs.
+ * A TEMPORARY HELPER, DRAWN QUIETLY. It exists only while Caravel runs on Esmeralda. One shell for
+ * every phase: the tile and the title never move, and only the line and the right-hand slot change
+ * — so the card never appears to become a different component while a claim runs.
+ *
+ * IN THE APP IT IS THE IN-FLIGHT SURFACE, and only that. FaucetClaimPanel shows FaucetBanner while
+ * the faucet is resting and swaps to this card the moment a claim starts, so what the wallet ever
+ * renders here is `claiming`, `verifying`, `lagging`, `error` and `done`. The card accordingly has
+ * NO DISMISS: not a hidden one, not a disabled one — there is no ✕ in this component, so no amount
+ * of prop-passing can put a control for losing a transaction report beside a transaction report.
+ * The other four phases still render, because the preview gallery draws all nine as a spec sheet
+ * and because a phase table with holes in it is worse than one without.
  *
  * NO PHASE IS AN ERROR EXCEPT `error`. `lagging` is a claim that committed and a balance that is
  * behind; `cooldown` and `plenty` are the faucet declining, which is what a faucet is for. All
@@ -150,7 +236,7 @@ export function FaucetPanel({ phase, received, message, onClaim, cooldownRemaini
         width: 32, height: 32, borderRadius: 9, flexShrink: 0,
         background: 'var(--accent-wash)', color: 'var(--accent-ink)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-      }}>{FAUCET_ICON}</span>
+      }}><FaucetGlyph size={14} /></span>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 13, fontWeight: 600, color: C.primary }}>Testnet faucet</div>
         <div style={{ fontSize: 12, color: C.mutedDim, marginTop: 1, lineHeight: 1.45, textWrap: 'pretty' }}>
@@ -1150,14 +1236,17 @@ export function ActivityEmpty({ compact = false }: { compact?: boolean }) {
  * event under a category. Fewer than three simply shows fewer; the empty case gets the same honest
  * card the full list does rather than padded blank rows.
  */
-export function RecentActivity({ rows, onViewAll }: {
+export function RecentActivity({ rows, onViewAll, lead = false }: {
   rows: ReactNode[]; onViewAll: () => void
+  /** Opens a section rather than continuing one — see SectionHead. The overview sets it. */
+  lead?: boolean
 }) {
   const shown = rows.slice(0, 3)
   return (
     <>
       <SectionHead
         title="Recent activity"
+        lead={lead}
         // Only offered when there is more than the page is showing — a "Show all" over three rows
         // of three would be a control that changes nothing.
         action={rows.length > shown.length && (

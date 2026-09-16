@@ -13,6 +13,14 @@
 //   record. There is no wallet here, no key, no network — the same arrangement src/dev/WalletPreview
 //   has run on since M4, which is the in-repo proof that these run on literals alone.
 //
+//   THE CONTAINER IS BORROWED FOR THE SAME REASON THE CONTENTS ARE. V3's 01B put Privacy and Assets
+//   inside ONE card divided by hairlines, and the tempting version of that here is a div with a
+//   border and a 1px line — four properties, easily typed, and a fifth thing to keep in step. So
+//   this uses the wallet's own OverviewCard and CardDivider over `bare` sections, which means the
+//   landing cannot drift from the app by one padding value or one radius: there is one card in the
+//   codebase and both surfaces render it. The divider's bleed is derived from that card's padding,
+//   so it stays full-width here without this file knowing the number.
+//
 //   WHAT IT BUYS: tsc is the drift alarm. If TotalView, BalanceView or EntryProps move, this file
 //   fails to build instead of quietly misdescribing the product to everyone who visits.
 //
@@ -56,7 +64,7 @@ import { AssetsPanel } from '../wallet/v2/assets'
 import type { BalanceView } from '../wallet/v2/balances'
 import { Eye, Refresh } from '../wallet/v2/icons'
 import type { EntryProps } from '../wallet/v2/move'
-import { SectionHead } from '../wallet/v2/panels'
+import { CardDivider, OverviewCard, SectionHead } from '../wallet/v2/panels'
 import { Body } from '../wallet/v2/primitives'
 import { PrivacyCard } from '../wallet/v2/PrivacyCard'
 import { C, MONO } from '../wallet/v2/tokens'
@@ -141,10 +149,17 @@ function StillHeader() {
  * @param compact  The balance hero ALONE — the services showcase tile.
  *
  * TWO GRAPHICS, TWO JOBS. The hero mockup at the top of the page is the detailed one: shell,
- * header, hero, Privacy card, assets. The showcase further down is a glanceable tile beside a
- * paragraph, and repeating the privacy split and the assets row there made it compete with the
- * mockup rather than complement it — the same facts, twice, the second time smaller. So compact
- * keeps the one thing a wallet tile should say at a glance: what you have.
+ * header, balance, and the overview card with its Privacy and Assets sections. The showcase
+ * further down is a glanceable tile beside a paragraph, and repeating the privacy split and the
+ * assets row there made it compete with the mockup rather than complement it — the same facts,
+ * twice, the second time smaller. So compact keeps the one thing a wallet tile should say at a
+ * glance: what you have.
+ *
+ * NO RECENT ACTIVITY IN EITHER, and that is a decision rather than an omission. The app's card has
+ * a third section; this graphic is a crop of the top of that page — it shows no faucet notice and
+ * no scan line either — and the only way to draw an activity list here is to invent transactions.
+ * A marketing page asserting that somebody received 120 XTR from @haci is a worse inaccuracy than
+ * a shorter picture.
  *
  * IT IS STILL THE REAL TotalHero, which is the point of the flag rather than a second component.
  * The tile cannot drift from the mockup above it, because they are the same component over the
@@ -155,21 +170,29 @@ export default function WalletStill({ compact = false }: { compact?: boolean }) 
     <div inert style={{ pointerEvents: 'none' }}>
       {!compact && <StillHeader />}
       {/* The app's own column: gap and padding come from the same component the wallet page uses,
-          at the same `chrome` and the same gap WalletModalV2 passes. */}
-      <Body gap={14} chrome="page">
+          at the same `chrome` and the same two gaps WalletModalV2 passes — 14 for a modal it will
+          never be, and the 12 the page actually runs at. The second one is the one that shows: it
+          is the air between the hero and the card under it, and this still sat at 16 for a commit
+          because it passed only the first. */}
+      <Body gap={14} pageGap={12} chrome="page">
         <TotalHero
           total={total} privateBalance={privateBalance} publicBalance={publicBalance}
           hidden={false} onSend={noop} onReceive={noop}
         />
+        {/* THE APP'S CARD, NOT A PICTURE OF IT — see the header note on drift. */}
         {!compact && (
-          <>
+          <OverviewCard>
             <PrivacyCard
+              bare
               privateBalance={privateBalance} publicBalance={publicBalance}
               total={total} hidden={false} entries={entries}
             />
-            <SectionHead title="Assets" />
-            <AssetsPanel total={total} hidden={false} onOpen={noop} />
-          </>
+            <CardDivider top={22} />
+            <SectionHead title="Assets" flush />
+            {/* `onOpen` still passed, still a no-op: it is what keeps the chevron and the row's
+                full weight, and inert is what keeps it harmless. See the header note. */}
+            <AssetsPanel bare total={total} hidden={false} onOpen={noop} />
+          </OverviewCard>
         )}
       </Body>
     </div>

@@ -103,23 +103,28 @@ export const MONO = 'var(--font-mono)'
 export const MODAL_WIDTH = 480
 
 /**
- * A SAFETY CEILING, not a measure.
+ * The widest the wallet PAGE lets its content grow.
  *
- * The wallet page is FLUID: it fills whatever the spine leaves it, with only its own side padding
- * between the content and the pane. That is the whole layout, and on every ordinary screen this
- * number never comes up — a 1440, a 1512 or a 1728 viewport is fully filled, because the pane is
- * narrower than the cap.
+ * THE COLUMN IS STILL FLUID UNDER IT. Everything below the cap fills the pane the spine leaves,
+ * with only this page's own clamped side padding between the content and the edge; a narrow window
+ * reflows rather than clipping. What the number decides is where filling stops.
  *
- * What it stops is the absurd end. On a 2560 or a 3840 display an uncapped column draws the balance
- * hero two and a half thousand pixels wide and puts half a metre of desk between an asset's name
- * and its amount. 1600 is set where the fill stops being a fill and starts being a stretch: the
- * first common width it bites at is 1920, and there it leaves ~128 either side rather than boxing
- * the page.
+ * 1200 IS A CHOSEN MIDDLE, ARRIVED AT BY LOOKING. Three values have been on this page and each was
+ * judged on a real screen rather than argued from arithmetic:
  *
- * IT IS NOT THE DESIGN'S MEASURE, and nothing is proportioned against it. "Caravel Dapp (Wallet)
- * V3" series 01 draws the overview in a 770 column, and this page ran at that measure briefly; the
- * call after seeing it was that a wallet should own its page rather than sit in a card-shaped
- * margin of it. The design's numbers still govern everything INSIDE the column — the hero's 32
- * padding, the 12/24 rhythm — which is what survives the column getting wider.
+ *   770   V3 series 01's own column — the design draws the overview at 980 beside a 210 nav. Read
+ *         as a wallet sitting in a card-shaped margin of its own page: correct, and gappy.
+ *   1200  here. Fills a 1280 outright, leaves ~88 either side at 1440 and ~328 at 1920.
+ *   1600  a ceiling rather than a measure: nothing under 1728 ever reached it, so the page was
+ *         effectively uncapped on every ordinary screen. Read as stretched.
+ *
+ * SO THIS IS A MEASURE AGAIN, and that is the difference from 1600 worth knowing before nudging it.
+ * At 1600 the cap was a guard against 4K absurdity and no more; at 1200 it shapes the page on
+ * almost every desktop, and the gutters either side are part of the design rather than an artefact
+ * of an enormous display. Moving it moves what the wallet looks like at 1440, not just at 3840.
+ *
+ * NOTHING IS PROPORTIONED AGAINST IT. The design's numbers still govern everything INSIDE the
+ * column — the hero's 32 padding, the overview card's 22 and its 12/18 rhythm — which is exactly
+ * what lets this value be picked by eye without anything below it having to move.
  */
-export const PAGE_MAX_WIDTH = 1600
+export const PAGE_MAX_WIDTH = 1200

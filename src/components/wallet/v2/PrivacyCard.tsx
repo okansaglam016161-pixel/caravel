@@ -92,7 +92,7 @@ function Side({ kind, balance, hidden }: {
   )
 }
 
-export function PrivacyCard({ privateBalance, publicBalance, total, hidden, entries, lockedText, lockedIsFlight }: {
+export function PrivacyCard({ privateBalance, publicBalance, total, hidden, entries, lockedText, lockedIsFlight, bare = false }: {
   privateBalance: BalanceView
   publicBalance: BalanceView
   total: TotalView
@@ -103,6 +103,16 @@ export function PrivacyCard({ privateBalance, publicBalance, total, hidden, entr
   lockedText?: string
   /** A move is on the wire rather than a balance being unreadable — a different kind of wait. */
   lockedIsFlight?: boolean
+  /**
+   * THE FIRST SECTION OF THE OVERVIEW CARD rather than a card of its own — see panels/OverviewCard.
+   *
+   * Bare returns exactly the same contents with the wrapper taken off. Nothing inside changes, and
+   * nothing needs to: the heading row, the meter, the two figures and the two buttons were already
+   * drawn at the measure and the rhythm 01B gives this section. Only the border, the ground, the
+   * radius, the shadow and the padding were ever this component's opinion about being a card, and
+   * inside the unified card that opinion belongs to the container.
+   */
+  bare?: boolean
 }) {
   const split = privacySplit(total, privateBalance, publicBalance, hidden)
 
@@ -150,11 +160,8 @@ export function PrivacyCard({ privateBalance, publicBalance, total, hidden, entr
   // two buttons reads as two separate problems.
   const sharedReason = reasons.length === 2 && reasons[0].why === reasons[1].why ? reasons[0].why : null
 
-  return (
-    <div style={{
-      background: 'var(--surface)', border: '1px solid var(--border)',
-      borderRadius: 16, padding: '20px 22px', boxShadow: 'var(--e1)',
-    }}>
+  const body = (
+    <>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
         <span style={{ flex: 1, fontSize: 15, fontWeight: 600, color: C.primary }}>Privacy</span>
         {caption && (
@@ -222,6 +229,14 @@ export function PrivacyCard({ privateBalance, publicBalance, total, hidden, entr
           ))}
         </div>
       )}
-    </div>
+    </>
+  )
+
+  if (bare) return body
+  return (
+    <div style={{
+      background: 'var(--surface)', border: '1px solid var(--border)',
+      borderRadius: 16, padding: '20px 22px', boxShadow: 'var(--e1)',
+    }}>{body}</div>
   )
 }

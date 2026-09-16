@@ -21,30 +21,108 @@ import { fmt6, formatCooldown } from './format'
 
 const XTR = (n: bigint) => `${fmt6(n)} XTR`
 
+// ── THE OVERVIEW'S ONE CARD ──────────────────────────────────────────────────
+//
+// V3's 01B replaces three stacked surfaces — Privacy, Assets, Recent activity, each a bordered
+// card with its own shadow — with one card whose sections are separated by hairlines. The argument
+// is the same one ScanLine's demotion made (see primitives/ScanLine): three borders, three
+// shadows and two gaps spend a great deal of page saying "these are different things", when what
+// the reader wants is one organised surface they can run their eye down.
+//
+// THE CHROME IS WRITTEN HERE AND ONLY HERE. Each of those three used to hand-write the same four
+// properties, and they had already drifted — radius 16 against 14 against 14, padding 20/22
+// against 5 against 5. The card writes them once now, and the three render `bare` inside it.
+
 /**
- * A section heading, drawn OUTSIDE the card it introduces.
+ * The card's horizontal padding.
  *
- * V3 lifts these out of the cards they used to sit inside, and the reason is rhythm rather than
- * taste: with the heading inside, every card began with a row of text that pushed its first real
- * row down, so a page of three cards read as nine bands. Outside, the heading is the label and the
- * card is the content, and the page has three things on it.
+ * SHARED WITH THE DIVIDERS BY DERIVATION, NOT BY COINCIDENCE. A hairline inside a padded box has
+ * to bleed back out by exactly the padding to reach both edges, so the divider's side margin is
+ * this number negated. Written twice they would drift the first time someone adjusted the padding,
+ * and the failure would be a divider stopping 4px short of the border — visible, and easy to
+ * mistake for a rendering bug.
  */
-export function SectionHead({ title, action, lead = false }: {
+const OVERVIEW_PAD = 22
+
+/** The unified overview card. Sections go inside it, separated by CardDivider. */
+export function OverviewCard({ children }: { children: ReactNode }) {
+  return (
+    <div style={{
+      background: 'var(--surface)', border: '1px solid var(--border)',
+      borderRadius: 16, boxShadow: 'var(--e1)',
+      // 16 at the foot rather than 22: the last thing in the card is a row with 11 of its own
+      // padding, so the drawn optical gap is larger than the number. V3 draws exactly this.
+      padding: `${OVERVIEW_PAD}px ${OVERVIEW_PAD}px 16px`,
+    }}>{children}</div>
+  )
+}
+
+/**
+ * A hairline between two sections of the card, full-bleed to both edges.
+ *
+ * IT OWNS THE SPACE ON BOTH SIDES OF ITSELF. `top` is the air under the section that just ended —
+ * V3 draws 22 after the privacy buttons and 16 after the assets row, because a row of buttons
+ * needs more room under it than a list row does — and `bottom` is the lead for the heading that
+ * follows, which is 18 in both places. Putting both on the divider is what lets the section heads
+ * be flush: the rhythm lives in one component instead of in a margin on every heading.
+ */
+export function CardDivider({ top, bottom = 18 }: { top: number; bottom?: number }) {
+  return (
+    <div aria-hidden="true" style={{
+      height: 1, background: 'var(--border)',
+      margin: `${top}px ${-OVERVIEW_PAD}px ${bottom}px`,
+    }} />
+  )
+}
+
+/**
+ * The bleed a list of rows takes inside the card.
+ *
+ * ROWS HOVER WIDER THAN THEY READ. The row's text should line up with the heading above it, but
+ * its hover band should reach past both, or the highlight looks like a floating pill rather than
+ * the row lighting up. V3 gets both by pulling the list 8px into the card's padding and giving
+ * each row 13 of its own — so the band is 8 wider on each side than the column of text inside it.
+ */
+export function RowBleed({ children }: { children: ReactNode }) {
+  return <div style={{ margin: '6px -8px 0' }}>{children}</div>
+}
+
+/**
+ * A section heading.
+ *
+ * DRAWN OUTSIDE THE CARD IT INTRODUCES, by default. V3 lifted these out of the cards they used to
+ * sit inside, and the reason was rhythm rather than taste: with the heading inside, every card
+ * began with a row of text that pushed its first real row down, so a page of three cards read as
+ * nine bands. Outside, the heading is the label and the card is the content.
+ *
+ * 01B TAKES THAT ARGUMENT FURTHER RATHER THAN REVERSING IT. Three cards became one, so the page
+ * now has ONE thing on it, and inside that thing the headings go back in — not as three card
+ * titles but as the labels of three sections divided by hairlines. `flush` is that placement; the
+ * default is still the free-standing head above a card, which is what the landing still uses.
+ */
+export function SectionHead({ title, action, flush = false }: {
   title: string
   action?: ReactNode
   /**
-   * A SECTION BREAK, not a heading style. V3's overview runs at a 12 rhythm inside a section and
-   * opens a new one at 24 (series 01: hero 12 privacy, then 24 before Assets and 24 before Recent
-   * activity), so the head that starts a section carries the extra 12 and drops the -4 that pulls
-   * a plain head down onto the card under it. Off by default: the landing page's still draws these
-   * heads in a composition of its own, and it is not this pass's surface.
+   * INSIDE A CARD RATHER THAN ABOVE ONE — see OverviewCard.
+   *
+   * The two adjustments a free-standing head needs are both about the gap between itself and the
+   * card it introduces, and inside a card there is no such gap to manage. The 6px inset existed so
+   * the heading's text lined up with the text in the card beneath it, past that card's border; in
+   * the unified card the container's own 22 of padding is the inset, and 6 more would push the
+   * heading out of line with the very rows it labels. The -4 cancelled a flex gap that this
+   * container does not have.
+   *
+   * SO FLUSH OWNS NO SPACE AT ALL. The divider above it carries the lead and the rows below carry
+   * their own 6 — which is what "the container owns the rhythm" means in practice. Off by default:
+   * the landing page's still draws these heads above cards, in a composition of its own.
    */
-  lead?: boolean
+  flush?: boolean
 }) {
   return (
     <div style={{
-      display: 'flex', alignItems: 'center', gap: 12, padding: '0 6px',
-      ...(lead ? { marginTop: 12 } : { marginBottom: -4 }),
+      display: 'flex', alignItems: 'center', gap: 12,
+      ...(flush ? {} : { padding: '0 6px', marginBottom: -4 }),
     }}>
       <span style={{ flex: 1, fontSize: 15, fontWeight: 600, color: C.primary }}>{title}</span>
       {action}
@@ -1236,32 +1314,52 @@ export function ActivityEmpty({ compact = false }: { compact?: boolean }) {
  * event under a category. Fewer than three simply shows fewer; the empty case gets the same honest
  * card the full list does rather than padded blank rows.
  */
-export function RecentActivity({ rows, onViewAll, lead = false }: {
+export function RecentActivity({ rows, onViewAll, bare = false }: {
   rows: ReactNode[]; onViewAll: () => void
-  /** Opens a section rather than continuing one — see SectionHead. The overview sets it. */
-  lead?: boolean
+  /**
+   * A SECTION OF THE OVERVIEW CARD rather than a card of its own — see OverviewCard.
+   *
+   * Bare drops the border, the ground and the shadow, because the card around it already draws
+   * all three, and keeps everything that is about the list itself: the heading, the Show-all, the
+   * three rows and the empty state. The 5px the card used to pad its rows with becomes the row
+   * bleed, which is the same idea pointing outward.
+   */
+  bare?: boolean
 }) {
   const shown = rows.slice(0, 3)
+  const list = shown.length === 0 ? <ActivityEmpty compact /> : shown
   return (
     <>
       <SectionHead
         title="Recent activity"
-        lead={lead}
+        flush={bare}
         // Only offered when there is more than the page is showing — a "Show all" over three rows
         // of three would be a control that changes nothing.
         action={rows.length > shown.length && (
-          <span role="button" tabIndex={0} onClick={onViewAll} onKeyDown={e => e.key === 'Enter' && onViewAll()}
-            style={{ fontSize: 13, fontWeight: 500, color: 'var(--accent-ink)', cursor: 'pointer', userSelect: 'none', flexShrink: 0 }}>
+          <span
+            role="button" tabIndex={0} onClick={onViewAll} onKeyDown={e => e.key === 'Enter' && onViewAll()}
+            // The same wash the rows under it take. It is the one control in this section that
+            // was not lighting up, and a card where some clickable things respond and others do
+            // not reads as half-broken rather than as two kinds of control.
+            className="cv-inline-action"
+            style={{
+              fontSize: 13, fontWeight: 500, color: 'var(--accent-ink)',
+              cursor: 'pointer', userSelect: 'none', flexShrink: 0,
+              // Room for the wash, taken back out again: the negative margin means the padding
+              // gives the highlight a body without moving the word off the heading's baseline.
+              padding: '3px 8px', margin: '-3px -8px', borderRadius: 8,
+            }}
+          >
             Show all
           </span>
         )}
       />
-      <div style={{
-        background: 'var(--surface)', border: '1px solid var(--border)',
-        borderRadius: 14, padding: 5, boxShadow: 'var(--e1)',
-      }}>
-        {shown.length === 0 ? <ActivityEmpty compact /> : shown}
-      </div>
+      {bare ? <RowBleed>{list}</RowBleed> : (
+        <div style={{
+          background: 'var(--surface)', border: '1px solid var(--border)',
+          borderRadius: 14, padding: 5, boxShadow: 'var(--e1)',
+        }}>{list}</div>
+      )}
     </>
   )
 }

@@ -30,6 +30,7 @@
 // because the type is smaller. When there is no figure the row shows `···` or `—`, muted, and the
 // Privacy card above says which half is the reason.
 
+import { RowBleed } from './panels'
 import { C, MONO } from './tokens'
 import { fiatForTotal } from './fiat'
 import { fmt6 } from './format'
@@ -48,16 +49,20 @@ export interface AssetsPanelProps {
    * control, which is worse than one not yet offered.
    */
   onOpen?: () => void
+  /**
+   * A SECTION OF THE OVERVIEW CARD rather than a card of its own — see panels/OverviewCard.
+   *
+   * Bare drops the border, the ground and the shadow; the card around it draws all three. What
+   * replaces the 5px of padding is the row bleed, which does the same job from the other side —
+   * it gives the row's hover band room to run wider than the text it contains.
+   */
+  bare?: boolean
 }
 
-export function AssetsPanel({ total, hidden, onOpen }: AssetsPanelProps) {
+export function AssetsPanel({ total, hidden, onOpen, bare = false }: AssetsPanelProps) {
   const live = !!onOpen
 
-  return (
-    <div style={{
-      background: 'var(--surface)', border: '1px solid var(--border)',
-      borderRadius: 14, padding: 5, boxShadow: 'var(--e1)',
-    }}>
+  const row = (
       <div
         role={live ? 'button' : undefined}
         tabIndex={live ? 0 : undefined}
@@ -66,7 +71,9 @@ export function AssetsPanel({ total, hidden, onOpen }: AssetsPanelProps) {
         className={live ? 'cv-asset-row' : undefined}
         style={{
           display: 'flex', alignItems: 'center', gap: 12,
-          padding: '11px 12px', borderRadius: 10,
+          // 13 and 9, which are the activity row's numbers too. They were 12 and 10 here for no
+          // reason anyone recorded, and two lists of rows in one card have to agree.
+          padding: '11px 13px', borderRadius: 9,
           cursor: live ? 'pointer' : 'default',
         }}
       >
@@ -103,6 +110,13 @@ export function AssetsPanel({ total, hidden, onOpen }: AssetsPanelProps) {
           </svg>
         )}
       </div>
-    </div>
+  )
+
+  if (bare) return <RowBleed>{row}</RowBleed>
+  return (
+    <div style={{
+      background: 'var(--surface)', border: '1px solid var(--border)',
+      borderRadius: 14, padding: 5, boxShadow: 'var(--e1)',
+    }}>{row}</div>
   )
 }

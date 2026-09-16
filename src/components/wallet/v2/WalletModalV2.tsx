@@ -25,7 +25,7 @@ import {
 } from './primitives'
 import {
   ActionButton, ActivityPanel, AmountBlock, CARD, Emblem, OUTCOME_CARD, Outcome, ReceivePanel,
-  RecentActivity, SectionHead, SendPanel, SheetHeader, VerbatimBox, type SendPanelProps,
+  CardDivider, OverviewCard, RecentActivity, SectionHead, SendPanel, SheetHeader, VerbatimBox, type SendPanelProps,
 } from './panels'
 import { AssetDetail } from './AssetDetail'
 import { AssetsPanel } from './assets'
@@ -293,21 +293,37 @@ export default function WalletModalV2(p: WalletModalV2Props) {
             {/* The literal scan figures, as a caption to the number above them. The Refresh press
                 is acknowledged by the header icon, which spins — see ScanLine. */}
             {p.scanSummary && <ScanLine scan={p.scanSummary} refreshing={p.refreshing} />}
-            {/* The composition, and the two controls that change it. This card also inherits the
-                hero's old breakdown duty — when the total cannot be shown, it is the only thing on
-                screen saying which half is the reason. See PrivacyCard. */}
-            <PrivacyCard
-              privateBalance={p.privateBalance} publicBalance={p.publicBalance}
-              total={p.total} hidden={p.hidden}
-              entries={p.entries} lockedText={p.lockedText} lockedIsFlight={p.lockedIsFlight}
-            />
-            {/* The portfolio. One real asset today — see assets.tsx for why that is a presentation
-                and not a model. */}
-            <SectionHead title="Assets" lead />
-            <AssetsPanel total={p.total} hidden={p.hidden} onOpen={p.onOpenAsset} />
-            {p.activity && p.onTab && (
-              <RecentActivity rows={p.activity} onViewAll={() => p.onTab!('activity')} lead />
-            )}
+            {/* ── ONE CARD, THREE SECTIONS ──
+                V3's 01B. What used to be three bordered cards with two gaps between them is one
+                surface with two hairlines in it — see OverviewCard for the argument. The order is
+                unchanged, every section is the same component it was, and each is passed `bare`
+                because the chrome it used to draw for itself is now drawn once, around all three. */}
+            <OverviewCard>
+              {/* The composition, and the two controls that change it. This section also inherits
+                  the hero's old breakdown duty — when the total cannot be shown, it is the only
+                  thing on screen saying which half is the reason. See PrivacyCard. */}
+              <PrivacyCard
+                bare
+                privateBalance={p.privateBalance} publicBalance={p.publicBalance}
+                total={p.total} hidden={p.hidden}
+                entries={p.entries} lockedText={p.lockedText} lockedIsFlight={p.lockedIsFlight}
+              />
+              {/* 22 above: a row of buttons needs more air under it than a list row does. */}
+              <CardDivider top={22} />
+              {/* The portfolio. One real asset today — see assets.tsx for why that is a
+                  presentation and not a model. */}
+              <SectionHead title="Assets" flush />
+              <AssetsPanel bare total={p.total} hidden={p.hidden} onOpen={p.onOpenAsset} />
+              {/* THE DIVIDER IS GATED WITH THE SECTION IT INTRODUCES. Activity is conditional, and
+                  a hairline with nothing under it would be the card announcing a section that
+                  never arrives — worse than the missing section, because it looks like a bug. */}
+              {p.activity && p.onTab && (
+                <>
+                  <CardDivider top={16} />
+                  <RecentActivity bare rows={p.activity} onViewAll={() => p.onTab!('activity')} />
+                </>
+              )}
+            </OverviewCard>
           </>
           )}
         </Body>

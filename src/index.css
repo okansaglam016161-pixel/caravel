@@ -397,9 +397,21 @@ a:hover { color: var(--accent-200); }
 .cv-vault-action:hover { filter: brightness(1.12); }
 
 /* The Privacy card's two entry buttons. Identical treatment on both — the direction that is
-   irreversible is warned about in its own sheet, not coloured differently at the door. */
+   irreversible is warned about in its own sheet, not coloured differently at the door.
+
+   !important FOR THE SAME REASON .cv-btn-primary NEEDS IT, and this rule was silently dead without
+   it: the button writes `background: var(--surface)` and a `border` shorthand INLINE, and an
+   inline declaration beats a class rule on specificity. So the hover has never once drawn — the
+   class was applied, the transition was set, and both properties lost to the element's own style
+   attribute every time. The alternative is moving the rest state into this rule and threading a
+   conditional background through the disabled case at the call site, which is more moving parts
+   than the narrow win here is worth. The background now matches the rows in the same card exactly;
+   the border-color goes with it because this control has a border and the rows do not. */
 .cv-privacy-action { transition: background 0.15s, border-color 0.15s; }
-.cv-privacy-action:hover { background: var(--surface-void); border-color: var(--text-faint-dim); }
+.cv-privacy-action:hover {
+  background: var(--surface-void) !important;
+  border-color: var(--text-faint-dim) !important;
+}
 
 /* The send flow's fields. The design specifies a focus ring rather than a bare border change, and
    `:focus-within` is what lets the AMOUNT box — an input inside a bordered shell with the unit
@@ -414,6 +426,14 @@ a:hover { color: var(--accent-200); }
 /* The bordered secondary action — Done, Back. */
 .cv-quiet-btn { transition: background 0.15s; }
 .cv-quiet-btn:hover { background: var(--surface-void); }
+
+/* An inline text action inside a card — "Show all" over the overview's activity list. It takes the
+   same wash as the rows beneath it, on purpose: 01B's unified card holds three kinds of control,
+   and if the rows light up and the link does not, the card reads as half-responsive rather than as
+   two kinds of thing. The element carries its own small padding so the wash has a body; see
+   RecentActivity, where a matching negative margin keeps that padding from moving the word. */
+.cv-inline-action { transition: background 0.15s; }
+.cv-inline-action:hover { background: var(--surface-void); }
 
 /* Chat composer + the per-message hover affordances (M3/M4, replies v1, reactions C). Shared by
    BOTH chat views — the DM thread in ChatApp and the group thread in GroupThread — which is exactly

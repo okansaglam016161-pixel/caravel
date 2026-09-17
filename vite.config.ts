@@ -17,11 +17,21 @@ const V = (p: string) => path.join(ROOT, 'vendor', p)
 // Vite 8 handles top-level-await natively — no plugin needed.
 // vite-plugin-wasm handles the `import * as wasm from "*.wasm"` in ootle-wasm.
 //
-// The Tari SDK is now a NORMAL NPM DEPENDENCY (0.39 bump). It used to be vendored under
+// The Tari SDK is a NORMAL NPM DEPENDENCY (since the 0.39 bump). It used to be vendored under
 // vendor/tari/ because the only published versions were 0.1.0, built against ootle-wasm ^0.32.0 —
 // ABI-mismatched against the wasm Esmeralda actually needed, so their transactions were rejected.
-// tari.js published 0.3.0 on ootle-wasm ^0.39.0, which is exactly the pairing this app needs, so
-// the vendored dists are gone and there is nothing left to keep in sync by hand.
+// Publishing caught up, the vendored dists went, and there is nothing left to sync by hand.
+//
+// THE PAIRING IS THE THING TO CHECK ON EVERY BUMP, and it is checkable in one command: the four
+// @tari-project packages must resolve to ONE copy of ootle-wasm. The SDK names the wasm it was
+// built against, and -indexer and -secret-key-wallet pin `ootle` to an EXACT version, so moving
+// any of the four alone makes npm nest a second, differently-built wasm rather than fail — two
+// instances, one signing what the other did not build. That is what the 0.1.0 dists did.
+//
+//   npm ls @tari-project/ootle-wasm        → exactly one entry, no "deduped" second tree
+//   find node_modules -path "*ootle-wasm/package.json"   → exactly one line
+//
+// Current pairing (Ootle 0.41 / protocol v1): SDK 0.5.0 on ootle-wasm ^0.41.0.
 //
 // The ONS client stays vendored — see vendor/README.md; it is our own unpublished package.
 //

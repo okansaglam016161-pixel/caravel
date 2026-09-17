@@ -16,9 +16,29 @@ The vendoring existed for one reason — the only published versions were `0.1.0
 ABI-mismatched and its transactions were rejected by the indexer, so the dists were built from
 tari.js `2bc5e93` against the right wasm and checked in.
 
-tari.js has since published `0.3.0` on `ootle-wasm ^0.39.0`, which is exactly the pairing Ootle
-0.39 requires. The reason to vendor is gone, so the dists are gone with it — one fewer thing to
-keep in sync by hand, and `npm install` now gets the same code the rest of the ecosystem runs.
+tari.js publishes in step with the node now, so the reason to vendor is gone and `npm install` gets
+the same code the rest of the ecosystem runs.
+
+### The pairing, and how to check it
+
+| Ootle | SDK (`ootle`, `-indexer`, `-secret-key-wallet`) | `ootle-wasm` |
+|---|---|---|
+| 0.39 | 0.3.0 | ^0.39.0 |
+| 0.41 (protocol v1) | **0.5.0** | **^0.41.0** |
+
+The four move TOGETHER, and npm will not stop you moving one. `-indexer` and `-secret-key-wallet`
+pin `ootle` to an exact version and the SDK carries a caret on the wasm it was built against, so
+bumping the wasm alone resolves to two differently-built copies — one signing what the other did
+not build. That is the 0.1.0 failure, and it looks like a successful install.
+
+So the check after any bump is a count, not a version read:
+
+```
+find node_modules -path "*ootle-wasm/package.json"   # exactly one line
+npm ls @tari-project/ootle-wasm                      # one entry
+```
+
+A second line means stop and fix the pairing before running anything against the chain.
 
 ## `tari-cipherseed/` — Tari CipherSeed format + account-key derivation (SOURCE, not a dist)
 

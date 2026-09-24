@@ -6,8 +6,11 @@ import { INDEXER_URL } from './indexerConfig'
 //   The live registry component is config passed to createOnsClient — nothing is hardcoded in the
 //   library itself. The register (write) side lives in the wallet UI and uses the browser signer.
 
-import { createOnsClient, type NameRecord } from '@ootle/name-service'
+import { createOnsClient, type BrowserSigner, type NameRecord } from '@ootle/name-service'
 import type { SecretKeyWallet } from '@tari-project/ootle-secret-key-wallet'
+import { Network, WasmStealthCrypto } from '@tari-project/ootle'
+import { scanOwnedUtxos } from './stealthUtxos'
+import { loadExcludedIds, loadSpentOutputs, markLocked, promoteToSpent } from './spentOutputs'
 import * as nip19 from 'nostr-tools/nip19'
 
 /**
@@ -182,8 +185,20 @@ export interface OnsRegisterResult {
   outcome?: OnsRegisterOutcome
 }
 
-/** Why a fee estimate failed. Three different problems with three different things to do about them. */
-export type OnsEstimateErrorKind = 'no-balance' | 'fragmented' | 'unreachable' | 'policy'
+/**
+ * Why a fee estimate failed. Each has a different thing to do about it.
+ *
+ *   no-private        the wallet has no spendable PRIVATE output at all. The fee is paid from one,
+ *                     so a wallet holding only public funds cannot register until it makes some
+ *                     private. Read through Caravel's own scan (see caravelFeeSource), so this is a
+ *                     real zero — never "the old one-page scan did not reach your coins".
+ *   private-settling  the same empty set, but this wallet has outputs LOCKED in its spend record: a
+ *                     transaction it sent has not settled, and its change is not spendable yet.
+ *   fragmented        private funds exist but no single output covers the fee.
+ *   unreachable       the network did not answer (or answered in a way we do not recognise).
+ *   policy            the name itself is not allowed.
+ */
+export type OnsEstimateErrorKind = 'no-private' | 'private-settling' | 'fragmented' | 'unreachable' | 'policy'
 
 export interface OnsEstimateResult {
   ok: boolean
@@ -239,10 +254,41 @@ function withOnsFeeMargin(required: bigint): bigint {
  * claim about this wallet's balance. The raw message is carried through either way, so nothing is
  * swallowed.
  */
-function classifyEstimateError(message: string): OnsEstimateErrorKind {
-  if (message.includes('No confidential UTXOs found')) return 'no-balance'
+function classifyEstimateError(message: string, senderAddress: string): OnsEstimateErrorKind {
+  if (message.includes('No confidential UTXOs found')) {
+    const locked = Object.values(loadSpentOutputs(senderAddress).records).some(r => r.status === 'locked')
+    return locked ? 'private-settling' : 'no-private'
+  }
   if (message.includes("Can't fund the fee from one UTXO")) return 'fragmented'
   return 'unreachable'
+}
+
+/**
+ * Where the writer's fee input comes from: CARAVEL'S OWN SPENDABLE SET, not the writer's.
+ *
+ * THE BUG THIS REPLACES. The vendored writer found private outputs with its own scan — ONE request
+ * for the 1000 OLDEST rows of ONE indexer's `/utxos`. Past a thousand unspent outputs on the
+ * network, a wallet whose private coins are all recent saw none of them, and CNS said "needs a
+ * balance" to a wallet holding ~2000 tTARI private. The send path had stopped reading `/utxos` that
+ * way long ago; this path never got the fix because it never used the send path's scan.
+ *
+ * So it uses it now: `scanOwnedUtxos`, exactly as confidentialSend calls it — every page, every
+ * indexer, by-id recovery, the receive walk, and the spend record excluded. CNS and a send can no
+ * longer disagree about which coins this wallet has. The writer's selection is unchanged (the
+ * smallest single output larger than the budget), and so is the fee math: this changes only WHICH
+ * set it selects from. The writer takes it through a two-field patch — see vendor/ons/dist/VENDOR_INFO.
+ */
+function caravelFeeSource(wallet: SecretKeyWallet, senderAddress: string): Pick<BrowserSigner, 'ownedUtxos'> {
+  return {
+    ownedUtxos: async () => {
+      const crypto = new WasmStealthCrypto(Network.Esmeralda)
+      const viewSecret = await wallet.getViewSecret()
+      return scanOwnedUtxos(crypto, viewSecret, {
+        excluded: loadExcludedIds(senderAddress),
+        walletAddress: senderAddress,
+      })
+    },
+  }
 }
 
 /**
@@ -259,12 +305,12 @@ export async function estimateOnsRegistration(
   const policy = validateOnsName(name)
   if (policy) return { ok: false, errorKind: 'policy', error: policy }
   try {
-    const writer = await ons.withBrowserSigner({ wallet, senderAddress })
+    const writer = await ons.withBrowserSigner({ wallet, senderAddress, ...caravelFeeSource(wallet, senderAddress) })
     const { feeMicroTari } = await writer.estimateRegisterWithNostr(name, ownNpub)
     return { ok: true, feeMicroTari: withOnsFeeMargin(feeMicroTari) }
   } catch (e) {
     const message = (e as Error).message || 'Could not estimate the fee.'
-    return { ok: false, errorKind: classifyEstimateError(message), error: message }
+    return { ok: false, errorKind: classifyEstimateError(message, senderAddress), error: message }
   }
 }
 
@@ -285,12 +331,36 @@ export async function registerOnsName(
   // REFUSED BEFORE ANYTHING WAS SENT. No transaction exists, no fee moved, and a screen must be able
   // to say that rather than implying a failed write.
   if (policy) return { ok: false, outcome: 'not-submitted', error: policy }
+
+  // ── THE FEE INPUT GOES INTO THE SPEND RECORD, like every other spend ──────
+  //
+  // Locked the moment the writer has submitted, before its ~30 s result poll — the window in which a
+  // send or a reveal could otherwise select the same output and have the chain reject it after
+  // taking its fee. Then:
+  //
+  //   Accept            → promote. The output is spent.
+  //   FeeIntentCommit   → promote, TOO. The fee input sits in the FEE instructions, and a fee-only
+  //                       commit is precisely the one where those committed: the output is consumed
+  //                       and the change exists. lockSweep would map this verdict to `release`
+  //                       (right for inputs in the body, wrong for this one), so it is settled here,
+  //                       where the outcome is known, rather than left for the sweep.
+  //   anything else     → KEEP. A plain Reject or a timeout is not something this can read with
+  //                       confidence from a sentence; lockSweep resolves the lock against the chain.
+  let lockTx: string | null = null
+  const onSubmitted = (txId: string, spentInputIds: string[]) => {
+    lockTx = txId
+    markLocked(senderAddress, spentInputIds, txId)
+  }
   try {
-    const writer = await ons.withBrowserSigner({ wallet, senderAddress })
+    const writer = await ons.withBrowserSigner({
+      wallet, senderAddress, ...caravelFeeSource(wallet, senderAddress), onSubmitted,
+    })
     const res = await writer.submitRegisterWithNostr(name, ownNpub, feeBudget)
+    if (lockTx) promoteToSpent(senderAddress, lockTx)
     return { ok: true, outcome: 'accepted', txId: res.transactionId, fee: res.fee }
   } catch (e) {
     const message = (e as Error).message || 'Registration failed.'
+    if (lockTx && message.includes('the fee was still spent')) promoteToSpent(senderAddress, lockTx)
     return { ok: false, outcome: classifyRegisterOutcome(message), txId: txIdFrom(message), error: message }
   }
 }

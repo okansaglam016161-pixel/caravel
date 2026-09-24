@@ -60,6 +60,8 @@ import {
   advanceSettle, settleAction, type PendingSettle, type SettleEvidence,
 } from '../src/context/settle'
 import { setStoreKey } from '../src/crypto/sessionKey'
+import { ons, estimateOnsRegistration } from '../src/crypto/ons'
+import { createWalletSeed } from 'tari-cipherseed'
 import {
   scanRecentReceives, advanceIndexer, loadReceiveScan, discoveredReceives, carriedOutputs,
   FIRST_SCAN_PAGE_BUDGET, SCAN_PAGE_BUDGET, RECENT_PAGE_LIMIT, PROBE_PAGE_LIMIT,
@@ -1759,6 +1761,94 @@ async function cmdProveReceiveScan(h: Harnessed, targetId?: string): Promise<voi
   if (failures > 0) process.exitCode = 1
 }
 
+
+// ── prove-cns-fee ────────────────────────────────────────────────────────────
+
+/**
+ * The CNS fee-input proof. The SAME vendored writer, the SAME dry-run, twice: once as it shipped
+ * (its own one-page scan of indexer-a's 1000 oldest rows) and once as ons.ts now drives it (fed
+ * Caravel's scanOwnedUtxos). Then a wallet with no private outputs, which must get the honest
+ * "make funds private" kind rather than a false "no balance".
+ *
+ * READ-ONLY. Both estimates are dry-runs: simulated by the network, never committed, nothing spent.
+ */
+async function cmdProveCnsFee(h: Harnessed): Promise<void> {
+  let failures = 0
+  const check = (label: string, ok: boolean, detail: string) => {
+    if (!ok) failures++
+    console.log(`  ${ok ? 'PASS' : '◀ FAIL'}  ${label.padEnd(58)} ${detail}`)
+  }
+  // Never registered, so the dry-run's register instruction has nothing to collide with.
+  const name = `cvh${Date.now().toString(36)}`
+  rule(`prove-cns-fee  ·  READ-ONLY, dry-runs only  ·  name "${name}"`)
+
+  // ── What each scan can see ──
+  const crypto = new WasmStealthCrypto(Network.Esmeralda)
+  const owned = await scanOwnedUtxos(crypto, h.viewSecret, { excluded: loadExcludedIds(h.address), walletAddress: h.address })
+  const privateTotal = owned.reduce((s, u) => s + u.value, 0n)
+  // The vendored scan's window, reproduced as its own request: one page, limit 1000, indexer-a.
+  const res = await fetch(`${INDEXER_URLS[0]}/utxos?resource_address=${RESOURCE_HEX}&limit=1000`)
+  const body = await res.json() as unknown
+  const windowRows = (Array.isArray(body) ? body : (body as { utxos?: unknown[] }).utxos ?? []) as [string, unknown][]
+  const inWindow = new Set(windowRows.map(r => r[0]))
+  const visibleToOld = owned.filter(u => inWindow.has(u.substateId.slice(u.substateId.lastIndexOf('_') + 1)))
+  rule('1 · what each scan can see')
+  field('Caravel scanOwnedUtxos', `${owned.length} spendable private output(s), ${amt(privateTotal)}`)
+  field('vendored window', `${windowRows.length} rows (the 1000 oldest on ${new URL(INDEXER_URLS[0]!).host})`)
+  field('ours inside it', `${visibleToOld.length} of ${owned.length}`)
+
+  // ── The writer as it shipped ──
+  rule('2 · the vendored writer, unpatched path (no ownedUtxos)')
+  let oldError: string | null = null
+  try {
+    const writer = await ons.withBrowserSigner({ wallet: h.wallet, senderAddress: h.address })
+    const r = await writer.estimateRegisterWithNostr(name, h.npub)
+    field('result', `estimated ${r.feeMicroTari} µtTARI`)
+  } catch (e) {
+    oldError = e instanceof Error ? e.message : String(e)
+    field('result', `THREW: ${oldError}`)
+  }
+  if (visibleToOld.length === 0 && owned.length > 0) {
+    check('reproduces the bug: "No confidential UTXOs found"', oldError?.includes('No confidential UTXOs found') === true, 'with private funds present')
+  } else {
+    console.log(`      (this wallet has ${visibleToOld.length} output(s) inside the old window, so the old path can work here;\n` +
+                '       the bug needs a wallet whose private outputs are all newer than those 1000 rows)')
+  }
+
+  // ── The writer as ons.ts now drives it ──
+  rule('3 · estimateOnsRegistration — the writer fed Caravel\'s owned set')
+  const now = await estimateOnsRegistration(h.wallet, h.address, name, h.npub)
+  field('result', now.ok ? `ok — budget ${now.feeMicroTari} µtTARI (dry-run estimate + 10% margin)` : `${now.errorKind}: ${now.error}`)
+  if (owned.length > 0) {
+    check('the fee input is found and the estimate succeeds', now.ok && (now.feeMicroTari ?? 0n) > 0n, now.ok ? `${now.feeMicroTari} µtTARI` : String(now.errorKind))
+  } else {
+    check('no private outputs: the honest kind, not "no-balance"', now.errorKind === 'no-private' || now.errorKind === 'private-settling', String(now.errorKind))
+  }
+
+  // ── A wallet with no private outputs ──
+  rule('4 · a wallet with NO private outputs')
+  const phrase = process.env.CARAVEL_PUBLIC_ONLY_MNEMONIC?.trim() || (await createWalletSeed()).mnemonic
+  const fromEnv = !!process.env.CARAVEL_PUBLIC_ONLY_MNEMONIC?.trim()
+  const scheme = detectScheme(phrase)
+  const other = await deriveIdentity(phrase, scheme === 'bip39' ? 'bip39' : 'cipherseed')
+  const otherAddr = await other.wallet.getAddress()
+  const otherOwned = await scanOwnedUtxos(crypto, await other.wallet.getViewSecret(), { walletAddress: otherAddr })
+  field('wallet', `${otherAddr.slice(0, 24)}… ${fromEnv ? '(CARAVEL_PUBLIC_ONLY_MNEMONIC)' : '(fresh, generated for this run — set CARAVEL_PUBLIC_ONLY_MNEMONIC for a funded public-only one)'}`)
+  if (fromEnv) {
+    const acct = await recoverAccountAddress(other.wallet, otherAddr)
+    const provider = await IndexerProvider.connect({ url: INDEXER, network: Network.Esmeralda })
+    field('public balance', amt(await readRevealedBalance(provider, acct)))
+    provider.stopWatcher?.()
+  }
+  field('private outputs', `${otherOwned.length}`)
+  const empty = await estimateOnsRegistration(other.wallet, otherAddr, name, other.nostr.npub)
+  field('result', empty.ok ? 'ok?!' : `${empty.errorKind}: ${empty.error}`)
+  check('gets "no-private" (→ "make some funds private first")', otherOwned.length === 0 && empty.errorKind === 'no-private', String(empty.errorKind))
+
+  rule(failures === 0 ? 'PROVEN — CNS funds its fee from the same set the wallet spends from' : `${failures} CHECK(S) FAILED`)
+  if (failures > 0) process.exitCode = 1
+}
+
 // ── Entry point ──────────────────────────────────────────────────────────────
 
 const USAGE = `
@@ -1776,6 +1866,9 @@ READ-ONLY — safe to run freely, costs nothing:
                               Proof that a receive absent from every /utxos listing is found by
                               walking recent transactions, recovered by id, counted and spendable;
                               plus the spent, dedup and cursor guards. Submits nothing.
+  prove-cns-fee               Proof that CNS finds its fee input through Caravel's own scan where
+                              the vendored one-page scan finds none, and that a wallet with no
+                              private outputs gets the honest message. Dry-runs only.
   indexers                    What each indexer holds, what the union recovers, and how much of
                               THIS wallet is invisible reading a single node.
   spent                       Show the local spend record (crypto/spentOutputs).
@@ -1867,6 +1960,9 @@ export async function main(argv: string[]): Promise<void> {
         break
       case 'prove-recovery':
         await cmdProveRecovery(h, args[1])
+        break
+      case 'prove-cns-fee':
+        await cmdProveCnsFee(h)
         break
       case 'prove-receive-scan':
         await cmdProveReceiveScan(h, args[1])

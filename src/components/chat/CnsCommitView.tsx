@@ -311,12 +311,14 @@ function commitBody(state: Commit, name: string, a: Acts) {
       )
 
     case 'estimate-failed': {
-      // THREE PROBLEMS, THREE THINGS TO DO. An empty wallet, a balance in the wrong shape, and a
-      // network that would not answer are not one error — only the last is worth retrying, and only
-      // the middle one has a fix the user can act on. Nothing was spent in any of them.
-      const network = state.errorKind === 'unreachable'
-      const copy = state.errorKind === 'no-balance'
-        ? 'This wallet needs a balance to pay the network fee.'
+      // DIFFERENT PROBLEMS, DIFFERENT THINGS TO DO. No private funds, private funds still settling, a
+      // balance in the wrong shape, and a network that would not answer are not one error. Only the
+      // network and the settling case are worth retrying as they stand. Nothing was spent in any.
+      const network = state.errorKind === 'unreachable' || state.errorKind === 'private-settling'
+      const copy = state.errorKind === 'no-private'
+        ? 'The registration fee is paid from your private balance, and it’s empty. Make some funds private first.'
+        : state.errorKind === 'private-settling'
+        ? 'Your private funds are tied up in a transaction that hasn’t settled yet. Try again in a moment.'
         : state.errorKind === 'fragmented'
         ? 'Your balance is split across too many outputs to cover the fee from one. Consolidate first.'
         : state.errorKind === 'policy'

@@ -16,7 +16,7 @@
 // is the seam this module actually depends on, and stubbing it keeps the spec off the network —
 // nothing here talks to an indexer.
 
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SecretKeyWallet } from '@tari-project/ootle-secret-key-wallet'
 import { checkOnsAvailable, estimateOnsRegistration, ons, ownedOnsNames, registerOnsName, type NameRecord } from './ons'
 
@@ -280,13 +280,13 @@ function stubWriter(impl: { estimate?: () => Promise<{ feeMicroTari: bigint }>; 
 const throwing = (message: string) => async () => { throw new Error(message) }
 
 describe('estimateOnsRegistration — three problems, three instructions', () => {
-  it('an empty wallet is "no-balance"', async () => {
+  it('a wallet with no private outputs is "no-private"', async () => {
     stubWriter({ estimate: throwing('No confidential UTXOs found — this wallet needs a balance to pay the fee.') })
 
     const r = await estimateOnsRegistration(WALLET, ADDR, 'okz', NPUB)
 
     expect(r.ok).toBe(false)
-    expect(r.errorKind).toBe('no-balance')
+    expect(r.errorKind).toBe('no-private')
     expect(r.feeMicroTari).toBeUndefined()
   })
 
@@ -297,7 +297,7 @@ describe('estimateOnsRegistration — three problems, three instructions', () =>
 
     expect(r.errorKind).toBe('fragmented')
     // A DIFFERENT PROBLEM FROM AN EMPTY WALLET: there is money, it is just in the wrong shape.
-    expect(r.errorKind).not.toBe('no-balance')
+    expect(r.errorKind).not.toBe('no-private')
   })
 
   it('a network failure is "unreachable"', async () => {
@@ -416,5 +416,112 @@ describe('the fee margin — 10%, and the floor that used to hide behind it', ()
       const drifted = fee + (fee * 27n) / 1000n   // +2.7%
       expect(budget, `budget for ${fee} must cover a 2.7% drift`).toBeGreaterThanOrEqual(drifted)
     }
+  })
+})
+
+// ── The fee input: Caravel's spendable set, and Caravel's spend record ────────
+//
+// The vendored writer used to find its fee input with its own scan — the 1000 OLDEST rows of ONE
+// indexer — and told a wallet holding ~2000 tTARI private that it "needs a balance". It now takes
+// the input from Caravel's scanOwnedUtxos through a two-field patch (vendor/ons/dist/VENDOR_INFO),
+// and reports the input it spent so the spend record can lock it. These pin both ends of that seam.
+
+describe('the fee input comes from Caravel, and is locked like any other spend', () => {
+  const FEE_COIN = 'utxo_0101_feecoin'
+
+  function memoryStorage(): Storage {
+    const map = new Map<string, string>()
+    return {
+      get length() { return map.size },
+      clear: () => map.clear(),
+      getItem: (k: string) => map.get(k) ?? null,
+      key: (i: number) => [...map.keys()][i] ?? null,
+      removeItem: (k: string) => { map.delete(k) },
+      setItem: (k: string, v: string) => { map.set(k, v) },
+    }
+  }
+
+  beforeEach(async () => {
+    globalThis.localStorage = memoryStorage()
+    const { setStoreKey } = await import('./sessionKey')
+    setStoreKey(new Uint8Array(32).fill(5))
+  })
+
+  type Signer = Parameters<typeof ons.withBrowserSigner>[0]
+
+  /** A writer that behaves as the patched one does: submit reports its fee input, then resolves. */
+  function writerThatSubmits(outcome: () => Promise<{ transactionId: string; fee: bigint }>) {
+    const seen: Signer[] = []
+    vi.spyOn(ons, 'withBrowserSigner').mockImplementation(async (signer: Signer) => {
+      seen.push(signer)
+      return {
+        estimateRegisterWithNostr: async () => ({ feeMicroTari: 1_000n }),
+        submitRegisterWithNostr: async () => {
+          signer.onSubmitted?.('tx9', [FEE_COIN])
+          return outcome()
+        },
+      } as unknown as Awaited<ReturnType<typeof ons.withBrowserSigner>>
+    })
+    return seen
+  }
+
+  const statusOf = async (id: string) => {
+    const { loadSpentOutputs } = await import('./spentOutputs')
+    return loadSpentOutputs(ADDR).records[id]?.status
+  }
+
+  it('the estimate hands the writer Caravel\'s owned-output source — the old scan is bypassed', async () => {
+    const seen = writerThatSubmits(async () => ({ transactionId: 'tx9', fee: 1n }))
+    await estimateOnsRegistration(WALLET, ADDR, 'okz', NPUB)
+    expect(typeof seen[0]!.ownedUtxos).toBe('function')
+    // Nothing is submitted by an estimate, so nothing may be locked.
+    expect(seen[0]!.onSubmitted).toBeUndefined()
+  })
+
+  it('the submit hands it the same source, and a lock hook', async () => {
+    const seen = writerThatSubmits(async () => ({ transactionId: 'tx9', fee: 1n }))
+    await registerOnsName(WALLET, ADDR, 'okz', NPUB, 1_500n)
+    expect(typeof seen[0]!.ownedUtxos).toBe('function')
+    expect(typeof seen[0]!.onSubmitted).toBe('function')
+  })
+
+  it('Accept: the fee coin is spent', async () => {
+    writerThatSubmits(async () => ({ transactionId: 'tx9', fee: 1n }))
+    await registerOnsName(WALLET, ADDR, 'okz', NPUB, 1_500n)
+    expect(await statusOf(FEE_COIN)).toBe('spent')
+  })
+
+  // The fee input is in the FEE instructions, which are exactly what a fee-only commit commits.
+  it('fee-only commit: the fee coin is ALSO spent — it was consumed', async () => {
+    writerThatSubmits(throwing('ONS register+set_record was rejected on-chain: the fee was too low, so no name was registered — but the fee was still spent (tx tx9).'))
+    await registerOnsName(WALLET, ADDR, 'okz', NPUB, 1_500n)
+    expect(await statusOf(FEE_COIN)).toBe('spent')
+  })
+
+  it('a timeout keeps the lock — not a verdict; the sweep resolves it', async () => {
+    writerThatSubmits(throwing('ONS register+set_record did not confirm in time (tx tx9). Check Activity before retrying.'))
+    await registerOnsName(WALLET, ADDR, 'okz', NPUB, 1_500n)
+    expect(await statusOf(FEE_COIN)).toBe('locked')
+  })
+
+  it('a plain reject keeps the lock too — a sentence is not evidence enough to hand a coin back', async () => {
+    writerThatSubmits(throwing('ONS register+set_record was rejected on-chain (tx tx9): {"Reject":"…"}.'))
+    await registerOnsName(WALLET, ADDR, 'okz', NPUB, 1_500n)
+    expect(await statusOf(FEE_COIN)).toBe('locked')
+  })
+
+  it('a failure before submission locks nothing', async () => {
+    stubWriter({ submit: throwing('socket hang up') })
+    await registerOnsName(WALLET, ADDR, 'okz', NPUB, 1_500n)
+    expect(await statusOf(FEE_COIN)).toBeUndefined()
+  })
+
+  it('no private outputs at all is "no-private"; none because some are locked is "private-settling"', async () => {
+    stubWriter({ estimate: throwing('No confidential UTXOs found — this wallet needs a balance to pay the fee.') })
+    expect((await estimateOnsRegistration(WALLET, ADDR, 'okz', NPUB)).errorKind).toBe('no-private')
+
+    const { markLocked } = await import('./spentOutputs')
+    markLocked(ADDR, ['utxo_0101_inflight'], 'txA')
+    expect((await estimateOnsRegistration(WALLET, ADDR, 'okz', NPUB)).errorKind).toBe('private-settling')
   })
 })

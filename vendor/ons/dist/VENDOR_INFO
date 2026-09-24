@@ -10,7 +10,8 @@ src digest    : 572a31292289c3c7fbf32b7eb3eda796a9016af24164c2fa927155351878f646
                 (sha256 over the sorted sha256s of client/src/*.ts)
 
 Verified at vendoring time: rebuilding client/dist from ed6ca72 reproduces this directory
-byte-for-byte (diff -rq, excluding this file).
+byte-for-byte (diff -rq, excluding this file). NO LONGER TRUE for browser-writer.js and
+browser-writer.d.ts — see the local patch below.
 
 This build carries the Ootle 0.39 write-path fixes:
   - browser-writer.ts / writer.ts : the mandatory max_epoch, tip + 10 epochs. The daemon path
@@ -22,3 +23,27 @@ This build carries the Ootle 0.39 write-path fixes:
                                     constructor, which is why the break was invisible to both
                                     repos' compilers. Corrected — but the stub is still a
                                     stub; see the follow-up noted in ed6ca72.
+
+LOCAL PATCH — Caravel, 2026-09-25 (not upstream; the source repo is not on this machine)
+======================================================================================
+The writer had no seam for its fee input. It found private outputs with its own module-private
+scanUtxos: ONE request for the 1000 OLDEST rows of ONE indexer's /utxos. Once the network passed
+1000 unspent outputs, a wallet whose private coins were all recent saw none and CNS reported
+"No confidential UTXOs found — this wallet needs a balance to pay the fee" with ~2000 tTARI
+private. The fee input also never reached Caravel's spend record.
+
+Two optional BrowserSigner fields, both no-ops when absent (the writer then behaves exactly as
+at ed6ca72):
+
+  ownedUtxos?: () => Promise<OwnedFeeUtxo[]>
+      browser-writer.js buildSubmit: used INSTEAD of scanUtxos. Caravel passes its own
+      scanOwnedUtxos (paginated, both indexers, by-id recovery, receive scan, spend-record
+      exclusion). The objects are the same shape scanUtxos already produced.
+
+  onSubmitted?: (txId, spentInputIds) => void
+      browser-writer.js buildSubmit: called after submitTransaction on a REAL submit (never on a
+      dry-run), before pollResult. Caravel locks the fee input in its spend record here.
+
+Selection, fee math, the dry-run budget and every message are unchanged. The .js.map files were
+not regenerated. Upstream the same two fields to ootle-name-service before the next re-vendor, or
+re-apply this patch on top of it.

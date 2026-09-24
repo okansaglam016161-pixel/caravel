@@ -288,7 +288,10 @@ export class OnsBrowserWriter {
         const provider = await IndexerProvider.connect({ url: this.indexerUrl, network: Network.Esmeralda });
         const crypto = new WasmStealthCrypto(Network.Esmeralda);
         const viewSecret = await wallet.getViewSecret();
-        const utxos = await scanUtxos(this.indexerUrl, crypto, viewSecret);
+        // CARAVEL PATCH (see VENDOR_INFO): an injected owned-output source replaces the one-page scan.
+        const utxos = this.signer.ownedUtxos
+            ? await this.signer.ownedUtxos()
+            : await scanUtxos(this.indexerUrl, crypto, viewSecret);
         if (utxos.length === 0)
             throw new Error("No confidential UTXOs found — this wallet needs a balance to pay the fee.");
         const candidates = utxos.filter((u) => u.value > feeBudget).sort((a, b) => Number(a.value - b.value));
@@ -338,6 +341,8 @@ export class OnsBrowserWriter {
         }
         const sub = await provider.submitTransaction(envelope);
         const txId = sub.transaction_id;
+        // CARAVEL PATCH (see VENDOR_INFO): report the spent fee input before the ~30s poll.
+        this.signer.onSubmitted?.(txId, [utxo.substateId]);
         const r = await pollResult(this.indexerUrl, txId);
         provider.stopWatcher?.();
         return { ...r, txId };

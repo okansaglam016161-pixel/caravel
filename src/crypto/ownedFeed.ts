@@ -23,18 +23,31 @@
 // of the outputs statement BEFORE submission (crypto/outputIds) and written to the journal entry
 // for that action. So when a listing omits one, the wallet already has its name and can ask for it
 // directly. That is a fundamentally different operation from scanning: it fetches a bounded set of
-// ids it recorded itself, never an arbitrary or discovered one.
+// ids it recorded itself — or, since stage 2c, ids its own view key opened inside a transaction
+// (below) — never an arbitrary one.
 //
 // ── COST, IN THE ORDINARY CASE, IS ZERO ──────────────────────────────────────
 //
 // Only ids MISSING from the union are fetched, and the listings normally have them all — so the
 // usual number of extra requests is none. It rises only when a listing drops one of ours, which is
 // exactly when it is worth paying for.
+//
+// ── A SECOND SOURCE OF NAMES: RECEIVES FOUND IN TRANSACTIONS (stage 2c) ──────
+//
+// The journal can only name outputs this wallet BUILT. A payment from someone else had no name
+// until the listing showed it, and the listing lags by minutes. crypto/receiveScan now reads the
+// indexer's recent transactions and trial-decrypts their outputs with our view key, so a receive is
+// named at commit. Those ids join the journal's here, through the SAME filters and the SAME fetch:
+// a discovered receive is only ever a row because `/substates` returned a live body for it.
 
 import { loadJournal } from './journalStore'
 import { loadSpentOutputs, excludedIds } from './spentOutputs'
 import { pointRead } from './indexerConfig'
 import { fetchAllUtxoRows, RESOURCE_HEX, type UtxoFeed, type UtxoRow } from './utxoFeed'
+import {
+  discoveredReceives, retireDiscovered, scanRecentReceives,
+  type ReceiveScanReport, type RecentPageFetcher, type OwnershipTest,
+} from './receiveScan'
 
 /**
  * Most by-id reads one scan may make.
@@ -58,11 +71,15 @@ export interface Recovery {
   commitment: string
   /** True when the chain returned a live output for it. */
   found: boolean
+  /** Which source named it: our own journal, or a receive found in a recent transaction. */
+  via: 'journal' | 'receive-scan'
 }
 
 export interface OwnedFeed extends UtxoFeed {
   /** Ids that were missing from every listing and had to be asked for directly. */
   recoveries: Recovery[]
+  /** What the transaction walk did this scan. `null` when it did not run (no view key given). */
+  receiveScan: ReceiveScanReport | null
 }
 
 /** The commitment half of a `utxo_<resource>_<commitment>` substate id. */
@@ -70,8 +87,19 @@ function commitmentOf(substateId: string): string {
   return substateId.slice(substateId.lastIndexOf('_') + 1)
 }
 
+/** One id worth asking for, and which source named it. */
+export interface RecoveryCandidate {
+  substateId: string
+  via: Recovery['via']
+}
+
 /**
- * Which of our own recorded outputs are worth asking the chain about directly.
+ * Which of our own outputs are worth asking the chain about directly.
+ *
+ * TWO SOURCES, ONE LIST. The journal's self-output ids (what this wallet built for itself) and the
+ * ids crypto/receiveScan found in recent transactions (what somebody else built for us). Both are
+ * merged newest-first by when they became known, deduplicated by id — our own change output is
+ * ALSO found by the transaction walk, and must be asked for once — and pass the same filters.
  *
  * THREE FILTERS, and each removes a different kind of waste or danger:
  *
@@ -89,32 +117,52 @@ export function recoveryCandidates(
   presentCommitments: ReadonlySet<string>,
   limit = MAX_RECOVERY_READS,
 ): string[] {
+  return recoveryCandidatesWithSource(walletAddress, presentCommitments, limit).map(c => c.substateId)
+}
+
+/** recoveryCandidates, saying which source named each one. */
+export function recoveryCandidatesWithSource(
+  walletAddress: string,
+  presentCommitments: ReadonlySet<string>,
+  limit = MAX_RECOVERY_READS,
+): RecoveryCandidate[] {
   if (!walletAddress) return []
 
   const spent = excludedIds(loadSpentOutputs(walletAddress))
-  const seen = new Set<string>()
-  const out: string[] = []
 
-  // Newest first: a journal is appended to, so walking it backwards is most-recent-first.
-  const entries = [...loadJournal(walletAddress)].sort((a, b) => b.timestamp - a.timestamp)
-  for (const entry of entries) {
-    // `null` is a hole — the statement could not be read — and `[]` is a positive "creates nothing
-    // for us". Neither offers an id to look up.
-    if (!entry.selfOutputIds) continue
-    for (const id of entry.selfOutputIds) {
-      if (seen.has(id)) continue
-      seen.add(id)
-      if (spent.has(id)) continue
-      if (presentCommitments.has(commitmentOf(id))) continue
-      out.push(id)
-      if (out.length >= limit) return out
-    }
+  // Every named id with when it became known. `null` selfOutputIds is a hole — the statement could
+  // not be read — and `[]` is a positive "creates nothing for us". Neither offers an id to look up.
+  const named: { id: string; at: number; via: Recovery['via'] }[] = []
+  for (const entry of loadJournal(walletAddress)) {
+    for (const id of entry.selfOutputIds ?? []) named.push({ id, at: entry.timestamp, via: 'journal' })
+  }
+  for (const d of discoveredReceives(walletAddress)) named.push({ id: d.id, at: d.at, via: 'receive-scan' })
+
+  // Newest first. Stable, so the journal wins a tie — and it wins the dedup below either way, since
+  // an output we built ourselves is better described as ours than as a receive.
+  named.sort((a, b) => b.at - a.at || (a.via === b.via ? 0 : a.via === 'journal' ? -1 : 1))
+
+  const seen = new Set<string>()
+  const out: RecoveryCandidate[] = []
+  for (const { id, via } of named) {
+    if (seen.has(id)) continue
+    seen.add(id)
+    if (spent.has(id)) continue
+    if (presentCommitments.has(commitmentOf(id))) continue
+    out.push({ substateId: id, via })
+    if (out.length >= limit) return out
   }
   return out
 }
 
-/** How one id is asked for. Injectable so the policy can be tested without a chain. */
-export type SubstateFetcher = (substateId: string) => Promise<unknown | null>
+/**
+ * How one id is asked for. Injectable so the policy can be tested without a chain.
+ *
+ * `null` is a DEFINITE "no live coin" — every node answered. `undefined` is "nobody answered", which
+ * concludes nothing; the only difference it makes is that a discovered receive is never retired on
+ * it (see receiveScan.retireDiscovered).
+ */
+export type SubstateFetcher = (substateId: string) => Promise<unknown | null | undefined>
 
 /**
  * `/substates/<id>`, through every configured indexer.
@@ -126,7 +174,8 @@ export type SubstateFetcher = (substateId: string) => Promise<unknown | null>
  */
 const fetchSubstateBody: SubstateFetcher = async (substateId) => {
   const read = await pointRead(`/substates/${encodeURIComponent(substateId)}`)
-  if (!read.answered || read.body === null) return null
+  if (!read.answered) return undefined
+  if (read.body === null) return null
   const utxo = (read.body as { substate?: { Utxo?: unknown } })?.substate?.Utxo
   if (!utxo || typeof utxo !== 'object') return null
   // A spent or frozen output still answers 200 with `output: null`. Not a coin.
@@ -159,33 +208,51 @@ export async function fetchOwnedRows(opts: {
   indexerUrls?: readonly string[]
   signal?: AbortSignal
   onPage?: (pages: number, rows: number) => void
-  /** Test seam. */
+  /**
+   * This wallet's view key. With `walletAddress`, enables the transaction walk (crypto/receiveScan)
+   * that names receives before the listing shows them. Omit for the stage-2b behaviour.
+   */
+  viewSecret?: Uint8Array
+  /** Test seams. */
   fetchSubstate?: SubstateFetcher
+  receiveScan?: { fetchPage?: RecentPageFetcher; isOurs?: OwnershipTest; now?: number }
 }): Promise<OwnedFeed> {
-  const feed = await fetchAllUtxoRows({
-    indexerUrls: opts.indexerUrls,
-    signal: opts.signal,
-    onPage: opts.onPage,
-  })
-  if (!opts.walletAddress) return { ...feed, recoveries: [] }
+  const walletAddress = opts.walletAddress
+  const viewSecret = opts.viewSecret
+
+  // CONCURRENT with the listing walk, not before it: an incremental transaction walk is one small
+  // page per node, but a first walk on a fresh device can be several, and the balance should wait
+  // for the slower of the two rather than their sum. It never throws for a network reason — a failed
+  // walk holds its cursor and names nothing, and the listing is unaffected.
+  const [feed, receiveScan] = await Promise.all([
+    fetchAllUtxoRows({ indexerUrls: opts.indexerUrls, signal: opts.signal, onPage: opts.onPage }),
+    walletAddress && viewSecret
+      ? scanRecentReceives({
+          walletAddress, viewSecret, indexerUrls: opts.indexerUrls, signal: opts.signal, ...opts.receiveScan,
+        }).catch(() => null)
+      : Promise.resolve(null),
+  ])
+  if (!walletAddress) return { ...feed, recoveries: [], receiveScan }
 
   const present = new Set(feed.rows.map(r => r[0]))
-  const candidates = recoveryCandidates(opts.walletAddress, present)
-  if (candidates.length === 0) return { ...feed, recoveries: [] }
+  // No early return when this is empty (the ordinary case): the retirement below still has to run.
+  const candidates = recoveryCandidatesWithSource(walletAddress, present)
 
   const fetchSubstate = opts.fetchSubstate ?? fetchSubstateBody
   const recoveries: Recovery[] = []
   const rows: UtxoRow[] = [...feed.rows]
+  const absent = new Set<string>()
 
   // Sequential rather than parallel: the candidate list is normally empty and at most
   // MAX_RECOVERY_READS long, and a scan that has already pulled two full listings has no need to
   // open thirty more sockets at once.
-  for (const substateId of candidates) {
+  for (const { substateId, via } of candidates) {
     if (opts.signal?.aborted) break
     const commitment = commitmentOf(substateId)
     const body = await fetchSubstate(substateId)
-    recoveries.push({ substateId, commitment, found: body !== null })
-    if (body === null) continue
+    recoveries.push({ substateId, commitment, found: body != null, via })
+    if (body === null) absent.add(substateId)
+    if (body == null) continue
     // DEDUPLICATED, like everything else that reaches this set. `present` cannot already hold it —
     // it was filtered out of the candidates — but the guard costs nothing and the invariant this
     // protects (one commitment, one row) is the one that keeps a balance from double-counting.
@@ -194,7 +261,13 @@ export async function fetchOwnedRows(opts: {
     rows.push([commitment, body])
   }
 
-  return { ...feed, rows, recoveries }
+  // Let go of discovered receives that can no longer be ours — spent by us, or definitively absent
+  // for longer than a fresh commit could explain. Journal ids are untouched: the journal is history.
+  const spentForGood = new Set(Object.entries(loadSpentOutputs(walletAddress).records)
+    .filter(([, r]) => r.status === 'spent').map(([id]) => id))
+  retireDiscovered(walletAddress, spentForGood, absent, opts.receiveScan?.now)
+
+  return { ...feed, rows, recoveries, receiveScan }
 }
 
 /** Re-exported so callers need only this module. */

@@ -69,8 +69,13 @@ export async function scanOwnedUtxos(
   // wallet can cover.
   // THE SAME FEED THE BALANCE READS — union of listings plus by-id recovery, see crypto/ownedFeed.
   // Balance and selection must never disagree about which coins exist, which is why they share
-  // this one call rather than each assembling their own set.
-  const { rows, incomplete } = await fetchOwnedRows({ walletAddress: opts.walletAddress })
+  // this one call rather than each assembling their own set. The view key goes in for the same
+  // reason: the balance's feed includes receives the transaction walk found (crypto/receiveScan),
+  // so selection's must too, or a receive could be counted before it could be spent.
+  const { rows, incomplete } = await fetchOwnedRows({
+    walletAddress: opts.walletAddress,
+    viewSecret: opts.walletAddress ? viewSecret : undefined,
+  })
   // The runaway guard, not a page being full. The spend paths have no balance display of their own,
   // so surface it in the log; an actually-unspendable set still fails with an explicit
   // insufficient-funds message.

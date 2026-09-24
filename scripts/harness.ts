@@ -60,6 +60,11 @@ import {
   advanceSettle, settleAction, type PendingSettle, type SettleEvidence,
 } from '../src/context/settle'
 import { setStoreKey } from '../src/crypto/sessionKey'
+import {
+  scanRecentReceives, advanceIndexer, loadReceiveScan, discoveredReceives, carriedOutputs,
+  FIRST_SCAN_PAGE_BUDGET, SCAN_PAGE_BUDGET, RECENT_PAGE_LIMIT, PROBE_PAGE_LIMIT,
+  type RecentPageFetcher, type RecentTxEntry,
+} from '../src/crypto/receiveScan'
 import { IndexerProvider } from '@tari-project/ootle-indexer'
 import { Network, WasmStealthCrypto } from '@tari-project/ootle'
 import { SecretKeyWallet } from '@tari-project/ootle-secret-key-wallet'
@@ -1564,6 +1569,196 @@ async function cmdProveRecovery(h: Harnessed, targetId?: string): Promise<void> 
   if (failures > 0) process.exitCode = 1
 }
 
+
+// ── prove-receive-scan ───────────────────────────────────────────────────────
+
+/**
+ * The stage-2c proof: a receive the `/utxos` listing cannot see, found by walking recent
+ * transactions and trial-decrypting their outputs, then recovered by id into the balance and the
+ * spendable set. Plus the three guards: a spent receive stays out, a coin in two sources counts
+ * once, and the cursor only advances when the previous one was reached.
+ *
+ * READ-ONLY. It locks a coin in the LOCAL spend record to prove the spent guard, and releases it.
+ */
+async function cmdProveReceiveScan(h: Harnessed, targetId?: string): Promise<void> {
+  const sig = new AbortController().signal
+  let failures = 0
+  const check = (label: string, ok: boolean, detail: string) => {
+    if (!ok) failures++
+    console.log(`  ${ok ? 'PASS' : '◀ FAIL'}  ${label.padEnd(56)} ${detail}`)
+  }
+  rule('prove-receive-scan  ·  READ-ONLY, nothing is submitted')
+  field('budgets', `first walk ${FIRST_SCAN_PAGE_BUDGET} pages · incremental ${SCAN_PAGE_BUDGET} pages · ` +
+    `page ${RECENT_PAGE_LIMIT} tx (probe ${PROBE_PAGE_LIMIT}) · per indexer`)
+  const before = loadReceiveScan(h.address)
+  field('cursor store', Object.keys(before.cursors).length === 0
+    ? '(empty — a fresh device: this will be a FIRST walk)'
+    : JSON.stringify(before.cursors))
+
+  // ── 1. The premise: the listing does not have it, the chain does ──
+  const commitment = targetId ? targetId.slice(targetId.lastIndexOf('_') + 1) : null
+  const listing = await fetchAllUtxoRows({ indexerUrls: INDEXER_URLS })
+  const listed = new Set(listing.rows.map(r => r[0]))
+  rule('1 · the premise')
+  field('/utxos union', `${listing.rows.length} rows over ${INDEXER_URLS.length} indexer(s)${listing.incomplete ? ' (INCOMPLETE)' : ''}`)
+  if (targetId && commitment) {
+    const probe = await pointRead(`/substates/${encodeURIComponent(targetId)}`)
+    check('the chain has it (/substates)', probe.answered && probe.body !== null, probe.body !== null ? `HTTP 200 via ${probe.source}` : 'not found')
+    if (listed.has(commitment)) {
+      console.log('\n  ▶ PREMISE GONE: the listing now carries this coin. The walk would still find it, but it\n' +
+                  '    would prove nothing the listing does not. Pick a receive that is not listed yet.')
+    }
+    check('no /utxos listing has it', !listed.has(commitment), `absent from all ${listing.rows.length} rows`)
+  }
+
+  // ── 2. The listing-only scan cannot see it ──
+  rule('2 · the listing-only scan (no wallet address → no recovery, no walk)')
+  const excluded = loadExcludedIds(h.address)
+  const off = await scanWallet(h.viewSecret, () => {}, sig, { excluded })
+  field('listing only', `${off.utxos.length} owned — ${amt(off.balance)}`)
+  if (commitment) check('the listing-only scan does NOT find it', !off.utxos.some(u => u.commitment === commitment), `${off.utxos.length} owned`)
+
+  // ── 3. The transaction walk does ──
+  rule('3 · the transaction walk (crypto/receiveScan)')
+  const t0 = performance.now()
+  const walk = await scanRecentReceives({ walletAddress: h.address, viewSecret: h.viewSecret, signal: sig })
+  field('elapsed', `${Math.round(performance.now() - t0)} ms, ${walk.txsRead} transactions read`)
+  for (const w of walk.walks) {
+    field(new URL(w.url).host, `${w.outcome.padEnd(7)} ${w.pages} page(s)  cursor ${w.before.cursor?.slice(0, 12) ?? 'null'}… → ${w.after.cursor?.slice(0, 12) ?? 'null'}…${w.after.gap ? '  GAP ' + JSON.stringify(w.after.gap) : ''}`)
+  }
+  for (const hit of walk.hits) {
+    console.log(`      OURS  ${hit.substateId}\n            in tx ${hit.txId}  ${listed.has(hit.commitment) ? '(also listed)' : '◀ NOT LISTED'}`)
+  }
+  const hit = commitment ? walk.hits.find(x => x.commitment === commitment) : undefined
+  if (commitment && !hit) {
+    // NOT OURS, OR NOT WALKED? Two very different answers. Find the transaction that carries the
+    // commitment; if it is there and this key did not open it, the phrase is simply not the
+    // recipient's, and every later check about this coin would be meaningless.
+    let carrier: string | null = null
+    let lastId: string | null = null
+    for (let p = 0; p < FIRST_SCAN_PAGE_BUDGET && !carrier; p++) {
+      const res: Response = await fetch(`${INDEXER_URLS[0]}/transactions/recent?limit=${RECENT_PAGE_LIMIT}${lastId ? `&last_id=${lastId}` : ''}`)
+      const page: RecentTxEntry[] = ((await res.json()) as { transactions: RecentTxEntry[] }).transactions
+      for (const e of page) if (carriedOutputs(e).some(o => o.commitment === commitment)) { carrier = e.transaction_id; break }
+      if (page.length < RECENT_PAGE_LIMIT) break
+      lastId = page.at(-1)!.transaction_id
+    }
+    if (carrier) {
+      field('carried by', `tx ${carrier} — the walk READ it and parsed the output`)
+      console.log('\n  ▶ WRONG WALLET: this view key does not open that output, so this phrase is not the\n' +
+                  '    recipient. The walk works (see the OURS lines above for this wallet\'s own outputs);\n' +
+                  '    re-run with the recipient\'s phrase to prove it on this coin.')
+    } else {
+      field('carried by', 'no transaction in the indexer\'s recent history carries it')
+    }
+    rule('INCONCLUSIVE FOR THIS COIN — not this wallet\'s output')
+    process.exitCode = 2
+    return
+  }
+  if (commitment) {
+    check('the walk finds it and our view key opens it', !!hit, hit ? `in tx ${hit.txId.slice(0, 16)}…` : 'not among hits')
+    check('and remembers it as a recovery candidate', discoveredReceives(h.address).some(d => d.id === targetId), `${discoveredReceives(h.address).length} discovered`)
+  }
+
+  // ── 4. Recovered by id, into the balance ──
+  rule('4 · the full scan: listing ∪ journal ids ∪ discovered receives')
+  const on = await scanWallet(h.viewSecret, () => {}, sig, { excluded, walletAddress: h.address })
+  field('with 2c', `${on.utxos.length} owned — ${amt(on.balance)}   (was ${off.utxos.length} — ${amt(off.balance)})`)
+  for (const r of on.recoveries) console.log(`      ${r.found ? 'FOUND' : 'absent'}  via ${r.via.padEnd(12)} ${r.substateId}`)
+  const absentOld = on.recoveries.filter(r => !r.found && r.via === 'receive-scan').map(r => r.substateId)
+  const stillHeld = new Set(discoveredReceives(h.address).map(d => d.id))
+  check('discovered ids the chain has definitively lost are let go', absentOld.every(id => !stillHeld.has(id)),
+    `${absentOld.length} absent → ${absentOld.filter(id => stillHeld.has(id)).length} still held, ${stillHeld.size} discovered remain`)
+  const again4 = await scanWallet(h.viewSecret, () => {}, sig, { excluded, walletAddress: h.address })
+  check('so the next scan does not ask for them again', !again4.recoveries.some(r => absentOld.includes(r.substateId)),
+    `${again4.recoveries.length} by-id read(s)`)
+  if (commitment) {
+    const rec = on.recoveries.find(r => r.substateId === targetId)
+    check('recovered by id, named by the receive walk', rec?.found === true && rec.via === 'receive-scan', rec ? `found=${rec.found} via=${rec.via}` : 'not a candidate')
+    const u = on.utxos.find(x => x.commitment === commitment)
+    check('it is in the owned set and the balance', !!u && on.balance > off.balance, u ? `+${amt(u.amount)} → ${amt(on.balance)}` : 'absent')
+    const crypto = new WasmStealthCrypto(Network.Esmeralda)
+    const spendable = await scanOwnedUtxos(crypto, h.viewSecret, { excluded, walletAddress: h.address })
+    check('and selectable as an input', spendable.some(s => s.substateId === targetId), `${spendable.length} selectable vs ${on.utxos.length} owned`)
+  }
+
+  // ── 5. Dedup ──
+  rule('5 · dedup — one commitment, one row')
+  const dupCounts = new Map<string, number>()
+  for (const u of on.utxos) dupCounts.set(u.commitment, (dupCounts.get(u.commitment) ?? 0) + 1)
+  check('no commitment counted twice in the balance', [...dupCounts.values()].every(n => n === 1), `${on.utxos.length} rows, ${dupCounts.size} distinct`)
+  const listedHit = walk.hits.find(x => listed.has(x.commitment))
+  if (listedHit) {
+    const n = on.utxos.filter(u => u.commitment === listedHit.commitment).length
+    const asked = on.recoveries.some(r => r.substateId === listedHit.substateId)
+    check('a receive in /utxos AND the walk: counted once, no read', n === 1 && !asked, `${listedHit.commitment.slice(0, 16)}… ×${n}, by-id read: ${asked}`)
+  } else {
+    console.log('      (no walk hit is also listed right now — the listing-overlap case is covered by the unit specs)')
+  }
+  if (targetId && commitment) {
+    // Our own journal ALSO names it: two sources, one row, one read, attributed to the journal.
+    beginEntry(h.address, {
+      kind: 'send', amountMicrotari: null, feeMicrotari: null, from: 'private', to: 'external',
+      counterparty: null, note: 'harness: prove-receive-scan dedup', source: 'local-journal',
+      selfOutputIds: [targetId], spentInputIds: null,
+    })
+    const both = await scanWallet(h.viewSecret, () => {}, sig, { excluded, walletAddress: h.address })
+    const n = both.utxos.filter(u => u.commitment === commitment).length
+    const reads = both.recoveries.filter(r => r.substateId === targetId)
+    check('named by journal AND walk: counted once, read once', n === 1 && reads.length === 1 && both.balance === on.balance,
+      `×${n}, ${reads.length} read (via ${reads[0]?.via}), balance ${amt(both.balance)}`)
+  }
+
+  // ── 6. Spent guard ──
+  if (targetId && commitment) {
+    rule('6 · a spent receive never comes back')
+    const PROOF_TX = 'harness-receive-scan-spent-check'
+    try {
+      markLocked(h.address, [targetId], PROOF_TX)
+      const spentScan = await scanWallet(h.viewSecret, () => {}, sig, { excluded: loadExcludedIds(h.address), walletAddress: h.address })
+      const asked = spentScan.recoveries.some(r => r.substateId === targetId)
+      check('locked: not asked for, not in the balance', !asked && !spentScan.utxos.some(u => u.commitment === commitment), `${amt(spentScan.balance)}`)
+      const crypto = new WasmStealthCrypto(Network.Esmeralda)
+      const sel = await scanOwnedUtxos(crypto, h.viewSecret, { excluded: loadExcludedIds(h.address), walletAddress: h.address })
+      check('locked: not selectable', !sel.some(s => s.substateId === targetId), `${sel.length} selectable`)
+    } finally {
+      release(h.address, PROOF_TX)
+    }
+  }
+
+  // ── 7. The cursor rule, against the live node ──
+  rule('7 · the cursor advances only when the previous one was reached')
+  const url = INDEXER_URLS[0]!
+  const live: RecentPageFetcher = async (u, lastId, limit) => {
+    const q = new URLSearchParams({ limit: String(limit) })
+    if (lastId) q.set('last_id', lastId)
+    const res = await fetch(`${u}/transactions/recent?${q}`)
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    return ((await res.json()) as { transactions: RecentTxEntry[] }).transactions
+  }
+  const now = loadReceiveScan(h.address).cursors[url] ?? { cursor: null, gap: null }
+  const again = await advanceIndexer(url, now, live, async () => {})
+  check('an immediate re-walk reads almost nothing and stays contiguous', again.outcome === 'reached' && again.pages === 1,
+    `${again.outcome}, ${again.pages} page, cursor ${again.after.cursor?.slice(0, 12)}…`)
+  // An old cursor, deep in history: reached by walking back, and only then advanced.
+  const deep = (await live(url, null, RECENT_PAGE_LIMIT)).at(-1)?.transaction_id ?? null
+  if (deep) {
+    const w = await advanceIndexer(url, { cursor: deep, gap: null }, live, async () => {})
+    check('an old cursor: walked back to it, THEN advanced to the newest', w.outcome === 'reached' && w.after.cursor !== deep && w.after.gap === null,
+      `${w.pages} pages, ${deep.slice(0, 12)}… → ${w.after.cursor?.slice(0, 12)}…`)
+    // Same walk, but the second page fails: the cursor must not move.
+    let n = 0
+    const flaky: RecentPageFetcher = async (u, l, lim) => { if (++n === 2) throw new Error('simulated outage'); return live(u, l, lim) }
+    const f = await advanceIndexer(url, { cursor: deep, gap: null }, flaky, async () => {})
+    check('the same walk, second page failing: cursor HELD', f.after.cursor === deep && f.outcome === 'held', `${f.outcome}, cursor ${f.after.cursor?.slice(0, 12)}…`)
+  }
+
+  rule(failures > 0 ? `${failures} CHECK(S) FAILED`
+    : targetId ? 'PROVEN — the transaction walk finds a receive the listing cannot, and it is counted and spendable'
+    : 'GUARDS HOLD — pass a listing-absent receive\'s substate id to prove the find itself')
+  if (failures > 0) process.exitCode = 1
+}
+
 // ── Entry point ──────────────────────────────────────────────────────────────
 
 const USAGE = `
@@ -1577,6 +1772,10 @@ READ-ONLY — safe to run freely, costs nothing:
   resolve <txid>              Fetch and print one transaction result in full, with its verdict.
   prove-recovery [substateId] Proof that a coin absent from every listing is still found by id,
                               counted, and spendable. Submits nothing.
+  prove-receive-scan [substateId]
+                              Proof that a receive absent from every /utxos listing is found by
+                              walking recent transactions, recovered by id, counted and spendable;
+                              plus the spent, dedup and cursor guards. Submits nothing.
   indexers                    What each indexer holds, what the union recovers, and how much of
                               THIS wallet is invisible reading a single node.
   spent                       Show the local spend record (crypto/spentOutputs).
@@ -1668,6 +1867,9 @@ export async function main(argv: string[]): Promise<void> {
         break
       case 'prove-recovery':
         await cmdProveRecovery(h, args[1])
+        break
+      case 'prove-receive-scan':
+        await cmdProveReceiveScan(h, args[1])
         break
       case 'indexers':
         await cmdIndexers(h)

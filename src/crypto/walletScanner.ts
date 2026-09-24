@@ -2,6 +2,7 @@ import { decryptOwnedUtxo, WasmStealthCrypto, Network } from '@tari-project/ootl
 import type { IndexerGetSubstateResponse } from '@tari-project/ootle'
 import { RESOURCE_HEX } from './utxoFeed'
 import { fetchOwnedRows, type Recovery } from './ownedFeed'
+import type { ReceiveScanReport } from './receiveScan'
 import type { ExcludedValue } from './spentOutputs'
 
 // THE SET IS READ TO THE END, and the request/retry/cursor machinery lives in utxoFeed so this and
@@ -59,6 +60,8 @@ export interface ScanResult {
    * journal's record of it is what put it back — see crypto/ownedFeed.
    */
   recoveries: Recovery[]
+  /** The transaction walk that names receives early — see crypto/receiveScan. Diagnostic. */
+  receiveScan: ReceiveScanReport | null
 }
 
 /** The two things a scan needs beyond the view key, both optional. */
@@ -66,8 +69,10 @@ export interface ScanOptions {
   /** What this wallet has already spent — see crypto/spentOutputs. */
   excluded?: ReadonlySet<string>
   /**
-   * Enables by-id recovery of our own unlisted outputs. Without it the scan reads the listings
-   * alone, which is the pre-2b behaviour and still correct, just blind to a dropped row.
+   * Enables by-id recovery of our own unlisted outputs, AND the transaction walk that finds
+   * receives before the listing does (the scan's own view key is used for that). Without it the
+   * scan reads the listings alone, which is the pre-2b behaviour and still correct, just slower to
+   * see a receive and blind to a dropped row.
    */
   walletAddress?: string
 }
@@ -119,9 +124,13 @@ export async function scanWallet(
   // EVERY configured indexer, unioned — AND our own outputs that no listing returned, fetched by
   // id from the journal's record of them. See crypto/ownedFeed: reading one node left ~20 live
   // coins invisible, and a listing can drop one of ours entirely.
-  const { rows: uniqueRows, incomplete, recoveries } = await fetchOwnedRows({
+  //
+  // And the receives the recent-transaction walk found, named by id before any listing has them —
+  // crypto/receiveScan. Same recovery path, same filters: they are rows only if the chain says so.
+  const { rows: uniqueRows, incomplete, recoveries, receiveScan } = await fetchOwnedRows({
     signal,
     walletAddress: opts.walletAddress,
+    viewSecret: opts.walletAddress ? viewSecret : undefined,
   })
 
   const found: ScannedUtxo[] = []
@@ -168,5 +177,5 @@ export async function scanWallet(
   onProgress({ scanned: totalScanned, found: found.length })
 
   const balance = found.reduce((sum, u) => sum + u.amount, 0n)
-  return { utxos: found, totalScanned, incomplete, balance, excludedPresent, recoveries }
+  return { utxos: found, totalScanned, incomplete, balance, excludedPresent, recoveries, receiveScan }
 }

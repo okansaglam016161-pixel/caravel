@@ -12,7 +12,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { setStoreKey } from './sessionKey'
 import { beginEntry } from './journalStore'
 import { markLocked, promoteToSpent, __resetSpentSessionForTests } from './spentOutputs'
-import { MAX_RECOVERY_READS, fetchOwnedRows, recoveryCandidates } from './ownedFeed'
+import { MAX_RECOVERY_READS, fetchOwnedRows, recoveryCandidates, recoveryCandidatesWithSource } from './ownedFeed'
+import { discoveredReceives, type RecentPageFetcher, type RecentTxEntry } from './receiveScan'
 import { RESOURCE_HEX } from './utxoFeed'
 import type { JournalDraft } from './journal'
 
@@ -130,7 +131,7 @@ describe('the recovered feed', () => {
     const feed = await fetchOwnedRows({ walletAddress: ADDR, indexerUrls: URLS, fetchSubstate })
     expect(fetchSubstate).toHaveBeenCalledWith(id(A))
     expect(feed.rows.map(r => r[0])).toEqual([A])
-    expect(feed.recoveries).toEqual([{ substateId: id(A), commitment: A, found: true }])
+    expect(feed.recoveries).toEqual([{ substateId: id(A), commitment: A, found: true, via: 'journal' }])
   })
 
   it('hands the recovered coin back in the same shape a listing row has', async () => {
@@ -159,7 +160,7 @@ describe('the recovered feed', () => {
       walletAddress: ADDR, indexerUrls: URLS, fetchSubstate: async () => null,
     })
     expect(feed.rows).toEqual([])
-    expect(feed.recoveries).toEqual([{ substateId: id(A), commitment: A, found: false }])
+    expect(feed.recoveries).toEqual([{ substateId: id(A), commitment: A, found: false, via: 'journal' }])
   })
 
   // NO NEGATIVE CACHE, deliberately: a 404 today and a 404 forever look identical at this moment,
@@ -180,5 +181,145 @@ describe('the recovered feed', () => {
     const feed = await fetchOwnedRows({ walletAddress: ADDR, indexerUrls: URLS, fetchSubstate })
     expect(fetchSubstate).not.toHaveBeenCalled()
     expect(feed.rows).toEqual([])
+  })
+})
+
+// ── Stage 2c: receives named by the transaction walk ─────────────────────────
+//
+// crypto/receiveScan finds outputs our view key opens inside recent transactions, before any
+// listing carries them. They join the journal's ids as a SECOND source for the same by-id recovery,
+// through the same filters — and the same guards against resurrection and double counting.
+
+describe('receives found in transactions — the second source', () => {
+  const VIEW = new Uint8Array(32)
+  const R = 'ee01', S = 'ff02'
+
+  /** One node whose history is these transactions, newest first. */
+  const chain = (...txs: RecentTxEntry[]): RecentPageFetcher => async (_u, lastId, limit) => {
+    if (lastId !== null) return []
+    return txs.slice(0, limit)
+  }
+  const tx = (txId: string, commitments: string[]): RecentTxEntry => ({
+    transaction_id: txId,
+    transaction: { V1: { body: { transaction: { fee_instructions: [], instructions: [{ StealthTransfer: {
+      resource_address_ref: { Address: `resource_${RESOURCE_HEX}` },
+      statement: { outputs_statement: { outputs: commitments.map(c => ({
+        output: { commitment: c, sender_public_nonce: 'ab', encrypted_data: 'cd' },
+      })) } },
+    } }] } } } },
+  })
+  const ours = (set: string[]) => async (o: { commitment: string }) => set.includes(o.commitment)
+  const walk = (fetchPage: RecentPageFetcher, isOurs: (o: { commitment: string }) => Promise<boolean>, now = 5_000) =>
+    ({ fetchPage, isOurs, now })
+
+  // THE POINT OF 2c: a receive no listing has, recovered by id because the walk named it.
+  it('recovers a receive the listing does not have yet', async () => {
+    const fetchSubstate = vi.fn(async () => liveBody)
+    const feed = await fetchOwnedRows({
+      walletAddress: ADDR, viewSecret: VIEW, indexerUrls: URLS, fetchSubstate,
+      receiveScan: walk(chain(tx('t0', [R, 'dead'])), ours([R])),
+    })
+    expect(fetchSubstate).toHaveBeenCalledWith(id(R))
+    expect(feed.rows.map(r => r[0])).toEqual([R])
+    expect(feed.recoveries).toEqual([{ substateId: id(R), commitment: R, found: true, via: 'receive-scan' }])
+    expect(feed.receiveScan?.hits.map(h => h.commitment)).toEqual([R])
+  })
+
+  it('is remembered, so a later scan with nothing new still recovers it', async () => {
+    await fetchOwnedRows({
+      walletAddress: ADDR, viewSecret: VIEW, indexerUrls: URLS, fetchSubstate: async () => null,
+      receiveScan: walk(chain(tx('t0', [R])), ours([R])),
+    })
+    // Next scan: the cursor is at t0, so the walk reads nothing — but the id is kept.
+    const feed = await fetchOwnedRows({
+      walletAddress: ADDR, viewSecret: VIEW, indexerUrls: URLS, fetchSubstate: async () => liveBody,
+      receiveScan: walk(chain(tx('t0', [R])), ours([R])),
+    })
+    expect(feed.receiveScan?.txsRead).toBe(0)
+    expect(feed.rows.map(r => r[0])).toEqual([R])
+  })
+
+  it('does not run the walk without a view key — the stage-2b feed, unchanged', async () => {
+    const fetchPage = vi.fn(chain(tx('t0', [R])))
+    const feed = await fetchOwnedRows({ walletAddress: ADDR, indexerUrls: URLS, receiveScan: { fetchPage } })
+    expect(fetchPage).not.toHaveBeenCalled()
+    expect(feed.receiveScan).toBeNull()
+  })
+
+  // SPENT-SET, direction one: found by the walk, later spent by us. It must not come back.
+  it('never re-adds a discovered receive we have since spent — locked or spent', async () => {
+    const fetchSubstate = vi.fn(async () => liveBody)
+    const receiveScan = walk(chain(tx('t0', [R])), ours([R]))
+    await fetchOwnedRows({ walletAddress: ADDR, viewSecret: VIEW, indexerUrls: URLS, fetchSubstate, receiveScan })
+    expect(fetchSubstate).toHaveBeenCalledTimes(1)
+
+    markLocked(ADDR, [id(R)], 'spend-it')
+    const locked = await fetchOwnedRows({ walletAddress: ADDR, viewSecret: VIEW, indexerUrls: URLS, fetchSubstate, receiveScan })
+    expect(locked.rows).toEqual([])
+    promoteToSpent(ADDR, 'spend-it')
+    const spent = await fetchOwnedRows({ walletAddress: ADDR, viewSecret: VIEW, indexerUrls: URLS, fetchSubstate, receiveScan })
+    expect(spent.rows).toEqual([])
+    expect(fetchSubstate).toHaveBeenCalledTimes(1)
+    // And once spent for good, it is let go entirely.
+    expect(discoveredReceives(ADDR)).toEqual([])
+  })
+
+  // SPENT-SET, direction two: already spent when the walk finds it (e.g. a re-walk from a fresh
+  // cursor over a transaction whose output we have since spent). Never asked for at all.
+  it('never asks for a receive that is already in the spend record when the walk finds it', async () => {
+    markLocked(ADDR, [id(R)], 'earlier')
+    const fetchSubstate = vi.fn(async () => liveBody)
+    const feed = await fetchOwnedRows({
+      walletAddress: ADDR, viewSecret: VIEW, indexerUrls: URLS, fetchSubstate,
+      receiveScan: walk(chain(tx('t0', [R])), ours([R])),
+    })
+    expect(fetchSubstate).not.toHaveBeenCalled()
+    expect(feed.rows).toEqual([])
+  })
+
+  // DEDUP: in the listing AND found by the walk — one row, and no extra read.
+  it('a receive the listing already has costs nothing and counts once', async () => {
+    vi.stubGlobal('fetch', listing([R]))
+    const fetchSubstate = vi.fn(async () => liveBody)
+    const feed = await fetchOwnedRows({
+      walletAddress: ADDR, viewSecret: VIEW, indexerUrls: URLS, fetchSubstate,
+      receiveScan: walk(chain(tx('t0', [R])), ours([R])),
+    })
+    expect(fetchSubstate).not.toHaveBeenCalled()
+    expect(feed.rows.map(r => r[0])).toEqual([R])
+  })
+
+  // DEDUP: our own change output is in the journal AND opened by the walk. Asked for once, and
+  // described as the journal's.
+  it('an id named by both sources is asked for once, as a journal id', async () => {
+    beginEntry(ADDR, sent([id(S)]), 9_000)
+    const fetchSubstate = vi.fn(async () => liveBody)
+    const feed = await fetchOwnedRows({
+      walletAddress: ADDR, viewSecret: VIEW, indexerUrls: URLS, fetchSubstate,
+      receiveScan: walk(chain(tx('t0', [S, R])), ours([S, R]), 9_000),
+    })
+    expect(fetchSubstate).toHaveBeenCalledTimes(2)
+    expect(feed.rows.map(r => r[0]).sort()).toEqual([R, S])
+    expect(feed.recoveries.find(r => r.substateId === id(S))?.via).toBe('journal')
+    expect(feed.recoveries.find(r => r.substateId === id(R))?.via).toBe('receive-scan')
+  })
+
+  it('merges both sources newest first under the one cap', async () => {
+    beginEntry(ADDR, sent([id('0ld0')]), 1_000)
+    await fetchOwnedRows({
+      walletAddress: ADDR, viewSecret: VIEW, indexerUrls: URLS, fetchSubstate: async () => null,
+      receiveScan: walk(chain(tx('t0', [R])), ours([R]), 5_000),
+    })
+    expect(recoveryCandidatesWithSource(ADDR, new Set(), 1)).toEqual([{ substateId: id(R), via: 'receive-scan' }])
+    expect(recoveryCandidates(ADDR, new Set())).toEqual([id(R), id('0ld0')])
+  })
+
+  it('a node that cannot be read does not fail the feed', async () => {
+    vi.stubGlobal('fetch', listing([A]))
+    const feed = await fetchOwnedRows({
+      walletAddress: ADDR, viewSecret: VIEW, indexerUrls: URLS,
+      receiveScan: { fetchPage: async () => { throw new Error('down') }, isOurs: ours([]) },
+    })
+    expect(feed.rows.map(r => r[0])).toEqual([A])
   })
 })

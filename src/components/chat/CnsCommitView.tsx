@@ -225,6 +225,7 @@ export default function CnsCommitView({ name, onCancel, onDone, onTryAnother, on
       note: null,
       source: 'local-journal',
       selfOutputIds: null,
+      spentInputIds: null,             // the ONS path does not report its inputs
     }).entry.id
 
     const r = await registerOnsName(wallet, address, name, nostrNpub, budget)

@@ -110,6 +110,21 @@ export interface JournalEntry {
    *         own output that we failed to record, so nothing may be classified from it.
    */
   selfOutputIds: string[] | null
+  /**
+   * Substate ids of the stealth outputs THIS ACTION CONSUMED.
+   *
+   * The mirror of `selfOutputIds`, and recorded for the same reason: the commitments are known at
+   * action time (the wallet chooses its own inputs) and are unrecoverable afterwards, because the
+   * spent substate is pruned from the chain. What the wallet actually EXCLUDES from its balance
+   * lives in crypto/spentOutputs — this is the per-action audit trail beside it, so a row in the
+   * journal says what it spent as well as what it created.
+   *
+   * `[]` AND `null` ARE NOT THE SAME, exactly as above:
+   *   []    this action provably consumed no stealth input — a conceal, a public send, a faucet
+   *         claim. They spend the revealed vault, which is keyed and consensus-fresh.
+   *   null  not determined. A hole; nothing may be concluded from its absence.
+   */
+  spentInputIds: string[] | null
 }
 
 /** The fields a caller supplies up front, before anything has been submitted. */
@@ -123,6 +138,7 @@ export interface JournalPatch {
   amountMicrotari?: bigint | null
   feeMicrotari?: bigint | null
   selfOutputIds?: string[] | null
+  spentInputIds?: string[] | null
 }
 
 /**
@@ -272,6 +288,7 @@ export function draftToEntry(draft: JournalDraft, now = Date.now()): JournalEntr
     note: draft.note,
     source: draft.source,
     selfOutputIds: draft.selfOutputIds,
+    spentInputIds: draft.spentInputIds,
   }
 }
 
@@ -290,5 +307,6 @@ export function applyPatch(entry: JournalEntry, patch: JournalPatch): JournalEnt
     amountMicrotari: patch.amountMicrotari ?? entry.amountMicrotari,
     feeMicrotari: patch.feeMicrotari ?? entry.feeMicrotari,
     selfOutputIds: patch.selfOutputIds !== undefined ? patch.selfOutputIds : entry.selfOutputIds,
+    spentInputIds: patch.spentInputIds !== undefined ? patch.spentInputIds : entry.spentInputIds,
   }
 }

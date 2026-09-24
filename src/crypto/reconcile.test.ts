@@ -30,7 +30,7 @@ function entry(over: Partial<JournalEntry> = {}): JournalEntry {
     ...draftToEntry({
       kind: 'send', amountMicrotari: 1n, feeMicrotari: null,
       from: 'private', to: 'external', counterparty: null, note: null,
-      source: 'local-journal', selfOutputIds: [CHANGE],
+      source: 'local-journal', selfOutputIds: [CHANGE], spentInputIds: null,
     }),
     outcome: 'committed',
     ...over,

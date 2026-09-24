@@ -69,6 +69,10 @@ function toRaw(e: JournalEntry): EntryRaw {
 function fromRaw(r: EntryRaw): JournalEntry {
   return {
     ...r,
+    // Entries written before spend-tracking shipped carry no such field. Normalised to `null` —
+    // "not determined" — rather than left undefined, so the [] / null distinction the type
+    // promises holds for old rows too.
+    spentInputIds: r.spentInputIds ?? null,
     amountMicrotari: r.amountMicrotari === null ? null : BigInt(r.amountMicrotari),
     feeMicrotari: r.feeMicrotari === null ? null : BigInt(r.feeMicrotari),
   }

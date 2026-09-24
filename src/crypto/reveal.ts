@@ -114,8 +114,10 @@ import { probeFeeFor } from './confidentialSend'
 import {
   StaticSigner, reachableTotal, scanOwnedUtxos, selectStealthInputs, type OwnedUtxo,
 } from './stealthUtxos'
+import { awaitFinality } from './finality'
+import { loadExcludedIds, markLocked, promoteToSpent, release } from './spentOutputs'
+import { INDEXER_URL } from './indexerConfig'
 
-const INDEXER_URL = 'https://ootle-indexer-a.tari.com'
 
 /**
  * Fee reserved while PRICING a reveal, and the amount MAX holds back (µtTARI).
@@ -166,6 +168,14 @@ export type RevealOutcome = 'Commit' | 'Reject' | 'Timeout'
 export interface RevealResult {
   txId: string
   outcome: RevealOutcome
+  /**
+   * What the network said when it refused, verbatim inside a sentence — see crypto/txResult.
+   *
+   * Present on `Reject` and absent on `Commit`/`Timeout`. It is the only account anyone gets of why
+   * a transaction failed, so it is carried out of the poll rather than logged and dropped: a fee
+   * taken for nothing, or a rejection, is exactly the moment a user deserves the real reason.
+   */
+  reason?: string
   /** What was made public (µtTARI) — exactly the amount asked for. */
   revealedAmount: bigint
   /** Fee reserved for this transaction (µtTARI), paid out of the stealth inputs. */
@@ -183,6 +193,13 @@ export interface RevealResult {
    * read, which the journal stores as a hole rather than as "none".
    */
   selfOutputIds?: string[]
+  /**
+   * Substate ids of the stealth outputs this reveal CONSUMED.
+   *
+   * Same field and same reason as the send path's — see confidentialSend. A reveal spends real
+   * stealth inputs, so it has exactly the same obligation to record them.
+   */
+  spentInputIds: string[]
   /** Account address read from the committed result — the free capture for pre-M1 wallets. */
   accountAddress?: string
 }
@@ -408,21 +425,6 @@ function buildReveal(
     ])
 }
 
-/** Poll the indexer for the reveal tx's decision, reading the account address from the same body. */
-async function pollOutcome(txId: string, ownerPkHex: string): Promise<{ outcome: RevealOutcome; accountAddress?: string }> {
-  for (let i = 0; i < 8; i++) {
-    await new Promise<void>(r => setTimeout(r, 4_000))
-    try {
-      const res = await fetch(`${INDEXER_URL}/transactions/${txId}/result`)
-      if (!res.ok) continue
-      const json = await res.json() as { result?: { Finalized?: { final_decision?: string } } }
-      const decision = json.result?.Finalized?.final_decision
-      if (decision === 'Commit') return { outcome: 'Commit', accountAddress: extractAccountAddress(json, ownerPkHex) ?? undefined }
-      if (decision) return { outcome: 'Reject' }
-    } catch { /* transient */ }
-  }
-  return { outcome: 'Timeout' }
-}
 
 /**
  * A priced, built, signed reveal — everything except pressing send.
@@ -484,7 +486,13 @@ export async function prepareReveal(
   const viewSecret = await wallet.getViewSecret()
 
   log('Finding your private funds…')
-  const utxos = await scanOwnedUtxos(crypto, viewSecret)
+  // EXCLUDING WHAT WE HAVE ALREADY SPENT — see the same note in confidentialSend, and
+  // crypto/spentOutputs. A reveal selects from the identical set, so it inherits the identical bug
+  // if it does not exclude.
+  const utxos = await scanOwnedUtxos(crypto, viewSecret, {
+    excluded: loadExcludedIds(ownerAddress),
+    walletAddress: ownerAddress,
+  })
 
   // SELECTED ONCE, AGAINST THE RESERVE, AND PINNED. The fee is not known until the dry run, and the
   // dry run needs a transaction — so the selection is made against the generous reserve and the
@@ -610,6 +618,11 @@ export async function prepareReveal(
   log('Building…')
   const real = await buildEnvelope(fee, false)
 
+  // The pinned selection is what the real envelope was built from, so these are exactly the
+  // outputs this transaction consumes. Read here, at the only point where both the selection and
+  // the built transaction are known to agree.
+  const spentInputIds = selection.inputs.map(u => u.substateId)
+
   return {
     feeMicrotari: fee,
     revealedAmount: real.split.amount,
@@ -623,9 +636,38 @@ export async function prepareReveal(
       const sub = await provider.submitTransaction(real.envelope)
       const txId = sub.transaction_id as string
 
+// ── THE SPEND RECORD, RESOLVED IN THE SAME FUNCTION THAT SUBMITS ─────────────
+//
+// Locking happens HERE rather than at the UI call site, and that is a correctness requirement
+// rather than a convenience. `markLocked` has to run between submitting and hearing back, and this
+// function does not return until it HAS heard back — so a call site could not lock in that window
+// even if it wanted to. Leaving it to the caller would also mean every future call site has to
+// remember, and the cost of forgetting is a transaction the chain rejects after taking its fee.
+//
+// The verdict mapping is the reference wallet's (crypto/spentOutputs, OutputStatus):
+//   Commit  → promoteToSpent   the locks become facts.
+//   Reject  → release          the inputs were never consumed; give them back. Note this covers
+//                              AcceptFeeRejectRest, where the fee committed and nothing moved —
+//                              txResult.ts folds that into `Reject`, and it is the right call
+//                              here: the coins are untouched.
+//   Timeout → LEAVE LOCKED     not a verdict. Since the wait moved to the SSE watcher
+//                              (crypto/finality, 180s) a timeout is rare and means nothing was
+//                              legible — not that the transaction failed — so unlocking on one
+//                              would risk handing a spent coin back to the next selection.
+      markLocked(ownerAddress, spentInputIds, txId)
+
       slog('Confirming on-chain…')
-      const { outcome, accountAddress: confirmedAccount } = await pollOutcome(txId, ownerPkHex)
+      // TOLD, NOT ASKED — see crypto/finality. The verdict is still read by crypto/txResult, so
+      // a fee-only commit is still a failure and not a success.
+      const { outcome, reason, body } = await awaitFinality(provider, txId)
+      // Only an ACCEPT creates substates, so only an Accept can name the account component.
+      const confirmedAccount = outcome === 'Commit' && body !== null
+        ? extractAccountAddress(body, ownerPkHex) ?? undefined
+        : undefined
       provider.stopWatcher?.()
+
+      if (outcome === 'Commit') promoteToSpent(ownerAddress, txId)
+      else if (outcome === 'Reject') release(ownerAddress, txId)
 
       // The free capture, as conceal does it: a reveal runs CreateAccount, so a wallet that never
       // stored its address gets one here. saveAccountAddress is first-write-wins, so a repeat is a
@@ -635,11 +677,13 @@ export async function prepareReveal(
       return {
         txId,
         outcome,
+        reason,
         revealedAmount: real.split.amount,
         feeMicrotari: fee,
         changeAmount: real.split.changeAmount,
         accountAddress: confirmedAccount,
         selfOutputIds: real.selfOutputIds,
+        spentInputIds,
       }
     },
   }

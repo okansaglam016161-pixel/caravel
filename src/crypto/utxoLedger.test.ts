@@ -390,7 +390,7 @@ describe('reconciliation over an encrypted ledger', () => {
     ...draftToEntry({
       kind: 'send', amountMicrotari: 1n, feeMicrotari: null,
       from: 'private', to: 'external', counterparty: null, note: null,
-      source: 'local-journal', selfOutputIds: [CHANGE],
+      source: 'local-journal', selfOutputIds: [CHANGE], spentInputIds: null,
     }, 1_500),
     outcome: 'committed' as const,
   }

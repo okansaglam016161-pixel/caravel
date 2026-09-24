@@ -1,5 +1,6 @@
 import { decryptOwnedUtxo, parseSubstateUtxo, WasmStealthCrypto, Network } from '@tari-project/ootle'
 import type { IndexerGetSubstateResponse } from '@tari-project/ootle'
+import { pointRead } from './indexerConfig'
 
 // Resolve the TRUE amount of a payment-linked UTXO (M10.2). The amount deliberately never travels
 // on the wire (M10.0) — it lives encrypted in the UTXO, its single source of truth — so the
@@ -8,8 +9,6 @@ import type { IndexerGetSubstateResponse } from '@tari-project/ootle'
 //
 // (Future optimisation, out of scope here: the blind scanner in walletScanner.ts could be narrowed
 // using message-referenced ids like this one. Left untouched deliberately — it works.)
-
-const INDEXER = 'https://ootle-indexer-a.tari.com'
 
 // One shared WASM instance — stateless per call, same pattern as walletScanner.
 const stealthCrypto = new WasmStealthCrypto(Network.Esmeralda)
@@ -26,24 +25,17 @@ export async function resolvePayment(
   viewSecret: Uint8Array,
   signal?: AbortSignal,
 ): Promise<PaymentResolution> {
-  let resp: Response
-  try {
-    resp = await fetch(`${INDEXER}/substates/${encodeURIComponent(utxoId)}`, { signal })
-  } catch (e) {
-    return { status: 'network_error', detail: e instanceof Error ? e.message : String(e) }
-  }
+  // ACROSS EVERY INDEXER. The nodes disagree about which substates they hold, so one node's 404 is
+  // not an absence — and here it would show a real payment as "not found" to the person who
+  // received it. See indexerConfig.pointRead.
+  if (signal?.aborted) return { status: 'network_error', detail: 'aborted' }
+  const read = await pointRead(`/substates/${encodeURIComponent(utxoId)}`)
+  if (!read.answered) return { status: 'network_error', detail: 'no indexer answered' }
 
-  // 404 is the common "spent or not-yet-indexed" case — deliberately NOT treated as terminal by
-  // callers, so indexer lag right after receipt recovers via retry.
-  if (resp.status === 404) return { status: 'not_found' }
-  if (!resp.ok) return { status: 'network_error', detail: `indexer HTTP ${resp.status}` }
-
-  let substate: IndexerGetSubstateResponse
-  try {
-    substate = await resp.json() as IndexerGetSubstateResponse
-  } catch {
-    return { status: 'network_error', detail: 'malformed indexer response' }
-  }
+  // 404 from EVERY node: the common "spent or not-yet-indexed" case — deliberately NOT treated as
+  // terminal by callers, so indexer lag right after receipt recovers via retry.
+  if (read.body === null) return { status: 'not_found' }
+  const substate = read.body as IndexerGetSubstateResponse
 
   // Structural check first: separates a spent/frozen output (output === null) from a live UTXO,
   // so we can distinguish "gone" from "not ours" rather than lumping both into a null decrypt.

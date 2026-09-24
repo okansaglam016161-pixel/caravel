@@ -28,8 +28,8 @@
 // under-reporting lies.
 
 import { upSubstates } from './accountAddress'
+import { INDEXER_URL } from './indexerConfig'
 
-const INDEXER_URL = 'https://ootle-indexer-a.tari.com'
 
 /** Matches the id format walletScanner builds, so the two sets compare directly. */
 const UTXO_PREFIX = 'utxo_'

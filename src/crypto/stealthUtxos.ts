@@ -18,18 +18,14 @@
 // is skipped silently — that is the overwhelming majority of the set and not an error. What IS
 // surfaced is a truncated listing: see the FETCH_LIMIT note below.
 
-import { decryptOwnedUtxo, TARI_RESOURCE_ADDRESS, WasmStealthCrypto, type Mask, type Signer } from '@tari-project/ootle'
+import { decryptOwnedUtxo, WasmStealthCrypto, type Mask, type Signer } from '@tari-project/ootle'
+import { RESOURCE_HEX } from './utxoFeed'
+import { fetchOwnedRows } from './ownedFeed'
 
-const INDEXER_URL = 'https://ootle-indexer-a.tari.com'
 
-/** The TARI resource address with its `resource_` prefix stripped — the form the /utxos query and
- *  the `utxo_<resource>_<commitment>` substate id both use. */
-export const RESOURCE_HEX = TARI_RESOURCE_ADDRESS.replace(/^resource_/, '')
-
-// The indexer's /utxos endpoint IGNORES `offset` (every offset returns the same set) but HONORS
-// `limit`. So we fetch the whole set in one request with a limit safely above it — never paginate by
-// offset (that loops forever once the set exceeds one page). 1000 is honored; 5000 is rejected.
-export const FETCH_LIMIT = 1000
+// RESOURCE_HEX is re-exported rather than redefined: conceal, reveal, publicSend and the substate
+// ids all import it from here, and it is now one constant shared with the balance scan.
+export { RESOURCE_HEX }
 
 /** One of the wallet's own stealth outputs, with everything needed to spend it. */
 export interface OwnedUtxo {
@@ -49,36 +45,50 @@ export function fromHex(h: string): Uint8Array {
 /**
  * Every stealth TARI output this view key can open, in the order the indexer returned them.
  *
+ * `excluded` is this wallet's own spend record (crypto/spentOutputs) — outputs it has already
+ * committed to a transaction. Empty by default, which is the old behaviour.
+ *
  * Order is preserved deliberately: input selection sorts by value and JS sorts are stable, so a
  * deterministic starting order means a deterministic selection for a given balance — the same
  * transaction gets built when it is priced and when it is sent.
  */
-export async function scanOwnedUtxos(crypto: WasmStealthCrypto, viewSecret: Uint8Array): Promise<OwnedUtxo[]> {
+export async function scanOwnedUtxos(
+  crypto: WasmStealthCrypto,
+  viewSecret: Uint8Array,
+  opts: { excluded?: ReadonlySet<string>; walletAddress?: string } = {},
+): Promise<OwnedUtxo[]> {
+  const excluded = opts.excluded ?? new Set<string>()
   const owned: OwnedUtxo[] = []
 
-  // ONE request — the indexer ignores `offset`, so paginating by it would re-fetch the same set
-  // forever. Fetch the whole set with a big `limit` instead.
-  const url = `${INDEXER_URL}/utxos?resource_address=${RESOURCE_HEX}&limit=${FETCH_LIMIT}`
-  const res = await fetch(url)
-  if (!res.ok) throw new Error(`UTXO scan HTTP ${res.status}`)
-  const body = await res.json() as { utxos?: [string, unknown][] } | [string, unknown][]
-  const rows = Array.isArray(body) ? body : (body as { utxos?: [string, unknown][] }).utxos ?? []
-  // Ceiling guard: a full FETCH_LIMIT means there may be inputs we couldn't see. The spend paths
-  // have no balance display of their own, so surface it in the log; an actually-unspendable set
-  // still fails with an explicit insufficient-funds message.
-  if (rows.length >= FETCH_LIMIT) {
-    console.warn(`[Caravel] stealth UTXO fetch hit the indexer limit (${FETCH_LIMIT}) — input selection may be incomplete`)
+  // EVERY page — see utxoFeed. This used to be one request for the first 1000 rows of a
+  // network-wide, oldest-first listing, which stopped containing this wallet's outputs the moment
+  // the testnet passed a thousand unspent UTXOs.
+  //
+  // Rows arrive deduplicated by commitment: input selection must never consider a duplicate, since
+  // spending one commitment twice is a self-double-spend and counting it twice overstates what the
+  // wallet can cover.
+  // THE SAME FEED THE BALANCE READS — union of listings plus by-id recovery, see crypto/ownedFeed.
+  // Balance and selection must never disagree about which coins exist, which is why they share
+  // this one call rather than each assembling their own set.
+  const { rows, incomplete } = await fetchOwnedRows({ walletAddress: opts.walletAddress })
+  // The runaway guard, not a page being full. The spend paths have no balance display of their own,
+  // so surface it in the log; an actually-unspendable set still fails with an explicit
+  // insufficient-funds message.
+  if (incomplete) {
+    console.warn('[Caravel] stealth UTXO walk hit its page bound — input selection may be incomplete')
   }
 
-  // Dedup by commitment — the indexer can return the same UTXO more than once, and input selection
-  // must never consider a duplicate: spending one commitment twice is a self-double-spend, and
-  // counting it twice overstates what the wallet can cover.
-  const seen = new Set<string>()
   for (const [commitmentHex, utxoBody] of rows) {
-    if (seen.has(commitmentHex)) continue
-    seen.add(commitmentHex)
-
     const substateId = `utxo_${RESOURCE_HEX}_${commitmentHex}`
+    // ── ALREADY SPENT BY US — NOT SELECTABLE, AT ANY PRICE ────────────────────
+    //
+    // Skipped BEFORE the decrypt, unlike the balance scan, because nothing here needs to know what
+    // it was worth: an output we have spent cannot be an input again whatever its value. This is
+    // the half of the exclusion that prevents a doomed transaction rather than a wrong number —
+    // `/utxos` keeps listing a spent output until the indexer catches up, and selecting one builds
+    // a transaction the chain can only reject with "Input substate utxo_... is down", after taking
+    // its fee. See crypto/spentOutputs.
+    if (excluded.has(substateId)) continue
     const fakeResponse = { version: 0, verified: false, substate: { Utxo: utxoBody } }
     const decrypted = await decryptOwnedUtxo(
       crypto,

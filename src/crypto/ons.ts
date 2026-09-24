@@ -1,3 +1,4 @@
+import { INDEXER_URL } from './indexerConfig'
 //   ONS (Ootle Name Service) integration for Caravel.
 //
 //   READ side only in this module: resolve an @name to a Nostr pubkey via the keyless public
@@ -28,10 +29,16 @@ import * as nip19 from 'nostr-tools/nip19'
 const ONS_COMPONENT =
   'component_fe93e87e362a263ee65d382047b5adcc92c2a1dc08051a770032aefdda45c787'
 
-/** Configured client. Same indexer Caravel already uses for UTXOs; network defaults to Esmeralda. */
+/**
+ * Configured client. The same indexer Caravel reads everywhere else; network defaults to Esmeralda.
+ *
+ * ONE NODE, not the union: name resolution is a point read of a registry component, and the ONS
+ * client owns its own requests. If this ever needs the multi-node treatment it wants the same
+ * fallback the wallet's point reads use — see indexerConfig.pointRead — not a union.
+ */
 export const ons = createOnsClient({
   component: ONS_COMPONENT,
-  indexerUrl: 'https://ootle-indexer-a.tari.com',
+  indexerUrl: INDEXER_URL,
 })
 
 /** Normalise a compose input to a bare ONS name: strip a leading `@`, lowercase. */

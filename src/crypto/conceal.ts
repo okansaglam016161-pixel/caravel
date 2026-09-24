@@ -49,8 +49,9 @@ import { resolveAccountInputs } from './substates'
 import { nextMaxEpoch } from './epoch'
 import { dryRunFee, withFeeMargin } from './feeProbe'
 import { readOutputSubstateIds } from './outputIds'
+import { awaitFinality } from './finality'
+import { INDEXER_URL } from './indexerConfig'
 
-const INDEXER_URL = 'https://ootle-indexer-a.tari.com'
 
 /**
  * Fee reserved for the DRY RUN only — never submitted for real, and refunded as overcharge in the
@@ -75,6 +76,14 @@ export type ConcealOutcome = 'Commit' | 'Reject' | 'Timeout'
 export interface ConcealResult {
   txId: string
   outcome: ConcealOutcome
+  /**
+   * What the network said when it refused, verbatim inside a sentence — see crypto/txResult.
+   *
+   * Present on `Reject` and absent on `Commit`/`Timeout`. It is the only account anyone gets of why
+   * a transaction failed, so it is carried out of the poll rather than logged and dropped: a fee
+   * taken for nothing, or a rejection, is exactly the moment a user deserves the real reason.
+   */
+  reason?: string
   /** What actually landed in stealth (µtTARI) — the amount moved minus the fee. */
   concealedAmount: bigint
   /** Fee actually reserved for this transaction (µtTARI). */
@@ -206,21 +215,6 @@ function buildConceal(
     .withInputs(declaredInputs.map(substate_id => ({ substate_id, version: null })))
 }
 
-/** Poll the indexer for the conceal tx's decision, reading the account address from the same body. */
-async function pollOutcome(txId: string, ownerPkHex: string): Promise<{ outcome: ConcealOutcome; accountAddress?: string }> {
-  for (let i = 0; i < 8; i++) {
-    await new Promise<void>(r => setTimeout(r, 4_000))
-    try {
-      const res = await fetch(`${INDEXER_URL}/transactions/${txId}/result`)
-      if (!res.ok) continue
-      const json = await res.json() as { result?: { Finalized?: { final_decision?: string } } }
-      const decision = json.result?.Finalized?.final_decision
-      if (decision === 'Commit') return { outcome: 'Commit', accountAddress: extractAccountAddress(json, ownerPkHex) ?? undefined }
-      if (decision) return { outcome: 'Reject' }
-    } catch { /* transient */ }
-  }
-  return { outcome: 'Timeout' }
-}
 
 /**
  * A priced, built, signed conceal — everything except pressing send.
@@ -349,14 +343,20 @@ export async function prepareConceal(
       const txId = sub.transaction_id as string
 
       slog('Confirming on-chain\u2026')
-      const { outcome, accountAddress: confirmedAccount } = await pollOutcome(txId, ownerPkHex)
+      // TOLD, NOT ASKED — see crypto/finality. The verdict is still read by crypto/txResult, so
+      // a fee-only commit is still a failure and not a success.
+      const { outcome, reason, body } = await awaitFinality(provider, txId)
+      // Only an ACCEPT creates substates, so only an Accept can name the account component.
+      const confirmedAccount = outcome === 'Commit' && body !== null
+        ? extractAccountAddress(body, ownerPkHex) ?? undefined
+        : undefined
       provider.stopWatcher?.()
 
       // The free capture: a conceal runs CreateAccount, so a wallet that never stored its address
       // from a claim gets one here. saveAccountAddress is first-write-wins, so a repeat is a no-op.
       if (confirmedAccount) saveAccountAddress(ownerAddress, confirmedAccount)
 
-      return { txId, outcome, concealedAmount: real.split.stealthAmount, feeMicrotari: fee, accountAddress: confirmedAccount, selfOutputIds: real.selfOutputIds }
+      return { txId, outcome, reason, concealedAmount: real.split.stealthAmount, feeMicrotari: fee, accountAddress: confirmedAccount, selfOutputIds: real.selfOutputIds }
     },
   }
 }

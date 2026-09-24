@@ -53,6 +53,39 @@ export interface SideBalances {
 }
 
 /**
+ * Everything a settle is judged against.
+ *
+ * ── WHY THE BALANCES ALONE WERE NOT ENOUGH ──────────────────────────────────
+ *
+ * A settle used to complete when a balance moved in the right DIRECTION. That was always a proxy,
+ * and the spend record turned it into a broken one. A send now excludes its inputs the instant it
+ * is submitted, so the private balance falls immediately — and falls TOO FAR, because the change
+ * output it creates is a new commitment the indexer will not list for another sixty to ninety
+ * seconds. "Did it fall?" answers yes at exactly the moment the figure is most wrong, the settle
+ * ends, and the total certifies a number that is short by the change. Measured: a send of 50
+ * showed 741 against a true 750, and stayed there until the user pressed Refresh.
+ *
+ * `ownedIds` is what replaces the proxy. The wallet knows, BEFORE it submits, the substate id of
+ * every output a transaction will create for it — read from the outputs statement by
+ * crypto/outputIds and recorded on the journal entry. So the question stops being "did the number
+ * move the way I expected" and becomes "are my new outputs on chain yet", which is the thing that
+ * was actually being waited for all along.
+ */
+export interface SettleEvidence {
+  balances: SideBalances
+  /** Substate ids of every UTXO the current scan shows this wallet owning. */
+  ownedIds: ReadonlySet<string>
+  /**
+   * False while a scan is running or was truncated.
+   *
+   * ABSENCE ONLY PROVES SOMETHING IN A COMPLETE SCAN. A partial owned set is missing outputs it
+   * never looked at, so concluding "my change has not arrived" from one would keep a landed
+   * transaction waiting out its whole deadline.
+   */
+  scanComplete: boolean
+}
+
+/**
  * One balance this transaction is expected to move.
  *
  * `before` is the reading captured at commit. `null` means the baseline was NOT KNOWN at that
@@ -77,6 +110,17 @@ export type SettleStatus = 'settling' | 'settled' | 'lagged'
  * distinction exists only so the copy can mention the delay.
  */
 export interface PendingSettle {
+  /**
+   * Substate ids of the outputs this transaction creates FOR US — the evidence it has landed.
+   *
+   *   [...]  wait until every one of them appears in the owned set. The honest completion test.
+   *   []     this transaction provably creates no output for us — an exact-cover spend, a public
+   *          send. Nothing to wait for, so the private side is done immediately.
+   *   null   they could not be read from the outputs statement. A hole: there is no evidence to
+   *          wait for, so the private side falls back to its direction watch, which is the old
+   *          behaviour and the best that can be done without knowing what to look for.
+   */
+  expectOutputs: string[] | null
   /** The on-chain transaction id. Also the identity: consumers match their own tx against it. */
   txId: string
   kind: 'move' | 'send' | 'faucet'
@@ -123,6 +167,49 @@ export function settleAction(
 }
 
 /**
+ * Have this transaction's own outputs shown up?
+ *
+ * `null` means the question cannot be asked — the ids were never readable — and the caller falls
+ * back to the direction watch. `false` is a real "not yet", and is also what a running or
+ * truncated scan produces, because absence from a partial set proves nothing.
+ *
+ * ROBUST TO A CONCURRENT RECEIVE, which is the whole reason this is a set of specific commitments
+ * rather than an arithmetic check on the total. Somebody paying this wallet mid-send moves the
+ * balance by an unrelated amount and would defeat any delta match; it cannot conjure the exact
+ * commitment this transaction is waiting for.
+ */
+export function outputsAppeared(entry: PendingSettle, evidence: SettleEvidence): boolean | null {
+  if (entry.expectOutputs === null) return null
+  if (entry.expectOutputs.length === 0) return true
+  if (!evidence.scanComplete) return false
+  return entry.expectOutputs.every(id => evidence.ownedIds.has(id))
+}
+
+/** Is one side of the wallet consistent with this transaction yet? */
+function sideSettled(
+  entry: PendingSettle,
+  side: SettleSide,
+  evidence: SettleEvidence,
+  now: number,
+): boolean {
+  // THE PRIVATE SIDE IS WHERE THE EVIDENCE LIVES. Every id in `expectOutputs` is a stealth output,
+  // so when they have all appeared the private figure already includes them — whatever the number
+  // did on the way there. The direction watch is not consulted at all in that case, deliberately:
+  // it is the thing that was firing early.
+  if (side === 'private') {
+    const appeared = outputsAppeared(entry, evidence)
+    if (appeared !== null) return appeared
+  }
+
+  // The public side, and the private side when there is no evidence to go on. Unchanged: a keyed
+  // vault read is consensus-fresh, so a direction is a fair test of it.
+  const watches = entry.watches.filter(w => w.side === side)
+  if (watches.length === 0) return true
+  return watches.every(w =>
+    settleAction(balanceFor(side, evidence.balances), w.before, now, Number.POSITIVE_INFINITY, w.direction) === 'settled')
+}
+
+/**
  * Has the WHOLE transaction landed?
  *
  * EVERY watch must have moved. A move changes both balances, and they do not arrive together: the
@@ -139,15 +226,18 @@ export function settleAction(
  * not "confirmed".
  */
 export function settleAllAction(
-  watches: SettleWatch[],
-  balances: SideBalances,
+  entry: PendingSettle,
+  evidence: SettleEvidence,
   now: number,
   deadlineAt: number,
 ): SettleAction {
-  const allMoved = watches.length > 0 && watches.every(
-    w => settleAction(balanceFor(w.side, balances), w.before, now, deadlineAt, w.direction) === 'settled',
-  )
-  if (allMoved) return 'settled'
+  // Nothing to judge against at all — no watches AND no readable outputs — can never settle, and
+  // waits out its deadline. Same rule as before: a settle with nothing to observe is a programming
+  // error, and the safe reading of it is "we cannot confirm", not "confirmed".
+  const observable = entry.watches.length > 0 || entry.expectOutputs !== null
+  if (observable && sideSettled(entry, 'private', evidence, now) && sideSettled(entry, 'public', evidence, now)) {
+    return 'settled'
+  }
   if (now > deadlineAt) return 'deadline'
   return 'wait'
 }
@@ -158,7 +248,10 @@ export function settleAllAction(
  * Only meaningful once that watch has settled; `null` whenever either end is unknown, so a caller
  * cannot accidentally render a delta computed from a missing reading.
  */
-export function watchDelta(watch: SettleWatch, balances: SideBalances): bigint | null {
+export function watchDelta(watch: SettleWatch | undefined, balances: SideBalances): bigint | null {
+  // A settle may legitimately carry no watches now that evidence can stand alone, so there may be
+  // nothing to measure. `null` is already this function's "no reading", so it needs no new case.
+  if (!watch) return null
   const now = balanceFor(watch.side, balances)
   if (now === null || watch.before === null) return null
   return now > watch.before ? now - watch.before : watch.before - now
@@ -175,8 +268,8 @@ export function watchDelta(watch: SettleWatch, balances: SideBalances): bigint |
  * presentation distinction, and for the purpose of adding two balances they mean the same thing —
  * something of ours is missing from the figures. Once this turns true, it no longer is.
  */
-export function isAccountedFor(entry: PendingSettle, balances: SideBalances): boolean {
-  return settleAllAction(entry.watches, balances, 0, Number.POSITIVE_INFINITY) === 'settled'
+export function isAccountedFor(entry: PendingSettle, evidence: SettleEvidence): boolean {
+  return settleAllAction(entry, evidence, 0, Number.POSITIVE_INFINITY) === 'settled'
 }
 
 /**
@@ -193,16 +286,16 @@ export function isAccountedFor(entry: PendingSettle, balances: SideBalances): bo
  * any other. This is what releases the total after a deadline: a Refresh resolves it, without the
  * user having to know that is what they are fixing.
  */
-export function advanceSettle(entry: PendingSettle, balances: SideBalances, now: number): PendingSettle {
+export function advanceSettle(entry: PendingSettle, evidence: SettleEvidence, now: number): PendingSettle {
   if (entry.status === 'settled') return entry
   if (entry.status === 'lagged') {
-    return isAccountedFor(entry, balances)
-      ? { ...entry, status: 'settled', delta: watchDelta(entry.watches[0], balances) }
+    return isAccountedFor(entry, evidence)
+      ? { ...entry, status: 'settled', delta: watchDelta(entry.watches[0], evidence.balances) }
       : entry
   }
-  switch (settleAllAction(entry.watches, balances, now, entry.deadlineAt)) {
+  switch (settleAllAction(entry, evidence, now, entry.deadlineAt)) {
     case 'settled':
-      return { ...entry, status: 'settled', delta: watchDelta(entry.watches[0], balances) }
+      return { ...entry, status: 'settled', delta: watchDelta(entry.watches[0], evidence.balances) }
     case 'deadline':
       // NOT an error. The transaction committed; only the index is behind. No delta, because
       // nothing was observed to move — reporting one would be inventing a measurement.
@@ -213,10 +306,10 @@ export function advanceSettle(entry: PendingSettle, balances: SideBalances, now:
 }
 
 /** Advance every entry. Returns the SAME array when nothing changed. */
-export function advanceAll(entries: PendingSettle[], balances: SideBalances, now: number): PendingSettle[] {
+export function advanceAll(entries: PendingSettle[], evidence: SettleEvidence, now: number): PendingSettle[] {
   let changed = false
   const next = entries.map(e => {
-    const advanced = advanceSettle(e, balances, now)
+    const advanced = advanceSettle(e, evidence, now)
     if (advanced !== e) changed = true
     return advanced
   })

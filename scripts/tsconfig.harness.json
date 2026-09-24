@@ -1,0 +1,20 @@
+{
+  // Typecheck for the harness ONLY. It is not part of `tsc -b` and never will be: scripts/ is a
+  // dev tool, outside tsconfig.app.json's `include: ["src"]`, so the harness cannot break the app
+  // build — and equally, the app build cannot tell you when the harness has drifted from a module
+  // it imports. This is how you check that by hand:
+  //
+  //   npx tsc -p scripts/tsconfig.harness.json
+  //
+  // It inherits the app's options (bundler resolution, the tari-cipherseed path) so the harness is
+  // checked against exactly the modules the app compiles, then overrides the two things that
+  // differ: this runs in Node, so it needs node types rather than vite/client.
+  "extends": "../tsconfig.app.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node"],
+    "lib": ["ES2023", "DOM"],
+    "tsBuildInfoFile": null
+  },
+  "include": ["./harness.ts"]
+}

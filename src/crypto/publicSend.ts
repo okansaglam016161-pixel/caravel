@@ -59,8 +59,9 @@ import { loadAccountAddress, saveAccountAddress } from './accountStore'
 import { resolveAccountInputs } from './substates'
 import { nextMaxEpoch } from './epoch'
 import { dryRunFee, withFeeMargin } from './feeProbe'
+import { awaitFinality } from './finality'
+import { INDEXER_URL } from './indexerConfig'
 
-const INDEXER_URL = 'https://ootle-indexer-a.tari.com'
 
 /**
  * Fee reserved for the DRY RUN only, and the amount MAX holds back (µtTARI).
@@ -88,6 +89,14 @@ export type PublicSendOutcome = 'Commit' | 'Reject' | 'Timeout'
 export interface PublicSendResult {
   txId: string
   outcome: PublicSendOutcome
+  /**
+   * What the network said when it refused, verbatim inside a sentence — see crypto/txResult.
+   *
+   * Present on `Reject` and absent on `Commit`/`Timeout`. It is the only account anyone gets of why
+   * a transaction failed, so it is carried out of the poll rather than logged and dropped: a fee
+   * taken for nothing, or a rejection, is exactly the moment a user deserves the real reason.
+   */
+  reason?: string
   /** What the recipient receives (µtTARI) — exactly the amount asked for. */
   recipientAmount: bigint
   /** Fee reserved for this transaction (µtTARI), paid out of the same withdraw. */
@@ -258,21 +267,6 @@ function buildPublicSend(
     .withInputs(declaredInputs.map(substate_id => ({ substate_id, version: null })))
 }
 
-/** Poll the indexer for the decision, reading the account address from the same body. */
-async function pollOutcome(txId: string, ownerPkHex: string): Promise<{ outcome: PublicSendOutcome; accountAddress?: string }> {
-  for (let i = 0; i < 8; i++) {
-    await new Promise<void>(r => setTimeout(r, 4_000))
-    try {
-      const res = await fetch(`${INDEXER_URL}/transactions/${txId}/result`)
-      if (!res.ok) continue
-      const json = await res.json() as { result?: { Finalized?: { final_decision?: string } } }
-      const decision = json.result?.Finalized?.final_decision
-      if (decision === 'Commit') return { outcome: 'Commit', accountAddress: extractAccountAddress(json, ownerPkHex) ?? undefined }
-      if (decision) return { outcome: 'Reject' }
-    } catch { /* transient */ }
-  }
-  return { outcome: 'Timeout' }
-}
 
 /** A priced, built, signed public send — everything except pressing send. */
 export interface PreparedPublicSend {
@@ -403,7 +397,13 @@ export async function preparePublicSend(
       const txId = sub.transaction_id as string
 
       slog('Confirming on-chain…')
-      const { outcome, accountAddress: confirmedAccount } = await pollOutcome(txId, ownerPkHex)
+      // TOLD, NOT ASKED — see crypto/finality. The verdict is still read by crypto/txResult, so
+      // a fee-only commit is still a failure and not a success.
+      const { outcome, reason, body } = await awaitFinality(provider, txId)
+      // Only an ACCEPT creates substates, so only an Accept can name the account component.
+      const confirmedAccount = outcome === 'Commit' && body !== null
+        ? extractAccountAddress(body, ownerPkHex) ?? undefined
+        : undefined
       provider.stopWatcher?.()
 
       // The free capture: this runs CreateAccount, so a wallet that never stored its address gets
@@ -413,6 +413,7 @@ export async function preparePublicSend(
       return {
         txId,
         outcome,
+        reason,
         recipientAmount: real.split.recipientAmount,
         feeMicrotari: fee,
         withdrawAmount: real.split.withdrawAmount,

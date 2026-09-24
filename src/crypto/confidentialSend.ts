@@ -49,8 +49,10 @@ import {
   RESOURCE_HEX, StaticSigner, reachableTotal, scanOwnedUtxos, selectStealthInputs,
 } from './stealthUtxos'
 import type { SecretKeyWallet } from '@tari-project/ootle-secret-key-wallet'
+import { awaitFinality } from './finality'
+import { loadExcludedIds, markLocked, promoteToSpent, release } from './spentOutputs'
+import { INDEXER_URL } from './indexerConfig'
 
-const INDEXER_URL = 'https://ootle-indexer-a.tari.com'
 
 /**
  * CEILING, not the fee. The fee actually paid is discovered per transaction by dry run (see
@@ -73,6 +75,14 @@ export type SendOutcome = 'Commit' | 'Reject' | 'Timeout'
 export interface SendResult {
   txId: string
   outcome: SendOutcome
+  /**
+   * What the network said when it refused, verbatim inside a sentence — see crypto/txResult.
+   *
+   * Present on `Reject` and absent on `Commit`/`Timeout`. It is the only account anyone gets of why
+   * a transaction failed, so it is carried out of the poll rather than logged and dropped: a fee
+   * taken for nothing, or a rejection, is exactly the moment a user deserves the real reason.
+   */
+  reason?: string
   // Substate id of the RECIPIENT's output UTXO (specs[0]), derived from the outputs statement.
   // Used by M10.1 payment-linked messages to reference this exact output. Undefined only if the
   // commitment could not be read from the statement.
@@ -91,6 +101,15 @@ export interface SendResult {
    * read, which the journal stores as a hole rather than as "none".
    */
   selfOutputIds?: string[]
+  /**
+   * Substate ids of the stealth outputs this send CONSUMED.
+   *
+   * The field whose absence was the bug: `selection.inputs` used to live and die inside this
+   * function, so nothing downstream could record what had been spent and the balance went on
+   * counting it. Always populated — the inputs are chosen before anything is built — and recorded
+   * by this module into crypto/spentOutputs before the verdict is known.
+   */
+  spentInputIds: string[]
 }
 
 export interface SendParams {
@@ -103,35 +122,6 @@ export interface SendParams {
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-async function pollOutcome(txId: string): Promise<{ outcome: SendOutcome; feeMicrotari?: bigint }> {
-  for (let i = 0; i < 6; i++) {
-    await new Promise<void>(r => setTimeout(r, 5_000))
-    try {
-      const res = await fetch(`${INDEXER_URL}/transactions/${txId}/result`)
-      if (!res.ok) continue
-      const json = await res.json() as {
-        result?: { Finalized?: { final_decision?: string; execution_result?: { finalize?: { fee_receipt?: { total_fees_paid?: number | string } } } } }
-      }
-      const fin = json.result?.Finalized
-      const decision = fin?.final_decision
-      // The fee lives at Finalized.execution_result.finalize.fee_receipt — NOT
-      // Finalized.finalize, which is where this looked until CP4 and why `feeMicrotari` was always
-      // undefined and the UI always fell back to showing the ceiling. (The DRY-RUN endpoint really
-      // does answer at result.finalize with no execution_result wrapper; the two response shapes
-      // differ, which is what made the wrong path look plausible. See crypto/feeProbe.ts.)
-      //
-      // `total_fees_paid` is the RESERVED amount, and that is the honest number to show: the
-      // overcharge is NOT refunded to the sender in this stealth flow. Measured — a send reserving
-      // 20 725 reported total_fee_overcharge 4 587, and the wallet's change UTXO came back at
-      // exactly value − amount − 20 725, with no refund output. So the user paid 20 725.
-      const feePaid = fin?.execution_result?.finalize?.fee_receipt?.total_fees_paid
-      const feeMicrotari = feePaid != null ? BigInt(feePaid) : undefined
-      if (decision === 'Commit') return { outcome: 'Commit', feeMicrotari }
-      if (decision) return { outcome: 'Reject', feeMicrotari }
-    } catch { /* transient */ }
-  }
-  return { outcome: 'Timeout' }
-}
 
 // ── main export ───────────────────────────────────────────────────────────────
 
@@ -151,7 +141,13 @@ export async function sendConfidential(
   const viewSecret = await wallet.getViewSecret()
 
   log('Scanning for your UTXOs…')
-  const utxos = await scanOwnedUtxos(crypto, viewSecret)
+  // EXCLUDING WHAT WE HAVE ALREADY SPENT. `/utxos` keeps listing a spent output until the indexer
+  // catches up, and selecting one builds a transaction the chain can only reject ("Input substate
+  // utxo_... is down") after taking its fee. See crypto/spentOutputs.
+  const utxos = await scanOwnedUtxos(crypto, viewSecret, {
+    excluded: loadExcludedIds(senderAddress),
+    walletAddress: senderAddress,
+  })
   if (utxos.length === 0) throw new Error('No owned UTXOs found. Your wallet may need a balance from the faucet.')
 
   // SELECTED ONCE, AGAINST THE CEILING, AND PINNED — the same discipline reveal.ts uses. The fee is
@@ -278,15 +274,55 @@ export async function sendConfidential(
 
   const { envelope, recipientUtxoId, selfOutputIds } = await buildEnvelope(fee, false)
 
+  const spentInputIds = selection.inputs.map(u => u.substateId)
+
   log('Submitting transaction…')
   const sub = await provider.submitTransaction(envelope)
   const txId = sub.transaction_id as string
-  log(`Submitted — waiting for confirmation (up to 30s)…`)
+  log('Submitted — waiting for the network to finalise it…')
 
-  const { outcome, feeMicrotari } = await pollOutcome(txId)
+// ── THE SPEND RECORD, RESOLVED IN THE SAME FUNCTION THAT SUBMITS ─────────────
+//
+// Locking happens HERE rather than at the UI call site, and that is a correctness requirement
+// rather than a convenience. `markLocked` has to run between submitting and hearing back, and this
+// function does not return until it HAS heard back — so a call site could not lock in that window
+// even if it wanted to. Leaving it to the caller would also mean every future call site has to
+// remember, and the cost of forgetting is a transaction the chain rejects after taking its fee.
+//
+// The verdict mapping is the reference wallet's (crypto/spentOutputs, OutputStatus):
+//   Commit  → promoteToSpent   the locks become facts.
+//   Reject  → release          the inputs were never consumed; give them back. Note this covers
+//                              AcceptFeeRejectRest, where the fee committed and nothing moved —
+//                              txResult.ts folds that into `Reject`, and it is the right call
+//                              here: the coins are untouched.
+//   Timeout → LEAVE LOCKED     not a verdict. Since the wait moved to the SSE watcher
+//                              (crypto/finality, 180s) a timeout is rare and means nothing was
+//                              legible — not that the transaction failed — so unlocking on one
+//                              would risk handing a spent coin back to the next selection.
+  markLocked(senderAddress, spentInputIds, txId)
+
+  // TOLD, NOT ASKED — see crypto/finality.
+  const { outcome, reason, body } = await awaitFinality(provider, txId)
+  // The fee lives at Finalized.execution_result.finalize.fee_receipt — NOT Finalized.finalize,
+  // which is where this looked until CP4 and why `feeMicrotari` was always undefined and the UI
+  // always fell back to showing the ceiling. (The DRY-RUN endpoint really does answer at
+  // result.finalize with no execution_result wrapper; the two shapes differ, which is what made
+  // the wrong path look plausible. See crypto/feeProbe.)
+  //
+  // `total_fees_paid` is the RESERVED amount, and that is the honest number to show: the
+  // overcharge is NOT refunded to the sender in this stealth flow. Measured — a send reserving
+  // 20 725 reported total_fee_overcharge 4 587, and the wallet's change UTXO came back at exactly
+  // value - amount - 20 725, with no refund output. So the user paid 20 725.
+  const feePaid = (body as {
+    result?: { Finalized?: { execution_result?: { finalize?: { fee_receipt?: { total_fees_paid?: number | string } } } } }
+  } | null)?.result?.Finalized?.execution_result?.finalize?.fee_receipt?.total_fees_paid
+  const feeMicrotari = feePaid != null ? BigInt(feePaid) : undefined
   provider.stopWatcher?.()
 
-  return { txId, outcome, recipientUtxoId, feeMicrotari, selfOutputIds }
+  if (outcome === 'Commit') promoteToSpent(senderAddress, txId)
+  else if (outcome === 'Reject') release(senderAddress, txId)
+
+  return { txId, outcome, reason, recipientUtxoId, feeMicrotari, selfOutputIds, spentInputIds }
 }
 
 // ── The fund-critical arithmetic, isolated so it can be tested ────────────────

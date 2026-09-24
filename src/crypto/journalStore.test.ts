@@ -46,6 +46,7 @@ const DRAFT: JournalDraft = {
   note: 'lunch',
   source: 'local-journal',
   selfOutputIds: null,
+  spentInputIds: null,
 }
 
 // The journal is sealed at rest from stage 2 on, so these specs run against the ENCRYPTED path —

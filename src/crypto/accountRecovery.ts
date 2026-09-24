@@ -40,8 +40,8 @@ import type { SecretKeyWallet } from '@tari-project/ootle-secret-key-wallet'
 import { extractAccountAddress } from './accountAddress'
 import { loadAccountAddress, saveAccountAddress } from './accountStore'
 import { nextMaxEpoch } from './epoch'
+import { INDEXER_URL } from './indexerConfig'
 
-const INDEXER_URL = 'https://ootle-indexer-a.tari.com'
 
 /** A dry run is one round trip; this bounds it so a hung request cannot stall an unlock. */
 const DRY_RUN_TIMEOUT_MS = 20_000
@@ -71,6 +71,11 @@ export async function probeAccountAddress(wallet: SecretKeyWallet): Promise<stri
     const provider = await IndexerProvider.connect({ url: INDEXER_URL, network: Network.Esmeralda })
     ownerPkHex = toHexStr(await wallet.getPublicKey())
     const maxEpoch = await nextMaxEpoch(provider)
+    // A NO-OP HERE, and kept deliberately. This probe never watches a transaction — it reads the
+    // epoch and dry-runs — so there is no SSE stream to release. It stays because the provider is
+    // discarded on the next line, and a future edit that adds a watch here would otherwise leak
+    // the connection. The five submit paths DO start a watcher (see crypto/finality), and their
+    // matching calls are what actually close a stream.
     provider.stopWatcher?.()
 
     // CreateAccount and nothing else. No withdraw, no transfer, no fee instruction — the simulation

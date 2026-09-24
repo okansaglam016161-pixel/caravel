@@ -1326,6 +1326,7 @@ export default function ChatApp({ onOpenWallet }: {
       note: null,
       source: 'local-journal',
       selfOutputIds: null,
+      spentInputIds: null,             // not known until the send returns
     }).entry.id
 
     try {
@@ -1347,6 +1348,9 @@ export default function ChatApp({ onOpenWallet }: {
         feeMicrotari: result.feeMicrotari ?? null,
         // A rejected transaction created nothing, so there is nothing of ours on chain to subtract.
         selfOutputIds: result.outcome === 'Reject' ? [] : result.selfOutputIds ?? null,
+        // And it consumed nothing — crypto/confidentialSend has already released the locks on a
+        // Reject, so recording `[]` keeps the journal row consistent with what the wallet excludes.
+        spentInputIds: result.outcome === 'Reject' ? [] : result.spentInputIds,
       })
 
       if (result.outcome === 'Reject') {

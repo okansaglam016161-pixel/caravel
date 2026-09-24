@@ -39,6 +39,7 @@ import { IndexerProvider } from '@tari-project/ootle-indexer'
 import type { SubstateValue } from '@tari-project/ootle-ts-bindings'
 import { loadAccountAddress } from './accountStore'
 import { isSubstateNotFound, type VaultIdResolver } from './substates'
+import { INDEXER_URL } from './indexerConfig'
 
 // The not-found predicate now lives in substates.ts — reveal, conceal and public send need the same
 // one, and a fund-critical test must not be able to drift from a balance-read test.
@@ -46,7 +47,6 @@ export { isSubstateNotFound } from './substates'
 
 // Same indexer the scan and send paths use. Inlined here as they inline it, rather than introducing
 // a shared config module as a side effect of this milestone.
-const INDEXER_URL = 'https://ootle-indexer-a.tari.com'
 
 /**
  * An `Amount` converted to bigint EXACTLY, or `null` if it cannot be.

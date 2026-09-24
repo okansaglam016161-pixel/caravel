@@ -21,6 +21,7 @@ const DRAFT: JournalDraft = {
   note: 'lunch',
   source: 'local-journal',
   selfOutputIds: null,
+  spentInputIds: null,
 }
 
 describe('draftToEntry', () => {

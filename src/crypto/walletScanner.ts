@@ -1,16 +1,13 @@
 import { decryptOwnedUtxo, WasmStealthCrypto, Network } from '@tari-project/ootle'
 import type { IndexerGetSubstateResponse } from '@tari-project/ootle'
+import { RESOURCE_HEX } from './utxoFeed'
+import { fetchOwnedRows, type Recovery } from './ownedFeed'
+import type { ExcludedValue } from './spentOutputs'
 
-const INDEXER = 'https://ootle-indexer-a.tari.com'
-const RESOURCE_HEX = '0101010101010101010101010101010101010101010101010101010101010101'
-// The indexer's /utxos endpoint IGNORES `offset` (every offset returns the same set) but HONORS
-// `limit` (returns min(limit, total)). So we do NOT paginate — one request with a limit safely above
-// the whole set. 1000 is honored; 5000 is rejected, so that's the working ceiling. If the returned
-// count ever reaches this limit, there may be more we can't see → we flag the balance as incomplete.
-const FETCH_LIMIT = 1000
-const FETCH_TIMEOUT_MS = 15_000  // hang guard (feeds the retry below)
-const FETCH_RETRIES = 3          // transient failures (timeout / network blip) retry before we give up
-const RETRY_BACKOFF_MS = 600     // base backoff between retries (×attempt)
+// THE SET IS READ TO THE END, and the request/retry/cursor machinery lives in utxoFeed so this and
+// the spend paths cannot read it differently. RESOURCE_HEX came from there too: it was a hand-typed
+// 0101…01 here and derived from the SDK constant there, which is two places to be wrong about which
+// resource the balance is counting.
 
 export interface ScannedUtxo {
   id: string
@@ -28,10 +25,51 @@ export interface ScanProgress {
 export interface ScanResult {
   utxos: ScannedUtxo[]
   totalScanned: number
-  /** True if the indexer returned a full FETCH_LIMIT of rows — there may be UTXOs we couldn't see,
-   *  so the balance could be understated. False in the normal case (whole set fits under the limit). */
+  /**
+   * Owned rows that were EXCLUDED as already spent, and that `/utxos` was still listing.
+   *
+   * Not a balance figure — these are deliberately absent from `utxos` and from `balance`. Two
+   * consumers need it, and between them they need both fields:
+   *
+   *   reconciliation  asks "of the commitments I am excluding, which does the indexer still show
+   *                   me?" Without it, absence from `utxos` would be ambiguous between a coin the
+   *                   listing has dropped and one this scan chose not to count.
+   *   the safety net  asks HOW MUCH the exclusion is costing the displayed balance. The value is
+   *                   decrypted here anyway and used to be thrown away, which is why a wallet
+   *                   could be understated by 1110 tTARI with no number anywhere naming the gap.
+   *
+   * ONLY THE LISTED ONES, and that is the point: excluding a commitment the indexer has already
+   * dropped subtracts nothing, because the loop below never sees it.
+   */
+  excludedPresent: ExcludedValue[]
+  /**
+   * True only if the walk hit utxoFeed's runaway guard — there may be UTXOs we never saw, so the
+   * balance could be understated.
+   *
+   * IT USED TO FIRE ON EVERY BUSY NETWORK, because it meant "the one page we asked for was full".
+   * Now the pages are followed to the end, so a full first page is ordinary and this stays false
+   * until something is genuinely wrong. See utxoFeed's MAX_UTXO_PAGES.
+   */
   incomplete: boolean
   balance: bigint
+  /**
+   * Coins this wallet had to ask for BY ID because no listing returned them.
+   *
+   * Normally empty. A non-empty list means the indexers dropped one of our own outputs and the
+   * journal's record of it is what put it back — see crypto/ownedFeed.
+   */
+  recoveries: Recovery[]
+}
+
+/** The two things a scan needs beyond the view key, both optional. */
+export interface ScanOptions {
+  /** What this wallet has already spent — see crypto/spentOutputs. */
+  excluded?: ReadonlySet<string>
+  /**
+   * Enables by-id recovery of our own unlisted outputs. Without it the scan reads the listings
+   * alone, which is the pre-2b behaviour and still correct, just blind to a dropped row.
+   */
+  walletAddress?: string
 }
 
 // One shared WASM instance — safe to share across calls (stateless per-call)
@@ -57,71 +95,37 @@ function decodeMemo(memoJson: string | undefined): { payRef: string; message: st
   return { payRef: '', message: memoJson }
 }
 
-// Returns a new AbortSignal that fires when either input fires.
-function mergeSignals(a: AbortSignal, b: AbortSignal): AbortSignal {
-  const ctrl = new AbortController()
-  if (a.aborted || b.aborted) { ctrl.abort(); return ctrl.signal }
-  const abort = () => ctrl.abort()
-  a.addEventListener('abort', abort, { once: true })
-  b.addEventListener('abort', abort, { once: true })
-  return ctrl.signal
-}
-
-// Fetch the resource's UTXO list in ONE request (the indexer ignores `offset`, honors `limit`), with
-// a timeout + bounded retry so a transient blip doesn't fail the scan. Only throws — surfacing as a
-// scan error + Retry, never a silent zero — after FETCH_RETRIES attempts. An intentional abort of
-// `signal` (rescan / lock / new identity) is rethrown immediately so the caller can ignore it.
-async function fetchUtxos(signal: AbortSignal): Promise<[string, unknown][]> {
-  let lastErr: unknown
-  for (let attempt = 1; attempt <= FETCH_RETRIES; attempt++) {
-    if (signal.aborted) throw new DOMException('scan aborted', 'AbortError')
-
-    const reqCtrl = new AbortController()
-    let timedOut = false
-    const reqTimer = setTimeout(() => { timedOut = true; reqCtrl.abort() }, FETCH_TIMEOUT_MS)
-    const reqSignal = mergeSignals(signal, reqCtrl.signal)
-
-    try {
-      const resp = await fetch(
-        `${INDEXER}/utxos?resource_address=${RESOURCE_HEX}&limit=${FETCH_LIMIT}`,
-        { signal: reqSignal },
-      )
-      clearTimeout(reqTimer)
-      if (!resp.ok) throw new Error(`indexer returned HTTP ${resp.status}`)
-      const json = await resp.json() as { utxos?: [string, unknown][] }
-      if (!Array.isArray(json.utxos)) throw new Error('unexpected indexer response shape')
-      return json.utxos
-    } catch (e) {
-      clearTimeout(reqTimer)
-      if (signal.aborted) throw e   // intentional abort — stop now; the caller ignores aborted scans
-      lastErr = timedOut ? new Error('indexer request timed out') : e
-      // Transient failure — back off and retry before giving up.
-      if (attempt < FETCH_RETRIES) await new Promise<void>(r => setTimeout(r, RETRY_BACKOFF_MS * attempt))
-    }
-  }
-  throw lastErr instanceof Error ? lastErr : new Error(`scan failed: ${String(lastErr)}`)
-}
-
+/**
+ * The wallet's private balance, from every stealth UTXO it can open.
+ *
+ * `excluded` IS WHAT THIS WALLET HAS ALREADY SPENT — see crypto/spentOutputs. It is subtracted
+ * here rather than at a call site because the balance is a single number derived in a single
+ * place, and a caller that forgot to subtract would show money the wallet no longer has. Empty by
+ * default, which is exactly the old behaviour: trust the listing and nothing else.
+ *
+ * The exclusion runs AFTER the trial decrypt, not before. Only a decrypted row is known to be
+ * ours, and matching ids against undecrypted rows would be matching against the whole network's
+ * outputs for no benefit.
+ */
 export async function scanWallet(
   viewSecret: Uint8Array,
   onProgress: (p: ScanProgress) => void,
   signal: AbortSignal,
+  opts: ScanOptions = {},
 ): Promise<ScanResult> {
-  const rows = await fetchUtxos(signal)
-  // The endpoint returns min(limit, total). A full FETCH_LIMIT means there may be more we can't see.
-  const incomplete = rows.length >= FETCH_LIMIT
-
-  // Dedup by commitment BEFORE decrypting — the indexer can return the same UTXO more than once, and
-  // counting a duplicate twice would double-count its value into the balance.
-  const uniqueRows: [string, unknown][] = []
-  const seen = new Set<string>()
-  for (const row of rows) {
-    if (seen.has(row[0])) continue
-    seen.add(row[0])
-    uniqueRows.push(row)
-  }
+  const excluded = opts.excluded ?? new Set<string>()
+  // EVERY page, not the first. The rows come back deduplicated by commitment — a duplicate counted
+  // twice would double-count its value into the balance — so what arrives here is the set itself.
+  // EVERY configured indexer, unioned — AND our own outputs that no listing returned, fetched by
+  // id from the journal's record of them. See crypto/ownedFeed: reading one node left ~20 live
+  // coins invisible, and a listing can drop one of ours entirely.
+  const { rows: uniqueRows, incomplete, recoveries } = await fetchOwnedRows({
+    signal,
+    walletAddress: opts.walletAddress,
+  })
 
   const found: ScannedUtxo[] = []
+  const excludedPresent: ExcludedValue[] = []
   let totalScanned = 0
 
   for (const [commitmentHex, body] of uniqueRows) {
@@ -138,8 +142,15 @@ export async function scanWallet(
     try {
       const decrypted = await decryptOwnedUtxo(stealthCrypto, viewSecret, fakeSubstate, substateId)
       if (decrypted !== null) {
-        const { payRef, message } = decodeMemo(decrypted.memo)
-        found.push({ id: substateId, commitment: commitmentHex, amount: decrypted.value, payRef, message })
+        // OURS, BUT ALREADY SPENT. Recorded as still-listed so reconciliation can see the indexer
+        // has not caught up yet, then dropped — it is not part of the balance and it is not an
+        // input anything may select.
+        if (excluded.has(substateId)) {
+          excludedPresent.push({ id: substateId, microtari: decrypted.value })
+        } else {
+          const { payRef, message } = decodeMemo(decrypted.memo)
+          found.push({ id: substateId, commitment: commitmentHex, amount: decrypted.value, payRef, message })
+        }
       }
     } catch {
       // Trial-decrypt failures are expected (not our UTXO) — skip silently
@@ -157,5 +168,5 @@ export async function scanWallet(
   onProgress({ scanned: totalScanned, found: found.length })
 
   const balance = found.reduce((sum, u) => sum + u.amount, 0n)
-  return { utxos: found, totalScanned, incomplete, balance }
+  return { utxos: found, totalScanned, incomplete, balance, excludedPresent, recoveries }
 }

@@ -18,6 +18,8 @@ import {
 } from '../crypto/derivation'
 import { createWalletSeed } from 'tari-cipherseed'
 import { scanWallet, type ScannedUtxo, type ScanProgress } from '../crypto/walletScanner'
+import { loadExcludedIds, loadSpentOutputs, heldOutOfBalance, type ExcludedValue, type HeldSummary } from '../crypto/spentOutputs'
+import { sweepLocks } from '../crypto/lockSweep'
 import { loadHistory, addSent, type SentEntry, type NewSentParams } from '../crypto/txHistory'
 import { NostrMessagingProvider } from '../messaging/NostrMessagingProvider'
 import type { MessagingProvider, MessagingConnectionStatus, CaravelMessage, RelayState } from '../messaging/types'
@@ -36,7 +38,7 @@ import { recoverAccountAddress } from '../crypto/accountRecovery'
 import { fetchRevealedBalance } from '../crypto/revealedBalance'
 import {
   advanceAll, anySettling, acknowledged, isAccountedFor, withSettle,
-  type PendingSettle, type SideBalances,
+  type PendingSettle, type SettleEvidence, type SideBalances,
 } from './settle'
 import { DEFAULT_RELAYS } from '../config/relays'
 
@@ -50,6 +52,14 @@ export interface ScanState {
   totalScanned: number
   /** True when the indexer capped the returned set at its limit — balance may be understated. */
   incomplete: boolean
+  /**
+   * Our own already-spent outputs that `/utxos` was STILL listing on this scan, with their value.
+   *
+   * Evidence about the INDEXER rather than about the balance — these are deliberately absent from
+   * `utxos` and from `balance`. Two consumers: reconciliation (useSpentOutputs) and the held-back
+   * total below.
+   */
+  excludedPresent: ExcludedValue[]
   error: string
   /** Which refresh produced `balance`. Preserved while a newer scan runs. See READ GENERATIONS. */
   generation: number
@@ -95,6 +105,7 @@ const SCAN_IDLE: ScanState = {
   progress: { scanned: 0, found: 0 },
   totalScanned: 0,
   incomplete: false,
+  excludedPresent: [],
   error: '',
   generation: 0,
 }
@@ -158,6 +169,18 @@ export interface WalletCtx {
    *  need raw hex without re-decoding bech32 — derivation already computes it for free. */
   nostrPubkeyHex: string | null
   scan: ScanState
+  /**
+   * What this wallet's own spend record is currently holding out of the displayed private balance.
+   *
+   * ZERO IS THE NORMAL STATE, and a non-zero `totalMicrotari` is usually normal too — a spend in
+   * flight holds its inputs back for a minute or so, which is correct and needs no explanation.
+   *
+   * `unresolved` IS THE ONE TO SHOW. It is the subset that can no longer be explained as a
+   * transaction in flight: locks the sweep has repeatedly failed to settle against the chain. That
+   * is the state that silently understated a real wallet by 1110 tTARI, and the whole reason this
+   * figure is computed rather than left implicit. See crypto/spentOutputs.heldOutOfBalance.
+   */
+  held: HeldSummary
   /** The REVEALED (public) balance — read-only in M1. Independent of `scan`; see RevealedState. */
   revealed: RevealedState
   txHistory: SentEntry[]
@@ -363,7 +386,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   useEffect(() => { contactsRef.current = new Set(Object.keys(contacts)) }, [contacts])
   useEffect(() => { leftGroupsRef.current = new Set(groups.filter(g => g.state === 'left').map(g => g.id)) }, [groups])
 
-  const startScan = useCallback((w: SecretKeyWallet, generation: number) => {
+  // `walletAddress` is passed in rather than awaited from `w` — the spend record is keyed per
+  // identity and this must not become async, since it runs synchronously from unlock and refresh.
+  const startScan = useCallback((w: SecretKeyWallet, walletAddress: string, generation: number) => {
     // Cancel any prior scan
     scanAbortRef.current?.abort()
     const ctrl = new AbortController()
@@ -380,6 +405,10 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     // generation here would claim this scan's freshness for a balance of `null`.
     setScan(prev => ({ ...SCAN_IDLE, status: 'scanning', generation: prev.generation }))
 
+    // WHAT THIS WALLET HAS ALREADY SPENT, read fresh on every scan so a spend that happened since
+    // the last one is excluded immediately rather than at the next unlock. See crypto/spentOutputs.
+    const excluded = loadExcludedIds(walletAddress)
+
     scanWallet(
       viewSecret,
       (progress) => {
@@ -387,6 +416,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         setScan(prev => ({ ...prev, progress }))
       },
       ctrl.signal,
+      // `walletAddress` enables by-id recovery of our own outputs that no listing returned —
+      // see crypto/ownedFeed. Without it the scan is blind to a coin the indexers dropped.
+      { excluded, walletAddress },
     ).then(result => {
       if (ctrl.signal.aborted) return
       setScan({
@@ -396,6 +428,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         progress: { scanned: result.totalScanned, found: result.utxos.length },
         totalScanned: result.totalScanned,
         incomplete: result.incomplete,
+        excludedPresent: result.excludedPresent,
         error: '',
         generation,
       })
@@ -447,8 +480,22 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     // ONE generation for both reads, even though they start at different moments — they are two
     // halves of the same refresh, and that is exactly what the stamp has to express. Staggering
     // them under separate generations would make an unlock permanently mismatched.
+    // ── RESOLVE STRANDED LOCKS BEFORE THE FIRST BALANCE IS READ ──────────────
+    //
+    // A previous session can end mid-spend: the poll gives up at ~30s against a 60-90s listing
+    // lag, so a transaction that committed normally reports Timeout, and Stage 1 leaves its
+    // inputs locked. Nothing used to revisit them, so the balance came back understated by
+    // whatever those coins were worth and stayed that way.
+    //
+    // Awaited, not fired and forgotten, so the FIRST figure the user sees is already correct
+    // rather than being quietly wrong and then jumping. It costs nothing in the ordinary case —
+    // no locks means no requests at all — and crypto/lockSweep carries its own per-request
+    // timeout, so a dead indexer cannot hang an unlock. A failure here must never block one:
+    // an unresolved lock is a wrong number, and a thrown unlock is no wallet.
+    await sweepLocks(addr).catch(() => undefined)
+
     const generation = ++readGenRef.current
-    startScan(w, generation)
+    startScan(w, addr, generation)
     // Recover the account address BEFORE reading the revealed balance — the read needs it, and a
     // wallet that claimed before M1 (or was restored on another device) has none stored. The probe
     // short-circuits without touching the network when an address is already known, so this is a
@@ -831,7 +878,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       // Both reads carry the SAME generation. That is what lets the total tell "these two figures
       // describe one moment" from "one of them has moved on and the other has not yet".
       const generation = ++readGenRef.current
-      startScan(wallet, generation)
+      startScan(wallet, address, generation)
       startRevealedRead(address, generation)
     }
   }, [wallet, address, startScan, startRevealedRead])
@@ -863,19 +910,43 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     public: revealed.status === 'done' ? revealed.amount : null,
   }), [scan.balance, revealed])
 
-  // Evaluate on EVERY balance change, not only on a tick: the scan that finds the change may land
-  // between ticks, and waiting up to a full interval to notice would be needless delay. advanceAll
-  // returns the same array when nothing moved, so this is a no-op re-render otherwise.
+  /**
+   * What a settle is judged against — the balances AND the outputs this wallet can see.
+   *
+   * THE OWNED SET IS THE PART THAT MATTERS. A settle used to complete when a balance moved in the
+   * right direction, and the spend record made that fire instantly: a send excludes its inputs on
+   * submission, so the private figure drops before the change output is listed, and "did it fall?"
+   * said yes while the number was short by the change. Judging on "are my new outputs here yet"
+   * cannot be fooled that way. See src/context/settle.ts.
+   */
+  const settleEvidence: SettleEvidence = useMemo(() => ({
+    balances: settleBalances,
+    ownedIds: new Set(scan.utxos.map(u => u.id)),
+    // A scan in flight carries an empty owned set and a truncated one carries a partial set, so
+    // neither may be read as "my change has not arrived".
+    scanComplete: scan.status === 'done' && !scan.incomplete,
+  }), [settleBalances, scan.utxos, scan.status, scan.incomplete])
+
+  // Evaluate on EVERY change, not only on a tick: the scan that finds the change may land between
+  // ticks, and waiting up to a full interval to notice would be needless delay. advanceAll returns
+  // the same array when nothing moved, so this is a no-op re-render otherwise.
   useEffect(() => {
-    setSettles(prev => advanceAll(prev, settleBalances, Date.now()))
-  }, [settleBalances])
+    setSettles(prev => advanceAll(prev, settleEvidence, Date.now()))
+  }, [settleEvidence])
+
+  // Derived from the scan's own measurement, not from the store: an exclusion only subtracts from
+  // a balance while the indexer is still listing the coin, and `excludedPresent` is exactly that.
+  const held = useMemo(
+    () => heldOutOfBalance(loadSpentOutputs(address ?? ''), scan.excludedPresent),
+    [address, scan.excludedPresent],
+  )
 
   const isSettling = anySettling(settles)
   // Deliberately measured against the BALANCES, not against the status: a lagged entry is only
   // still a problem for the total while the figures genuinely fail to reflect THAT transaction.
   // Asking `some(lagged) && anythingUnaccountedFor` would be a different, looser question — a
   // resolved lagged entry beside an unrelated settling one would answer it yes.
-  const settleLagged = settles.some(e => e.status === 'lagged' && !isAccountedFor(e, settleBalances))
+  const settleLagged = settles.some(e => e.status === 'lagged' && !isAccountedFor(e, settleEvidence))
 
   // The only poll in the app. It rescans on a fixed cadence while anything is waiting, and
   // re-evaluates on each tick so a passed deadline resolves even when no balance ever changed.
@@ -885,6 +956,47 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   // the timer. With frequent re-renders that is a poll loop that never polls.
   const rescanRef = useRef(rescan)
   rescanRef.current = rescan
+
+  // ── AN INCOMING PAYMENT HAS TO ASK FOR A SCAN, BECAUSE NOTHING ELSE WILL ────
+  //
+  // Every other balance change in this app is something the wallet DID, so it could rescan itself
+  // afterwards. A receive is the one that happens TO it, and until now nothing anywhere reacted to
+  // one: `rescan()` had four call sites — Refresh, the move commit, the send commit, the faucet —
+  // and the settle poll, none of which a stranger's payment touches. Money arrived and stayed
+  // invisible until the user happened to press Refresh.
+  //
+  // KEYED ON THE UTXO IDS, not on a count or on the array identity. `messages` is rebuilt on every
+  // relay event, edit, reaction and read-receipt, so anything coarser would rescan constantly.
+  //
+  // THE FIRST RUN SEEDS AND DOES NOT SCAN. Unlock loads the whole stored history at once, and
+  // every payment in it is old news; treating those as new would fire a redundant scan on top of
+  // the one unlock has already started. The ref is reset when the identity changes so the next
+  // wallet seeds its own.
+  //
+  // A FULL RESCAN, DELIBERATELY, even though paymentResolver can fetch one UTXO by id in O(1).
+  // That call returns an AMOUNT; it does not put the output into the owned set, and the balance is
+  // derived from the owned set alone. Injecting a figure beside the scan would create a second
+  // source of truth for the balance — the exact shape of bug this milestone has spent its time
+  // removing. One scan, one answer.
+  const seenPaymentIdsRef = useRef<Set<string> | null>(null)
+  useEffect(() => { seenPaymentIdsRef.current = null }, [address])
+
+  useEffect(() => {
+    if (!wallet || !address) return
+    const ids = messages
+      .filter(m => m.direction === 'received' && m.payment?.utxoId)
+      .map(m => m.payment!.utxoId)
+
+    if (seenPaymentIdsRef.current === null) {
+      seenPaymentIdsRef.current = new Set(ids)
+      return
+    }
+    const fresh = ids.filter(id => !seenPaymentIdsRef.current!.has(id))
+    if (fresh.length === 0) return
+    for (const id of fresh) seenPaymentIdsRef.current.add(id)
+    // One scan for the batch, however many arrived together.
+    rescanRef.current()
+  }, [messages, wallet, address])
 
   // ── WHY THE POLL SKIPS A SCAN ALREADY IN FLIGHT ─────────────────────────────
   //
@@ -924,14 +1036,14 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     const iv = setInterval(() => {
       // UNGUARDED, deliberately: the deadline must resolve even if scans stall completely. The
       // guard below suppresses a network call, never the passage of time.
-      setSettles(prev => advanceAll(prev, settleBalances, Date.now()))
+      setSettles(prev => advanceAll(prev, settleEvidence, Date.now()))
       // Only the POLL is guarded. A user's Refresh/Retry and the post-commit rescans still abort
       // and restart — those are deliberate requests for fresh state now, and silently doing nothing
       // because a slow scan happens to be running would be its own bug.
       if (scanStatusRef.current !== 'scanning') rescanRef.current()
     }, SETTLE_POLL_MS)
     return () => clearInterval(iv)
-  }, [isSettling, settleBalances])
+  }, [isSettling, settleEvidence])
 
   const recordSent = useCallback((params: NewSentParams) => {
     if (!address) return
@@ -1279,7 +1391,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
   return (
     <Ctx.Provider value={{
-      walletExists, wallet, address, nostrNpub, nostrPubkeyHex, scan, revealed, txHistory,
+      walletExists, wallet, address, nostrNpub, nostrPubkeyHex, scan, held, revealed, txHistory,
       settles, isSettling, settleLagged, beginSettle, acknowledgeSettle,
       messagingStatus, messages, historyUnreadable,
       createRecoveryPhrase, createWallet, unlock, restore, lock, getMnemonic, rescan, recordSent,

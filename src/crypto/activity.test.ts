@@ -26,6 +26,7 @@ function journalled(over: Partial<JournalEntry> = {}): JournalEntry {
       note: 'oi',
       source: 'local-journal',
       selfOutputIds: [],
+      spentInputIds: null,
     }, 1_000),
     ...over,
   }

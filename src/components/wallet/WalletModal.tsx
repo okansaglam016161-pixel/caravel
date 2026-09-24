@@ -49,6 +49,8 @@ import { ActivityRowShell, type ActivityStatus, type SendSource, type SendView }
 import { useJournal } from '../../hooks/useJournal'
 import { useUtxoLedger } from '../../hooks/useUtxoLedger'
 import { useJournalCoverage } from '../../hooks/useJournalCoverage'
+import { useSpentOutputs } from '../../hooks/useSpentOutputs'
+import { useLockSweep } from '../../hooks/useLockSweep'
 import { useReconcileDevtools } from '../../hooks/useReconcileDevtools'
 import { reconcile } from '../../crypto/reconcile'
 import { loadEpoch } from '../../crypto/journalStore'
@@ -241,6 +243,10 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
   // phase can ask "was this UTXO already here before the journal covered everything", which is the
   // question that stops the user's own change being reported as a stranger's payment.
   useUtxoLedger(address, scan)
+  // And lets the spend record forget entries the indexer has finally dropped — see useSpentOutputs.
+  useSpentOutputs(address, scan)
+  // …and resolves any lock a timed-out transaction left behind, rescanning if that freed funds.
+  useLockSweep(address, scan, rescan)
 
   // Declares that this build records every output-creating action, then freezes the set of UTXOs
   // that predate it. Both are one-time per wallet and invisible — see useJournalCoverage.
@@ -615,6 +621,7 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
       note: null,
       source: 'local-journal',
       selfOutputIds: null,
+      spentInputIds: null,              // a reveal reports them on return; a conceal spends none
     }).entry.id
     setMoveJournalId(journalId)
 
@@ -638,6 +645,10 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
         txId: result.txId,
         feeMicrotari: result.feeMicrotari,
         selfOutputIds: result.selfOutputIds ?? null,
+        // A REVEAL spends real stealth outputs and reports them; a CONCEAL provably spends none —
+        // it withdraws from the revealed vault — so `[]` is a positive claim rather than a hole.
+        // (The exclusion itself is already recorded inside crypto/reveal; this is the audit row.)
+        spentInputIds: 'spentInputIds' in result ? result.spentInputIds : [],
       })
       setMoveTxId(result.txId)
       // ── TIMEOUT IS NOT A VERDICT ──────────────────────────────────────────
@@ -681,6 +692,17 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
           txId: result.txId,
           kind: 'move',
           deadlineAt: Date.now() + MOVE_SETTLE_MS,
+          // ── THE EVIDENCE THIS MOVE HAS LANDED ────────────────────────────────
+          //
+          // The stealth output the move creates for us: a conceal's new private output, or a
+          // reveal's stealth change. Once it is in the owned set the private figure already
+          // includes it, whatever the number did on the way there.
+          //
+          // THE WATCHES BELOW STILL RUN, and the public one still decides the public side. What
+          // changes is that the PRIVATE side is no longer judged by a direction — see settle.ts,
+          // where a reveal's `private fall` was being satisfied instantly by the spend record
+          // while the change was still sixty seconds away.
+          expectOutputs: result.selfOutputIds ?? null,
           watches: movePrepared.dir === 'reveal'
             ? [
                 { side: 'public', direction: 'rise', before: publicBefore },
@@ -696,7 +718,18 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
         // Kick both reads now — each side lags differently and neither is worth waiting a poll for.
         rescan()
       } else {
-        setMoveError(`The network rejected the transaction. Nothing was ${movePrepared.dir === 'reveal' ? 'made public' : 'moved'}, and no fee was taken.`)
+        // ── THE NETWORK'S OWN WORDS, NOT OURS ──
+        //
+        // This used to end "and no fee was taken", which is a claim the screen cannot make: a
+        // transaction whose fee commits and whose body is rejected takes the fee and moves nothing,
+        // and it arrives here exactly like any other rejection. The builder now carries the
+        // network's reason out of the poll — including which of those two happened — so the only
+        // honest thing to show is that reason. The fallback keeps the shape of the old sentence
+        // minus the part that was guessing.
+        setMoveError(plainError(
+          result.reason
+          ?? `The network rejected the transaction. Nothing was ${movePrepared.dir === 'reveal' ? 'made public' : 'moved'}.`,
+        ))
         setMoveStep('error')
       }
     } catch (e) {
@@ -733,6 +766,7 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
       note: sendNote || null,
       source: 'local-journal',
       selfOutputIds: null,              // not known until the outputs statement is built
+      spentInputIds: null,              // likewise — the private path reports them on return
     }).entry.id
     setSendJournalId(journalId)
 
@@ -772,6 +806,11 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
         selfOutputIds: path.kind === 'public'
           ? []
           : 'selfOutputIds' in result ? result.selfOutputIds ?? null : null,
+        // Same split as above: a PUBLIC send withdraws from the vault and consumes no stealth
+        // output, a PRIVATE one reports exactly what it spent.
+        spentInputIds: path.kind === 'public'
+          ? []
+          : 'spentInputIds' in result ? result.spentInputIds : null,
       })
       recordSent({
         recipient: sendRecipient,
@@ -793,6 +832,14 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
           txId: result.txId,
           kind: 'send',
           deadlineAt: Date.now() + MOVE_SETTLE_MS,
+          // A PUBLIC send provably creates no stealth output for us — it withdraws from the
+          // vault and puts a single output at the RECIPIENT's address — so `[]` completes the
+          // private side at once and the public `fall` watch below decides it. A PRIVATE send's
+          // evidence is its change output, which is exactly what the old `fall` watch was firing
+          // before: the inputs were already excluded, so the balance had fallen too far.
+          expectOutputs: path.kind === 'public'
+            ? []
+            : 'selfOutputIds' in result ? result.selfOutputIds ?? null : null,
           watches: [sendSource === 'public'
             ? { side: 'public', direction: 'fall', before: publicBefore }
             : { side: 'private', direction: 'fall', before: privateBefore }],
@@ -801,7 +848,11 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
         setSendStep('settling')
         rescan()
       } else {
-        setSendError('The network rejected this payment. Nothing left your wallet and no fee was taken.')
+        // The network's own reason, for the same argument as the move flow above: "no fee was
+        // taken" is not knowable from a rejection alone, and is false on the fee-only variant.
+        setSendError(plainError(
+          result.reason ?? 'The network rejected this payment. Nothing left your wallet.',
+        ))
         setSendStep('error')
       }
     } catch (e) {

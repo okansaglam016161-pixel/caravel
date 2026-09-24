@@ -26,6 +26,8 @@
 
 // A dry run is a single round trip against the indexer; this bounds it so a hung request surfaces
 // as an error the caller can show rather than a spinner that never resolves.
+import { describeRejectReason } from './txResult'
+
 const DRY_RUN_TIMEOUT_MS = 20_000
 
 // Safety margin added to the measured cost, as a percentage.
@@ -72,29 +74,12 @@ function toBigInt(v: unknown): bigint | null {
  * alone and so fall below what was paid." The fee IS paid. Only `Accept` is a clean success.
  */
 /**
- * Render a `RejectReason` as something a person can act on, verbatim where possible.
+ * `describeRejectReason` MOVED TO txResult.ts, where the submit paths read the same union.
  *
- * The binding admits eight variants, and they are not one shape: six are single-key objects whose
- * value is a string or a struct (`ExecutionFailure`, `SubstateNotFound`, `FailedToLockInputs`,
- * `FailedToLockOutputs`, `InsufficientFeesPaid`, `ForeignShardGroupDecidedToAbort`, `Abort`), and
- * two are bare strings (`ForeignPledgeInputConflict`, `FeePaymentInMainIntent`).
- *
- * The network's own words are the most useful thing we are ever told about a failed transaction, so
- * this never invents a friendlier message — it only unwraps the tagging so the useful half is not
- * buried in JSON punctuation.
+ * It was written here first, for the dry run; the five submit polls then needed the identical
+ * unwrapping and the identical three-variant check, so both live in one module now and this file
+ * imports what it used to own.
  */
-function describeRejectReason(reason: unknown): string {
-  if (typeof reason === 'string') return reason
-  if (reason && typeof reason === 'object' && !Array.isArray(reason)) {
-    const entries = Object.entries(reason as Record<string, unknown>)
-    if (entries.length === 1) {
-      const [tag, value] = entries[0]!
-      if (typeof value === 'string') return `${tag}: ${value}`
-      return `${tag}: ${JSON.stringify(value).slice(0, 200)}`
-    }
-  }
-  return JSON.stringify(reason).slice(0, 200)
-}
 
 interface DryRunResponse {
   result?: {

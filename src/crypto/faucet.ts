@@ -34,8 +34,9 @@ import { nextMaxEpoch } from './epoch'
 import { dryRunFee, withFeeMargin } from './feeProbe'
 import { readOutputSubstateIds } from './outputIds'
 import type { SecretKeyWallet } from '@tari-project/ootle-secret-key-wallet'
+import { awaitFinality } from './finality'
+import { INDEXER_URL } from './indexerConfig'
 
-const INDEXER_URL = 'https://ootle-indexer-a.tari.com'
 /**
  * What one `XtrFaucet.take` deposits: 1_000_000_000 µtTARI (~1000 tTARI). The claim withdraws
  * EXACTLY this and splits it into the stealth output plus the fee, so `stealthAmount + fee` must
@@ -57,6 +58,14 @@ export type ClaimOutcome = 'Commit' | 'Reject' | 'Timeout'
 export interface ClaimResult {
   txId: string
   outcome: ClaimOutcome
+  /**
+   * What the network said when it refused, verbatim inside a sentence — see crypto/txResult.
+   *
+   * Present on `Reject` and absent on `Commit`/`Timeout`. It is the only account anyone gets of why
+   * a transaction failed, so it is carried out of the poll rather than logged and dropped: a fee
+   * taken for nothing, or a rejection, is exactly the moment a user deserves the real reason.
+   */
+  reason?: string
   /** The confidential amount deposited (µtTARI) if committed. */
   amount: bigint
   /**
@@ -98,32 +107,6 @@ function toHexStr(bytes: Uint8Array): string {
   return s
 }
 
-/**
- * Poll the indexer for the claim tx's final decision (up to ~32s), and on a commit also read the
- * account component address out of the SAME response.
- *
- * The address extraction rides along here rather than in a second request because this response
- * already contains it — the previous version parsed `final_decision` out of the body and threw the
- * rest away. Nothing about the polling loop or its timings changes.
- */
-async function pollOutcome(txId: string, ownerPkHex: string): Promise<{ outcome: ClaimOutcome; accountAddress?: string }> {
-  for (let i = 0; i < 8; i++) {
-    await new Promise<void>(r => setTimeout(r, 4_000))
-    try {
-      const res = await fetch(`${INDEXER_URL}/transactions/${txId}/result`)
-      if (!res.ok) continue
-      const json = await res.json() as { result?: { Finalized?: { final_decision?: string } } }
-      const decision = json.result?.Finalized?.final_decision
-      if (decision === 'Commit') {
-        // Only a COMMIT creates substates. A rejected transaction's result carries no Accept diff,
-        // so there is nothing to read and nothing to store.
-        return { outcome: 'Commit', accountAddress: extractAccountAddress(json, ownerPkHex) ?? undefined }
-      }
-      if (decision) return { outcome: 'Reject' }
-    } catch { /* transient */ }
-  }
-  return { outcome: 'Timeout' }
-}
 
 /**
  * Claim testnet tTARI into `ownerAddress`, self-signed by `wallet`. Returns once the claim tx has a
@@ -189,9 +172,15 @@ export async function claimFaucet(
   const txId = sub.transaction_id as string
 
   log('Confirming on-chain…')
-  const { outcome, accountAddress } = await pollOutcome(txId, ownerPkHex)
+  // TOLD, NOT ASKED — see crypto/finality. The verdict is still read by crypto/txResult, so
+  // a fee-only commit is still a failure and not a success.
+  const { outcome, reason, body } = await awaitFinality(provider, txId)
+  // Only an ACCEPT creates substates, so only an Accept can name the account component.
+  const accountAddress = outcome === 'Commit' && body !== null
+    ? extractAccountAddress(body, ownerPkHex) ?? undefined
+    : undefined
   provider.stopWatcher?.()
-  return { txId, outcome, amount: stealthAmount, feeMicrotari: fee, accountAddress, selfOutputIds: real.selfOutputIds }
+  return { txId, outcome, reason, amount: stealthAmount, feeMicrotari: fee, accountAddress, selfOutputIds: real.selfOutputIds }
 }
 
 // The instruction recipe, lifted out so the pricing build and the real build are provably the same

@@ -136,6 +136,9 @@ export default function FaucetClaimPanel() {
       note: null,
       source: 'local-journal',
       selfOutputIds: null,
+      // A claim CONSUMES NOTHING of ours — it mints from the faucet's vault. `[]` is a positive
+      // claim of "no stealth inputs", not a hole.
+      spentInputIds: [],
     }).entry.id
     journalIdRef.current = journalId
 
@@ -177,7 +180,12 @@ export default function FaucetClaimPanel() {
     // against a 60–90s indexer lag; the balance watch below is what can actually tell.
     if (r.outcome === 'Reject') {
       setPhase('error')
-      setMsg('The network rejected the claim — no tokens were added.')
+      // THE NETWORK'S REASON, WHEN IT GAVE ONE. The flat line below asserted "no tokens were
+      // added", which is true of a plain rejection and NOT of the variant where the fee commits and
+      // the body does not — that one costs the claimant a fee for nothing, and saying so is the
+      // only way they would ever know. `msg` renders through plainError, which leaves a reason it
+      // does not recognise exactly as the network wrote it.
+      setMsg(r.reason ?? 'The network rejected the claim — no tokens were added.')
       return
     }
     startedBy.current = r.outcome
@@ -198,6 +206,9 @@ export default function FaucetClaimPanel() {
       // /utxos indexing can lag ~60-90s after the claim commits.
       deadlineAt: Date.now() + 150_000,
       watches: [{ side: 'private', direction: 'rise', before: privateBefore }],
+      // THE EVIDENCE, not the direction: the claim's own stealth output. The rise watch stays as
+      // the fallback for a claim whose statement could not be read — see PendingSettle.
+      expectOutputs: r.selfOutputIds ?? null,
     })
     rescan()
   }

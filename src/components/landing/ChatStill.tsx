@@ -10,9 +10,15 @@
 //   makes the mockup look like a duplicate of itself.
 //
 //   So the showcase is a glance now: a short exchange, in and out and back. That is what a chat tile
-//   beside one paragraph of copy has room to say, and the paragraph beside it — "private money and
-//   private words, one conversation" — is carried by the middle bubble's own words rather than by
-//   drawing the payment object underneath it.
+//   beside one paragraph of copy has room to say.
+//
+//   THE PRIVACY CLAIM IS THE PARAGRAPH'S, NOT THE BUBBLES'. "Private messaging and private money,
+//   one conversation" is made in the copy beside this tile, and the tile's job is to make it
+//   plausible rather than to repeat it. The bubbles used to say "private" out loud, in the middle
+//   one, standing in for the payment card that had been removed — which meant the graphic was
+//   asserting the claim and the paragraph was asserting it again, two feet apart. They show the
+//   exchange instead: a payment that went around a bank, and a receipt confirming it landed. The
+//   payment object is still deliberately not drawn; see WHAT WENT below.
 //
 //   THREE BUBBLES, NOT TWO, AND THE THIRD IS FOR THE ROW. Two left this tile noticeably shorter than
 //   the balance hero across from it, and the services section reads as a set of peers — a tile that
@@ -100,9 +106,9 @@ export default function ChatStill() {
           visual weight as the balance hero across the row from it. The two other overrides are
           what make it a still — there is nothing to scroll, and no flex parent to weigh against. */}
       <div style={{ ...THREAD_SCROLLER, flex: 'none', overflowY: 'visible', padding: 24 }}>
-        <MessageBubble variant="received" text="Bank flagged my wire again 🙄 can you just send it on Caravel?" timestamp={now - 6 * MIN} />
-        <MessageBubble variant="sent" text="Done. 250 XTR, private." timestamp={now - 5 * MIN} />
-        <MessageBubble variant="received" text="Instant. Thank you." timestamp={now - 4 * MIN} />
+        <MessageBubble variant="received" text="Bank flagged my wire again 🙄 sending it on Caravel instead" timestamp={now - 6 * MIN} />
+        <MessageBubble variant="sent" text="Received, 250 XTR" timestamp={now - 5 * MIN} />
+        <MessageBubble variant="received" text="So much easier" timestamp={now - 4 * MIN} />
       </div>
     </div>
   )

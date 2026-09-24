@@ -58,6 +58,7 @@
 //   the app can produce; what it cannot produce, and what this must never be edited into, is a
 //   split bar sitting under a hero claiming the balance is entirely private.
 
+import Chip from '../primitives/Chip'
 import ThemeToggle from '../primitives/ThemeToggle'
 import { iconBoxStyle } from '../primitives/iconBox'
 import { AssetsPanel } from '../wallet/v2/assets'
@@ -67,7 +68,7 @@ import type { EntryProps } from '../wallet/v2/move'
 import { CardDivider, OverviewCard, SectionHead } from '../wallet/v2/panels'
 import { Body } from '../wallet/v2/primitives'
 import { PrivacyCard } from '../wallet/v2/PrivacyCard'
-import { C, MONO } from '../wallet/v2/tokens'
+import { C } from '../wallet/v2/tokens'
 import { TotalHero } from '../wallet/v2/TotalHero'
 import { computeTotal } from '../wallet/v2/total'
 
@@ -117,6 +118,19 @@ const entries: EntryProps[] = [
  *
  * The controls are `span`s rather than buttons: nothing focusable, even in a browser that has never
  * heard of `inert`.
+ *
+ * ── WHY THIS IS NOT JUST `<RootHeader chrome="page" />` ──────────────────────
+ *
+ * It nearly is: the wrapper, the title and the right cluster below are a line-for-line copy of
+ * RootHeader's `page` branch, and rendering that instead would delete the copy outright. One thing
+ * stops it. The wrapper carries `cv-lp-mockhead`, and that class is load-bearing — LandingPage's
+ * CSS wraps this row onto two lines at ≤640, which is what holds the spine's breakpoint at 460
+ * rather than ~500, which is what keeps the mockup on a phone at all (the derivation is written
+ * out under that rule). RootHeader takes no `className`, so there is nowhere to put it.
+ *
+ * So the PILL — the part that had actually rotted — is the shared component, and the frame around
+ * it stays a copy. Giving RootHeader an optional `className` would close the rest, and is the
+ * obvious next move if anyone is in there.
  */
 function StillHeader() {
   return (
@@ -126,17 +140,23 @@ function StillHeader() {
     }}>
       <span style={{ fontSize: 22, fontWeight: 600, letterSpacing: '-0.015em', color: C.primary }}>Wallet</span>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        {/* Mono, quiet, amber dot — a statement of fact rather than a badge, and SENTENCE CASE.
-            The old mock shouted ESMERALDA TESTNET in caps, which the wallet never did. */}
-        <span style={{
-          display: 'inline-flex', alignItems: 'center', gap: 6,
-          padding: '5px 12px', borderRadius: 'var(--r-pill)', border: '1px solid var(--border)',
-          fontFamily: MONO, fontSize: 10.5, letterSpacing: '0.08em',
-          color: C.mutedDim, whiteSpace: 'nowrap',
-        }}>
-          <span style={{ width: 5, height: 5, borderRadius: 'var(--r-pill)', background: C.warn }} />
-          Esmeralda testnet
-        </span>
+        {/* ── THE REAL PILL, NOT A DRAWING OF ONE ──
+            This was eleven hand-written properties, and by the time anyone looked they described a
+            pill the wallet had stopped rendering: sentence case against the wallet's caps, a 5px
+            amber dot the wallet had dropped, 5/12 padding against Chip's 7/13, 0.08em tracking
+            against 0.12em, `--border` against `--border-strong`, and no fill at all. Nine
+            differences, none of them decisions — just what the mockup happened to be frozen at.
+
+            It renders the SAME Chip the wallet's RootHeader renders, with the same three
+            overrides, so the two can only differ if somebody changes Chip for everybody. That is
+            the same move `0dd003d` made for the card body; the header was the piece it missed.
+
+            THE CAPS ARE IN THE STRING, exactly as they are in the real header — `chip` arrives
+            upper-cased from its caller there, and the literal is upper-cased here. No
+            textTransform, which would shout at any future label regardless of what it said. */}
+        <Chip mono style={{ letterSpacing: '0.12em', fontSize: 10.5, whiteSpace: 'nowrap' }}>
+          ESMERALDA TESTNET
+        </Chip>
         <span style={iconBoxStyle(30)}><Eye size={15} color="currentColor" /></span>
         <span style={iconBoxStyle(30)}><Refresh size={14} color="currentColor" /></span>
         <ThemeToggle size={30} />

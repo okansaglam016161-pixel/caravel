@@ -132,7 +132,12 @@ export function SectionHead({ title, action, flush = false }: {
 
 // ══ FAUCET ════════════════════════════════════════════════════════════════════
 
-export type FaucetPhase = 'idle' | 'locked' | 'claiming' | 'verifying' | 'done' | 'lagging' | 'error' | 'cooldown' | 'plenty'
+/**
+ * `unknown` is the balance NOT BEING KNOWN YET, and it renders nothing — see v2/faucetPhase. It is
+ * not a state this panel draws; it exists so the caller can tell "no opinion" apart from "you have
+ * plenty", which is what leaked a claim banner on every refresh.
+ */
+export type FaucetPhase = 'idle' | 'locked' | 'claiming' | 'verifying' | 'done' | 'lagging' | 'error' | 'cooldown' | 'plenty' | 'unknown'
 
 
 export interface FaucetPanelProps {
@@ -269,6 +274,10 @@ export function FaucetPanel({ phase, received, message, onClaim, cooldownRemaini
       // The fragment is completed by the countdown beside it, so it is only used when there IS one.
       case 'cooldown': return counting ? 'Next claim available in' : 'Just claimed. You can claim again shortly.'
       case 'plenty': return 'You already have plenty. Leave the rest for other testers.'
+      // NEVER RENDERED. The caller hides `unknown` before it gets here — the faucet has no opinion
+      // while the balance is unread (v2/faucetPhase.isHidden). The case exists so this switch stays
+      // exhaustive, which is what makes a future phase a type error rather than a blank line.
+      case 'unknown': return ''
     }
   }
 

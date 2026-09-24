@@ -1,7 +1,8 @@
 //   "Claim testnet funds" — the M4 (v2) presentation over the SAME logic.
 //
 //   RESKIN, NOT REWRITE. Every piece of behaviour below is untouched: the phase machine, claim(),
-//   the verify loop (now WalletContext's), the 60s cooldown, the 150s deadline, HIGH_BALANCE,
+//   the verify loop (now WalletContext's), the 60s cooldown, the 150s deadline, the balance
+//   threshold (now v2/faucetPhase's HIGH_BALANCE),
 //   and the account-address capture that only this transaction can perform. What changed is that
 //   the eight states now render through v2's FaucetPanel instead of hand-rolled markup, so the
 //   card matches the rest of the modal — and the copy no longer explains our machinery.
@@ -12,13 +13,13 @@ import { claimFaucet, type ClaimResult } from '../../crypto/faucet'
 import { saveAccountAddress } from '../../crypto/accountStore'
 import { beginEntry, settleEntry } from '../../crypto/journalStore'
 import { settleVerdict, journalOutcomeFor, type SettleStartedBy } from './v2/settleVerdict'
-import { FaucetBanner, FaucetPanel, type FaucetPhase } from './v2/panels'
+import { FaucetBanner, FaucetPanel } from './v2/panels'
+import { faucetPhase, isHidden } from './v2/faucetPhase'
 import { plainError } from './v2/plainError'
 import { fmt2, formatCooldown } from './v2/format'
 
 type Phase = 'idle' | 'claiming' | 'verifying' | 'done' | 'lagging' | 'error'
 
-const HIGH_BALANCE = 100_000_000n // 100 tTARI — "you already have plenty"
 /** Caravel's own re-claim throttle. Named so the timer and the timeout cannot drift apart. */
 const COOLDOWN_MS = 60_000
 // Was `Number(µt) / 1_000_000` — the same float-on-an-amount the rail forbids, hiding in a panel
@@ -66,8 +67,6 @@ export default function FaucetClaimPanel() {
   const startedBy = useRef<SettleStartedBy>('Commit')
   const journalIdRef = useRef<string | null>(null)
 
-  const highBalance = balance !== null && balance >= HIGH_BALANCE
-  const busy = p === 'claiming' || p === 'verifying'
 
   // Read from storage rather than held across it: the address arrives after the first render on a
   // fresh unlock, and it changes under this component when a different wallet is restored.
@@ -222,18 +221,15 @@ export default function FaucetClaimPanel() {
 
   // ── PRESENTATION ──
   //
-  // The phase machine above maps onto v2's FaucetPanel one state at a time. `cooldown` and
-  // `highBalance` are separate flags rather than phases in the logic, so they are folded in here
-  // in the same precedence order the original markup used.
-  const phase: FaucetPhase =
-    p === 'done' ? 'done'
-    : p === 'lagging' ? 'lagging'
-    : p === 'error' ? 'error'
-    : cooldown ? 'cooldown'
-    : busy ? (p === 'claiming' ? 'claiming' : 'verifying')
-    : highBalance ? 'plenty'
-    : !wallet || !address ? 'locked'
-    : 'idle'
+  // The ladder moved to v2/faucetPhase, pure and under test. It used to end `: 'idle'` — an
+  // unconditional fall-through — so a balance that was merely UNREAD read as "low" and flashed a
+  // claim banner through every refresh. It now has a phase of its own for not knowing.
+  const phase = faucetPhase({
+    claim: p,
+    cooldown,
+    balance,
+    unlocked: !!wallet && !!address,
+  })
 
   // ── A PROMPT, NOT A FIXTURE ─────────────────────────────────────────────────
   //
@@ -247,7 +243,7 @@ export default function FaucetClaimPanel() {
   // The dismissal is honoured unconditionally and can be, because `dismiss` is only reachable from
   // the ✕, the ✕ only renders on the two resting phases, and this card is the only way to start a
   // claim. There is no path on which a claim is in flight and this is true.
-  if (phase === 'plenty' || phase === 'locked' || dismissed) return null
+  if (isHidden(phase) || dismissed) return null
 
   const remainingMs = cooldownUntil === null ? undefined : Math.max(0, cooldownUntil - nowTick)
 

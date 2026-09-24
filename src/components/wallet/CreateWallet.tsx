@@ -28,15 +28,41 @@ const QUIZ_POSITIONS = [5, 12, 20]
 
 // ── 8a · Welcome ─────────────────────────────────────────────────────────────
 
-function Welcome({ onCreate, onRestore, genError }: { onCreate: () => void; onRestore: () => void; genError?: string }) {
+function Welcome({ onCreate, onRestore, onBack, replaces, genError }: {
+  onCreate: () => void
+  onRestore: () => void
+  /** Present only when this flow was entered from the unlock screen. */
+  onBack?: () => void
+  /** True when a wallet is already stored on this device and creating will replace it. */
+  replaces: boolean
+  genError?: string
+}) {
   return (
     <EntryCard centred>
       <Lockup />
-      <EntryTitle mt={16}>Welcome to Caravel</EntryTitle>
+      <EntryTitle mt={16}>{replaces ? 'Set up a different wallet' : 'Welcome to Caravel'}</EntryTitle>
       <EntryBlurb mt={8}>A private wallet, generated on your device.</EntryBlurb>
+      {/* ── ONE LINE, AND ONLY WHEN THERE IS SOMETHING TO REPLACE ──
+          Caravel stores ONE wallet record, so creating overwrites it. That is worth saying plainly
+          and worth saying once — a modal gate here would be a ceremony in front of a button the
+          user has just deliberately chosen from a link that already says "different wallet".
+
+          IT MUST NOT SAY "DELETED", because nothing is. The store key is derived from each
+          wallet's own seed, so the old wallet's messages, contacts and journal stay on this device
+          sealed under a key only its phrase can re-derive — unreachable while another wallet is
+          loaded, and back the moment that phrase is restored. The accurate word is REPLACED, and
+          the thing the user must actually have is the phrase. Same reasoning, and the same tone,
+          as the note at the foot of RestoreFlow. */}
+      {replaces && (
+        <EntryBlurb mt={14}>
+          This replaces the wallet saved on this device. Make sure you have its recovery phrase:
+          it is the only way back to it, and to the conversations and contacts that stay here with it.
+        </EntryBlurb>
+      )}
       {genError && <EntryError mt={12}>{genError}</EntryError>}
       <EntryButton tone="primary" mt={24} onClick={onCreate}>Create wallet</EntryButton>
       <EntryLink onClick={onRestore}>I have a recovery phrase</EntryLink>
+      {onBack && <EntryLink onClick={onBack} tone="muted" mt={12}>Back</EntryLink>}
     </EntryCard>
   )
 }
@@ -199,8 +225,13 @@ function SetPassword({ mnemonic }: { mnemonic: string }) {
 
 // ── Root ─────────────────────────────────────────────────────────────────────
 
-export default function CreateWallet() {
-  const { createRecoveryPhrase } = useWallet()
+/**
+ * @param onBack  Present only when this flow was reached from the UNLOCK screen, i.e. when a wallet
+ *                already exists and this one will replace it. Absent on a device with no wallet,
+ *                where there is nowhere to go back to — AppRoute renders this as the whole app.
+ */
+export default function CreateWallet({ onBack }: { onBack?: () => void } = {}) {
+  const { createRecoveryPhrase, walletExists } = useWallet()
   const [mode, setMode] = useState<'create' | 'restore'>('create')
   const [step, setStep] = useState(1)
   const [mnemonic, setMnemonic] = useState<string[]>([])
@@ -236,7 +267,15 @@ export default function CreateWallet() {
       {mode === 'restore'
         ? <RestoreFlow onBack={() => { setMode('create'); setStep(1) }} />
         : <>
-            {step === 1 && <Welcome onCreate={() => void startCreate()} onRestore={() => setMode('restore')} genError={genError} />}
+            {step === 1 && (
+              <Welcome
+                onCreate={() => void startCreate()}
+                onRestore={() => setMode('restore')}
+                onBack={onBack}
+                replaces={walletExists}
+                genError={genError}
+              />
+            )}
             {step === 2 && <SeedReveal words={mnemonic} onNext={() => setStep(3)} />}
             {step === 3 && <SeedConfirm words={mnemonic} onBack={() => setStep(2)} onNext={() => setStep(4)} />}
             {step === 4 && <SetPassword mnemonic={mnemonic.join(' ')} />}

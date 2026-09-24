@@ -745,11 +745,20 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
   // New wallets are always CipherSeed — Tari's own format, importable by official Tari wallets.
   const createWallet = useCallback(async (mnemonic: string, password: string) => {
-    saveStoredWallet(await encryptMnemonic(mnemonic, password, 'cipherseed'))
-    // THE IDENTITY FIRST, because the store key now comes out of it — derived from this wallet's own
-    // seed rather than from a random salt stored beside it. Still set before adoptIdentity, which is
-    // where store reads begin; only setWalletExists sits between, and it touches no store.
+    // ── DERIVE BEFORE OVERWRITING STORAGE, exactly as restore does ─────────────
+    //
+    // `saveStoredWallet` REPLACES this device's only wallet record — Caravel stores one — and this
+    // used to run before anything had been derived. So a phrase that could not be derived, on the
+    // path that creates a wallet, would have destroyed the record it was about to replace and left
+    // the device with neither. Nothing about the old order was chosen; it was simply written before
+    // creating was reachable from the unlock screen, where there is something to lose.
+    //
+    // The identity has to be computed anyway — the store key comes out of it, derived from this
+    // wallet's own seed — so ordering it first costs nothing and makes a failed create a no-op.
     const identity = await deriveIdentity(mnemonic, 'cipherseed')
+    saveStoredWallet(await encryptMnemonic(mnemonic, password, 'cipherseed'))
+    // Set before adoptIdentity, which is where store reads begin; only setWalletExists sits
+    // between, and it touches no store.
     setStoreKey(identity.storeKey)
     setWalletExists(true)
     await adoptIdentity(identity)

@@ -13,13 +13,14 @@
 
 import { useState } from 'react'
 import { useWallet } from '../../context/WalletContext'
+import CreateWallet from './CreateWallet'
 import RestoreFlow from './RestoreFlow'
 import {
   EntryButton, EntryCard, EntryError, EntryField, EntryLink, EntrySpinner, EntryTitle, Lockup,
   entryShell,
 } from './entryUi'
 
-function UnlockScreen({ onRestore }: { onRestore: () => void }) {
+function UnlockScreen({ onRestore, onCreate }: { onRestore: () => void; onCreate: () => void }) {
   const { unlock } = useWallet()
   const [pass, setPass] = useState('')
   const [loading, setLoading] = useState(false)
@@ -70,6 +71,12 @@ function UnlockScreen({ onRestore }: { onRestore: () => void }) {
           </div>
           <EntryButton tone="primary" mt={12} disabled={!pass} onClick={() => void submit()}>Unlock</EntryButton>
           <EntryLink onClick={onRestore} mt={16}>Forgot password? Restore from recovery phrase</EntryLink>
+          {/* THE THIRD DOOR. Until now this screen offered only the two ways back into the wallet
+              already stored here, so a user who wanted to start fresh had no route at all short of
+              clearing site data. Creating REPLACES that wallet — Caravel keeps one — which is why
+              the link says "different" rather than "new", and why the flow it opens carries a line
+              saying so. */}
+          <EntryLink onClick={onCreate} tone="muted" mt={10}>Set up a different wallet</EntryLink>
         </>
       )}
     </EntryCard>
@@ -77,12 +84,16 @@ function UnlockScreen({ onRestore }: { onRestore: () => void }) {
 }
 
 export default function UnlockWallet() {
-  const [mode, setMode] = useState<'unlock' | 'restore'>('unlock')
+  const [mode, setMode] = useState<'unlock' | 'restore' | 'create'>('unlock')
+
+  // CreateWallet brings its own `entryShell`, so it is rendered OUTSIDE this one rather than
+  // inside it — nesting the shell would double its padding and centring.
+  if (mode === 'create') return <CreateWallet onBack={() => setMode('unlock')} />
 
   return (
     <div style={entryShell}>
       {mode === 'unlock'
-        ? <UnlockScreen onRestore={() => setMode('restore')} />
+        ? <UnlockScreen onRestore={() => setMode('restore')} onCreate={() => setMode('create')} />
         : <RestoreFlow onBack={() => setMode('unlock')} />}
     </div>
   )

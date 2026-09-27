@@ -72,6 +72,7 @@
 import Avatar from '../chat/Avatar'
 import MessageBubble from '../chat/MessageBubble'
 import { HEADER_LEFT, THREAD_HEADER, THREAD_SCROLLER, THREAD_TITLE } from '../chat/threadChrome'
+import { TICKER } from '../wallet/v2/format'
 
 // TIMES ARE DERIVED, NOT LITERAL. MessageBubble prints them through toLocaleTimeString, so a
 // hardcoded epoch would read 03:14 for a visitor in Sydney — not a plausible afternoon exchange.
@@ -107,7 +108,7 @@ export default function ChatStill() {
           what make it a still — there is nothing to scroll, and no flex parent to weigh against. */}
       <div style={{ ...THREAD_SCROLLER, flex: 'none', overflowY: 'visible', padding: 24 }}>
         <MessageBubble variant="received" text="Bank flagged my wire again 🙄 sending it on Caravel instead" timestamp={now - 6 * MIN} />
-        <MessageBubble variant="sent" text="Received, 250 XTR" timestamp={now - 5 * MIN} />
+        <MessageBubble variant="sent" text={`Received, 250 ${TICKER}`} timestamp={now - 5 * MIN} />
         <MessageBubble variant="received" text="So much easier" timestamp={now - 4 * MIN} />
       </div>
     </div>

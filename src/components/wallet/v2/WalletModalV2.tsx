@@ -38,7 +38,7 @@ import {
   DIR, moveAvailLabel, moveBlurb, moveDirectionRow, moveDone, moveMovedTo, moveMovingTo, moveTitle,
   type Dir,
 } from './moveCopy'
-import { MASK_SHORT, fmt6 } from './format'
+import { MASK_SHORT, fmt6, TICKER } from './format'
 import { MONO } from './tokens'
 
 /**
@@ -442,12 +442,12 @@ function MoveBody({ m, p, onClose }: {
           readOnly={p.hidden}
           onMax={p.onMax}
           availableLabel={p.hidden ? 'Available' : moveAvailLabel(m.dir)}
-          availableValue={p.hidden ? MASK_SHORT : m.available !== null ? `${fmt6(m.available)} XTR` : '—'}
+          availableValue={p.hidden ? MASK_SHORT : m.available !== null ? `${fmt6(m.available)} ${TICKER}` : '—'}
           error={m.error}
           // THE REMAINDER, WHEN THERE IS ONE. Set only where MAX genuinely held something back for
           // the fee, and it names the figure. The floor takes the slot otherwise: the builder
           // enforces a minimum, and being told it beats typing under it and being refused.
-          note={m.leftoverNote ?? `Minimum ${fmt6(m.minMicrotari)} XTR`}
+          note={m.leftoverNote ?? `Minimum ${fmt6(m.minMicrotari)} ${TICKER}`}
         />
 
         <ActionButton mt={28} tone={m.canReview ? 'primary' : 'disabled'} onClick={m.canReview ? p.onReview : undefined}>
@@ -466,7 +466,7 @@ function MoveBody({ m, p, onClose }: {
 
         <div style={{ textAlign: 'center', marginTop: 28 }}>
           <div style={{ fontSize: 36, fontWeight: 700, letterSpacing: '-0.02em', fontFeatureSettings: "'tnum'", color: C.primary }}>
-            {fmt6(m.amountMicrotari)} <span style={{ fontSize: 16, fontWeight: 600, color: C.mutedDim }}>XTR</span>
+            {fmt6(m.amountMicrotari)} <span style={{ fontSize: 16, fontWeight: 600, color: C.mutedDim }}>{TICKER}</span>
           </div>
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 13.5, color: C.bodyDim, marginTop: 8 }}>
             <MoveSide word={DIR[m.dir].from} />
@@ -484,14 +484,14 @@ function MoveBody({ m, p, onClose }: {
           <MoveRow label="Direction" value={moveDirectionRow(m.dir)} />
           <MoveRow label="Network fee" mono value={pricing
             ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontFamily: 'inherit', color: C.faint }}><Spinner size={12} />Pricing…</span>
-            : `${fmt6(m.feeMicrotari!)} XTR`} />
+            : `${fmt6(m.feeMicrotari!)} ${TICKER}`} />
           {/* WHAT YOU ARE LEFT WITH. The frames stop at the fee; this is the figure a person
               actually wants before confirming, and it is the only thing on the screen that answers
               "and then what do I have". Drawn as two more rows in the same block, so it costs the
               layout nothing. */}
           {m.resulting && <>
-            <MoveRow label="Private after" mono value={`${fmt6(m.resulting.privateAfter)} XTR`} />
-            <MoveRow label="Public after" mono value={`${fmt6(m.resulting.publicAfter)} XTR`} />
+            <MoveRow label="Private after" mono value={`${fmt6(m.resulting.privateAfter)} ${TICKER}`} />
+            <MoveRow label="Public after" mono value={`${fmt6(m.resulting.publicAfter)} ${TICKER}`} />
           </>}
         </div>
 
@@ -529,7 +529,7 @@ function MoveBody({ m, p, onClose }: {
         <Spinner size={28} ring={3} />
         <div style={{ fontSize: 17, fontWeight: 600, color: C.primary, marginTop: 18 }}>Moving funds</div>
         <div style={{ fontSize: 13, color: C.mutedDim, marginTop: 6 }}>
-          {fmt6(m.amountMicrotari)} XTR {moveMovingTo(m.dir)}
+          {fmt6(m.amountMicrotari)} {TICKER} {moveMovingTo(m.dir)}
         </div>
         {m.progress && (
           <div style={{ fontSize: 12, color: C.faint, marginTop: 14, lineHeight: 1.5 }}>{m.progress}</div>
@@ -563,7 +563,7 @@ function MoveBody({ m, p, onClose }: {
         // THE STRING THE OLD BUG GOT WRONG — derived from the direction of the move that ran.
         title={moveDone(m.dir)}
         sub={<>
-          <span style={{ fontFamily: MONO }}>{fmt6(m.amountMicrotari)} XTR</span> {moveMovedTo(m.dir)}
+          <span style={{ fontFamily: MONO }}>{fmt6(m.amountMicrotari)} {TICKER}</span> {moveMovedTo(m.dir)}
           {/* A PASSED DEADLINE IS STILL A SUCCESS. The transaction committed; only the index is
               behind, and telling someone their funds did not move when they demonstrably did is
               the worst outcome available here. */}

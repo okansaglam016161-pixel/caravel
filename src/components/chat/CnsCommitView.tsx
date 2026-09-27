@@ -38,11 +38,11 @@ import {
 } from '../../crypto/ons'
 import { beginEntry, markDegraded, settleEntry } from '../../crypto/journalStore'
 import { fetchCreatedUtxoIds } from '../../crypto/txOutputs'
-import { fmt6 } from '../wallet/v2/format'
+import { fmt6, TICKER } from '../wallet/v2/format'
 import { MONO } from './chatDisplay'
 
 /** µtTARI as the product says it everywhere else. One formatter, one unit on screen. */
-const XTR = (micro: bigint) => `${fmt6(micro)} XTR`
+const XTR = (micro: bigint) => `${fmt6(micro)} ${TICKER}`
 
 type Commit =
   | { kind: 'estimating' }

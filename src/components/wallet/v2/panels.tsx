@@ -17,9 +17,9 @@ import { QRCodeSVG } from 'qrcode.react'
 import { C, MONO } from './tokens'
 import { Check, Clock, Copy, Eye, Lock, Shield, Spinner } from './icons'
 import { Body, SubHeader } from './primitives'
-import { fmt6, formatCooldown } from './format'
+import { fmt6, formatCooldown, TICKER } from './format'
 
-const XTR = (n: bigint) => `${fmt6(n)} XTR`
+const XTR = (n: bigint) => `${fmt6(n)} ${TICKER}`
 
 // ── THE OVERVIEW'S ONE CARD ──────────────────────────────────────────────────
 //
@@ -620,14 +620,14 @@ export function AmountBlock({ value, onChange, onMax, availableLabel, availableV
       }}>
         <input
           value={value} onChange={e => onChange(e.target.value)} readOnly={readOnly}
-          inputMode="decimal" placeholder="0.00" aria-label="Amount in XTR"
+          inputMode="decimal" placeholder="0.00" aria-label={`Amount in ${TICKER}`}
           style={{
             flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent', padding: 0,
             fontFamily: 'inherit', fontSize: 32, fontWeight: 700, letterSpacing: '-0.02em',
             fontFeatureSettings: "'tnum'", color: C.primary,
           }}
         />
-        <span style={{ fontSize: 14, fontWeight: 600, color: C.mutedDim, flexShrink: 0 }}>XTR</span>
+        <span style={{ fontSize: 14, fontWeight: 600, color: C.mutedDim, flexShrink: 0 }}>{TICKER}</span>
       </div>
       {error
         ? <div style={{ fontSize: 12, color: C.dangerText, marginTop: 10, lineHeight: 1.5 }}>{error}</div>
@@ -702,7 +702,7 @@ function Receipt({ fee, txId, onCopy }: { fee: bigint; txId: string; onCopy: () 
       display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
       marginTop: 18, fontFamily: MONO, fontSize: 11, color: C.faint, flexWrap: 'wrap',
     }}>
-      <span>fee {fmt6(fee)} XTR</span>
+      <span>fee {fmt6(fee)} {TICKER}</span>
       <span aria-hidden="true">·</span>
       <span
         role="button" tabIndex={0} onClick={onCopy} onKeyDown={e => e.key === 'Enter' && onCopy()}
@@ -733,7 +733,7 @@ export function SendPanel({ view, hidden, onSource, onRecipient, onAmount, onNot
           // above showing Private or Public selected, repeating the word here is the same fact
           // twice; without it, this label is the only thing saying which balance the figure is.
           availableLabel={view.canChooseSource ? 'Available' : view.source === 'private' ? 'Private available' : 'Public available'}
-          availableValue={hidden ? '••••••' : view.available !== null ? `${fmt6(view.available)} XTR` : '—'}
+          availableValue={hidden ? '••••••' : view.available !== null ? `${fmt6(view.available)} ${TICKER}` : '—'}
           onMax={onMax}
           error={view.error}
           // MAX owning up to a truncated scan — the total refuses to show a number on one, and MAX
@@ -765,7 +765,7 @@ export function SendPanel({ view, hidden, onSource, onRecipient, onAmount, onNot
 
         <div style={{ textAlign: 'center', marginTop: 28 }}>
           <div style={{ fontSize: 36, fontWeight: 700, letterSpacing: '-0.02em', fontFeatureSettings: "'tnum'", color: C.primary }}>
-            {fmt6(view.amountMicrotari)} <span style={{ fontSize: 16, fontWeight: 600, color: C.mutedDim }}>XTR</span>
+            {fmt6(view.amountMicrotari)} <span style={{ fontSize: 16, fontWeight: 600, color: C.mutedDim }}>{TICKER}</span>
           </div>
           <div style={{ fontSize: 13.5, color: C.bodyDim, marginTop: 8 }}>
             to <span style={{ fontFamily: MONO, fontWeight: 500, color: C.primary, fontSize: 12 }}>{shortAddr(view.recipient)}</span>
@@ -793,7 +793,7 @@ export function SendPanel({ view, hidden, onSource, onRecipient, onAmount, onNot
             <span style={{ fontFamily: MONO, fontWeight: 500, color: C.primary }}>
               {pricing
                 ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontFamily: 'inherit', color: C.faint }}><Spinner size={12} />Pricing…</span>
-                : `${fmt6(view.feeMicrotari!)} XTR`}
+                : `${fmt6(view.feeMicrotari!)} ${TICKER}`}
             </span>
           </div>
         </div>
@@ -830,7 +830,7 @@ export function SendPanel({ view, hidden, onSource, onRecipient, onAmount, onNot
         <Spinner size={28} ring={3} />
         <div style={{ fontSize: 17, fontWeight: 600, color: C.primary, marginTop: 18 }}>Sending</div>
         <div style={{ fontSize: 13, color: C.mutedDim, marginTop: 6 }}>
-          {fmt6(view.amountMicrotari)} XTR to <span style={{ fontFamily: MONO, fontSize: 11.5 }}>{shortAddr(view.recipient)}</span>
+          {fmt6(view.amountMicrotari)} {TICKER} to <span style={{ fontFamily: MONO, fontSize: 11.5 }}>{shortAddr(view.recipient)}</span>
         </div>
         {/* The builder's own words about which step it is on. Kept below the headline rather than
             replacing it, so the screen does not appear to change state on every progress tick. */}
@@ -864,7 +864,7 @@ export function SendPanel({ view, hidden, onSource, onRecipient, onAmount, onNot
         emblem={<Emblem tone="positive"><Check size={18} color="currentColor" /></Emblem>}
         title="Sent"
         sub={<>
-          <span style={{ fontFamily: MONO }}>{fmt6(view.amountMicrotari)} XTR</span> to{' '}
+          <span style={{ fontFamily: MONO }}>{fmt6(view.amountMicrotari)} {TICKER}</span> to{' '}
           <span style={{ fontFamily: MONO, fontSize: 11.5 }}>{shortAddr(view.recipient)}</span>
           {/* A passed settle deadline is STILL A SUCCESS. The payment committed; only the balance
               behind this card is behind, so the extra sentence explains the stale figure rather

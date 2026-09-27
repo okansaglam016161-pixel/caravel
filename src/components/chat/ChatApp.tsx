@@ -25,7 +25,7 @@ import { usePaymentResolution } from '../../hooks/usePaymentResolution'
 import { balanceIsLowerBound, isInsufficientBalance } from './paymentGuard'
 // The wallet's amount formatters, bigint-only — shared rather than re-derived, which is the whole
 // point of format.ts having been written. MASK_SHORT is the same stand-in its balance rows use.
-import { fmt6, MASK_SHORT } from '../wallet/v2/format'
+import { fmt6, MASK_SHORT, TICKER } from '../wallet/v2/format'
 // The wallet's own sentence for "this figure came off a truncated scan". Shared, not retyped: its
 // note says there is one wording precisely so the two surfaces cannot drift apart on the claim.
 import { incompleteAvailableNote } from '../wallet/v2/total'
@@ -299,7 +299,7 @@ function PaymentCard({ sent, state, timestamp, plaintext, lid, flashed }: {
 
         {state.amount !== undefined && (
           <div style={{ fontFamily: MONO, fontSize: 24, fontWeight: 600, fontFeatureSettings: "'tnum'", letterSpacing: '-0.01em' }}>
-            {state.amount}<span style={{ fontSize: 13, color: 'var(--vault-ink-dim)', marginLeft: 6 }}>XTR</span>
+            {state.amount}<span style={{ fontSize: 13, color: 'var(--vault-ink-dim)', marginLeft: 6 }}>{TICKER}</span>
           </div>
         )}
         {state.masked && (
@@ -1234,7 +1234,7 @@ export default function ChatApp({ onOpenWallet }: {
   const availableLowerBound = balanceIsLowerBound(scan)
   const availableText = balanceHidden
     ? MASK_SHORT
-    : scan.balance === null ? '—' : `${fmt6(scan.balance)} XTR`
+    : scan.balance === null ? '—' : `${fmt6(scan.balance)} ${TICKER}`
 
   const payAmountNum = Number(payAmount)
   const payAmountUsable = !!payAmount.trim() && isFinite(payAmountNum) && payAmountNum > 0
@@ -1730,7 +1730,7 @@ export default function ChatApp({ onOpenWallet }: {
                         <div style={{ padding: 13 }}>
                           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, marginBottom: 9 }}>
                             <span style={{ fontFamily: MONO, fontSize: 22, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.1em' }}>••••</span>
-                            <span style={{ fontFamily: MONO, fontSize: 13, fontWeight: 600, color: 'var(--text-accent-dim)' }}>XTR</span>
+                            <span style={{ fontFamily: MONO, fontSize: 13, fontWeight: 600, color: 'var(--text-accent-dim)' }}>{TICKER}</span>
                           </div>
                           <div style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5, textAlign: 'center', marginBottom: note ? 11 : 0 }}>Amount stays unresolved until you accept. Caravel doesn’t query the chain for strangers.</div>
                           {note && (
@@ -2254,8 +2254,8 @@ export default function ChatApp({ onOpenWallet }: {
                     <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="var(--warn)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 2 }}><path d="M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" /><path d="M12 9v4M12 17h.01" /></svg>
                     <div style={{ fontSize: 11.5, lineHeight: 1.5, textWrap: 'pretty' }}>
                       {payAlert.kind === 'orphan'
-                        ? <><span style={{ fontWeight: 600, color: 'var(--warn)' }}>The funds left your wallet, but no note was attached.</span> <span style={{ color: 'var(--text-body-dim)' }}>{displayName(selectedConvo.peerHex)} received {payAlert.amountTari} XTR without your message, so tell them separately.</span></>
-                        : <><span style={{ fontWeight: 600, color: 'var(--warn)' }}>The send timed out. Do not resend.</span> <span style={{ color: 'var(--text-body-dim)' }}>{payAlert.amountTari} XTR may still have gone through. Check Activity before trying again.</span></>}
+                        ? <><span style={{ fontWeight: 600, color: 'var(--warn)' }}>The funds left your wallet, but no note was attached.</span> <span style={{ color: 'var(--text-body-dim)' }}>{displayName(selectedConvo.peerHex)} received {payAlert.amountTari} {TICKER} without your message, so tell them separately.</span></>
+                        : <><span style={{ fontWeight: 600, color: 'var(--warn)' }}>The send timed out. Do not resend.</span> <span style={{ color: 'var(--text-body-dim)' }}>{payAlert.amountTari} {TICKER} may still have gone through. Check Activity before trying again.</span></>}
                     </div>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '9px 12px', borderRadius: 9, background: 'var(--surface-trough)' }}>
@@ -2295,7 +2295,7 @@ export default function ChatApp({ onOpenWallet }: {
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, padding: '11px 13px', borderRadius: 12, background: 'var(--surface)', border: '1px solid var(--border-strong)' }}>
                   <span style={{ width: 13, height: 13, borderRadius: '50%', border: '2px solid var(--border)', borderTopColor: 'var(--accent-400)', animation: 'cv-spin 1s linear infinite', flexShrink: 0 }} />
                   <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: 'var(--text-body-dim)' }}>{payProgress ?? 'Working…'}</span>
-                  {payAmount.trim() && <span style={{ fontFamily: MONO, fontSize: 11.5, color: 'var(--text-muted-dim)', flexShrink: 0 }}>{payAmount} XTR</span>}
+                  {payAmount.trim() && <span style={{ fontFamily: MONO, fontSize: 11.5, color: 'var(--text-muted-dim)', flexShrink: 0 }}>{payAmount} {TICKER}</span>}
                 </div>
               )}
 
@@ -2320,10 +2320,10 @@ export default function ChatApp({ onOpenWallet }: {
                         onChange={e => { setPayAmount(e.target.value); if (payError) setPayError(null) }}
                         placeholder="0.000000"
                         inputMode="decimal"
-                        aria-label="Amount in XTR"
+                        aria-label={`Amount in ${TICKER}`}
                         style={{ flex: 1, minWidth: 0, background: 'transparent', border: 'none', outline: 'none', fontFamily: MONO, fontSize: 15, fontWeight: 600, color: 'var(--text-body)' }}
                       />
-                      <span style={{ fontFamily: MONO, fontSize: 11.5, color: 'var(--text-muted-dim)', flexShrink: 0 }}>XTR</span>
+                      <span style={{ fontFamily: MONO, fontSize: 11.5, color: 'var(--text-muted-dim)', flexShrink: 0 }}>{TICKER}</span>
                     </div>
                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: 'var(--text-body-dim)', flexShrink: 0 }}>
                       to
@@ -2388,7 +2388,7 @@ export default function ChatApp({ onOpenWallet }: {
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '11px 13px', borderRadius: 11, background: 'var(--surface-base)', border: '1px solid var(--border)' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 12.5 }}>
                       <span style={{ color: 'var(--text-muted-dim)' }}>Amount</span>
-                      <span style={{ fontFamily: MONO, fontWeight: 600, color: 'var(--text-primary)' }}>{payAmount} XTR</span>
+                      <span style={{ fontFamily: MONO, fontWeight: 600, color: 'var(--text-primary)' }}>{payAmount} {TICKER}</span>
                     </div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 12.5, minWidth: 0 }}>
                       <span style={{ color: 'var(--text-muted-dim)', flexShrink: 0 }}>To</span>
@@ -2403,7 +2403,7 @@ export default function ChatApp({ onOpenWallet }: {
                         is doing real work rather than softening a number. */}
                     <div style={{ borderTop: '1px solid var(--border)', paddingTop: 8, display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 12.5 }}>
                       <span style={{ color: 'var(--text-muted-dim)' }}>Fee, at most</span>
-                      <span style={{ fontFamily: MONO, fontWeight: 600, color: 'var(--text-primary)' }}>{FEE_CEIL_XTR} XTR</span>
+                      <span style={{ fontFamily: MONO, fontWeight: 600, color: 'var(--text-primary)' }}>{FEE_CEIL_XTR} {TICKER}</span>
                     </div>
                     <div style={{ fontSize: 11, color: 'var(--text-muted-dim)', marginTop: -3, textAlign: 'right' }}>The exact fee is known once it settles</div>
                   </div>

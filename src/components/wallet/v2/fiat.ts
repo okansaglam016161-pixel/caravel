@@ -29,22 +29,23 @@
 
 import type { BalanceView } from './balances'
 import type { TotalView } from './total'
+import { TICKER } from './format'
 
 /**
- * 1 XTR = $0.0004 USD. TEMPORARY TESTNET PLACEHOLDER.
+ * 1 TARI = $0.0004 USD. TEMPORARY TESTNET PLACEHOLDER.
  *
  * Held as an exact fraction over microtari rather than a float: every amount in this wallet is a
  * bigint precisely so no figure ever round-trips through binary floating point, and a rate applied
  * as `Number(microtari) * 0.0004` would undo that at the last step.
  *
  *   USD = microtari x RATE_NUM / RATE_DEN
- *       = microtari x 4 / 10^10          (microtari -> XTR is /10^6, XTR -> USD is x4/10^4)
+ *       = microtari x 4 / 10^10          (microtari -> TARI is /10^6, TARI -> USD is x4/10^4)
  */
 export const RATE_NUM = 4n
 export const RATE_DEN = 10_000_000_000n
 
 /** Human-readable form of the rate, for anywhere that needs to state it. */
-export const RATE_LABEL = '1 XTR = $0.0004'
+export const RATE_LABEL = `1 ${TICKER} = $0.0004`
 
 /**
  * Decimal places.

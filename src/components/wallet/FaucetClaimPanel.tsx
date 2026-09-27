@@ -16,7 +16,7 @@ import { settleVerdict, journalOutcomeFor, type SettleStartedBy } from './v2/set
 import { FaucetBanner, FaucetPanel } from './v2/panels'
 import { faucetPhase, isHidden } from './v2/faucetPhase'
 import { plainError } from './v2/plainError'
-import { fmt2, formatCooldown } from './v2/format'
+import { fmt2, formatCooldown, TICKER } from './v2/format'
 
 type Phase = 'idle' | 'claiming' | 'verifying' | 'done' | 'lagging' | 'error'
 
@@ -95,7 +95,7 @@ export default function FaucetClaimPanel() {
       // The delta is measured by the loop, from the two readings it actually compared.
       setMsg(settle.delta === null
         ? 'Tokens received. You can now send them, make them public, or register a name.'
-        : `Added ${fmt2(settle.delta)} XTR. You can now send it, make it public, or register a name.`)
+        : `Added ${fmt2(settle.delta)} ${TICKER}. You can now send it, make it public, or register a name.`)
       setCooldown(true)
       setCooldownUntil(Date.now() + COOLDOWN_MS)
       setTimeout(() => { setCooldown(false); setCooldownUntil(null) }, COOLDOWN_MS)

@@ -179,7 +179,7 @@ function Pill({ tone, children }: { tone: 'live' | 'quiet' | 'mono'; children: R
 // the header cluster — and the spine and header are copied measurement-for-measurement from
 // ServiceNav and RootHeader, with their geometry imported where a module exists to import it from.
 //
-// TERMINOLOGY: PRIVATE / PUBLIC, and XTR. The app purged "shielded / unshielded" outright —
+// TERMINOLOGY: PRIVATE / PUBLIC, and TARI (TICKER, wallet/v2/format.ts). The app purged "shielded / unshielded" outright —
 // wallet/v2/total.ts puts the rule as "the words here have to be the words the screen around them
 // uses", and moveCopy.test.ts pins it with a case-insensitive assertion that no derived string may
 // match /shielded/i ("Nothing may bring it back"). This page was the last surface still saying it.

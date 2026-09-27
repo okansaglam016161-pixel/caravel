@@ -59,7 +59,7 @@ import { plainError } from './v2/plainError'
 import { resolveSendPath } from './v2/sendPath'
 import { settleVerdict, journalOutcomeFor, type SettleStartedBy } from './v2/settleVerdict'
 import { GenerationGuard } from './v2/generation'
-import { firstSeenLabel, toInput } from './v2/format'
+import { firstSeenLabel, toInput, TICKER } from './v2/format'
 
 // The PUBLIC ↔ PRIVATE move. Its own state machine rather than SendStep's: a move has no recipient,
 // prices itself before review, and its terminal states carry different information.
@@ -482,10 +482,10 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
 
     if (sendSource === 'public') {
       if (amountMicrotari < MIN_PUBLIC_SEND_MICROTARI) {
-        return `The smallest amount you can send from your public balance is ${toInput(MIN_PUBLIC_SEND_MICROTARI)} XTR.`
+        return `The smallest amount you can send from your public balance is ${toInput(MIN_PUBLIC_SEND_MICROTARI)} ${TICKER}.`
       }
       if (amountMicrotari > publicSendCeiling) {
-        return `Not enough public balance — the fee comes out of it too. Most you can send now: ${toInput(publicSendCeiling)} XTR.`
+        return `Not enough public balance — the fee comes out of it too. Most you can send now: ${toInput(publicSendCeiling)} ${TICKER}.`
       }
       return null
     }
@@ -497,7 +497,7 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
     if (amountMicrotari > privateSendCeiling) {
       return privateSendCeiling === 0n
         ? 'You have no private funds to send yet.'
-        : `The most you can send in one private payment is ${toInput(privateSendCeiling)} XTR.`
+        : `The most you can send in one private payment is ${toInput(privateSendCeiling)} ${TICKER}.`
     }
     return null
   }
@@ -1019,7 +1019,7 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
   const moveLeftoverNote =
     moveDir === 'reveal' && moveExact !== null && privateAmount > ceiling
       ? [
-          `${toInput(privateAmount - ceiling)} XTR stays private to cover the fee. It’s still yours and still spendable.`,
+          `${toInput(privateAmount - ceiling)} ${TICKER} stays private to cover the fee. It’s still yours and still spendable.`,
           privateFiguresIncomplete ? incompleteAvailableNote() : '',
         ].filter(Boolean).join(' ')
       : moveDir === 'reveal' && privateFiguresIncomplete
@@ -1037,9 +1037,9 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
       minMicrotari: minAmount,
       maxMicrotari: ceiling,
       canReview: moveAmount !== '' && !belowMin && !overCeiling,
-      error: belowMin ? `The smallest amount you can move is ${toInput(minAmount)} XTR.`
+      error: belowMin ? `The smallest amount you can move is ${toInput(minAmount)} ${TICKER}.`
         : overCeiling ? (moveDir === 'reveal'
-            ? `More than you can make public — the fee comes out of your private balance too. Most you can move now: ${toInput(ceiling)} XTR.`
+            ? `More than you can make public — the fee comes out of your private balance too. Most you can move now: ${toInput(ceiling)} ${TICKER}.`
             : 'More than your public balance.')
           : moveError || undefined,
       // Said BEFORE they notice it: a private balance that stops just short of zero after "move

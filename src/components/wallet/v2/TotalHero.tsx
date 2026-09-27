@@ -26,7 +26,7 @@
 import { C, MONO } from './tokens'
 import { Receive, Send, Shield, Spinner } from './icons'
 import { fiatForTotal } from './fiat'
-import { MASK_SHORT, fmt6 } from './format'
+import { MASK_SHORT, fmt6, TICKER } from './format'
 import { unreadableReasonText, type TotalView } from './total'
 import type { BalanceView } from './balances'
 
@@ -86,7 +86,7 @@ export function TotalHero({ total, privateBalance, publicBalance, hidden, onRetr
               {usd ? <Figure usd={usd} /> : fmt6(total.microtari)}
             </div>
             <div style={{ fontFamily: MONO, fontSize: 13, color: 'var(--accent-300)', marginTop: 8 }}>
-              {fmt6(total.microtari)} XTR
+              {fmt6(total.microtari)} {TICKER}
             </div>
           </div>
         )

@@ -11,6 +11,14 @@
 
 const MICRO = 1_000_000n
 
+/**
+ * The unit name every amount is shown in. ONE place, so a rename is one line.
+ *
+ * DISPLAY ONLY. Nothing stored, sent or keyed carries it: amounts travel and persist as µtTARI
+ * bigints, and the SDK's own symbols (XTR_FAUCET_*, TARI_RESOURCE_ADDRESS) are not this.
+ */
+export const TICKER = 'TARI'
+
 /** Full-precision display: grouped whole part, always six decimals. "12,847.503210" */
 export function fmt6(microtari: bigint): string {
   const neg = microtari < 0n

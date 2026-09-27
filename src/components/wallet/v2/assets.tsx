@@ -33,7 +33,7 @@
 import { RowBleed } from './panels'
 import { C, MONO } from './tokens'
 import { fiatForTotal } from './fiat'
-import { fmt6 } from './format'
+import { fmt6, TICKER } from './format'
 import { totalPillValue } from './TotalHero'
 import type { TotalView } from './total'
 
@@ -84,7 +84,7 @@ export function AssetsPanel({ total, hidden, onOpen, bare = false }: AssetsPanel
             border: '1px solid var(--border)', flexShrink: 0, display: 'block',
           }}
         />
-        <span style={{ flex: 1, minWidth: 0, fontSize: 13.5, fontWeight: 600, color: C.primary }}>XTR</span>
+        <span style={{ flex: 1, minWidth: 0, fontSize: 13.5, fontWeight: 600, color: C.primary }}>{TICKER}</span>
         <span style={{ textAlign: 'right', flexShrink: 0 }}>
           <span style={{
             display: 'block', fontSize: 13, fontWeight: 600, fontFeatureSettings: "'tnum'",
@@ -100,7 +100,7 @@ export function AssetsPanel({ total, hidden, onOpen, bare = false }: AssetsPanel
             <span style={{
               display: 'block', fontFamily: MONO, fontSize: 11,
               color: C.mutedDim, marginTop: 2, whiteSpace: 'nowrap',
-            }}>{fmt6(total.microtari)} XTR</span>
+            }}>{fmt6(total.microtari)} {TICKER}</span>
           )}
         </span>
         {live && (

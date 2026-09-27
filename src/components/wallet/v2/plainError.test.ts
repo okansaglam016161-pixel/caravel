@@ -4,57 +4,58 @@
 // conceal.ts, not invented — so a change to either that reintroduces base units on screen breaks a
 // test here rather than shipping.
 //
-// NOTE THE ASYMMETRY, AND KEEP IT. Inputs say TARI because src/crypto still says TARI; outputs say
-// XTR because this translator is the boundary where the product's unit name is applied. Rewriting
-// the inputs to XTR would make these tests pass while testing nothing — the gloss-collapsing branch
-// would simply stop matching.
+// THE INPUTS KEEP THEIR OWN SHAPE. They say `N µtTARI (x TARI)` because that is what src/crypto
+// emits; the outputs say `x TARI` because this translator is the boundary where the product's unit
+// name (TICKER, format.ts) is applied. The two now share a word, which makes it tempting to simplify
+// an input to its output form — don't: the gloss-collapsing branch would stop matching and these
+// tests would pass while testing nothing.
 
 import { describe, expect, it } from 'vitest'
 import { plainError } from './plainError'
 
 describe('plainError — no base units reach the screen', () => {
-  it('collapses a figure that already carries its own XTR gloss', () => {
+  it('collapses a figure that already carries its own TARI gloss', () => {
     // reveal.ts: the MIN_REVEAL refusal.
     expect(plainError('The smallest amount that can be made public is 100000 µtTARI (0.10 TARI).'))
-      .toBe('The smallest amount that can be made public is 0.10 XTR.')
+      .toBe('The smallest amount that can be made public is 0.10 TARI.')
   })
 
   it('collapses conceal.ts’s minimum the same way', () => {
     expect(plainError('The smallest amount that can be made private is 100000 µtTARI (0.10 TARI).'))
-      .toBe('The smallest amount that can be made private is 0.10 XTR.')
+      .toBe('The smallest amount that can be made private is 0.10 TARI.')
   })
 
   it('converts bare base units, and the output count with them', () => {
     // reveal.ts: selectStealthInputs, insufficient funds.
     expect(plainError('Not enough private funds. This reveal needs 5000000 µtTARI (amount + network fee), and the wallet holds 3000000 µtTARI across 2 output(s).'))
-      .toBe('Not enough private funds. This reveal needs 5 XTR (amount + network fee), and the wallet holds 3 XTR across 2 payments.')
+      .toBe('Not enough private funds. This reveal needs 5 TARI (amount + network fee), and the wallet holds 3 TARI across 2 payments.')
   })
 
   it('handles the singular payment case', () => {
     expect(plainError('the wallet holds 3000000 µtTARI across 1 output(s).'))
-      .toBe('the wallet holds 3 XTR across 1 payment.')
+      .toBe('the wallet holds 3 TARI across 1 payment.')
   })
 
   it('converts every figure in a multi-figure message', () => {
     // reveal.ts: planReveal's coverage refusal.
     expect(plainError('The selected private funds (2971007 µtTARI) do not cover the amount plus the network fee (1000000 + 14537 = 1014537 µtTARI).'))
-      .toBe('The selected private funds (2.971007 XTR) do not cover the amount plus the network fee (1000000 + 14537 = 1.014537 XTR).')
+      .toBe('The selected private funds (2.971007 TARI) do not cover the amount plus the network fee (1000000 + 14537 = 1.014537 TARI).')
   })
 
   it('rewrites the fragmentation refusal without the UTXO vocabulary', () => {
     const out = plainError('Your private balance is spread across too many small outputs to reveal 5000000 µtTARI in one transaction (it would need 9, and the limit is 8). Reveal a smaller amount, or send yourself a payment first to consolidate.')
     expect(out).toContain('split across too many small payments')
-    expect(out).toContain('5 XTR')
+    expect(out).toContain('5 TARI')
     expect(out).not.toMatch(/µtTARI|output/)
   })
 
   it('converts the fee-exceeds-reserve refusal', () => {
     expect(plainError('The network fee (60000 µtTARI) is higher than this reveal reserved for it.'))
-      .toBe('The network fee (0.06 XTR) is higher than this reveal reserved for it.')
+      .toBe('The network fee (0.06 TARI) is higher than this reveal reserved for it.')
   })
 
   it('handles underscored literals, in case a message ever formats them that way', () => {
-    expect(plainError('needs 1_014_537 µtTARI')).toBe('needs 1.014537 XTR')
+    expect(plainError('needs 1_014_537 µtTARI')).toBe('needs 1.014537 TARI')
   })
 
   it.each([
@@ -73,7 +74,7 @@ describe('plainError — no base units reach the screen', () => {
 
   it('NO µtTARI SURVIVES any message the fund modules can emit', () => {
     const all = [
-      'The smallest amount that can be made public is 100000 µtTARI (0.10 XTR).',
+      'The smallest amount that can be made public is 100000 µtTARI (0.10 TARI).',
       'Not enough private funds. This reveal needs 5000000 µtTARI (amount + network fee), and the wallet holds 3000000 µtTARI across 2 output(s).',
       'The selected private funds (2971007 µtTARI) do not cover the amount plus the network fee (1000000 + 14537 = 1014537 µtTARI).',
       'The network fee (60000 µtTARI) exceeds the amount being made private. Try a larger amount.',

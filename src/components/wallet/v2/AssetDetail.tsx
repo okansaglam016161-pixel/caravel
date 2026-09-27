@@ -26,7 +26,7 @@
 import type { ReactNode } from 'react'
 import { C, MONO } from './tokens'
 import { Eye, Lock, Spinner } from './icons'
-import { MASK_SHORT, fmt6 } from './format'
+import { MASK_SHORT, fmt6, TICKER } from './format'
 import { RATE_LABEL, fiatForBalance, fiatForTotal } from './fiat'
 import type { BalanceView } from './balances'
 import type { TotalView } from './total'
@@ -87,7 +87,7 @@ function HoldingSide({ kind, balance, hidden, entry }: {
           {fiatForBalance(balance) ?? fmt6(balance.microtari)}
         </div>
         <div style={{ fontFamily: MONO, fontSize: 10.5, color: 'var(--vault-label)', marginTop: 2 }}>
-          {fmt6(balance.microtari)} XTR
+          {fmt6(balance.microtari)} {TICKER}
         </div>
       </>
     )
@@ -158,7 +158,7 @@ export function AssetDetail(p: AssetDetailProps) {
           border: '1px solid var(--border)', flexShrink: 0, display: 'block',
         }} />
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 19, fontWeight: 600, letterSpacing: '-0.01em', color: C.primary }}>XTR</div>
+          <div style={{ fontSize: 19, fontWeight: 600, letterSpacing: '-0.01em', color: C.primary }}>{TICKER}</div>
           <div style={{ fontSize: 12.5, color: C.mutedDim, marginTop: 1 }}>Tari · the Ootle</div>
         </div>
         <div style={{ textAlign: 'right', flexShrink: 0 }}>
@@ -229,7 +229,7 @@ export function AssetDetail(p: AssetDetailProps) {
             <span style={{ fontSize: 30, fontWeight: 700, letterSpacing: '-0.03em', color: C.bright, fontFeatureSettings: "'tnum'" }}>
               {fiatForTotal(p.total)}
             </span>
-            <span style={{ fontFamily: MONO, fontSize: 12.5, color: 'var(--accent-300)' }}>{fmt6(p.total.microtari)} XTR</span>
+            <span style={{ fontFamily: MONO, fontSize: 12.5, color: 'var(--accent-300)' }}>{fmt6(p.total.microtari)} {TICKER}</span>
           </div>
         ) : (
           // No total, no figure — the same rule the hero follows, for the same reason.

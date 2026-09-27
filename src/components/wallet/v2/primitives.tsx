@@ -18,6 +18,7 @@ export type Chrome = 'modal' | 'page'
 import { Copy, Spinner } from './icons'
 import { iconBoxStyle } from '../../primitives/iconBox'
 import Chip from '../../primitives/Chip'
+import { TICKER } from './format'
 
 // ── Shell ─────────────────────────────────────────────────────────────────────
 
@@ -328,7 +329,7 @@ export function FeeRow({ fee, last = false }: { fee: string | null; last?: boole
           <Spinner size={12} /><span style={{ fontSize: 12.5, color: C.faint, fontFamily: 'inherit' }}>Pricing…</span>
         </span>
       } />
-    : <DetailRow label="Network fee" value={`${fee} XTR`} last={last} />
+    : <DetailRow label="Network fee" value={`${fee} ${TICKER}`} last={last} />
 }
 
 export function TxRow({ txId, onCopy }: { txId: string; onCopy?: () => void }) {
@@ -492,10 +493,10 @@ export function AmountField({ value, onChange, onMax, maxUsed, accent = 'accent'
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
         <input
           value={value} onChange={e => onChange(e.target.value)} readOnly={readOnly}
-          inputMode="decimal" placeholder="0.000000" aria-label="Amount in XTR"
+          inputMode="decimal" placeholder="0.000000" aria-label={`Amount in ${TICKER}`}
           style={{ flex: 1, minWidth: 0, background: 'transparent', border: 'none', outline: 'none', padding: 0, fontFamily: MONO, fontSize: 26, fontWeight: 600, color: C.bright }}
         />
-        <span style={{ fontFamily: MONO, fontSize: 14, color: C.accentDim, flexShrink: 0 }}>XTR</span>
+        <span style={{ fontFamily: MONO, fontSize: 14, color: C.accentDim, flexShrink: 0 }}>{TICKER}</span>
         {onMax && (
           <span role="button" tabIndex={0} onClick={onMax} onKeyDown={e => e.key === 'Enter' && onMax()} style={{
             padding: '5px 12px', borderRadius: 'var(--r-sm)', fontSize: 12, fontWeight: 600, cursor: 'pointer', flexShrink: 0, userSelect: 'none',

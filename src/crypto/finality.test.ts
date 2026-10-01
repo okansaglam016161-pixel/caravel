@@ -23,6 +23,8 @@ const ACCEPT = finalized({ Accept: {} })
 const REJECT = finalized({ Reject: { ExecutionFailure: 'Input substate utxo_… is down' } })
 const FEE_ONLY = finalized({ AcceptFeeRejectRest: [{}, { SubstateNotFound: 'vault_6a6de7ab' }] })
 const UNDECIDED = { result: { Finalized: { final_decision: '' } } }
+const REJECTED = { result: { Rejected: { details: 'Transaction validation failed', rejected_time: '2026-10-01T00:00:00Z' } } }
+const EXEC_FAILURE = finalized({ Reject: { ExecutionFailure: { code: 'AccessDenied', message: 'receiver badge not in scope' } } }, 'Abort')
 
 const TX = 'tx_abc123'
 
@@ -77,6 +79,21 @@ describe('reading the verdict', () => {
     const r = await awaitFinality(provider, TX, FAST)
     expect(r.outcome).toBe('Reject')
     expect(r.reason).toContain('took the fee')
+  })
+
+  // The indexer's own refusal, before consensus. It is final; reading it as "not yet" ran every
+  // such transaction to Timeout and left its inputs locked.
+  it('an indexer Rejected is a Reject, not a Timeout', async () => {
+    const { provider } = fakeProvider({ receipt: async () => REJECTED })
+    const r = await awaitFinality(provider, TX, FAST)
+    expect(r.outcome).toBe('Reject')
+    expect(r.reason).toContain('Transaction validation failed')
+  })
+
+  it('an ExecutionFailure {code, message} reads as words, not JSON', async () => {
+    const { provider } = fakeProvider({ receipt: async () => EXEC_FAILURE })
+    const r = await awaitFinality(provider, TX, FAST)
+    expect(r.reason).toContain('ExecutionFailure (AccessDenied): receiver badge not in scope')
   })
 
   it('an undecided result is a Timeout, never a verdict', async () => {

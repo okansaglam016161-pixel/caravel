@@ -122,7 +122,11 @@ export async function claimFaucet(
   log('Connecting…')
   const provider = await IndexerProvider.connect({ url: INDEXER_URL, network: Network.Esmeralda })
   const crypto = new WasmStealthCrypto(Network.Esmeralda)
-  const ownerPkHex = toHexStr(await wallet.getPublicKey())
+  // The owner key signs for the account, so it is also the RECEIVER of the statement's revealed
+  // output: since Ootle 0.42 the engine only creates that bucket if the receiver's badge is in the
+  // transaction's auth scope, which a statement lifted into someone else's transaction cannot satisfy.
+  const ownerPk = await wallet.getPublicKey()
+  const ownerPkHex = toHexStr(ownerPk)
 
   // 0.39: mandatory validity window — the builder cannot be constructed without the chain tip.
   // Read ONCE and used for both the dry run and the real submission: the two are seconds apart and
@@ -142,7 +146,7 @@ export async function claimFaucet(
 
     const { statement: outputsStatement, outputMask } = await crypto.generateOutputsStatement(
       [createOutput({ destination: ownerAddress, amount: stealthAmount, resourceAddress: TARI_RESOURCE_ADDRESS })],
-      feeMicrotari,
+      { amount: feeMicrotari, receiver: ownerPk },
     )
     const inputsStatement = await crypto.buildInputsStatement([], revealedInputAmount)
     const balanceProof = await signBalanceProof(crypto, Mask.zero(), outputMask, inputsStatement, outputsStatement)

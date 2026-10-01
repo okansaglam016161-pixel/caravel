@@ -31,7 +31,8 @@ const V = (p: string) => path.join(ROOT, 'vendor', p)
 //   npm ls @tari-project/ootle-wasm        → exactly one entry, no "deduped" second tree
 //   find node_modules -path "*ootle-wasm/package.json"   → exactly one line
 //
-// Current pairing (Ootle 0.41 / protocol v1): SDK 0.5.0 on ootle-wasm ^0.41.0.
+// Current pairing (Ootle 0.42): SDK 0.6.0 on ootle-wasm ^0.42.0, with ootle-ts-bindings ^1.55.0
+// declared directly (the version the SDK depends on) since our code imports its types.
 //
 // The ONS client stays vendored — see vendor/README.md; it is our own unpublished package.
 //

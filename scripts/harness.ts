@@ -481,10 +481,15 @@ async function printTxResult(txId: string, opts: { raw?: boolean } = {}): Promis
   if (!res.ok) { console.log(`  body: ${(call?.resBody ?? '').slice(0, 500)}`); return }
 
   const json = await res.json() as Record<string, unknown>
-  const finalized = (json.result as Record<string, unknown> | undefined)?.Finalized as Record<string, unknown> | undefined
+  const outcome = json.result as Record<string, unknown> | undefined
+  const finalized = outcome?.Finalized as Record<string, unknown> | undefined
+  // The indexer's own refusal, before consensus — a decision with no Finalized envelope at all.
+  const rejected = outcome?.Rejected as Record<string, unknown> | undefined
   const exec = (finalized?.execution_result as Record<string, unknown> | undefined)?.finalize as Record<string, unknown> | undefined
 
-  field('final_decision', String(finalized?.final_decision ?? '(none — not yet decided)'))
+  field('final_decision', rejected
+    ? `Rejected by the indexer at ${String(rejected.rejected_time ?? '?')} (never reached consensus)`
+    : String(finalized?.final_decision ?? '(none — not yet decided)'))
   field('result', exec?.result !== undefined ? JSON.stringify(exec.result).slice(0, 600) : '(no execution_result.finalize.result)')
 
   const receipt = exec?.fee_receipt as Record<string, unknown> | undefined

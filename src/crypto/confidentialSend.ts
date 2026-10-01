@@ -139,6 +139,10 @@ export async function sendConfidential(
 
   const crypto = new WasmStealthCrypto(Network.Esmeralda)
   const viewSecret = await wallet.getViewSecret()
+  // The fee leaves the statement as a revealed output, and since Ootle 0.42 that bucket is only
+  // created for a receiver whose badge is in the auth scope: the sender's owner key, which signs
+  // this transaction through `ootleWallet` below. (Not StaticSigner — its getPublicKey is zeros.)
+  const ownerPk = await wallet.getPublicKey()
 
   log('Scanning for your UTXOs…')
   // EXCLUDING WHAT WE HAVE ALREADY SPENT. `/utxos` keeps listing a spent output until the indexer
@@ -191,7 +195,7 @@ export async function sendConfidential(
       split.changeAmount > 0n
         ? [recipientOutput, createOutput({ destination: senderAddress, amount: split.changeAmount, resourceAddress: TARI_RESOURCE_ADDRESS })]
         : [recipientOutput],
-      feeMicrotari,
+      { amount: feeMicrotari, receiver: ownerPk },
     )
 
     // Recipient's output is specs[0]; read its on-wire Pedersen commitment from the outputs

@@ -482,7 +482,11 @@ export async function prepareReveal(
   log('Connecting…')
   const provider = await IndexerProvider.connect({ url: INDEXER_URL, network: Network.Esmeralda })
   const crypto = new WasmStealthCrypto(Network.Esmeralda)
-  const ownerPkHex = toHexStr(await wallet.getPublicKey())
+  // The owner key signs for the account, so it is also the RECEIVER of the statement's revealed
+  // output: since Ootle 0.42 the engine only creates that bucket if the receiver's badge is in the
+  // transaction's auth scope, which a statement lifted into someone else's transaction cannot satisfy.
+  const ownerPk = await wallet.getPublicKey()
+  const ownerPkHex = toHexStr(ownerPk)
   const viewSecret = await wallet.getViewSecret()
 
   log('Finding your private funds…')
@@ -537,7 +541,7 @@ export async function prepareReveal(
 
     // THE SINGLE VALUE. `split.revealedOutput` is the statement's revealed output here, and the
     // bucket the instructions split below; there is no second computation of it anywhere.
-    const { statement: outsStmt, outputMask } = await crypto.generateOutputsStatement(outputs, split.revealedOutput)
+    const { statement: outsStmt, outputMask } = await crypto.generateOutputsStatement(outputs, { amount: split.revealedOutput, receiver: ownerPk })
 
     // REAL stealth inputs — commitments of UTXOs actually being spent — and 0n revealed input,
     // because nothing revealed goes into a reveal. (Conceal is the mirror image: no stealth inputs,

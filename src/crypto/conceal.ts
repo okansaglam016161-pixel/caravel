@@ -265,7 +265,11 @@ export async function prepareConceal(
   log('Connecting…')
   const provider = await IndexerProvider.connect({ url: INDEXER_URL, network: Network.Esmeralda })
   const crypto = new WasmStealthCrypto(Network.Esmeralda)
-  const ownerPkHex = toHexStr(await wallet.getPublicKey())
+  // The owner key signs for the account, so it is also the RECEIVER of the statement's revealed
+  // output: since Ootle 0.42 the engine only creates that bucket if the receiver's badge is in the
+  // transaction's auth scope, which a statement lifted into someone else's transaction cannot satisfy.
+  const ownerPk = await wallet.getPublicKey()
+  const ownerPkHex = toHexStr(ownerPk)
 
   // ── THE ACCOUNT MAY NOT EXIST YET, AND THAT IS NOT AN ERROR ────────────────
   //
@@ -294,7 +298,7 @@ export async function prepareConceal(
 
     const { statement: outputsStatement, outputMask } = await crypto.generateOutputsStatement(
       [createOutput({ destination: ownerAddress, amount: split.stealthAmount, resourceAddress: TARI_RESOURCE_ADDRESS })],
-      split.feeMicrotari,
+      { amount: split.feeMicrotari, receiver: ownerPk },
     )
     // THE SINGLE VALUE. `split.withdrawAmount` feeds the statement here and the withdraw
     // instruction below; there is no second computation of it anywhere.

@@ -55,6 +55,9 @@ export type TxVerdict =
  * this never invents a friendlier message — it only unwraps the tagging so the useful half is not
  * buried in JSON punctuation. plainError leaves anything it does not recognise alone, so what the
  * network said reaches the screen intact.
+ *
+ * Since Ootle 0.42 `ExecutionFailure` carries `{ code, message }` — a classification and the engine's
+ * own sentence — which reads as `ExecutionFailure (AccessDenied): <message>` rather than as JSON.
  */
 export function describeRejectReason(reason: unknown): string {
   if (typeof reason === 'string') return reason
@@ -63,6 +66,10 @@ export function describeRejectReason(reason: unknown): string {
     if (entries.length === 1) {
       const [tag, value] = entries[0]!
       if (typeof value === 'string') return `${tag}: ${value}`
+      const fields = obj(value)
+      if (fields && typeof fields.message === 'string') {
+        return typeof fields.code === 'string' ? `${tag} (${fields.code}): ${fields.message}` : `${tag}: ${fields.message}`
+      }
       return `${tag}: ${JSON.stringify(value).slice(0, 200)}`
     }
   }
@@ -84,9 +91,21 @@ function obj(v: unknown): Record<string, unknown> | undefined {
  * path against a committed transaction made the fee silently undefined for a whole milestone.
  *
  * Returns `null` while the transaction has no final decision, so a polling loop can simply continue.
+ *
+ * `Rejected` IS a decision. The indexer answers `{ Rejected: { details, rejected_time } }` for a
+ * transaction that never reached consensus — refused before execution, so nothing committed and no
+ * fee was taken. Reading it as "not yet" ran finality to its timeout and left the inputs locked
+ * until the lock sweep's stale-lock fallback; it is a final reject, and the inputs come back.
  */
 export function readFinalizedVerdict(body: unknown): TxVerdict | null {
-  const finalized = obj(obj(obj(body)?.result)?.Finalized)
+  const outcome = obj(obj(body)?.result)
+  const rejected = obj(outcome?.Rejected)
+  if (rejected) {
+    const details = typeof rejected.details === 'string' && rejected.details !== '' ? rejected.details : 'no details given'
+    return { kind: 'reject', reason: details }
+  }
+
+  const finalized = obj(outcome?.Finalized)
   if (!finalized) return null
 
   // Undecided. Nothing to report yet, and NOT a failure — the caller keeps waiting.

@@ -130,3 +130,63 @@ describe('the two agree', () => {
     expect(owned.map(u => u.substateId)).toEqual([id(A)])
   })
 })
+
+// ── Spent somewhere else: no local record, and the listing has not caught up ─────────────────
+//
+// The record above only knows spends made on THIS device. Measured on 0.42, a coin spent by the
+// harness stayed in both nodes' `/utxos` for minutes while `/substates` answered "is down" — and a
+// browser with an empty record counted it and would have selected it. Through the real feed and
+// the real point read, with only the network faked: the coin must leave BOTH sets.
+describe('a coin spent on another device', () => {
+  const ADDR = 'otl_esm_1tnay4uzgpe0cvu4tzwfmhdhtvc3pq97s'
+  const live = { substate: { Utxo: { output: { output: { public_nonce: 'dd' } }, is_frozen: false } } }
+
+  beforeEach(async () => {
+    const map = new Map<string, string>()
+    globalThis.localStorage = {
+      get length() { return map.size },
+      clear: () => map.clear(),
+      getItem: (k: string) => map.get(k) ?? null,
+      key: (i: number) => [...map.keys()][i] ?? null,
+      removeItem: (k: string) => { map.delete(k) },
+      setItem: (k: string, v: string) => { map.set(k, v) },
+    }
+    const { setStoreKey } = await import('./sessionKey')
+    const { __resetSpentSessionForTests } = await import('./spentOutputs')
+    __resetSpentSessionForTests()
+    setStoreKey(new Uint8Array(32).fill(7))
+
+    // Every node still lists A, B and C; every node says A is down and B is live.
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/utxos?')) return new Response(JSON.stringify({ utxos: [row(A), row(B), row(C)] }), { status: 200 })
+      if (url.includes(`/substates/${id(B)}`)) return new Response(JSON.stringify(live), { status: 200 })
+      if (url.includes(`/substates/${id(A)}`)) {
+        return new Response(JSON.stringify({ error: `Input substate ${id(A)} (v0) is down` }), { status: 404 })
+      }
+      return new Response('not found', { status: 404 })
+    }) as typeof fetch
+  })
+
+  it('selection no longer offers it', async () => {
+    const owned = await scanOwnedUtxos(crypto, VIEW, { excluded: new Set(), walletAddress: ADDR })
+    expect(owned.map(u => u.substateId)).toEqual([id(B)])
+  })
+
+  it('the balance no longer counts it', async () => {
+    const r = await scanWallet(VIEW, () => {}, new AbortController().signal, { excluded: new Set(), walletAddress: ADDR })
+    expect(r.balance).toBe(250n)
+    expect(r.utxos.map(u => u.id)).toEqual([id(B)])
+  })
+
+  it('a node outage keeps it — no answer is not "spent"', async () => {
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes('/utxos?')) {
+        return new Response(JSON.stringify({ utxos: [row(A), row(B), row(C)] }), { status: 200 })
+      }
+      throw new TypeError('network down')
+    }) as typeof fetch
+    const owned = await scanOwnedUtxos(crypto, VIEW, { excluded: new Set(), walletAddress: ADDR })
+    expect(owned.map(u => u.substateId)).toEqual([id(A), id(B)])
+  })
+})

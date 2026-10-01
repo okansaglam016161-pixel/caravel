@@ -214,12 +214,14 @@ async function walkOne(
  * invention. A node that lists a coin has seen it; a node that omits one has not necessarily seen
  * it spent. So "present on any node" is the closest thing to the truth available from listings.
  *
- * THE CONVERSE — a coin one node still lists while another has seen it spent — is NOT guarded
- * here, deliberately. The union may therefore carry a stale row, and two existing guards already
- * cover exactly that: crypto/spentOutputs excludes anything this wallet has spent itself, and a
- * genuinely down input is refused by the chain at submission ("Input substate ... is down"), which
- * crypto/lockSweep then resolves against `/substates`. Re-checking every row here would be a
- * thousand point reads per scan to re-derive what those two already know.
+ * THE CONVERSE — a listed coin that has already been spent — is NOT guarded here, and the union
+ * does carry such rows: measured on 0.42, BOTH nodes kept listing a spent coin for over six
+ * minutes while `/substates` answered "is down" for it. This module cannot know which rows are
+ * ours, and re-reading every row would be a thousand point reads per scan, so the guard lives one
+ * layer up, in crypto/ownedFeed: every listed row our view key opens is confirmed by id there.
+ * crypto/spentOutputs is NOT enough on its own — it only knows spends made on THIS device, so a
+ * spend from another device, a restore or the harness left the stale row counted in the balance
+ * and offered to coin selection.
  *
  * ── WHAT IT STILL CANNOT DO ─────────────────────────────────────────────────
  *

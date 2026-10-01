@@ -39,7 +39,24 @@
 // indexer's recent transactions and trial-decrypts their outputs with our view key, so a receive is
 // named at commit. Those ids join the journal's here, through the SAME filters and the SAME fetch:
 // a discovered receive is only ever a row because `/substates` returned a live body for it.
+//
+// ── THE CONVERSE: A LISTING THAT STILL SHOWS ONE OF OURS AFTER IT WAS SPENT ──
+//
+// Measured on 0.42: a coin spent by a confidential send answered `404 … (v0) is down` from
+// `/substates` on BOTH nodes, while BOTH nodes' `/utxos` kept listing it more than six minutes
+// later. The local spend record hides that only on the device that made the spend. Anywhere else —
+// a second device, a restore, the harness — the record is empty, the stale row decrypts as ours,
+// and the balance counted 9,989.99 tTARI that no longer existed (and coin selection offered it as
+// an input the chain could only refuse).
+//
+// So every listed row OUR VIEW KEY OPENS, and that the spend record does not already exclude, is
+// read by id — the same `/substates` read the recovery uses. Only owned rows: a stranger's row is
+// never read, so the cost is one small request per coin this wallet holds, not per network row.
+// A row is dropped ONLY on a definite answer that no live coin exists (every node 404, or a body
+// with `output: null`); no answer at all keeps it, because a network outage must never be able
+// to zero out live money.
 
+import { decryptOwnedUtxo, Network, WasmStealthCrypto, type IndexerGetSubstateResponse } from '@tari-project/ootle'
 import { loadJournal } from './journalStore'
 import { loadSpentOutputs, excludedIds } from './spentOutputs'
 import { pointRead } from './indexerConfig'
@@ -78,6 +95,8 @@ export interface Recovery {
 export interface OwnedFeed extends UtxoFeed {
   /** Ids that were missing from every listing and had to be asked for directly. */
   recoveries: Recovery[]
+  /** Our own listed coins the chain definitively said are gone, dropped from `rows`. Diagnostic. */
+  staleListed: string[]
   /** What the transaction walk did this scan. `null` when it did not run (no view key given). */
   receiveScan: ReceiveScanReport | null
 }
@@ -184,6 +203,31 @@ const fetchSubstateBody: SubstateFetcher = async (substateId) => {
 }
 
 /**
+ * Does our view key open this listed row? Injectable so the policy can be tested without wasm.
+ *
+ * The SAME trial decrypt both scanners run (`decryptOwnedUtxo` on the row wrapped as a substate),
+ * so "ours" here can never mean something different from "ours" in the balance or in selection.
+ */
+export type ListedOwnershipTest = (substateId: string, body: unknown) => Promise<boolean>
+
+let sharedCrypto: WasmStealthCrypto | undefined
+
+function viewKeyOwns(viewSecret: Uint8Array): ListedOwnershipTest {
+  return async (substateId, body) => {
+    try {
+      const wrapped = { version: 0, verified: false, substate: { Utxo: body } } as IndexerGetSubstateResponse
+      const crypto = (sharedCrypto ??= new WasmStealthCrypto(Network.Esmeralda))
+      return (await decryptOwnedUtxo(crypto, viewSecret, wrapped, substateId)) !== null
+    } catch {
+      return false   // a failed trial decrypt is the ordinary "not ours"
+    }
+  }
+}
+
+/** At most this many by-id reads in flight while verifying listed coins. */
+const VERIFY_CONCURRENCY = 8
+
+/**
  * Every row a scan should consider: the union of listings, plus our own coins the listings lost.
  *
  * ── WHY BOTH SCANNERS CALL THIS AND NOT `fetchAllUtxoRows` ──────────────────
@@ -215,6 +259,7 @@ export async function fetchOwnedRows(opts: {
   viewSecret?: Uint8Array
   /** Test seams. */
   fetchSubstate?: SubstateFetcher
+  ownsListed?: ListedOwnershipTest
   receiveScan?: { fetchPage?: RecentPageFetcher; isOurs?: OwnershipTest; now?: number }
 }): Promise<OwnedFeed> {
   const walletAddress = opts.walletAddress
@@ -232,15 +277,26 @@ export async function fetchOwnedRows(opts: {
         }).catch(() => null)
       : Promise.resolve(null),
   ])
-  if (!walletAddress) return { ...feed, recoveries: [], receiveScan }
+  if (!walletAddress) return { ...feed, recoveries: [], staleListed: [], receiveScan }
 
+  const fetchSubstate = opts.fetchSubstate ?? fetchSubstateBody
+
+  // ── Our own listed coins, confirmed by id (see the header) ──
+  //
+  // `present` stays the LISTING, stale rows included: it answers "did a listing return this?" for
+  // the recovery below, and a coin just confirmed gone needs no second read as a candidate.
   const present = new Set(feed.rows.map(r => r[0]))
+  const ownsListed = opts.ownsListed ?? (viewSecret ? viewKeyOwns(viewSecret) : undefined)
+  const staleListed = ownsListed
+    ? await confirmListedCoins(feed.rows, walletAddress, ownsListed, fetchSubstate, opts.signal)
+    : []
+  const stale = new Set(staleListed)
+
   // No early return when this is empty (the ordinary case): the retirement below still has to run.
   const candidates = recoveryCandidatesWithSource(walletAddress, present)
 
-  const fetchSubstate = opts.fetchSubstate ?? fetchSubstateBody
   const recoveries: Recovery[] = []
-  const rows: UtxoRow[] = [...feed.rows]
+  const rows: UtxoRow[] = feed.rows.filter(([c]) => !stale.has(`utxo_${RESOURCE_HEX}_${c}`))
   const absent = new Set<string>()
 
   // Sequential rather than parallel: the candidate list is normally empty and at most
@@ -267,7 +323,47 @@ export async function fetchOwnedRows(opts: {
     .filter(([, r]) => r.status === 'spent').map(([id]) => id))
   retireDiscovered(walletAddress, spentForGood, absent, opts.receiveScan?.now)
 
-  return { ...feed, rows, recoveries, receiveScan }
+  return { ...feed, rows, recoveries, staleListed, receiveScan }
+}
+
+/**
+ * Which of our own listed coins the chain says no longer exist.
+ *
+ * Owned rows only, and only those the spend record does not already exclude — the scanners drop
+ * those themselves, and reading them would be pure cost. Returns the substate ids to drop: ONLY a
+ * definite `null`. `undefined` (no node answered) keeps the coin, as does a live body.
+ */
+async function confirmListedCoins(
+  listed: readonly UtxoRow[],
+  walletAddress: string,
+  ownsListed: ListedOwnershipTest,
+  fetchSubstate: SubstateFetcher,
+  signal: AbortSignal | undefined,
+): Promise<string[]> {
+  const spent = excludedIds(loadSpentOutputs(walletAddress))
+  const ours: string[] = []
+  for (let i = 0; i < listed.length; i++) {
+    if (signal?.aborted) return []
+    const [commitment, body] = listed[i]!
+    const substateId = `utxo_${RESOURCE_HEX}_${commitment}`
+    if (!spent.has(substateId) && await ownsListed(substateId, body)) ours.push(substateId)
+    // The trial decrypt is synchronous wasm under the await; yield now and then so a large listing
+    // does not freeze the page — the scanners do the same.
+    if (i % 50 === 49) await new Promise<void>(r => setTimeout(r, 0))
+  }
+
+  const gone: string[] = []
+  let next = 0
+  const worker = async () => {
+    while (next < ours.length && !signal?.aborted) {
+      const substateId = ours[next++]!
+      if (await fetchSubstate(substateId) === null) gone.push(substateId)
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(VERIFY_CONCURRENCY, ours.length) }, worker))
+  // An aborted scan drops nothing: a half-finished check is not a verdict on the coins it skipped,
+  // and the caller discards an aborted scan's result anyway.
+  return signal?.aborted ? [] : gone
 }
 
 /** Re-exported so callers need only this module. */

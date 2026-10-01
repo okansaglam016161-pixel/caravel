@@ -184,6 +184,75 @@ describe('the recovered feed', () => {
   })
 })
 
+// ── A listing that still shows one of our coins after it was spent ───────────
+//
+// Measured on 0.42: both nodes kept listing a coin for minutes after a send consumed it, while
+// `/substates` answered "is down" for it on both. On any device without the spend in its local
+// record, that row decrypted as ours and was counted. Each listed row our key opens is now read by
+// id, and dropped ONLY on a definite "no live coin".
+
+describe('our own listed coins, confirmed by id', () => {
+  const VIEW = new Uint8Array(32)
+  const ownsOnly = (set: string[]) => vi.fn(async (substateId: string) => set.some(c => id(c) === substateId))
+  const noWalk = { fetchPage: async () => [] }
+
+  it('drops a listed coin of ours that the chain says is gone — every node 404', async () => {
+    vi.stubGlobal('fetch', listing([A, C]))
+    const fetchSubstate = vi.fn(async () => null)
+    const feed = await fetchOwnedRows({
+      walletAddress: ADDR, viewSecret: VIEW, indexerUrls: URLS, fetchSubstate,
+      ownsListed: ownsOnly([A]), receiveScan: noWalk,
+    })
+    expect(feed.rows.map(r => r[0])).toEqual([C])
+    expect(feed.staleListed).toEqual([id(A)])
+    // A stranger's row is never read — the cost is per coin WE hold, not per network row.
+    expect(fetchSubstate).toHaveBeenCalledTimes(1)
+    expect(fetchSubstate).toHaveBeenCalledWith(id(A))
+  })
+
+  it('keeps a listed coin of ours that the chain confirms is live', async () => {
+    vi.stubGlobal('fetch', listing([A, C]))
+    const feed = await fetchOwnedRows({
+      walletAddress: ADDR, viewSecret: VIEW, indexerUrls: URLS, fetchSubstate: async () => liveBody,
+      ownsListed: ownsOnly([A]), receiveScan: noWalk,
+    })
+    expect(feed.rows.map(r => r[0])).toEqual([A, C])
+    expect(feed.staleListed).toEqual([])
+  })
+
+  // THE SAFETY HALF. No answer is not an answer: an outage must never zero out live money.
+  it('keeps a listed coin of ours when no node answered', async () => {
+    vi.stubGlobal('fetch', listing([A, C]))
+    const feed = await fetchOwnedRows({
+      walletAddress: ADDR, viewSecret: VIEW, indexerUrls: URLS, fetchSubstate: async () => undefined,
+      ownsListed: ownsOnly([A]), receiveScan: noWalk,
+    })
+    expect(feed.rows.map(r => r[0])).toEqual([A, C])
+    expect(feed.staleListed).toEqual([])
+  })
+
+  it('does not read a coin the spend record already excludes', async () => {
+    vi.stubGlobal('fetch', listing([A]))
+    markLocked(ADDR, [id(A)], 'tx1')
+    const fetchSubstate = vi.fn(async () => null)
+    const feed = await fetchOwnedRows({
+      walletAddress: ADDR, viewSecret: VIEW, indexerUrls: URLS, fetchSubstate,
+      ownsListed: ownsOnly([A]), receiveScan: noWalk,
+    })
+    expect(fetchSubstate).not.toHaveBeenCalled()
+    // Left in the feed: the scanners exclude it themselves, and report it as still listed.
+    expect(feed.rows.map(r => r[0])).toEqual([A])
+  })
+
+  it('confirms nothing without a view key — it cannot tell which rows are ours', async () => {
+    vi.stubGlobal('fetch', listing([A]))
+    const fetchSubstate = vi.fn(async () => null)
+    const feed = await fetchOwnedRows({ walletAddress: ADDR, indexerUrls: URLS, fetchSubstate })
+    expect(fetchSubstate).not.toHaveBeenCalled()
+    expect(feed.rows.map(r => r[0])).toEqual([A])
+  })
+})
+
 // ── Stage 2c: receives named by the transaction walk ─────────────────────────
 //
 // crypto/receiveScan finds outputs our view key opens inside recent transactions, before any

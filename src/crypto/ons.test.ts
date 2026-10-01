@@ -423,7 +423,7 @@ describe('the fee margin — 10%, and the floor that used to hide behind it', ()
 //
 // The vendored writer used to find its fee input with its own scan — the 1000 OLDEST rows of ONE
 // indexer — and told a wallet holding ~2000 tTARI private that it "needs a balance". It now takes
-// the input from Caravel's scanOwnedUtxos through a two-field patch (vendor/ons/dist/VENDOR_INFO),
+// the input from Caravel's scanOwnedUtxos through BrowserSigner.ownedUtxos (upstream in the ONS client),
 // and reports the input it spent so the spend record can lock it. These pin both ends of that seam.
 
 describe('the fee input comes from Caravel, and is locked like any other spend', () => {
@@ -449,7 +449,7 @@ describe('the fee input comes from Caravel, and is locked like any other spend',
 
   type Signer = Parameters<typeof ons.withBrowserSigner>[0]
 
-  /** A writer that behaves as the patched one does: submit reports its fee input, then resolves. */
+  /** A writer that behaves as the real one does: submit reports its fee input, then resolves. */
   function writerThatSubmits(outcome: () => Promise<{ transactionId: string; fee: bigint }>) {
     const seen: Signer[] = []
     vi.spyOn(ons, 'withBrowserSigner').mockImplementation(async (signer: Signer) => {

@@ -15,6 +15,13 @@ const WAIT_SECS = 30;
 // Epochs of validity a transaction we build now should carry (Ootle 0.39: `max_epoch` is mandatory
 // and the builder throws without it). Same value as browser-writer.ts and Caravel's crypto/epoch.ts.
 const MAX_EPOCH_LEAD = 10;
+/** Component ids an Accept diff created or touched, excluding the fee account. */
+function createdComponents(result, feeAccount) {
+    const ups = (result.Accept?.up_substates ?? []);
+    return ups
+        .map((u) => (Array.isArray(u) ? u[0] : undefined))
+        .filter((id) => typeof id === "string" && id.startsWith("component_") && id !== feeAccount);
+}
 /** ONS writes via a wallet daemon. Obtain one with `createOnsClient(cfg).withSigner(signer)`. */
 export class OnsWriter {
     signer;
@@ -65,11 +72,17 @@ export class OnsWriter {
         return { component: r.account.component_address, sealSigner: r.account.owner_key_id };
     }
     async call(methodName, args) {
+        const r = (await this.execute(methodName, (b) => b.callMethod({ componentAddress: this.component, methodName }, args)));
+        return { transactionId: r.transactionId, fee: r.fee };
+    }
+    /**
+     * One daemon-sealed transaction: fee from the signer account's revealed balance, then whatever
+     * `addCalls` adds. Dry-run first (free); a non-Accept stops before spending. With `dryRunOnly`,
+     * returns the dry run's outcome and submits nothing.
+     */
+    async execute(label, addCalls, opts = {}) {
         const acct = await this.account();
-        const built = new TransactionBuilder(this.network, await this.maxEpoch())
-            .feeTransactionPayFromComponent(acct.component, MAX_FEE)
-            .callMethod({ componentAddress: this.component, methodName }, args)
-            .buildUnsignedTransaction();
+        const built = addCalls(new TransactionBuilder(this.network, await this.maxEpoch()).feeTransactionPayFromComponent(acct.component, MAX_FEE)).buildUnsignedTransaction();
         const req = {
             transaction: {
                 V1: {
@@ -95,18 +108,48 @@ export class OnsWriter {
         const dry = await this.jrpc("transactions.submit_dry_run", req);
         const dtr = dry?.result?.finalize?.result;
         if (!dtr || !("Accept" in dtr)) {
-            throw new Error(`ONS ${methodName} dry-run did not commit: ${JSON.stringify(dtr)}`);
+            throw new Error(`ONS ${label} dry-run did not commit: ${JSON.stringify(dtr)}`);
+        }
+        if (opts.dryRunOnly) {
+            return {
+                dryRun: true,
+                feeReceipt: dry?.result?.finalize?.fee_receipt ?? null,
+                newComponents: createdComponents(dtr, acct.component),
+            };
         }
         const sub = await this.jrpc("transactions.submit", req);
         const txId = sub.transaction_id;
         const wait = await this.jrpc("transactions.wait_result", { transaction_id: txId, timeout_secs: WAIT_SECS });
         if (wait.timed_out)
-            throw new Error(`ONS ${methodName} timed out after ${WAIT_SECS}s (tx ${txId})`);
+            throw new Error(`ONS ${label} timed out after ${WAIT_SECS}s (tx ${txId})`);
         const wtr = wait?.result?.result;
         if (!wtr || !("Accept" in wtr)) {
-            throw new Error(`ONS ${methodName} rejected on-chain: ${JSON.stringify(wtr)}`);
+            throw new Error(`ONS ${label} rejected on-chain: ${JSON.stringify(wtr)}`);
         }
-        return { transactionId: txId, fee: BigInt(wait.final_fee ?? 0) };
+        return {
+            transactionId: txId,
+            fee: BigInt(wait.final_fee ?? 0),
+            newComponents: createdComponents(wtr, acct.component),
+        };
+    }
+    /**
+     * Deploy the shared registry: call the template's `new()` from a daemon account, which pays the
+     * fee from its revealed balance. Same path as every write — dry-run first, then submit, then wait
+     * for a final Accept. Returns the new registry component's address.
+     *
+     * With `dryRunOnly`, nothing is submitted; the address reported is the one the SIMULATION
+     * created, and the real one will differ (it is derived from the submitted transaction).
+     */
+    static async instantiate(templateAddress, signer, opts = {}) {
+        const writer = new OnsWriter({ component: "", network: opts.network, indexerUrl: opts.indexerUrl }, signer);
+        const r = await writer.execute("new", (b) => b.callFunction({ templateAddress, functionName: "new" }, []), { dryRunOnly: opts.dryRunOnly });
+        if ("dryRun" in r)
+            return r;
+        const created = r.newComponents;
+        if (created.length !== 1) {
+            throw new Error(`ONS new: expected exactly one new component, got ${JSON.stringify(created)} (tx ${r.transactionId})`);
+        }
+        return { ...r, component: created[0] };
     }
     /** Register a name. The signing account becomes its owner. */
     register(name) {

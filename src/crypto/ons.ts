@@ -16,11 +16,11 @@ import * as nip19 from 'nostr-tools/nip19'
 /**
  * The live ONS registry on esmeralda.
  *
- * REDEPLOYED for Ootle 0.39. The ONS-2 registry (component_0e70f16a…) and the template behind it
- * were destroyed by the esmeralda reset — both return 404 — and 0.39 would have required a rebuild
- * regardless, since `Amount`'s CBOR encoding changed and templates must be rebuilt against the new
- * `tari_template_lib`. This is the fresh instantiation, on template_66a7034e…, verified live:
- * register + set_record commit, and a keyless resolve returns the record.
+ * REDEPLOYED for Ootle 0.42, on template_ceb0ef6b… (tari_template_lib 0.33). The 0.39 registry
+ * (component_fe93e87e…, template_66a7034e…) is gone — 404 on both indexers — and 0.42 needs
+ * templates rebuilt against the 0.42 crates anyway. This is the fresh instantiation, verified live
+ * on both indexers: new() and a register commit with Accept, and a keyless resolve returns the name.
+ * (Before that: ONS-2's component_0e70f16a…, wiped by an earlier esmeralda reset.)
  *
  * A REDEPLOY IS A NEW ADDRESS, ALWAYS. Nothing migrates: every name registered against the old
  * registry is gone with it, and this constant is the only place Caravel learns where the registry
@@ -30,7 +30,7 @@ import * as nip19 from 'nostr-tools/nip19'
  * needed the address, and the `ons` client is what callers actually want.
  */
 const ONS_COMPONENT =
-  'component_fe93e87e362a263ee65d382047b5adcc92c2a1dc08051a770032aefdda45c787'
+  'component_0109d5287493affc06ec8902fcbf85bd2362832580feeac2a70cba7e5ac6da4d'
 
 /**
  * Configured client. The same indexer Caravel reads everywhere else; network defaults to Esmeralda.
@@ -276,7 +276,8 @@ function classifyEstimateError(message: string, senderAddress: string): OnsEstim
  * indexer, by-id recovery, the receive walk, and the spend record excluded. CNS and a send can no
  * longer disagree about which coins this wallet has. The writer's selection is unchanged (the
  * smallest single output larger than the budget), and so is the fee math: this changes only WHICH
- * set it selects from. The writer takes it through a two-field patch — see vendor/ons/dist/VENDOR_INFO.
+ * set it selects from. The writer takes it through BrowserSigner.ownedUtxos — a local patch until the
+ * ONS client took it upstream (ootle-name-service 0263c14); see vendor/ons/dist/VENDOR_INFO.
  */
 function caravelFeeSource(wallet: SecretKeyWallet, senderAddress: string): Pick<BrowserSigner, 'ownedUtxos'> {
   return {

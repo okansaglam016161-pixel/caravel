@@ -1,49 +1,28 @@
 ONS client — vendored build provenance
 ======================================
-source repo   : ootle-name-service
-source commit : ed6ca7204b856551ed69d491e95260ac769e92f6
-              : (ed6ca72, branch: ons-039-redeploy)
-built from    : client/src → client/dist  (tsc -p client/tsconfig.json)
-vendored at   : 2026-08-20T20:45:10Z
-tree state    : clean (dist matches the commit above exactly)
-src digest    : 572a31292289c3c7fbf32b7eb3eda796a9016af24164c2fa927155351878f646
-                (sha256 over the sorted sha256s of client/src/*.ts)
+source repo   : ootle-name-service (github.com/okansaglam016161-pixel/ootle-name-service)
+source commit : 7632a80fa1eef640db33114bf6f689cadb0b1e70
+              : (7632a80, branch: ootle-0.42; client/ last changed in 8ec28fb)
+built from    : client/src → client/dist  (npm run build = tsc -p client/tsconfig.json)
+vendored at   : 2026-10-01
+tree state    : clean (dist matches the commit above exactly — diff -rq, excluding this file)
+src digest    : 8e209ba9750a87fb52f4d6be4bb91397e3f5daba27a5b6e928b4e7ac09416c19
+                (shasum -a 256 client/src/*.ts | sort | shasum -a 256)
 
-Verified at vendoring time: rebuilding client/dist from ed6ca72 reproduces this directory
-byte-for-byte (diff -rq, excluding this file). NO LONGER TRUE for browser-writer.js and
-browser-writer.d.ts — see the local patch below.
+NO LOCAL PATCHES. Everything Caravel needs is in the upstream source.
 
-This build carries the Ootle 0.39 write-path fixes:
-  - browser-writer.ts / writer.ts : the mandatory max_epoch, tip + 10 epochs. The daemon path
-                                    reads the tip from the indexer, since walletd 0.39.0
-                                    exposes no epoch method.
-  - browser-writer.ts             : fee margin 2% → 25% (measured drift is 2.7%, which a 2%
-                                    margin turns into a hard abort).
-  - ootle-sdk.d.ts                : the stub declared TransactionBuilder's old 1-arg
-                                    constructor, which is why the break was invisible to both
-                                    repos' compilers. Corrected — but the stub is still a
-                                    stub; see the follow-up noted in ed6ca72.
+This build is for Ootle 0.42 / @tari-project/ootle 0.6:
+  - browser-writer.ts : the fee reveal names the wallet's owner public key as the revealed
+                        output's receiver (tari-ootle #2645); without it every browser write
+                        rejects at the fee instruction.
+  - browser-writer.ts : BrowserSigner.ownedUtxos? and .onSubmitted? — the two fee-input hooks
+                        Caravel used to carry as a local patch on this directory (2026-09-25),
+                        now upstream with the same behaviour. OwnedFeeUtxo is exported.
+  - writer.ts         : OnsWriter.instantiate() for deploying the registry from a walletd
+                        account (used for the 0.42 deployment, not by Caravel).
+  - ootle-sdk.d.ts    : the build-time stub declares the 0.6 generateOutputsStatement signature;
+                        the source was also type-checked against the real SDK 0.6.0.
 
-LOCAL PATCH — Caravel, 2026-09-25 (not upstream; the source repo is not on this machine)
-======================================================================================
-The writer had no seam for its fee input. It found private outputs with its own module-private
-scanUtxos: ONE request for the 1000 OLDEST rows of ONE indexer's /utxos. Once the network passed
-1000 unspent outputs, a wallet whose private coins were all recent saw none and CNS reported
-"No confidential UTXOs found — this wallet needs a balance to pay the fee" with ~2000 tTARI
-private. The fee input also never reached Caravel's spend record.
-
-Two optional BrowserSigner fields, both no-ops when absent (the writer then behaves exactly as
-at ed6ca72):
-
-  ownedUtxos?: () => Promise<OwnedFeeUtxo[]>
-      browser-writer.js buildSubmit: used INSTEAD of scanUtxos. Caravel passes its own
-      scanOwnedUtxos (paginated, both indexers, by-id recovery, receive scan, spend-record
-      exclusion). The objects are the same shape scanUtxos already produced.
-
-  onSubmitted?: (txId, spentInputIds) => void
-      browser-writer.js buildSubmit: called after submitTransaction on a REAL submit (never on a
-      dry-run), before pollResult. Caravel locks the fee input in its spend record here.
-
-Selection, fee math, the dry-run budget and every message are unchanged. The .js.map files were
-not regenerated. Upstream the same two fields to ootle-name-service before the next re-vendor, or
-re-apply this patch on top of it.
+Deployment this client is used with (see src/crypto/ons.ts):
+  template  : template_ceb0ef6b0ae298cbc412fd7e1054c2bf2e7204a1d58bfe979976e6918ae6536f
+  registry  : component_0109d5287493affc06ec8902fcbf85bd2362832580feeac2a70cba7e5ac6da4d

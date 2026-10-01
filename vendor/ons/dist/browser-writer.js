@@ -288,7 +288,6 @@ export class OnsBrowserWriter {
         const provider = await IndexerProvider.connect({ url: this.indexerUrl, network: Network.Esmeralda });
         const crypto = new WasmStealthCrypto(Network.Esmeralda);
         const viewSecret = await wallet.getViewSecret();
-        // CARAVEL PATCH (see VENDOR_INFO): an injected owned-output source replaces the one-page scan.
         const utxos = this.signer.ownedUtxos
             ? await this.signer.ownedUtxos()
             : await scanUtxos(this.indexerUrl, crypto, viewSecret);
@@ -303,7 +302,12 @@ export class OnsBrowserWriter {
         const utxo = candidates[0];
         const changeAmount = utxo.value - feeBudget;
         // Reveal feeBudget for the fee; send the rest back to self as change.
-        const { statement: outsStmt, outputMask } = await crypto.generateOutputsStatement([createOutput({ destination: senderAddress, amount: changeAmount, resourceAddress: TARI_RESOURCE_ADDRESS })], feeBudget);
+        //
+        // Ootle 0.42: the revealed output names a RECEIVER, and the engine only creates its bucket if
+        // that key's badge is in the transaction's auth scope. That is the wallet's owner key, which
+        // signs below through `ootleWallet` (not StaticSigner — its public key is zeros).
+        const ownerPk = await wallet.getPublicKey();
+        const { statement: outsStmt, outputMask } = await crypto.generateOutputsStatement([createOutput({ destination: senderAddress, amount: changeAmount, resourceAddress: TARI_RESOURCE_ADDRESS })], { amount: feeBudget, receiver: ownerPk });
         const insStmt = await crypto.buildInputsStatement([new StealthInput(utxo.commitment)], 0n);
         const proof = await signBalanceProof(crypto, utxo.mask, outputMask, insStmt, outsStmt);
         const stmt = new StealthTransferStatement(insStmt, outsStmt, proof);
@@ -341,7 +345,6 @@ export class OnsBrowserWriter {
         }
         const sub = await provider.submitTransaction(envelope);
         const txId = sub.transaction_id;
-        // CARAVEL PATCH (see VENDOR_INFO): report the spent fee input before the ~30s poll.
         this.signer.onSubmitted?.(txId, [utxo.substateId]);
         const r = await pollResult(this.indexerUrl, txId);
         provider.stopWatcher?.();

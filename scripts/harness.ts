@@ -1803,7 +1803,7 @@ async function cmdProveCnsFee(h: Harnessed): Promise<void> {
   field('ours inside it', `${visibleToOld.length} of ${owned.length}`)
 
   // ── The writer as it shipped ──
-  rule('2 · the vendored writer, unpatched path (no ownedUtxos)')
+  rule('2 · the vendored writer\'s built-in scan (no ownedUtxos)')
   let oldError: string | null = null
   try {
     const writer = await ons.withBrowserSigner({ wallet: h.wallet, senderAddress: h.address })

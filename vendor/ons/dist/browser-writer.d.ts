@@ -1,5 +1,5 @@
+import { type Mask } from "@tari-project/ootle";
 import type { SecretKeyWallet } from "@tari-project/ootle-secret-key-wallet";
-import type { Mask } from "@tari-project/ootle";
 import type { OnsConfig, WriteResult } from "./types.js";
 /** A self-custodial browser signer: the user's own secret-key wallet + its owner address. */
 export interface BrowserSigner {
@@ -10,17 +10,20 @@ export interface BrowserSigner {
     /** Indexer base URL. Defaults to the esmeralda public indexer. */
     indexerUrl?: string;
     /**
-     * CARAVEL PATCH (see VENDOR_INFO). The wallet's spendable stealth outputs. When given, the fee
-     * input is selected from these instead of the built-in one-page `/utxos` scan.
+     * The wallet's spendable stealth outputs. When given, the fee input is selected from these
+     * instead of the built-in scan — which reads ONE page (the oldest 1000 rows) of ONE indexer's
+     * `/utxos`, and so finds nothing for a wallet whose coins are all newer than that page. A wallet
+     * that already keeps an accurate owned set (paginated, multi-indexer, spend-aware) should pass it.
      */
     ownedUtxos?: () => Promise<OwnedFeeUtxo[]>;
     /**
-     * CARAVEL PATCH (see VENDOR_INFO). Called once a real (non-dry-run) transaction is submitted,
-     * with the substate ids of the stealth inputs it spends, before the result is polled.
+     * Called once a real (non-dry-run) transaction is submitted, with the substate ids of the
+     * stealth inputs it spends, before the result is polled. Lets a wallet mark the fee input as
+     * spent immediately rather than waiting for its next scan.
      */
     onSubmitted?: (txId: string, spentInputIds: string[]) => void;
 }
-/** CARAVEL PATCH. One spendable stealth output — the shape Caravel's scanOwnedUtxos returns. */
+/** One spendable stealth output — what `ownedUtxos` returns and the built-in scan produces. */
 export interface OwnedFeeUtxo {
     substateId: string;
     commitment: Uint8Array;

@@ -81,10 +81,11 @@ export interface AccountInputs {
  *
  * ── WHY THE ABSENCE BRANCH IS SAFE, AND EXACTLY WHEN IT IS NOT ───────────────
  *
- * Minting is not a special case invented here: it is how every account in Caravel has ever come to
- * exist. The faucet claim issues CreateAccount while declaring only the FAUCET's components, and the
- * account appears as an output of that transaction. This is that same pattern, applied to the other
- * three paths, which until now assumed some earlier faucet claim had already done it.
+ * Minting is not a special case invented here: it is how every account in Caravel comes to exist.
+ * Tari's built-in faucet claim (no longer used) issued CreateAccount while declaring only the
+ * faucet's components, and the account appeared as an output of that transaction. This is that same
+ * pattern, applied to the three account paths — which, now that the claim creates no account, are
+ * where every account is first minted.
  *
  * It is safe ONLY on a real not-found. A timeout or a 503 read as "does not exist" would take a
  * wallet that HAS an account, decline to declare it, and deposit into a throwaway — the silent-loss

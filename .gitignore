@@ -21,8 +21,12 @@ tarijs-reference/
 # Private working notes — kept locally, not committed
 PROJECT_STATE.md
 
-# Live-seeding output. HOLDS A MNEMONIC — conceal-seed.live.ts writes here by default.
+# Live-seeding output. HOLDS A MNEMONIC — the removed conceal-seed.live.ts wrote here; kept ignored
+# so anything it left behind stays out of commits.
 scratchpad/
+
+# `harness faucet-claim --fresh` writes the new wallet's phrase here. HOLDS A MNEMONIC.
+harness-fresh-wallet-*.txt
 
 # macOS
 .DS_Store

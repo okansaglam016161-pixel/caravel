@@ -83,8 +83,8 @@ export function upSubstates(resultJson: unknown): unknown[] {
  * The account component address this transaction created (or re-used) for `ownerPublicKeyHex`, or
  * `null` if the result carries none.
  *
- * `CreateAccount` is create-or-reuse in the engine, so a repeat claim reports the SAME address it
- * reported the first time — this is idempotent, not first-write-only.
+ * `CreateAccount` is create-or-reuse in the engine, so a repeat transaction reports the SAME address
+ * it reported the first time — this is idempotent, not first-write-only.
  */
 export function extractAccountAddress(resultJson: unknown, ownerPublicKeyHex: string): string | null {
   if (!ownerPublicKeyHex) return null

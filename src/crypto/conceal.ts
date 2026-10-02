@@ -1,16 +1,17 @@
 // CONCEAL — move revealed (public) TARI into stealth (private) outputs. M2.
 //
 // The safe direction: value ends up MORE private than it started, and nothing about it is
-// irreversible in the way revealing is. Structurally it is faucet.ts's claim minus one instruction:
+// irreversible in the way revealing is. Structurally it is the shape faucet.ts's claim also uses:
 //
 //     createAccount(ownerPk)                            → 'account'   [idempotent — reuses existing]
 //     callMethod(account, 'withdraw', [TARI, amount])   → 'bucket'    revealed OUT of the vault
 //     StealthTransfer { revealedInputBucket: 'bucket' } → 'fee_bucket'
 //     PayFeeFromBucket { fee_bucket }
 //
-// The claim additionally calls the faucet's `take` to fill the vault first; a standalone conceal
-// spends a balance that is already there. Everything else — the statement construction, the zero
-// input mask, the dry-run-then-rebuild fee discovery — is the claim's, unchanged.
+// The claim takes its revealed bucket from the faucet's `claim()` instead of from an account, so it
+// needs no account at all; a conceal withdraws a balance that is already in one. Everything else —
+// the statement construction, the zero input mask, the dry-run-then-rebuild fee discovery — is the
+// same in both.
 //
 // ── THE INVARIANT THAT MATTERS ────────────────────────────────────────────────
 //
@@ -279,8 +280,8 @@ export async function prepareConceal(
   // such a wallet used to 404.
   //
   // So: declare the component and its vaults when it EXISTS (CreateAccount then reuses it), and
-  // declare NOTHING when it does not (CreateAccount then mints it, exactly as the faucet claim does
-  // — which is how every account in Caravel has ever come to exist). Getting that backwards on an
+  // declare NOTHING when it does not (CreateAccount then mints it — which is how an account comes to
+  // exist in Caravel; the faucet claim no longer creates one). Getting that backwards on an
   // account that DOES exist would deposit into a throwaway component and lose the funds silently,
   // so resolveAccountInputs rethrows anything that is not a definite not-found rather than guessing.
   const { declaredInputs } = await resolveAccountInputs(provider, accountAddress)

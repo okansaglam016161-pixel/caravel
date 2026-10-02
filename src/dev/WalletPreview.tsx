@@ -129,7 +129,7 @@ function Drive() {
   const [showFacts, setShowFacts] = useState(true)
   const [move, setMove] = useState<MoveView>({ step: 'idle' })
   const [tab, setTab] = useState<WalletTab>('overview')
-  const [faucet, setFaucet] = useState<FaucetPhase>('idle')
+  const [faucet, setFaucet] = useState<FaucetPhase>('open')
   const [copied, setCopied] = useState(false)
   const [addrReady, setAddrReady] = useState(true)
   const [send, setSend] = useState<SendView>({ step: 'form', recipient: '', amount: '', note: '', available: PRIVATE, canReview: false, source: 'private', canChooseSource: true })
@@ -246,10 +246,12 @@ function Drive() {
     // THE SLOT IS DRIVEN THE WAY THE APP DRIVES IT. FaucetClaimPanel shows a banner while the
     // faucet is resting and the card once a claim is running, so the harness picks the same way —
     // otherwise the one screen built to show what ships would be showing something that does not.
-    overviewNotice: faucet === 'idle' || faucet === 'cooldown' ? (
+    overviewNotice: faucet === 'open' || faucet === 'paused' || faucet === 'empty' ? (
       <FaucetBanner
-        text={faucet === 'idle' ? 'Testnet faucet is open.' : 'Next claim available in 42s.'}
-        action={faucet === 'idle' ? {
+        text={faucet === 'open' ? 'Testnet faucet is open.'
+          : faucet === 'paused' ? 'The faucet is paused right now. Check back soon.'
+          : 'The faucet is empty right now. Check back soon.'}
+        action={faucet === 'open' ? {
           label: 'Claim test funds',
           onClick: () => {
             setFaucet('claiming')
@@ -257,7 +259,7 @@ function Drive() {
             setTimeout(() => setFaucet('done'), 3200)
           },
         } : undefined}
-        onDismiss={faucet === 'idle' ? () => setFaucet('plenty') : undefined}
+        onDismiss={faucet === 'open' ? () => setFaucet('claimed') : undefined}
       />
     ) : (
       <FaucetPanel phase={faucet} received={1_000_000_000n} onClaim={noop} />
@@ -326,7 +328,7 @@ function Drive() {
           ))}
         </Group>
         <Group title="Faucet panel" note="Shown on Overview">
-          {(['idle', 'locked', 'claiming', 'verifying', 'done', 'lagging', 'error', 'cooldown', 'plenty'] as FaucetPhase[]).map(f => (
+          {(['open', 'paused', 'empty', 'locked', 'claiming', 'verifying', 'done', 'lagging', 'error', 'claimed'] as FaucetPhase[]).map(f => (
             <button key={f} onClick={() => { setFaucet(f); setTab('overview') }} style={btn(faucet === f)}>{f}</button>
           ))}
         </Group>
@@ -417,13 +419,11 @@ function still(over: Partial<WalletModalV2Props>): WalletModalV2Props {
 // The faucet is a rendered NODE now rather than a data prop — the wallet stopped describing it and
 // started taking it pre-built, so the gallery builds it the same way the app does.
 const faucetAt = (phase: FaucetPhase): Partial<WalletModalV2Props> =>
-  // A live countdown on the cooldown case, so the gallery shows 10g as it actually renders.
-  //
-  // EVERY PHASE, INCLUDING THE ONES THE APP NO LONGER PUTS HERE. These entries are the series-10
-  // spec sheet: `idle` and `cooldown` now reach the overview as FaucetBanner and `plenty`/`locked`
-  // reach it as nothing at all, but the card still draws all nine, and a spec sheet with holes in
-  // it documents less than one without. The banner has its own entry beside them.
-  ({ overviewNotice: <FaucetPanel phase={phase} received={1_000_000_000n} onClaim={noop} cooldownRemainingMs={phase === 'cooldown' ? 42_000 : undefined} /> })
+  // EVERY PHASE, INCLUDING THE ONES THE APP NEVER PUTS HERE. These entries are the series-10 spec
+  // sheet: `open`, `paused` and `empty` reach the overview as FaucetBanner and `claimed`/`locked`
+  // reach it as nothing at all, but the card still draws them, and a spec sheet with holes in it
+  // documents less than one without. The banners have their own entries beside them.
+  ({ overviewNotice: <FaucetPanel phase={phase} received={1_000_000_000n} onClaim={noop} /> })
 const sendAt = (view: SendView) =>
   ({ tab: 'send' as WalletTab, send: { view, hidden: false, onSource: noop, onRecipient: noop, onAmount: noop, onNote: noop, onMax: noop, onReview: noop, onBack: noop, onConfirm: noop, onDone: noop, onRetry: noop, onCopyTx: noop, onViewActivity: noop } })
 
@@ -460,14 +460,22 @@ function Gallery() {
     { label: 'FAUCET · THE PROMPT, AS IT SHIPS', props: still({
       overviewNotice: <FaucetBanner text="Testnet faucet is open." action={{ label: 'Claim test funds', onClick: noop }} onDismiss={noop} />,
     }) },
-    { label: 'FAUCET · IDLE', props: still(faucetAt('idle')) },
+    { label: 'FAUCET · PAUSED, AS IT SHIPS', props: still({
+      overviewNotice: <FaucetBanner text="The faucet is paused right now. Check back soon." />,
+    }) },
+    { label: 'FAUCET · EMPTY, AS IT SHIPS', props: still({
+      overviewNotice: <FaucetBanner text="The faucet is empty right now. Check back soon." />,
+    }) },
+    { label: 'FAUCET · OPEN', props: still(faucetAt('open')) },
     { label: 'FAUCET · CLAIMING', props: still(faucetAt('claiming')) },
     { label: 'FAUCET · CHECKING BALANCE', props: still(faucetAt('verifying')) },
     { label: 'FAUCET · RECEIVED', props: still(faucetAt('done')) },
     { label: 'FAUCET · SENT, NOT VISIBLE YET', props: still(faucetAt('lagging')) },
-    { label: 'FAUCET · ALREADY CLAIMED', props: still(faucetAt('cooldown')) },
-    { label: 'FAUCET · ALREADY HAS PLENTY', props: still(faucetAt('plenty')) },
-    { label: 'FAUCET · UNAVAILABLE', props: still(faucetAt('error')) },
+    { label: 'FAUCET · ALREADY CLAIMED (never shown in the app)', props: still(faucetAt('claimed')) },
+    { label: 'FAUCET · CLAIM DID NOT GO THROUGH', props: still(faucetAt('error')) },
+    { label: 'FAUCET · REFUSED (no retry)', props: still({
+      overviewNotice: <FaucetPanel phase="error" message="This wallet has already claimed its test funds." canRetry={false} onClaim={noop} />,
+    }) },
     { label: 'FAUCET · LOCKED', props: still(faucetAt('locked')) },
 
     // ── The asset page ──

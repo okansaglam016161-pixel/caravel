@@ -17,7 +17,7 @@ import { QRCodeSVG } from 'qrcode.react'
 import { C, MONO } from './tokens'
 import { Check, Clock, Copy, Eye, Lock, Shield, Spinner } from './icons'
 import { Body, SubHeader } from './primitives'
-import { fmt6, formatCooldown, TICKER } from './format'
+import { fmt6, TICKER } from './format'
 
 const XTR = (n: bigint) => `${fmt6(n)} ${TICKER}`
 
@@ -133,11 +133,13 @@ export function SectionHead({ title, action, flush = false }: {
 // ══ FAUCET ════════════════════════════════════════════════════════════════════
 
 /**
- * `unknown` is the balance NOT BEING KNOWN YET, and it renders nothing — see v2/faucetPhase. It is
- * not a state this panel draws; it exists so the caller can tell "no opinion" apart from "you have
- * plenty", which is what leaked a claim banner on every refresh.
+ * `open`, `paused`, `empty` and `claimed` are the faucet's status for this wallet, read from the
+ * chain (crypto/faucetStatus); the rest are the claim's own state. `unknown` is the status NOT BEING
+ * KNOWN YET and renders nothing, as do `claimed` and `locked` — see v2/faucetPhase.
  */
-export type FaucetPhase = 'idle' | 'locked' | 'claiming' | 'verifying' | 'done' | 'lagging' | 'error' | 'cooldown' | 'plenty' | 'unknown'
+export type FaucetPhase =
+  | 'open' | 'paused' | 'empty' | 'claimed' | 'locked' | 'unknown'
+  | 'claiming' | 'verifying' | 'done' | 'lagging' | 'error'
 
 
 export interface FaucetPanelProps {
@@ -148,15 +150,10 @@ export interface FaucetPanelProps {
   message?: string
   onClaim: () => void
   /**
-   * Milliseconds left on the cooldown, for the countdown in 10g.
-   *
-   * OUR OWN THROTTLE, NOT THE FAUCET'S. Caravel declines to re-claim for 60s after a successful
-   * one; the faucet server has its own rate limit and we do not know it. So this counts down to
-   * when the CLAIM BUTTON returns, which is a fact about this app, and not to when the faucet will
-   * certainly serve — which nobody here knows. Undefined falls back to a line with no number, so a
-   * missing timer can never render a dangling "Next claim available in".
+   * Whether `error` offers Retry. False when the faucet itself refused — already claimed, paused,
+   * empty — because retrying a refusal can only be refused again.
    */
-  cooldownRemainingMs?: number
+  canRetry?: boolean
 }
 
 /** The design draws one faucet mark at two sizes: 14 in the card's tile, 13 in the banner. */
@@ -193,7 +190,7 @@ const DismissX = () => (
  */
 export function FaucetBanner({ text, action, onDismiss }: {
   text: string
-  /** The claim, as a link. Absent while the faucet is declining — a cooldown offers nothing. */
+  /** The claim, as a link. Absent while the faucet is declining — paused or empty offers nothing. */
   action?: { label: string; onClick: () => void }
   /** Absent when the prompt is reporting rather than offering — see FaucetClaimPanel. */
   onDismiss?: () => void
@@ -242,23 +239,22 @@ export function FaucetBanner({ text, action, onDismiss }: {
  * renders here is `claiming`, `verifying`, `lagging`, `error` and `done`. The card accordingly has
  * NO DISMISS: not a hidden one, not a disabled one — there is no ✕ in this component, so no amount
  * of prop-passing can put a control for losing a transaction report beside a transaction report.
- * The other four phases still render, because the preview gallery draws all nine as a spec sheet
- * and because a phase table with holes in it is worse than one without.
+ * The other phases still render, because the preview gallery draws them all as a spec sheet and
+ * because a phase table with holes in it is worse than one without.
  *
  * NO PHASE IS AN ERROR EXCEPT `error`. `lagging` is a claim that committed and a balance that is
- * behind; `cooldown` and `plenty` are the faucet declining, which is what a faucet is for. All
- * three keep the same quiet card as `idle` — the design draws no dimming and none is added.
+ * behind; `paused` and `empty` are the faucet declining for now. Both keep the same quiet card as
+ * `open` — the design draws no dimming and none is added.
  *
  * `message` is the live text the claim itself emits, and it wins over the per-phase line: the
  * machine's own words about what it is doing beat a generic caption.
  */
-export function FaucetPanel({ phase, received, message, onClaim, cooldownRemainingMs }: FaucetPanelProps) {
+export function FaucetPanel({ phase, received, message, onClaim, canRetry = true }: FaucetPanelProps) {
   const spinning = phase === 'claiming' || phase === 'verifying' || phase === 'lagging'
-  const counting = phase === 'cooldown' && cooldownRemainingMs !== undefined && cooldownRemainingMs > 0
 
   const line = (): string => {
     switch (phase) {
-      case 'idle': return 'Claim free test funds to try Caravel.'
+      case 'open': return 'Claim free test funds to try Caravel.'
       // The wallet is locked. Calm and buttonless — the line is the explanation, so there is no
       // dead control needing one.
       case 'locked': return 'Unlock your wallet to claim.'
@@ -270,13 +266,13 @@ export function FaucetPanel({ phase, received, message, onClaim, cooldownRemaini
       // "Nothing was claimed" is kept over the frame's shorter line: on the one phase where
       // something went wrong, whether it went wrong BEFORE or AFTER the money moved is the only
       // thing the reader actually wants to know.
-      case 'error': return 'The faucet did not respond. Nothing was claimed.'
-      // The fragment is completed by the countdown beside it, so it is only used when there IS one.
-      case 'cooldown': return counting ? 'Next claim available in' : 'Just claimed. You can claim again shortly.'
-      case 'plenty': return 'You already have plenty. Leave the rest for other testers.'
-      // NEVER RENDERED. The caller hides `unknown` before it gets here — the faucet has no opinion
-      // while the balance is unread (v2/faucetPhase.isHidden). The case exists so this switch stays
-      // exhaustive, which is what makes a future phase a type error rather than a blank line.
+      case 'error': return 'The claim did not go through. Nothing was claimed.'
+      case 'paused': return 'The faucet is paused right now. Check back soon.'
+      case 'empty': return 'The faucet is empty right now. Check back soon.'
+      // NEVER RENDERED in the app — the caller hides these (v2/faucetPhase.isHidden). The cases
+      // exist so this switch stays exhaustive, which makes a future phase a type error rather than a
+      // blank line, and so the preview gallery can still draw them.
+      case 'claimed': return 'This wallet has already claimed its test funds.'
       case 'unknown': return ''
     }
   }
@@ -298,18 +294,11 @@ export function FaucetPanel({ phase, received, message, onClaim, cooldownRemaini
         }}><Check size={11} color="currentColor" /></span>
       )
     }
-    if (phase === 'error') return <FaucetAction tone="quiet" onClick={onClaim}>Retry</FaucetAction>
-    if (counting) {
-      return (
-        <span style={{ fontFamily: MONO, fontSize: 11.5, color: C.mutedDim, flexShrink: 0, whiteSpace: 'nowrap' }}>
-          {formatCooldown(cooldownRemainingMs!)}
-        </span>
-      )
-    }
-    // `plenty`, `locked` and a countdown-less `cooldown` offer nothing: the faucet is declining and
-    // the line says so. A disabled button would be a control that cannot be used and does not need
-    // to exist — the sentence beside it already carries the reason.
-    if (phase === 'idle') return <FaucetAction tone="primary" onClick={onClaim}>Claim</FaucetAction>
+    if (phase === 'error') return canRetry ? <FaucetAction tone="quiet" onClick={onClaim}>Retry</FaucetAction> : null
+    // `paused`, `empty`, `claimed` and `locked` offer nothing: the faucet is declining and the line
+    // says so. A disabled button would be a control that cannot be used and does not need to exist —
+    // the sentence beside it already carries the reason.
+    if (phase === 'open') return <FaucetAction tone="primary" onClick={onClaim}>Claim</FaucetAction>
     return null
   }
 

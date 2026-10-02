@@ -334,8 +334,8 @@ export async function preparePublicSend(
   // such a wallet used to 404.
   //
   // So: declare the component and its vaults when it EXISTS (CreateAccount then reuses it), and
-  // declare NOTHING when it does not (CreateAccount then mints it, exactly as the faucet claim does
-  // — which is how every account in Caravel has ever come to exist). Getting that backwards on an
+  // declare NOTHING when it does not (CreateAccount then mints it — which is how an account comes to
+  // exist in Caravel; the faucet claim no longer creates one). Getting that backwards on an
   // account that DOES exist would deposit into a throwaway component and lose the funds silently,
   // so resolveAccountInputs rethrows anything that is not a definite not-found rather than guessing.
   const { declaredInputs } = await resolveAccountInputs(provider, accountAddress)

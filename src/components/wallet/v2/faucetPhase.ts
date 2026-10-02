@@ -1,49 +1,38 @@
 // Which faucet state to show — and, above all, when to show none.
 //
-// ── THE BUG THIS EXISTS TO PREVENT ───────────────────────────────────────────
+// ── CLAIM STATUS DECIDES, NEVER THE BALANCE ──────────────────────────────────
 //
-// The ladder used to end `: 'idle'`, an unconditional fall-through, and the guard above it read:
+// What the faucet offers depends on one fact about this wallet: has its key claimed? That is read
+// from the chain (crypto/faucetStatus — the claim receipt), not inferred from how much the wallet
+// holds. The previous ladder hid the faucet once the balance passed a threshold ("you already have
+// plenty"), which answered a different question: a wallet funded by a payment has never claimed,
+// and a wallet that claimed and spent everything has.
 //
-//     const highBalance = balance !== null && balance >= HIGH_BALANCE
+// So a never-claimed wallet sees the faucet whatever its balance — the claim when the faucet is
+// open, and "paused / empty, check back soon" when it is not. A claimed wallet never sees it again.
 //
-// which answers "is it DEFINITELY high?" — and then everything downstream treated a `false` as
-// "it is low". Those are not the same claim. `false` covers two worlds: known-low, and NOT YET
-// KNOWN. Every rescan blanks the balance to `null` before it starts (WalletContext's startScan, via
-// SCAN_IDLE), so on every refresh a funded wallet spent a scan's worth of time — a second or two
-// over a thousand-odd rows plus trial decrypt — falling through to `idle` and flashing a "Claim
-// test funds" banner it did not need. A scan that ERRORED left the balance at null for good, so the
-// same banner sat there permanently on a wallet with plenty.
+// ── NOT KNOWING IS ITS OWN PHASE ─────────────────────────────────────────────
 //
-// Offering a claim is a statement that this wallet needs funding. The fix is to stop making that
-// statement from an indeterminate reading: `unknown` is now its own phase and it renders nothing.
-// Same rule the hero already follows — see v2/total.ts, which refuses to show a figure it cannot
-// stand behind.
+// Until the status has been read — or when the read fails — the phase is `unknown` and renders
+// nothing. Offering a claim is a statement about this wallet, and it is not made from a reading
+// nobody has.
 //
-// ── ORDER IS THE OTHER HALF OF THE FIX ───────────────────────────────────────
+// ── ORDER ────────────────────────────────────────────────────────────────────
 //
-// A CLAIM ITSELF TRIGGERS A RESCAN, so the balance is null for part of every claim. If the unknown
-// check sat anywhere above the in-flight states, the claim's own progress and result card would
-// vanish under the user mid-claim. It is therefore the LAST branch, after done / lagging / error /
-// cooldown / busy — each of which is a fact about the claim and owes nothing to the balance. A
-// mid-claim `null` hits one of those first and never reaches here.
+// The claim's own state comes first. A claim in flight triggers a rescan and, once it commits,
+// turns this wallet's status into `claimed` — if status outranked the claim, its progress and result
+// card would vanish under the user mid-claim.
 
 import type { FaucetPhase } from './panels'
+import type { FaucetStatus } from '../../../crypto/faucetStatus'
 
-/** "You already have plenty" — the payout is 1000 XTR, so one claim clears this for good. */
-export const HIGH_BALANCE = 100_000_000n // 100 XTR
-
-/** What the claim's own state machine is doing, independent of any balance. */
+/** What the claim's own state machine is doing, independent of the faucet's status. */
 export type ClaimState = 'idle' | 'claiming' | 'verifying' | 'done' | 'lagging' | 'error'
 
 export interface FaucetPhaseInputs {
   claim: ClaimState
-  /** Caravel's own re-claim throttle, not the faucet's rate limit. */
-  cooldown: boolean
-  /**
-   * The private balance in µXTR. `null` means NOT KNOWN — a scan in flight, or one that failed.
-   * Never zero: an empty wallet reads `0n`, and the difference is the entire point of this module.
-   */
-  balance: bigint | null
+  /** The faucet's status for this wallet, or null before it has been read. */
+  status: FaucetStatus['kind'] | null
   /** False until an identity is available. */
   unlocked: boolean
 }
@@ -51,42 +40,32 @@ export interface FaucetPhaseInputs {
 /**
  * The one place the faucet decides what it is.
  *
- * Precedence, and why it is this order:
- *
- *   1. done / lagging / error   the claim has something to report. Outranks everything; a balance
- *                               that has gone unknown underneath it changes nothing.
- *   2. cooldown                 we are declining to re-claim. Also a fact about the claim.
- *   3. claiming / verifying     in flight. Must survive the rescan it triggered.
- *   4. plenty                   CONFIRMED high. Hidden.
- *   5. locked                   no identity, so no control to offer.
- *   6. idle                     CONFIRMED low. The only state that offers a claim.
- *   7. unknown                  the balance is not known. Hidden — see the header.
+ *   1. done / lagging / error   the claim has something to report. Outranks everything.
+ *   2. claiming / verifying     in flight. Must survive the status changing underneath it.
+ *   3. locked                   no identity, so no control to offer.
+ *   4. unknown                  status not read, or unreadable. Hidden.
+ *   5. claimed                  this key has claimed. Hidden for good.
+ *   6. paused / empty           never claimed, faucet unavailable: "check back soon".
+ *   7. open                     never claimed, faucet open: the only state that offers a claim.
  */
-export function faucetPhase({ claim, cooldown, balance, unlocked }: FaucetPhaseInputs): FaucetPhase {
+export function faucetPhase({ claim, status, unlocked }: FaucetPhaseInputs): FaucetPhase {
   if (claim === 'done') return 'done'
   if (claim === 'lagging') return 'lagging'
   if (claim === 'error') return 'error'
-  if (cooldown) return 'cooldown'
   if (claim === 'claiming') return 'claiming'
   if (claim === 'verifying') return 'verifying'
 
-  // Both of these ask a question about a KNOWN balance, and neither answers it for `null`. Written
-  // as two positive tests rather than one test and its negation, because the negation is exactly
-  // the mistake this module was extracted to stop making.
-  if (balance !== null && balance >= HIGH_BALANCE) return 'plenty'
   if (!unlocked) return 'locked'
-  if (balance !== null && balance < HIGH_BALANCE) return 'idle'
-  return 'unknown'
+  if (status === null || status === 'unknown') return 'unknown'
+  return status
 }
 
 /**
  * The phases that render nothing.
  *
- * `plenty` and `locked` are the faucet DECLINING — a card that renders a decline is a permanent
- * object on the overview saying nothing anyone can act on. `unknown` is different in kind: it is
- * the faucet having no opinion yet, which is the honest state during a refresh and the one that
- * used to leak a claim banner.
+ * `claimed` and `locked` are the faucet having nothing to offer — a card about it would be a
+ * permanent object nobody can act on. `unknown` is the faucet having no opinion yet.
  */
 export function isHidden(phase: FaucetPhase): boolean {
-  return phase === 'plenty' || phase === 'locked' || phase === 'unknown'
+  return phase === 'claimed' || phase === 'locked' || phase === 'unknown'
 }

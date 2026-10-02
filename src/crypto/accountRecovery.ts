@@ -1,10 +1,11 @@
 // Recovering a wallet's account component address WITHOUT submitting a transaction.
 //
 // THE PROBLEM. The account address cannot be derived client-side (see accountAddress.ts), so
-// Caravel learns it by watching it go past in a transaction result. That works for a wallet that
-// claims the faucet while this code is installed, and for nothing else: a wallet that claimed
-// earlier, or one restored from its phrase on another device, has a real account holding a real
-// revealed balance and no idea what its address is. It would show 0 public forever.
+// Caravel learns it by watching it go past in a transaction result — a make-public, conceal or
+// public send, the transactions that run CreateAccount (the faucet claim no longer does). That works
+// for a wallet that runs one of those while this code is installed, and for nothing else: a wallet
+// restored from its phrase on another device has a real account holding a real revealed balance and
+// no idea what its address is. It would show 0 public forever.
 //
 // THE MECHANISM, and why it costs nothing. `CreateAccount` derives the address from the owner
 // public key alone, deterministically — so a SIMULATION of it produces exactly the address the real

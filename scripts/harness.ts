@@ -49,7 +49,9 @@ import { readRevealedBalance } from '../src/crypto/revealedBalance'
 import { prepareConceal, MIN_CONCEAL_MICROTARI } from '../src/crypto/conceal'
 import { prepareReveal, MIN_REVEAL_MICROTARI, maxRevealable } from '../src/crypto/reveal'
 import { sendConfidential, describeMicrotari, maxStealthSend, MAX_FEE } from '../src/crypto/confidentialSend'
-import { claimFaucet } from '../src/crypto/faucet'
+import { claimFaucet, prepareClaim, FaucetClaimRefused } from '../src/crypto/faucet'
+import { FAUCET_COMPONENT_ADDRESS, FAUCET_VAULT_ADDRESS, faucetReceiptId } from '../src/crypto/faucetConfig'
+import { decodeFaucetState, decodeFaucetVault, faucetStatusFrom } from '../src/crypto/faucetStatus'
 import { readFinalizedVerdict, describeFailure } from '../src/crypto/txResult'
 import {
   loadExcludedIds, loadSpentOutputs, markLocked, release, heldOutOfBalance,
@@ -62,6 +64,8 @@ import {
 import { setStoreKey } from '../src/crypto/sessionKey'
 import { ons, estimateOnsRegistration } from '../src/crypto/ons'
 import { createWalletSeed } from 'tari-cipherseed'
+import { writeFileSync } from 'node:fs'
+import path from 'node:path'
 import {
   scanRecentReceives, advanceIndexer, loadReceiveScan, discoveredReceives, carriedOutputs,
   FIRST_SCAN_PAGE_BUDGET, SCAN_PAGE_BUDGET, RECENT_PAGE_LIMIT, PROBE_PAGE_LIMIT,
@@ -995,19 +999,62 @@ async function cmdProveSpend(h: Harnessed): Promise<void> {
 }
 
 /**
- * WRITE, but from the faucet's purse rather than the user's.
+ * READ-ONLY. Caravel's faucet as this wallet sees it, and what a claim would do — nothing submitted.
  *
- * Here because the spend record cannot be proved against a wallet with nothing in it, and this is
- * the one action that takes a fresh wallet from zero to real stealth outputs: `claimFaucet` mints
- * the payout AND converts it to stealth in a single transaction, so what lands is exactly the
- * owned, spendable set `prove-spend` needs. ONE CLAIM PER PUBLIC KEY, ever — the faucet burns a
- * claim NFT — so a wallet that has claimed cannot claim again.
+ * Prints the status exactly as the panel reads it (crypto/faucetStatus: the faucet component, its
+ * vault, and this key's claim receipt), then runs the claim's own pricing dry run (prepareClaim),
+ * which executes claim() in simulation. That dry run is the authoritative check — if the receipt
+ * read and the dry run ever disagree about "already claimed", the dry run is right.
  */
-async function cmdFaucet(h: Harnessed, yes: boolean): Promise<void> {
-  rule('faucet claim  (crypto/faucet.claimFaucet)')
+async function cmdFaucetStatus(h: Harnessed): Promise<void> {
+  rule('faucet-status  (crypto/faucetStatus + crypto/faucet.prepareClaim)  ·  READ-ONLY, nothing is submitted')
+  field('faucet', FAUCET_COMPONENT_ADDRESS)
+  field('receipt id', faucetReceiptId(h.ownerPkHex))
+
+  const mark = net.length
+  const [component, vault, receipt] = await Promise.all([
+    pointRead(`/substates/${FAUCET_COMPONENT_ADDRESS}`),
+    pointRead(`/substates/${FAUCET_VAULT_ADDRESS}`),
+    pointRead(`/substates/${faucetReceiptId(h.ownerPkHex)}`),
+  ])
+  const state = component.body === null ? null : decodeFaucetState(component.body)
+  const available = vault.body === null ? null : decodeFaucetVault(vault.body)
+  field('claim amount', state ? amt(state.claimAmount) : '(unreadable)')
+  field('paused', state ? String(state.paused) : '(unreadable)')
+  field('faucet balance', available === null ? '(unreadable)' : amt(available))
+  field('receipt', !receipt.answered ? '(no indexer answered)' : receipt.body === null ? 'not found on any indexer — not claimed' : 'FOUND — this key has claimed')
+  const status = faucetStatusFrom(component, vault, receipt)
+  field('status', status.kind === 'unknown' ? `unknown — ${status.reason}` : status.kind)
+
+  rule('claim dry run  (prepareClaim — simulation only)')
+  try {
+    const prepared = await prepareClaim(h.wallet, h.address, stage)
+    field('verdict', 'Accept')
+    field('dry-run cost', amt(prepared.dryRunCost))
+    field('fee (with margin)', amt(prepared.fee))
+    field('would receive', `${amt(prepared.privateAmount)}  (private, to this wallet)`)
+  } catch (e) {
+    if (e instanceof FaucetClaimRefused) field('verdict', `REFUSED — ${e.refusal}: ${e.message}`)
+    else field('verdict', `FAILED — ${e instanceof Error ? e.message : String(e)}`)
+  }
+  printNet(mark)
+}
+
+/**
+ * WRITE, from the faucet's purse rather than the user's. One claim per key, ever.
+ *
+ * The way to take a wallet from zero to real stealth outputs: the claim pays out and converts the
+ * payout to a private coin in a single transaction, and the payout covers its own fee.
+ *
+ * `--fresh` claims for a NEW wallet generated for this run instead of CARAVEL_TEST_MNEMONIC. Its
+ * phrase is written to a file (mode 600) and never printed, so the funds it receives are not lost.
+ * The faucet holds a finite number of claims — use it deliberately.
+ */
+async function cmdFaucetClaim(h: Harnessed, yes: boolean): Promise<void> {
+  rule('faucet-claim  (crypto/faucet.claimFaucet)')
   console.log(yes
-    ? '  ⚠  WRITE COMMAND. Submits a real claim. Testnet faucet funds, once per wallet, forever.'
-    : '  Add --yes to actually claim. Nothing is submitted without it.')
+    ? '  ⚠  WRITE COMMAND. Submits a real claim. One per key, ever.'
+    : '  Add --yes to actually claim. Nothing is submitted without it — faucet-status shows the dry run.')
   if (!yes) return
 
   const mark = net.length
@@ -1018,13 +1065,26 @@ async function cmdFaucet(h: Harnessed, yes: boolean): Promise<void> {
   field('amount', amt(result.amount))
   field('fee', result.feeMicrotari === undefined ? '(not reported)' : amt(result.feeMicrotari))
   field('self outputs', result.selfOutputIds ? JSON.stringify(result.selfOutputIds) : 'undefined')
-  // Same free capture the app makes: the claim is the one transaction that runs CreateAccount.
-  if (result.accountAddress) {
-    saveAccountAddress(h.address, result.accountAddress)
-    field('account', result.accountAddress)
-  }
   printNet(mark)
   console.log('\n  The payout takes 60-90s to appear in /utxos — the listing trails consensus.')
+  console.log('  The claim receipt can take as long to appear on the indexers; re-run faucet-status after.')
+}
+
+/** A brand-new wallet for `faucet-claim --fresh`. Its phrase goes to a 600 file, never to stdout. */
+async function freshIdentity(): Promise<Harnessed> {
+  const { mnemonic } = await createWalletSeed()
+  const { wallet, nostr, storeKey } = await deriveIdentity(mnemonic, 'cipherseed')
+  setStoreKey(storeKey)
+  const address = await wallet.getAddress()
+  const file = path.resolve(`harness-fresh-wallet-${address.slice(-12)}.txt`)
+  writeFileSync(file, `${mnemonic}\n`, { mode: 0o600 })
+  rule('identity  (FRESH — generated for this run)')
+  field('address', address)
+  field('phrase', `written to ${file} (mode 600, not printed). Keep it — this wallet is about to be funded.`)
+  return {
+    wallet, address, ownerPkHex: hex(await wallet.getPublicKey()), viewSecret: await wallet.getViewSecret(),
+    npub: nostr.npub, scheme: 'cipherseed',
+  }
 }
 
 /**
@@ -1864,6 +1924,8 @@ CARAVEL TERMINAL HARNESS — the real crypto/tx paths against the live Esmeralda
 
 READ-ONLY — safe to run freely, costs nothing:
   scan                        Full balance trace: rows, pages, owned, spendable, private + public.
+  faucet-status               Caravel's faucet as this wallet sees it (open / paused / empty /
+                              claimed, from the chain) plus the claim's DRY RUN: verdict and fee.
   resolve <txid>              Fetch and print one transaction result in full, with its verdict.
   prove-recovery [substateId] Proof that a coin absent from every listing is still found by id,
                               counted, and spendable. Submits nothing.
@@ -1890,8 +1952,9 @@ READ-ONLY — safe to run freely, costs nothing:
                               and releases what it locked.
 
 WRITE — MOVES REAL TESTNET FUNDS. Builds and prices without --yes; submits with it:
-  faucet                      Claim testnet funds (once per wallet, ever) — the way to get a
-                              wallet into a state prove-spend can work against.
+  faucet-claim [--fresh]      Claim from Caravel's faucet (once per key, ever) — the way to get a
+                              wallet into a state prove-spend can work against. --fresh claims for
+                              a NEW wallet; its phrase is written to a 600 file, never printed.
   make-private <amount>       conceal: revealed vault  →  private stealth output.
   make-public  <amount>       reveal:  private outputs →  revealed vault balance.
   send <ootle-address> <amount> [memo]
@@ -1916,7 +1979,8 @@ Environment:
 export async function main(argv: string[]): Promise<void> {
   const yes = argv.includes('--yes')
   const raw = argv.includes('--raw')
-  const args = argv.filter(a => a !== '--yes' && a !== '--raw')
+  const fresh = argv.includes('--fresh')
+  const args = argv.filter(a => a !== '--yes' && a !== '--raw' && a !== '--fresh')
   const cmd = args[0]
 
   if (!cmd || cmd === 'help' || cmd === '--help' || cmd === '-h') { console.log(USAGE); return }
@@ -1951,7 +2015,9 @@ export async function main(argv: string[]): Promise<void> {
       return
     }
 
-    const h = await identity()
+    // --fresh is faucet-claim's alone: a new, empty wallet for the claim to fund.
+    if (fresh && cmd !== 'faucet-claim') throw new Error('--fresh only applies to faucet-claim.')
+    const h = fresh ? await freshIdentity() : await identity()
 
     switch (cmd) {
       case 'scan':
@@ -1985,8 +2051,11 @@ export async function main(argv: string[]): Promise<void> {
         if (!args[1] || !args[2]) throw new Error('prove-settle needs a recipient address and an amount.')
         await cmdProveSettle(h, args[1], parseAmount(args[2]), yes)
         break
-      case 'faucet':
-        await cmdFaucet(h, yes)
+      case 'faucet-status':
+        await cmdFaucetStatus(h)
+        break
+      case 'faucet-claim':
+        await cmdFaucetClaim(h, yes)
         break
       case 'make-private':
         if (!args[1]) throw new Error('make-private needs an amount.')

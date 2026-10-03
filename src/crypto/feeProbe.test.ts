@@ -12,6 +12,7 @@
 
 import { describe, expect, it, afterEach, vi } from 'vitest'
 import { dryRunFee, withFeeMargin, FEE_MARGIN_PERCENT } from './feeProbe'
+import { NETWORK_BUSY_MESSAGE, retryTiming } from './indexerRetry'
 
 const URL = 'https://indexer.test'
 
@@ -175,5 +176,50 @@ describe('withFeeMargin', () => {
 
   it('stays exact past Number.MAX_SAFE_INTEGER', () => {
     expect(withFeeMargin(18_446_744_073_709_551_615n)).toBe(23_058_430_092_136_939_518n)
+  })
+})
+
+// ── A busy indexer (Ootle 0.43: 429 / 503) ──────────────────────────────────────
+
+describe('a busy indexer is waited out, not reported', () => {
+  const saved = { ...retryTiming }
+  afterEach(() => { Object.assign(retryTiming, saved) })
+
+  /** Answer from a script of statuses (accept body on 200), recording the URLs asked. */
+  function scriptedFetch(statuses: number[]) {
+    const urls: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      urls.push(url)
+      const status = statuses.shift() ?? 503
+      return {
+        ok: status === 200, status,
+        headers: { get: () => null },
+        json: async () => accept(),
+        text: async () => '',
+      }
+    }))
+    return urls
+  }
+
+  it('retries 503 → 429 → accept, announces each retry, and prices normally', async () => {
+    retryTiming.sleep = async () => {}
+    scriptedFetch([503, 429, 200])
+    const onBusyRetry = vi.fn()
+    expect(await dryRunFee(URL, {}, { onBusyRetry })).toBe(14_537n - 4_596n)
+    expect(onBusyRetry).toHaveBeenCalledTimes(2)
+  })
+
+  it('moves to another indexer on retry — a simulation is the same on any of them', async () => {
+    retryTiming.sleep = async () => {}
+    const urls = scriptedFetch([503, 200])
+    await dryRunFee(URL, {})
+    expect(urls[0]).toBe(`${URL}/transactions/dry-run`)
+    expect(urls[1]).not.toContain(URL)
+  })
+
+  it('stays busy → the one plain message: busy, nothing sent', async () => {
+    retryTiming.sleep = async () => {}
+    scriptedFetch([503, 503, 503, 503])
+    await expect(dryRunFee(URL, {})).rejects.toThrow(NETWORK_BUSY_MESSAGE)
   })
 })

@@ -10,6 +10,7 @@
 // otherwise unrelated files — the same reasoning replyCompose.ts and messageEdit.ts are split out
 // for. A lead duplicated in two places is a lead that drifts.
 
+import { SDK_READ_ATTEMPTS, withBusyRetry } from './indexerRetry'
 import { resolveMaxEpoch, type Provider } from '@tari-project/ootle'
 
 // How many epochs of validity a transaction we build now should carry.
@@ -49,5 +50,6 @@ export const MAX_EPOCH_LEAD = 10
 // proofs and output statements are generated. Those are the slow part (wasm range proofs), and a
 // tip read placed before them spends part of the window on work that happens on this device.
 export async function nextMaxEpoch(provider: Provider): Promise<number> {
-  return resolveMaxEpoch(provider, MAX_EPOCH_LEAD)
+  // A busy indexer (0.43) is asked again — a read of the chain tip changes nothing.
+  return withBusyRetry(() => resolveMaxEpoch(provider, MAX_EPOCH_LEAD), { attempts: SDK_READ_ATTEMPTS })
 }

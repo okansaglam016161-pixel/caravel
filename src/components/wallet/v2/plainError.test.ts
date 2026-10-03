@@ -12,6 +12,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { plainError } from './plainError'
+import { NETWORK_BUSY_MESSAGE } from '../../../crypto/indexerRetry'
 
 describe('plainError — no base units reach the screen', () => {
   it('collapses a figure that already carries its own TARI gloss', () => {
@@ -81,5 +82,15 @@ describe('plainError — no base units reach the screen', () => {
       'Revealing 1000000 µtTARI would need 1014537 µtTARI of private funds, and the selected outputs hold 999000.',
     ]
     for (const m of all) expect(plainError(m)).not.toMatch(/µtTARI/)
+  })
+})
+
+describe('plainError — a busy indexer', () => {
+  it('replaces a raw 503 / 429 with the network-busy line', () => {
+    expect(plainError('Could not estimate the network fee: indexer HTTP 503 — saturated')).toBe(NETWORK_BUSY_MESSAGE)
+    expect(plainError('HTTP 429: Too Many Requests')).toBe(NETWORK_BUSY_MESSAGE)
+  })
+  it('leaves other HTTP failures as the network wrote them', () => {
+    expect(plainError('Could not estimate the network fee: indexer HTTP 502')).toBe('Could not estimate the network fee: indexer HTTP 502')
   })
 })

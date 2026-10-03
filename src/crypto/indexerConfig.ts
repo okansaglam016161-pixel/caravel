@@ -27,6 +27,8 @@
 // appearing in NEITHER node's listing. No union over listings can recover a coin no listing
 // returns. See utxoFeed for how far the union gets, and the note there about what is left.
 
+import { fetchWithRetry } from './indexerRetry'
+
 /** The public Esmeralda indexers, in preference order. The first is also the primary (below). */
 export const DEFAULT_INDEXER_URLS = [
   'https://ootle-indexer-a.tari.com',
@@ -89,6 +91,13 @@ export const INDEXER_URL: string = INDEXER_URLS[0]!
 /** Per-request ceiling for a point read, so one unresponsive node cannot stall a caller. */
 export const POINT_READ_TIMEOUT_MS = 8_000
 
+/**
+ * Attempts per indexer. A busy (429/503) or unanswering node is waited out once (Retry-After when
+ * it gives one) before the read moves on to the next node. A busy answer is never a 404: it says
+ * nothing about the resource.
+ */
+const POINT_READ_ATTEMPTS = 2
+
 /** What a point read came back with, and from where. */
 export interface PointRead {
   /** Parsed JSON body, or `null` when every indexer answered 404 / not-found. */
@@ -125,9 +134,9 @@ export async function pointRead(path: string): Promise<PointRead> {
   for (const base of INDEXER_URLS) {
     let res: Response
     try {
-      res = await fetch(`${base}${path}`, { signal: AbortSignal.timeout(POINT_READ_TIMEOUT_MS) })
+      res = await fetchWithRetry([base], path, {}, { attempts: POINT_READ_ATTEMPTS, timeoutMs: POINT_READ_TIMEOUT_MS })
     } catch {
-      continue   // unreachable or too slow — say nothing, try the next
+      continue   // unreachable, too slow, or still busy — say nothing, try the next
     }
     if (res.status === 404) {
       // Definite from THIS node. Keep asking the others before concluding anything.

@@ -26,6 +26,8 @@
 // immediately before the transaction is built, so a future edit that reintroduces a second
 // derivation trips an assertion here rather than an opaque engine rejection on-chain.
 
+import { submitOnce, versionsUnchanged } from './submitGuard'
+import { RETRYING_MESSAGE } from './indexerRetry'
 import {
   Mask,
   Network,
@@ -318,7 +320,7 @@ export async function prepareConceal(
 
   log('Estimating network fee\u2026')
   const probe = await buildEnvelope(FEE_PROBE_MICROTARI, true)
-  const cost = await dryRunFee(INDEXER_URL, probe.envelope)
+  const cost = await dryRunFee(INDEXER_URL, probe.envelope, { onBusyRetry: () => log(RETRYING_MESSAGE) })
   const fee = withFeeMargin(cost)
   // The probe→real fee guard, applied here for the same reason as the other three builders even
   // though this path is the least exposed: its output count is invariant (one stealth output at any
@@ -344,7 +346,12 @@ export async function prepareConceal(
     submit: async (onSubmitProgress?: (msg: string) => void) => {
       const slog = (m: string) => onSubmitProgress?.(m)
       slog('Submitting\u2026')
-      const sub = await provider.submitTransaction(real.envelope)
+      // Snapshot the account vaults this spends from, so a busy refusal can be checked against them.
+      const landed = await versionsUnchanged(declaredInputs.filter(id => id.startsWith('vault_')))
+      const sub = await submitOnce(() => provider.submitTransaction(real.envelope), {
+        landed,
+        onBusyRetry: () => slog(RETRYING_MESSAGE),
+      })
       const txId = sub.transaction_id as string
 
       slog('Confirming on-chain\u2026')

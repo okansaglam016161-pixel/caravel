@@ -19,6 +19,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SecretKeyWallet } from '@tari-project/ootle-secret-key-wallet'
 import { checkOnsAvailable, estimateOnsRegistration, ons, ownedOnsNames, registerOnsName, type NameRecord } from './ons'
+import { NETWORK_BUSY_MESSAGE } from './indexerRetry'
+import { NETWORK_BUSY_MESSAGE as ONS_BUSY, SubmitMaybeLandedError } from '@ootle/name-service'
 
 // A 32-byte key whose hex is easy to assert against: 0x00, 0x01, … 0x1f.
 const KEY = new Uint8Array(Array.from({ length: 32 }, (_, i) => i))
@@ -375,6 +377,22 @@ describe('registerOnsName — the outcome, not the sentence', () => {
     // The submission may well have landed. Calling that a failure is the lie this whole feature
     // exists to remove, so the unrecognised case defaults to pending.
     expect((await registerOnsName(WALLET, ADDR, 'okz', NPUB, 1_500n)).outcome).toBe('timed-out')
+  })
+
+  it('a busy indexer that never let it through is "not-submitted" — nothing was sent', async () => {
+    stubWriter({ submit: throwing(NETWORK_BUSY_MESSAGE) })
+    expect((await registerOnsName(WALLET, ADDR, 'okz', NPUB, 1_500n)).outcome).toBe('not-submitted')
+  })
+
+  it('a busy refusal that MAY have landed stays "timed-out" — never called not-sent', async () => {
+    stubWriter({ submit: throwing(new SubmitMaybeLandedError().message) })
+    expect((await registerOnsName(WALLET, ADDR, 'okz', NPUB, 1_500n)).outcome).toBe('timed-out')
+  })
+
+  it('the vendored ONS client and Caravel say "busy" in the same words', () => {
+    // ons.ts matches the writer's message exactly; a drift between the two copies would turn a
+    // definite "nothing sent" back into "pending".
+    expect(ONS_BUSY).toBe(NETWORK_BUSY_MESSAGE)
   })
 
   it('a policy refusal is "not-submitted" — nothing was sent and no fee moved', async () => {

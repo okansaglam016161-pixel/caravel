@@ -83,6 +83,8 @@
 // immediately before the transaction is built — so a future edit that re-derives any of these
 // numbers separately trips an assertion here rather than an opaque rejection on-chain.
 
+import { inputsStillUnspent, submitOnce } from './submitGuard'
+import { RETRYING_MESSAGE } from './indexerRetry'
 import {
   Network,
   OotleWallet,
@@ -589,7 +591,7 @@ export async function prepareReveal(
   // underpayment. MIN_STEALTH_CHANGE happens to keep MAX's probe change positive today, which is
   // luck rather than design — probeFeeFor makes it structural.
   const probe = await buildEnvelope(probeFeeFor(selection.total, amountMicrotari, REVEAL_FEE_RESERVE), true)
-  const cost = await dryRunFee(INDEXER_URL, probe.envelope)
+  const cost = await dryRunFee(INDEXER_URL, probe.envelope, { onBusyRetry: () => log(RETRYING_MESSAGE) })
   const fee = withFeeMargin(cost)
 
   // ── THE PROBE→REAL FEE GUARD ──
@@ -637,7 +639,10 @@ export async function prepareReveal(
     submit: async (onSubmitProgress?: (msg: string) => void) => {
       const slog = (m: string) => onSubmitProgress?.(m)
       slog('Submitting…')
-      const sub = await provider.submitTransaction(real.envelope)
+      const sub = await submitOnce(() => provider.submitTransaction(real.envelope), {
+        landed: inputsStillUnspent(spentInputIds),
+        onBusyRetry: () => slog(RETRYING_MESSAGE),
+      })
       const txId = sub.transaction_id as string
 
 // ── THE SPEND RECORD, RESOLVED IN THE SAME FUNCTION THAT SUBMITS ─────────────

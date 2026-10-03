@@ -25,6 +25,8 @@ the same code the rest of the ecosystem runs.
 |---|---|---|
 | 0.39 | 0.3.0 | ^0.39.0 |
 | 0.41 (protocol v1) | **0.5.0** | **^0.41.0** |
+| 0.42 | 0.6.0 | ^0.42.0 |
+| 0.43 | **0.7.0** | **^0.43.0** |
 
 The four move TOGETHER, and npm will not stop you moving one. `-indexer` and `-secret-key-wallet`
 pin `ootle` to an exact version and the SDK carries a caret on the wasm it was built against, so
@@ -55,3 +57,7 @@ procedure. Resolved by the `tari-cipherseed` alias in `vite.config.ts`, `tsconfi
 
 `@ootle/name-service` — our own client (source repo not yet published). Caravel imports only
 `createOnsClient` from it. Vendored until the client is published to npm, then switch to the package.
+
+Provenance — source commit, build, digest, and what each build changed — is in
+[`ons/dist/VENDOR_INFO`](ons/dist/VENDOR_INFO). The current build is ootle-name-service `bb94ae7`
+(branch `ootle-0.43`): Ootle 0.43 peers and the busy-indexer retry.

@@ -8,8 +8,12 @@
 // provisions", but "nothing except a not-found provisions". A 503 misread as absence is the silent
 // fund-loss case, and it is pinned harder than the happy path.
 
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { isSubstateNotFound, resolveAccountInputs, type VaultIdResolver } from './substates'
+import { NETWORK_BUSY_MESSAGE, isBusyError, retryTiming } from './indexerRetry'
+
+// Busy retries wait instantly here; the policy is pinned in indexerRetry.test.ts.
+beforeEach(() => { retryTiming.sleep = async () => {} })
 
 const ACCOUNT = 'component_5fdba3a627a929063e6769d0f420392fa752e0b8c2a2fb13d6b4993e214985fd'
 const VAULT_A = 'vault_' + 'a'.repeat(64)
@@ -106,11 +110,14 @@ describe('resolveAccountInputs — anything else ABORTS, and never provisions', 
   // land there, and the transaction would COMMIT reporting success with the balance unmoved. A
   // network blip would silently eat the money.
   it.each(NOT_ABSENCE)('rethrows %s rather than treating it as absence', async (_label, message) => {
-    await expect(resolveAccountInputs(provider, ACCOUNT, rejecting(message))).rejects.toThrow(message)
+    // A busy 503 is waited out first (Ootle 0.43) and then thrown as IndexerBusyError — still an
+    // abort, never an absence. Everything else is rethrown exactly as written.
+    await expect(resolveAccountInputs(provider, ACCOUNT, rejecting(message)))
+      .rejects.toThrow(isBusyError(new Error(message)) ? NETWORK_BUSY_MESSAGE : message)
   })
 
   it('rethrows the original error object, not a wrapped one', async () => {
-    const original = new Error('HTTP 503: Service Unavailable')
+    const original = new Error('HTTP 500: Internal Server Error')
     const boom: VaultIdResolver = vi.fn(async () => { throw original })
     await expect(resolveAccountInputs(provider, ACCOUNT, boom)).rejects.toBe(original)
   })

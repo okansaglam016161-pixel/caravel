@@ -8,6 +8,7 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { INDEXER_URL, INDEXER_URLS, pointRead } from './indexerConfig'
+import { retryTiming } from './indexerRetry'
 
 const [A, B] = INDEXER_URLS as [string, string]
 
@@ -26,7 +27,8 @@ const notFound = () => new Response('{"error":"not found"}', { status: 404 })
 const boom = () => new Response('upstream exploded', { status: 502 })
 const dead = () => { throw new TypeError('fetch failed') }
 
-beforeEach(() => { vi.unstubAllGlobals() })
+// Retries wait instantly here; the retry policy itself is pinned in indexerRetry.test.ts.
+beforeEach(() => { vi.unstubAllGlobals(); retryTiming.sleep = async () => {} })
 
 describe('configuration', () => {
   it('reads more than one indexer by default, and the first is the primary', () => {
@@ -86,5 +88,28 @@ describe('pointRead', () => {
       [B]: ok({ hello: 'b' }),
     }))
     expect((await pointRead('/substates/x')).body).toEqual({ hello: 'b' })
+  })
+})
+
+describe('pointRead — a busy node (Ootle 0.43: 429 / 503)', () => {
+  const busy = () => new Response('saturated', { status: 503 })
+
+  it('waits a busy node out once and takes its answer', async () => {
+    const answers = [busy, ok({ hello: 'a' })]
+    const fetchSpy = nodes({ [A]: () => answers.shift()!(), [B]: ok({ hello: 'b' }) })
+    vi.stubGlobal('fetch', fetchSpy)
+    const r = await pointRead('/substates/x')
+    expect(r).toMatchObject({ body: { hello: 'a' }, source: A })
+    expect(fetchSpy).toHaveBeenCalledTimes(2)
+  })
+
+  it('moves on to the next node when one stays busy', async () => {
+    vi.stubGlobal('fetch', nodes({ [A]: busy, [B]: ok({ hello: 'b' }) }))
+    expect((await pointRead('/substates/x')).source).toBe(B)
+  })
+
+  it('a busy answer is NEVER an absence — every node busy is "nobody answered"', async () => {
+    vi.stubGlobal('fetch', nodes({ [A]: busy, [B]: busy }))
+    expect(await pointRead('/substates/x')).toEqual({ body: null, answered: false, source: null })
   })
 })

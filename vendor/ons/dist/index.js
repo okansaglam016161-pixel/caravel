@@ -5,6 +5,7 @@
 //   @tari-project/ootle dependency) — so a consumer that only resolves names never touches signing.
 import { OnsReader } from "./reader.js";
 export { OnsReader } from "./reader.js";
+export { IndexerBusyError, SubmitMaybeLandedError, NETWORK_BUSY_MESSAGE, RETRYING_MESSAGE } from "./retry.js";
 /** An ONS client: keyless reads (inherited from {@link OnsReader}) plus opt-in writes. */
 export class OnsClient extends OnsReader {
     config;

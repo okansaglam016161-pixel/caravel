@@ -69,6 +69,7 @@
 // encoded BOTH fields the same way — both raw, or both prefixed. The mixed case is the right one.
 // assertByteLayout below exists to make that failure impossible to reintroduce silently.
 
+import { SDK_READ_ATTEMPTS, withBusyRetry } from './indexerRetry'
 import { blake2b } from '@noble/hashes/blake2.js'
 import type { Provider } from '@tari-project/ootle'
 
@@ -248,7 +249,7 @@ export async function crossCheckDerivation(
 
   let res: unknown
   try {
-    res = await provider.getSubstate(component)
+    res = await withBusyRetry(() => provider.getSubstate(component), { attempts: SDK_READ_ATTEMPTS })
   } catch {
     // The indexer answers a missing substate with an error rather than an empty body, so a throw
     // here is the ordinary "no account yet" case as well as a real outage. They are told apart

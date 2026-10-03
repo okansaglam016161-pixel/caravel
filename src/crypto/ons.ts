@@ -1,4 +1,5 @@
 import { INDEXER_URL } from './indexerConfig'
+import { NETWORK_BUSY_MESSAGE } from './indexerRetry'
 //   ONS (Ootle Name Service) integration for Caravel.
 //
 //   READ side only in this module: resolve an @name to a Nostr pubkey via the keyless public
@@ -383,6 +384,11 @@ function classifyRegisterOutcome(message: string): OnsRegisterOutcome {
   // instructions are the first instructions in it (stealth transfer → bucket → PayFeeFromBucket,
   // built before the ONS calls). A transaction the chain got far enough to reject has already paid.
   if (message.includes('the fee was still spent') || message.includes('was rejected on-chain')) return 'fee-burned'
+  // THE ONE FAILURE THAT IS A DEFINITE "NOTHING SENT": the writer's busy-indexer retry ran out
+  // (Ootle 0.43 rate limits). Every attempt was refused before processing, and the writer only
+  // resubmits after checking the fee input is still unspent — so no transaction exists and no fee
+  // moved. Its "may already have gone through" sibling deliberately stays below, as NOT KNOWING.
+  if (message === NETWORK_BUSY_MESSAGE) return 'not-submitted'
   // Everything else is NOT KNOWING: the poll gave up, or the submission threw before we learned what
   // the chain did. Both may well have landed, so neither may be called a failure.
   return 'timed-out'

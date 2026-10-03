@@ -36,6 +36,8 @@
 // of "the same" number is exactly how that check starts failing, so there is only ONE:
 // planPublicSend computes the split once and the single `withdrawAmount` is threaded to both.
 
+import { submitOnce, versionsUnchanged } from './submitGuard'
+import { RETRYING_MESSAGE } from './indexerRetry'
 import {
   Mask,
   Network,
@@ -370,7 +372,7 @@ export async function preparePublicSend(
 
   log('Estimating network fee…')
   const probe = await buildEnvelope(PUBLIC_SEND_FEE_RESERVE, true)
-  const cost = await dryRunFee(INDEXER_URL, probe.envelope)
+  const cost = await dryRunFee(INDEXER_URL, probe.envelope, { onBusyRetry: () => log(RETRYING_MESSAGE) })
   const fee = withFeeMargin(cost)
 
   // ── THE PROBE→REAL FEE GUARD ──
@@ -397,7 +399,12 @@ export async function preparePublicSend(
     submit: async (onSubmitProgress?: (msg: string) => void) => {
       const slog = (m: string) => onSubmitProgress?.(m)
       slog('Submitting…')
-      const sub = await provider.submitTransaction(real.envelope)
+      // Snapshot the account vaults this spends from, so a busy refusal can be checked against them.
+      const landed = await versionsUnchanged(declaredInputs.filter(id => id.startsWith('vault_')))
+      const sub = await submitOnce(() => provider.submitTransaction(real.envelope), {
+        landed,
+        onBusyRetry: () => slog(RETRYING_MESSAGE),
+      })
       const txId = sub.transaction_id as string
 
       slog('Confirming on-chain…')

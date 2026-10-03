@@ -1,28 +1,38 @@
 ONS client — vendored build provenance
 ======================================
 source repo   : ootle-name-service (github.com/okansaglam016161-pixel/ootle-name-service)
-source commit : 7632a80fa1eef640db33114bf6f689cadb0b1e70
-              : (7632a80, branch: ootle-0.42; client/ last changed in 8ec28fb)
+source commit : bb94ae7bdd41b8edb66974d2ce13ea654233c35d
+              : (bb94ae7, branch: ootle-0.43; client/ last changed in bb94ae7)
 built from    : client/src → client/dist  (npm run build = tsc -p client/tsconfig.json)
-vendored at   : 2026-10-01
+vendored at   : 2026-10-03
 tree state    : clean (dist matches the commit above exactly — diff -rq, excluding this file)
-src digest    : 8e209ba9750a87fb52f4d6be4bb91397e3f5daba27a5b6e928b4e7ac09416c19
+src digest    : bd6e66b0356c4e009f201759370246da5b2d25f59de03a40464f3b34de23613e
                 (shasum -a 256 client/src/*.ts | sort | shasum -a 256)
 
 NO LOCAL PATCHES. Everything Caravel needs is in the upstream source.
 
-This build is for Ootle 0.42 / @tari-project/ootle 0.6:
-  - browser-writer.ts : the fee reveal names the wallet's owner public key as the revealed
-                        output's receiver (tari-ootle #2645); without it every browser write
-                        rejects at the fee instruction.
-  - browser-writer.ts : BrowserSigner.ownedUtxos? and .onSubmitted? — the two fee-input hooks
-                        Caravel used to carry as a local patch on this directory (2026-09-25),
-                        now upstream with the same behaviour. OwnedFeeUtxo is exported.
-  - writer.ts         : OnsWriter.instantiate() for deploying the registry from a walletd
-                        account (used for the 0.42 deployment, not by Caravel).
-  - ootle-sdk.d.ts    : the build-time stub declares the 0.6 generateOutputsStatement signature;
-                        the source was also type-checked against the real SDK 0.6.0.
+This build is for Ootle 0.43 / @tari-project/ootle 0.7 (ootle-wasm 0.43):
+  - retry.ts          : NEW. Busy-indexer retry (0.43 rate limits: 429, dry-run cap: 503).
+                        Reads and dry runs retry with Retry-After / jittered backoff; a submit is
+                        retried only on a busy refusal, only with the same sealed envelope, and
+                        only after the fee input is confirmed unspent. Ambiguous failures are
+                        never resubmitted. IndexerBusyError / SubmitMaybeLandedError and the
+                        NETWORK_BUSY_MESSAGE / RETRYING_MESSAGE strings are exported.
+  - reader.ts         : registry read retries.
+  - browser-writer.ts : UTXO scan, result poll, dry run, epoch + input resolution retry; submit via
+                        submitOnce. BrowserSigner.onProgress (optional) carries the busy notice.
+  - package.json      : peer deps @tari-project/ootle* ^0.7.0, ootle-wasm ^0.43.0. The 0.7 SDK
+                        dist is byte-identical to 0.6, so no API change was needed.
+  - ootle-sdk.d.ts    : unchanged; the source was also type-checked against the real SDK 0.7.0
+                        (stub excluded) with no errors.
+  - tests             : npm test — 14 (node:test via tsx); excluded from this dist.
 
-Deployment this client is used with (see src/crypto/ons.ts):
+Carried forward from the 0.42 build:
+  - browser-writer.ts : the fee reveal names the wallet's owner public key as the revealed
+                        output's receiver (tari-ootle #2645).
+  - browser-writer.ts : BrowserSigner.ownedUtxos? and .onSubmitted? fee-input hooks.
+  - writer.ts         : OnsWriter.instantiate() for deploying the registry from a walletd account.
+
+Deployment this client is used with (see src/crypto/ons.ts) — unchanged by 0.43:
   template  : template_ceb0ef6b0ae298cbc412fd7e1054c2bf2e7204a1d58bfe979976e6918ae6536f
   registry  : component_0109d5287493affc06ec8902fcbf85bd2362832580feeac2a70cba7e5ac6da4d

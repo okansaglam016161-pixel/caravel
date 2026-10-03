@@ -31,6 +31,8 @@
  * creates that bucket if the receiver's badge is in the transaction's auth scope.
  */
 
+import { substateStillAbsent, submitOnce } from './submitGuard'
+import { RETRYING_MESSAGE } from './indexerRetry'
 import {
   TransactionBuilder,
   WasmStealthCrypto,
@@ -56,6 +58,7 @@ import {
   FAUCET_COMPONENT_ADDRESS,
   FAUCET_RECEIPTS_RESOURCE_ADDRESS,
   FAUCET_VAULT_ADDRESS,
+  faucetReceiptId,
 } from './faucetConfig'
 import { markFaucetClaimed, readFaucetStatus } from './faucetStatus'
 
@@ -225,7 +228,7 @@ export async function prepareClaim(
   const probe = await buildEnvelope(FEE_PROBE_MICROTARI, true)
   let cost: bigint
   try {
-    cost = await dryRunFee(INDEXER_URL, probe.envelope)
+    cost = await dryRunFee(INDEXER_URL, probe.envelope, { onBusyRetry: () => log(RETRYING_MESSAGE) })
   } catch (e) {
     // The dry run is the authoritative check: it runs claim() itself. A refusal here is the faucet
     // answering, not the network failing — and a duplicate is a chain fact worth keeping.
@@ -244,7 +247,11 @@ export async function prepareClaim(
     const real = await buildEnvelope(fee, false)
 
     log('Submitting…')
-    const sub = await provider.submitTransaction(real.envelope)
+    // A claim creates this key's receipt, so while every indexer says it is absent the claim has not landed.
+    const sub = await submitOnce(() => provider.submitTransaction(real.envelope), {
+      landed: substateStillAbsent(faucetReceiptId(ownerPkHex)),
+      onBusyRetry: () => log(RETRYING_MESSAGE),
+    })
     const txId = sub.transaction_id as string
 
     log('Confirming on-chain…')

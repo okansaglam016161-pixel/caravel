@@ -27,8 +27,14 @@
 // A dry run is a single round trip against the indexer; this bounds it so a hung request surfaces
 // as an error the caller can show rather than a spinner that never resolves.
 import { describeRejectReason } from './txResult'
+import { INDEXER_URLS } from './indexerConfig'
+import { IndexerBusyError, fetchWithRetry } from './indexerRetry'
 
 const DRY_RUN_TIMEOUT_MS = 20_000
+
+// A dry run changes nothing, so a busy (429/503) or unanswering indexer is asked again — up to this
+// many attempts, alternating to the other indexer. See indexerRetry.ts.
+const DRY_RUN_ATTEMPTS = 4
 
 // Safety margin added to the measured cost, as a percentage.
 //
@@ -106,16 +112,23 @@ interface DryRunResponse {
  * (an under-funded probe shows up here as a Reject, and reporting it verbatim is far more useful
  * than a silent fallback to some default fee).
  */
-export async function dryRunFee(indexerUrl: string, envelope: unknown): Promise<bigint> {
+export async function dryRunFee(
+  indexerUrl: string,
+  envelope: unknown,
+  opts: { onBusyRetry?: () => void } = {},
+): Promise<bigint> {
+  // The named indexer first, then the others: a simulation is answered the same by any of them.
+  const urls = [indexerUrl, ...INDEXER_URLS.filter(u => u !== indexerUrl)]
   let resp: Response
   try {
-    resp = await fetch(`${indexerUrl}/transactions/dry-run`, {
+    resp = await fetchWithRetry(urls, '/transactions/dry-run', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ transaction: envelope }),
-      signal: AbortSignal.timeout(DRY_RUN_TIMEOUT_MS),
-    })
+    }, { attempts: DRY_RUN_ATTEMPTS, timeoutMs: DRY_RUN_TIMEOUT_MS, alternate: true, onBusyRetry: opts.onBusyRetry })
   } catch (e) {
+    // Busy throughout: its own message already says what happened and that nothing was sent.
+    if (e instanceof IndexerBusyError) throw e
     const timedOut = e instanceof Error && (e.name === 'TimeoutError' || e.name === 'AbortError')
     throw new Error(
       timedOut

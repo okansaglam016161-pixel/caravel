@@ -41,11 +41,15 @@ import type { SecretKeyWallet } from '@tari-project/ootle-secret-key-wallet'
 import { extractAccountAddress } from './accountAddress'
 import { loadAccountAddress, saveAccountAddress } from './accountStore'
 import { nextMaxEpoch } from './epoch'
-import { INDEXER_URL } from './indexerConfig'
+import { INDEXER_URL, INDEXER_URLS } from './indexerConfig'
+import { fetchWithRetry } from './indexerRetry'
 
 
 /** A dry run is one round trip; this bounds it so a hung request cannot stall an unlock. */
 const DRY_RUN_TIMEOUT_MS = 20_000
+
+/** Attempts for the probe's dry run, across both indexers. */
+const RECOVERY_ATTEMPTS = 2
 
 function toHexStr(bytes: Uint8Array): string {
   let s = ''
@@ -90,12 +94,13 @@ export async function probeAccountAddress(wallet: SecretKeyWallet): Promise<stri
   } catch { return null }
 
   try {
-    const res = await fetch(`${INDEXER_URL}/transactions/dry-run`, {
+    // A busy (429/503) or unanswering indexer gets one more try, on the other indexer — a
+    // simulation changes nothing. Still failing is the same null as before: unlock carries on.
+    const res = await fetchWithRetry([INDEXER_URL, ...INDEXER_URLS.filter(u => u !== INDEXER_URL)], '/transactions/dry-run', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ transaction: envelope }),
-      signal: AbortSignal.timeout(DRY_RUN_TIMEOUT_MS),
-    })
+    }, { attempts: RECOVERY_ATTEMPTS, timeoutMs: DRY_RUN_TIMEOUT_MS, alternate: true })
     if (!res.ok) return null
     const json = await res.json() as unknown
     // The same owner-key and template guards the claim path uses. They matter no less here: a

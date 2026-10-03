@@ -1,4 +1,5 @@
 import { TICKER } from './format'
+import { NETWORK_BUSY_MESSAGE } from '../../../crypto/indexerRetry'
 // Turning the fund modules' internal error strings into something a person can act on.
 //
 // WHY THIS EXISTS RATHER THAN EDITING THE MESSAGES AT SOURCE. conceal.ts and reveal.ts speak in
@@ -35,6 +36,11 @@ function toTari(micro: bigint): string {
  */
 export function plainError(message: string): string {
   if (!message) return message
+
+  // 0 — a busy indexer (Ootle 0.43 rate limits: HTTP 429 / 503) that reached the screen as a raw
+  //     status, from a path that does not retry. The whole message is replaced: "HTTP 503" says
+  //     nothing a person can act on, and a busy answer is a refusal, so nothing was sent.
+  if (/\bHTTP (429|503)\b/.test(message)) return NETWORK_BUSY_MESSAGE
 
   let out = message
 

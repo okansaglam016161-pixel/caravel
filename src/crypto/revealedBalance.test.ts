@@ -8,9 +8,13 @@
 // money: amounts must survive as exact bigints however the union delivers them, and a structural
 // zero must never be confused with an unreadable balance.
 
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi, beforeEach } from 'vitest'
+import { NETWORK_BUSY_MESSAGE, isBusyError, retryTiming } from './indexerRetry'
 import { TARI_RESOURCE_ADDRESS } from '@tari-project/ootle'
 import { decodeRevealedAmount, parseAmount, readRevealedBalance, type VaultIdResolver } from './revealedBalance'
+
+// Busy retries wait instantly here; the policy is pinned in indexerRetry.test.ts.
+beforeEach(() => { retryTiming.sleep = async () => {} })
 
 const ACCOUNT = 'component_5fdba3a627a929063e6769d0f420392fa752e0b8c2a2fb13d6b4993e214985fd'
 const VAULT = 'vault_5f6cd2ad4eb86b31db16d245406d29ab154cfeca4bfc0da729a9df3fef9679cc'
@@ -246,7 +250,10 @@ describe('readRevealedBalance — a never-created account reads as the zero it i
     ['an internal rpc error', '-32603: Internal error'],
   ])('still THROWS on %s — never a false zero', async (_label, message) => {
     const failing: VaultIdResolver = vi.fn(async () => { throw new Error(message) })
-    await expect(readRevealedBalance(providerWith({}), ACCOUNT, failing)).rejects.toThrow(message)
+    // A busy 503 is waited out first (Ootle 0.43) and then thrown as IndexerBusyError — still a
+    // throw, never a zero. Every other failure is rethrown exactly as the SDK wrote it.
+    await expect(readRevealedBalance(providerWith({}), ACCOUNT, failing))
+      .rejects.toThrow(isBusyError(new Error(message)) ? NETWORK_BUSY_MESSAGE : message)
   })
 
   // The tolerance is for the COMPONENT read only. These ids came out of the component's own state,

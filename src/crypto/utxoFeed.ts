@@ -29,6 +29,7 @@
 // They page through here now, so a change to how the set is read cannot land in one and not the
 // other — the same argument stealthUtxos already makes for sharing input selection.
 
+import { classifyStatus, parseRetryAfter } from './indexerRetry'
 import { TARI_RESOURCE_ADDRESS } from '@tari-project/ootle'
 import { INDEXER_URLS } from './indexerConfig'
 
@@ -112,6 +113,7 @@ function mergeSignals(a: AbortSignal, b: AbortSignal): AbortSignal {
  */
 async function fetchPage(indexerUrl: string, fromId: string | null, signal: AbortSignal): Promise<UtxoRow[]> {
   let lastErr: unknown
+  let busyWaitMs: number | null = null
   for (let attempt = 1; attempt <= FETCH_RETRIES; attempt++) {
     if (signal.aborted) throw new DOMException('scan aborted', 'AbortError')
 
@@ -127,7 +129,11 @@ async function fetchPage(indexerUrl: string, fromId: string | null, signal: Abor
         { signal: reqSignal },
       )
       clearTimeout(reqTimer)
-      if (!resp.ok) throw new Error(`indexer returned HTTP ${resp.status}`)
+      if (!resp.ok) {
+        // A busy indexer (0.43 rate limits) may say how long to wait; that beats our own guess.
+        if (classifyStatus(resp.status) === 'busy') busyWaitMs = parseRetryAfter(resp.headers?.get?.('retry-after'))
+        throw new Error(`indexer returned HTTP ${resp.status}`)
+      }
       const json = await resp.json() as { utxos?: UtxoRow[] }
       if (!Array.isArray(json.utxos)) throw new Error('unexpected indexer response shape')
       return json.utxos
@@ -136,7 +142,8 @@ async function fetchPage(indexerUrl: string, fromId: string | null, signal: Abor
       if (signal.aborted) throw e   // intentional abort — stop now; the caller ignores aborted scans
       lastErr = timedOut ? new Error('indexer request timed out') : e
       // Transient failure — back off and retry before giving up.
-      if (attempt < FETCH_RETRIES) await new Promise<void>(r => setTimeout(r, RETRY_BACKOFF_MS * attempt))
+      if (attempt < FETCH_RETRIES) await new Promise<void>(r => setTimeout(r, busyWaitMs ?? RETRY_BACKOFF_MS * attempt))
+      busyWaitMs = null
     }
   }
   throw lastErr instanceof Error ? lastErr : new Error(`utxo fetch failed: ${String(lastErr)}`)

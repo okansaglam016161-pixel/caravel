@@ -39,6 +39,7 @@
 // restored wallet on a fresh device has for anything older than the first walk reached. The two
 // union, the same way by-id recovery already unions with the listing.
 
+import { withBusyRetry } from './indexerRetry'
 import { decryptInputData, Network, WasmStealthCrypto, type StealthCryptoProvider } from '@tari-project/ootle'
 import { IndexerClient } from '@tari-project/ootle-indexer'
 import { INDEXER_URLS } from './indexerConfig'
@@ -247,22 +248,30 @@ const fetchRecentPage: RecentPageFetcher = async (indexerUrl, lastId, limit) => 
     client = IndexerClient.usingFetchTransport(indexerUrl)
     clients.set(indexerUrl, client)
   }
-  // The client's transport takes no signal, so the ceiling is a race. A lost race leaves one
-  // request to finish in the background, which is harmless; a stalled balance scan is not.
-  let timer: ReturnType<typeof setTimeout> | undefined
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`${indexerUrl}/transactions/recent timed out`)), PAGE_TIMEOUT_MS)
-  })
-  try {
-    const res = await Promise.race([
-      client.listRecentTransactions({ limit, last_id: lastId, source: null }),
-      timeout,
-    ])
-    return (res?.transactions ?? []) as unknown as RecentTxEntry[]
-  } finally {
-    clearTimeout(timer)
-  }
+  const page = client
+  // A busy indexer (429/503 — the SDK throws "HTTP 503: …") is asked again; anything else fails the
+  // page exactly as before. A read, so retrying is safe.
+  return withBusyRetry(async () => {
+    // The client's transport takes no signal, so the ceiling is a race. A lost race leaves one
+    // request to finish in the background, which is harmless; a stalled balance scan is not.
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${indexerUrl}/transactions/recent timed out`)), PAGE_TIMEOUT_MS)
+    })
+    try {
+      const res = await Promise.race([
+        page.listRecentTransactions({ limit, last_id: lastId, source: null }),
+        timeout,
+      ])
+      return (res?.transactions ?? []) as unknown as RecentTxEntry[]
+    } finally {
+      clearTimeout(timer)
+    }
+  }, { attempts: RECENT_PAGE_ATTEMPTS })
 }
+
+/** Attempts per recent-transactions page when the indexer answers busy. */
+const RECENT_PAGE_ATTEMPTS = 3
 
 /** A stealth output as a transaction carries it: enough to try our view key on it. */
 export interface CarriedOutput {

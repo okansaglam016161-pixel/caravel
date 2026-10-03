@@ -21,6 +21,8 @@
  * since M3, shared from stealthUtxos.ts so the two cannot drift.
  */
 
+import { inputsStillUnspent, submitOnce } from './submitGuard'
+import { RETRYING_MESSAGE } from './indexerRetry'
 import {
   OotleWallet,
   Network,
@@ -260,7 +262,7 @@ export async function sendConfidential(
   // aside — so a probe can never fail for want of funds the real send would have had. The "almost"
   // is what keeps the probe the same SHAPE as the real send; see probeFeeFor.
   const probe = await buildEnvelope(probeFeeFor(selection.total, amountMicrotari), true)
-  const cost  = await dryRunFee(INDEXER_URL, probe.envelope)
+  const cost  = await dryRunFee(INDEXER_URL, probe.envelope, { onBusyRetry: () => log(RETRYING_MESSAGE) })
   const fee   = withFeeMargin(cost)
   // AGAINST WHAT THE PROBE RESERVED, not the raw ceiling. Two things follow from that, and the
   // second is the one that matters: a fee above the reservation was never simulated, and — because
@@ -281,7 +283,10 @@ export async function sendConfidential(
   const spentInputIds = selection.inputs.map(u => u.substateId)
 
   log('Submitting transaction…')
-  const sub = await provider.submitTransaction(envelope)
+  const sub = await submitOnce(() => provider.submitTransaction(envelope), {
+    landed: inputsStillUnspent(spentInputIds),
+    onBusyRetry: () => log(RETRYING_MESSAGE),
+  })
   const txId = sub.transaction_id as string
   log('Submitted — waiting for the network to finalise it…')
 

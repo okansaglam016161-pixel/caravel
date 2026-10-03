@@ -5,7 +5,11 @@
 //   indexer returns as plain JSON at `substate.Component.body.state[0]`:
 //       { "okz": [ { "@cbor":"bytes", "hex":"c00a…" }, { "nostr":"npub1…" } ] }
 //   i.e. name → [ owner (cbor bytes), records (string→string) ]. No CBOR decoding needed.
+import { IndexerBusyError, fetchWithRetry } from "./retry.js";
 const DEFAULT_INDEXER_URL = "https://ootle-indexer-a.tari.com";
+/** Registry reads: attempts when the indexer is busy or unanswering, and the per-request ceiling. */
+const READ_ATTEMPTS = 3;
+const READ_TIMEOUT_MS = 15_000;
 /** Keyless ONS reads via the public indexer. */
 export class OnsReader {
     component;
@@ -22,9 +26,12 @@ export class OnsReader {
         const url = `${this.indexerUrl}/substates/${encodeURIComponent(this.component)}`;
         let resp;
         try {
-            resp = await fetch(url);
+            // A read: a busy (429/503) or unanswering indexer is asked again before giving up.
+            resp = await fetchWithRetry(url, {}, { attempts: READ_ATTEMPTS, timeoutMs: READ_TIMEOUT_MS });
         }
         catch (e) {
+            if (e instanceof IndexerBusyError)
+                throw e; // its message already says what happened
             throw new Error(`ONS indexer request failed: ${e.message}`);
         }
         if (resp.status === 404) {

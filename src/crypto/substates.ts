@@ -5,6 +5,7 @@
 // transaction declares as its inputs. Both are about existence, and getting either wrong costs
 // money rather than correctness.
 
+import { SDK_READ_ATTEMPTS, withBusyRetry } from './indexerRetry'
 import { getVaultIdsForAccount, type Provider } from '@tari-project/ootle'
 
 /**
@@ -101,7 +102,8 @@ export async function resolveAccountInputs(
 ): Promise<AccountInputs> {
   let vaultIds: string[]
   try {
-    vaultIds = await resolveVaultIds(provider, accountAddress)
+    // Busy is retried; on exhaustion the IndexerBusyError is not a not-found, so it rethrows below.
+    vaultIds = await withBusyRetry(() => resolveVaultIds(provider, accountAddress), { attempts: SDK_READ_ATTEMPTS })
   } catch (e) {
     // NOT-FOUND ONLY. Anything else is "we do not know", and a transaction must not be built on a
     // guess about where its money is going.

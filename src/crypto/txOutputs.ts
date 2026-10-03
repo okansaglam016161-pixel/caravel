@@ -28,11 +28,16 @@
 // under-reporting lies.
 
 import { upSubstates } from './accountAddress'
-import { INDEXER_URL } from './indexerConfig'
+import { INDEXER_URL, INDEXER_URLS } from './indexerConfig'
+import { fetchWithRetry } from './indexerRetry'
 
 
 /** Matches the id format walletScanner builds, so the two sets compare directly. */
 const UTXO_PREFIX = 'utxo_'
+
+/** A result read is retried across both indexers when busy or unanswering. */
+const RESULT_READ_ATTEMPTS = 3
+const RESULT_READ_TIMEOUT_MS = 15_000
 
 /**
  * The substate ids of every UTXO this transaction created.
@@ -48,7 +53,13 @@ export async function fetchCreatedUtxoIds(
 ): Promise<string[] | null> {
   let resp: Response
   try {
-    resp = await fetch(`${INDEXER_URL}/transactions/${encodeURIComponent(txId)}/result`, { signal })
+    // A read: a busy or unanswering indexer is asked again, on the other indexer if need be.
+    resp = await fetchWithRetry(
+      [INDEXER_URL, ...INDEXER_URLS.filter(u => u !== INDEXER_URL)],
+      `/transactions/${encodeURIComponent(txId)}/result`,
+      {},
+      { attempts: RESULT_READ_ATTEMPTS, timeoutMs: RESULT_READ_TIMEOUT_MS, alternate: true, signal },
+    )
   } catch { return null }
   if (!resp.ok) return null
 

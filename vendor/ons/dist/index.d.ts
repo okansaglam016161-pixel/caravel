@@ -6,6 +6,7 @@ export type { NameRecord, OnsConfig, DaemonSigner, WriteResult } from "./types.j
 export { OnsReader } from "./reader.js";
 export type { OnsWriter } from "./writer.js";
 export type { BrowserSigner, OnsBrowserWriter, OwnedFeeUtxo } from "./browser-writer.js";
+export { IndexerBusyError, SubmitMaybeLandedError, NETWORK_BUSY_MESSAGE, RETRYING_MESSAGE } from "./retry.js";
 /** An ONS client: keyless reads (inherited from {@link OnsReader}) plus opt-in writes. */
 export declare class OnsClient extends OnsReader {
     private readonly config;

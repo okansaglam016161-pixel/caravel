@@ -9,6 +9,7 @@
 //
 //   This makes ONS registrable by ANY self-custodial browser wallet, not just Caravel. It depends on
 //   @tari-project/ootle (+ -indexer, + -secret-key-wallet) — optional peer deps loaded only for writes.
+import { RETRYING_MESSAGE, fetchWithRetry, submitOnce, withBusyRetry } from "./retry.js";
 import { OotleWallet, Network, TARI_RESOURCE_ADDRESS, StealthInput, StealthTransferStatement, TransactionBuilder, WasmStealthCrypto, createOutput, decryptOwnedUtxo, generateSealKeypair, resolveMaxEpoch, resolveTransaction, sealTransaction, serializeUnsignedTx, signBalanceProof, signTransaction, stealthTransferInstruction, stealthUtxoSubstateId, stringLiteral, } from "@tari-project/ootle";
 import { IndexerProvider } from "@tari-project/ootle-indexer";
 const DEFAULT_INDEXER_URL = "https://ootle-indexer-a.tari.com";
@@ -36,6 +37,20 @@ const MAX_EPOCH_LEAD = 10;
 // Ceiling on the dry-run request. A dry-run is simulated, not committed, so it should return well
 // inside this; the transport aborts the fetch past it rather than hanging the caller forever.
 const DRY_RUN_TIMEOUT_MS = 30_000;
+// Ootle 0.43 busy-indexer retries (see retry.ts): attempts for dry runs and for reads.
+const DRY_RUN_ATTEMPTS = 4;
+const READ_ATTEMPTS = 3;
+const RESULT_TIMEOUT_MS = 15_000;
+/** "not-landed" only while the fee input coin still exists — positive evidence the submit did not land. */
+async function substateStillExists(indexerUrl, substateId) {
+    try {
+        const res = await fetchWithRetry(`${indexerUrl}/substates/${encodeURIComponent(substateId)}`, {}, { attempts: 2, timeoutMs: RESULT_TIMEOUT_MS });
+        return res.ok ? "not-landed" : "maybe-landed";
+    }
+    catch {
+        return "maybe-landed";
+    }
+}
 // Safety margin added over the estimate when actually submitting.
 //
 // WIDENED 2% -> 25%. The whole revealed budget is consumed on-chain here (the fee overcharge is NOT
@@ -76,7 +91,8 @@ async function scanUtxos(indexerUrl, crypto, viewSecret) {
     // ONE request — the indexer ignores `offset`, so paginating by it would re-fetch the same set
     // forever. Fetch the whole set with a big `limit` instead.
     const url = `${indexerUrl}/utxos?resource_address=${RESOURCE_HEX}&limit=${FETCH_LIMIT}`;
-    const res = await fetch(url, { signal: AbortSignal.timeout(SCAN_TIMEOUT_MS) });
+    // A read: a busy or unanswering indexer is asked again before the scan gives up.
+    const res = await fetchWithRetry(url, {}, { attempts: READ_ATTEMPTS, timeoutMs: SCAN_TIMEOUT_MS });
     if (!res.ok)
         throw new Error(`UTXO scan HTTP ${res.status}`);
     const body = (await res.json());
@@ -153,7 +169,7 @@ async function pollResult(indexerUrl, txId) {
     for (let i = 0; i < 6; i++) {
         await new Promise((r) => setTimeout(r, 5_000));
         try {
-            const res = await fetch(`${indexerUrl}/transactions/${txId}/result`);
+            const res = await fetchWithRetry(`${indexerUrl}/transactions/${txId}/result`, {}, { attempts: 2, timeoutMs: RESULT_TIMEOUT_MS });
             if (!res.ok)
                 continue;
             const json = (await res.json());
@@ -177,15 +193,14 @@ async function pollResult(indexerUrl, txId) {
  * with no `Finalized` wrapper and no `final_decision`, and it is never recorded at
  * `/transactions/{id}/result`. So we classify the inline `result.finalize` and never poll.
  */
-async function dryRunSubmit(provider, envelope) {
+async function dryRunSubmit(provider, envelope, onBusyRetry) {
     // `getTransport()` is present at runtime but absent from the (older) build-time indexer types, so
     // reach it structurally. This is the same transport `submitTransaction` posts through.
     const transport = provider
         .getClient()
         .getTransport();
-    const resp = (await transport.sendPost("transactions/dry-run", { transaction: envelope }, {
-        timeout_millis: DRY_RUN_TIMEOUT_MS,
-    }));
+    // A dry run changes nothing, so a busy indexer (429/503) is waited out and asked again.
+    const resp = (await withBusyRetry(() => transport.sendPost("transactions/dry-run", { transaction: envelope }, { timeout_millis: DRY_RUN_TIMEOUT_MS }), { attempts: DRY_RUN_ATTEMPTS, onBusyRetry }));
     const txId = resp.transaction_id ?? "(dry-run)";
     const classified = classifyFinalize(resp.result?.finalize);
     if (classified)
@@ -314,7 +329,8 @@ export class OnsBrowserWriter {
         // 0.39: `max_epoch` is mandatory, so the builder needs the chain tip before it exists. Read
         // here — after the range proofs above, immediately before the builder — so none of the validity
         // window is spent generating them locally.
-        const maxEpoch = await resolveMaxEpoch(provider, MAX_EPOCH_LEAD);
+        const onBusyRetry = () => this.signer.onProgress?.(RETRYING_MESSAGE);
+        const maxEpoch = await withBusyRetry(() => resolveMaxEpoch(provider, MAX_EPOCH_LEAD), { attempts: READ_ATTEMPTS, onBusyRetry });
         const builder = new TransactionBuilder(Network.Esmeralda, maxEpoch);
         // Fee: StealthTransfer → bucket on workspace → PayFeeFromBucket (identical to confidentialSend).
         builder.addFeeInstruction(stealthTransferInstruction({ resourceAddress: TARI_RESOURCE_ADDRESS, revealedInputBucket: null, statement: stmt }, () => ({ id: 0, offset: null })));
@@ -326,7 +342,10 @@ export class OnsBrowserWriter {
         // The ONS call(s) — normal instructions, run in order after the fee is set up.
         for (const c of calls)
             builder.callMethod({ componentAddress: this.component, methodName: c.methodName }, c.args);
-        const unsignedTx = await resolveTransaction(provider, builder.buildUnsignedTransaction());
+        const unsignedTx = await withBusyRetry(() => resolveTransaction(provider, builder.buildUnsignedTransaction()), {
+            attempts: READ_ATTEMPTS,
+            onBusyRetry,
+        });
         // A dry-run asks the network to simulate execution and return the result without committing state
         // (no fee spent). Set it before serialising so the flag is covered by the signature.
         if (dryRun)
@@ -339,11 +358,17 @@ export class OnsBrowserWriter {
         const envelope = sealTransaction(signed);
         // Dry-runs must go to the dedicated endpoint; the normal submit path rejects `dry_run` txs.
         if (dryRun) {
-            const dr = await dryRunSubmit(provider, envelope);
+            const dr = await dryRunSubmit(provider, envelope, onBusyRetry);
             provider.stopWatcher?.();
             return dr;
         }
-        const sub = await provider.submitTransaction(envelope);
+        // A busy refusal is retried with THIS envelope only, and only while the fee input still exists
+        // (i.e. the refused attempt did not land). Anything ambiguous is never resubmitted — see retry.ts.
+        const feeInputId = stealthUtxoSubstateId(TARI_RESOURCE_ADDRESS, utxo.commitment);
+        const sub = await submitOnce(() => provider.submitTransaction(envelope), {
+            landed: () => substateStillExists(this.indexerUrl, feeInputId),
+            onBusyRetry,
+        });
         const txId = sub.transaction_id;
         this.signer.onSubmitted?.(txId, [utxo.substateId]);
         const r = await pollResult(this.indexerUrl, txId);

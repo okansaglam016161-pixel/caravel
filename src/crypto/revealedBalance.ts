@@ -34,6 +34,7 @@
 // reported "Balance unreadable right now / your public balance couldn't be read" over a balance that
 // was simply, verifiably, zero. See isSubstateNotFound below.
 
+import { SDK_READ_ATTEMPTS, withBusyRetry } from './indexerRetry'
 import { getVaultIdsForAccount, Network, TARI_RESOURCE_ADDRESS, type Provider } from '@tari-project/ootle'
 import { IndexerProvider } from '@tari-project/ootle-indexer'
 import type { SubstateValue } from '@tari-project/ootle-ts-bindings'
@@ -150,7 +151,7 @@ export async function readRevealedBalance(
   // is. Every other failure still throws, because every other failure means we do not know.
   let vaultIds: string[]
   try {
-    vaultIds = await resolveVaultIds(provider, accountAddress)
+    vaultIds = await withBusyRetry(() => resolveVaultIds(provider, accountAddress), { attempts: SDK_READ_ATTEMPTS })
   } catch (e) {
     if (isSubstateNotFound(e)) return 0n
     throw e
@@ -165,7 +166,8 @@ export async function readRevealedBalance(
   // missing vault here therefore throws, like any other unreadable balance.
   let total = 0n
   for (const vaultId of vaultIds) {
-    const res = await provider.getSubstate(vaultId)
+    // A busy indexer is asked again (reads are safe to retry); every other failure throws as before.
+    const res = await withBusyRetry(() => provider.getSubstate(vaultId), { attempts: SDK_READ_ATTEMPTS })
     const amount = decodeRevealedAmount(res?.substate as SubstateValue | undefined, TARI_RESOURCE_ADDRESS)
     if (amount !== null) total += amount
   }

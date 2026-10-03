@@ -22,6 +22,11 @@ export interface BrowserSigner {
      * spent immediately rather than waiting for its next scan.
      */
     onSubmitted?: (txId: string, spentInputIds: string[]) => void;
+    /**
+     * Progress text for the caller to show. Today it carries only the busy-indexer notice
+     * ("Network busy, retrying…") while an Ootle 0.43 rate limit is being waited out.
+     */
+    onProgress?: (message: string) => void;
 }
 /** One spendable stealth output — what `ownedUtxos` returns and the built-in scan produces. */
 export interface OwnedFeeUtxo {

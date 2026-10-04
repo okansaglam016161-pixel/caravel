@@ -448,7 +448,7 @@ export default function GroupThread({
         {messages.length === 0 && pending.length === 0 && (
           <ThreadEmptyState
             title="This group is private"
-            body={<>Messages in {groupTitle(group)} go to every member, end-to-end encrypted. Only people on the group’s member list, including anyone who has left, can read them.</>}
+            body={<>Messages in {groupTitle(group)} go to every member, end-to-end encrypted. Only group members can read them.</>}
           />
         )}
         {/* Real messages and provisional bubbles in ONE chronological pass — see mergeThreadItems.

@@ -107,7 +107,7 @@ export default function ChatStill() {
           visual weight as the balance hero across the row from it. The two other overrides are
           what make it a still — there is nothing to scroll, and no flex parent to weigh against. */}
       <div style={{ ...THREAD_SCROLLER, flex: 'none', overflowY: 'visible', padding: 24 }}>
-        <MessageBubble variant="received" text="Bank flagged my wire again 🙄 sending it on Caravel instead" timestamp={now - 6 * MIN} />
+        <MessageBubble variant="received" text="Splitting dinner? I’ll send my half on Caravel 🍜 (testnet for now)" timestamp={now - 6 * MIN} />
         <MessageBubble variant="sent" text={`Received, 250 ${TICKER}`} timestamp={now - 5 * MIN} />
         <MessageBubble variant="received" text="So much easier" timestamp={now - 4 * MIN} />
       </div>

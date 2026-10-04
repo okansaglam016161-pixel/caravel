@@ -201,9 +201,7 @@ function UnattributedReceiveRowV2({ row, hidden }: {
   const seen = `first seen ${firstSeenLabel(row.timestamp)}`
   const note = row.message !== null
     ? `“${row.message}” · sender unknown · ${seen}`
-    // No message, so this may be our own change from a send made on another device: that send is
-    // in the other device's journal, not this one's, and the coin looks like anyone else's.
-    : `Sender unknown · may be change from this wallet on another device · ${seen}`
+    : `Sender unknown · ${seen}`
   return <ActivityRowShell hidden={hidden} row={{
     id: row.id, direction: 'in', title: 'Received', note,
     status: 'received', amountMicrotari: row.amountMicrotari,
@@ -1023,7 +1021,7 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
   const moveLeftoverNote =
     moveDir === 'reveal' && moveExact !== null && privateAmount > ceiling
       ? [
-          `${toInput(privateAmount - ceiling)} ${TICKER} stays private: room for the fee plus a small change output. It’s still yours.`,
+          'A little stays private to cover the fee.',
           privateFiguresIncomplete ? incompleteAvailableNote() : '',
         ].filter(Boolean).join(' ')
       : moveDir === 'reveal' && privateFiguresIncomplete
@@ -1164,7 +1162,7 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
         // The figure shown is the whole balance; MAX fills less (the fee reserve, and for private
         // funds the 64-output cap). Say so, or MAX looks like it ignored the number above it.
         : sendAvailable !== null && sendCeiling > 0n && sendCeiling < sendAvailable
-          ? `Up to ${toInput(sendCeiling)} ${TICKER} can be sent in one payment (${toInput(MAX_FEE)} ${TICKER} held for the fee).`
+          ? `Max keeps ${toInput(MAX_FEE)} ${TICKER} for the fee.`
           : undefined,
       canReview: !!sendRecipient && !!sendAmount,
       error: sendValidationError || undefined,

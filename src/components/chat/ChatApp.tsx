@@ -1406,7 +1406,7 @@ export default function ChatApp() {
       // The busy-then-unsure error says "Check Activity", which is true in the wallet and not here:
       // chat payments are never rows in Activity. Same fact, a pointer that can be followed.
       setPayError(e instanceof SubmitMaybeLandedError
-        ? 'The network was busy, and this payment may already have gone through. Watch your private balance for a few minutes before trying again.'
+        ? 'Network busy. It may have gone through. Check your balance before trying again.'
         : e instanceof Error ? e.message : String(e))
     } finally {
       setPayBusy(false)
@@ -2256,7 +2256,7 @@ export default function ChatApp() {
                     <div style={{ fontSize: 11.5, lineHeight: 1.5, textWrap: 'pretty' }}>
                       {payAlert.kind === 'orphan'
                         ? <><span style={{ fontWeight: 600, color: 'var(--warn)' }}>The funds left your wallet, but no note was attached.</span> <span style={{ color: 'var(--text-body-dim)' }}>{displayName(selectedConvo.peerHex)} received {payAlert.amountTari} {TICKER} without your message, so tell them separately.</span></>
-                        : <><span style={{ fontWeight: 600, color: 'var(--warn)' }}>The send timed out. Do not resend.</span> <span style={{ color: 'var(--text-body-dim)' }}>{payAlert.amountTari} {TICKER} may still go through — check your private balance in a few minutes before trying again. If it does, {displayName(selectedConvo.peerHex)} receives it without your note.</span></>}
+                        : <><span style={{ fontWeight: 600, color: 'var(--warn)' }}>Timed out.</span> <span style={{ color: 'var(--text-body-dim)' }}>It may still go through. Don’t resend; check your balance in a few minutes.</span></>}
                     </div>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '9px 12px', borderRadius: 9, background: 'var(--surface-trough)' }}>
@@ -2358,7 +2358,7 @@ export default function ChatApp() {
                     <div style={{ fontSize: 11, color: 'var(--warn)', lineHeight: 1.5, marginTop: -6, textWrap: 'pretty' }}>{incompleteAvailableNote()}</div>
                   )}
                   {payInsufficient && (
-                    <div style={{ fontSize: 11.5, color: 'var(--danger-300)', marginTop: -6 }}>Amount plus the {FEE_CEIL_XTR} {TICKER} fee reserve is more than your private balance</div>
+                    <div style={{ fontSize: 11.5, color: 'var(--danger-300)', marginTop: -6 }}>Not enough to cover amount + fee.</div>
                   )}
 
                   <textarea

@@ -17,7 +17,7 @@ import { QRCodeSVG } from 'qrcode.react'
 import { C, MONO } from './tokens'
 import { Check, Clock, Copy, Eye, Lock, Shield, Spinner } from './icons'
 import { Body, SubHeader } from './primitives'
-import { fmt6, TICKER } from './format'
+import { fmt6, toInput, TICKER } from './format'
 
 const XTR = (n: bigint) => `${fmt6(n)} ${TICKER}`
 
@@ -697,7 +697,7 @@ function Receipt({ fee, feeIsCeiling, txId, onCopy }: { fee: bigint; feeIsCeilin
       display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
       marginTop: 18, fontFamily: MONO, fontSize: 11, color: C.faint, flexWrap: 'wrap',
     }}>
-      <span>{feeIsCeiling ? <>fee ≤ {fmt6(fee)} {TICKER} (exact fee not reported)</> : <>fee {fmt6(fee)} {TICKER}</>}</span>
+      <span>{feeIsCeiling ? <>Fee: up to {toInput(fee)} {TICKER} (estimate)</> : <>fee {fmt6(fee)} {TICKER}</>}</span>
       <span aria-hidden="true">·</span>
       <span
         role="button" tabIndex={0} onClick={onCopy} onKeyDown={e => e.key === 'Enter' && onCopy()}
@@ -1300,11 +1300,10 @@ export function ActivityEmpty({ compact = false }: { compact?: boolean }) {
           <path d="M3 12h4l3-8 4 16 3-8h4" />
         </svg>
       </span>
-      <div style={{ fontSize: 13.5, fontWeight: 600, color: C.primary, marginTop: 12 }}>No activity on this device yet</div>
-      {/* No "swaps" — there is no swap feature; the moves are Make private / Make public. And
-          "on this device": the history is kept locally, so a restored wallet starts empty here. */}
+      <div style={{ fontSize: 13.5, fontWeight: 600, color: C.primary, marginTop: 12 }}>No activity yet</div>
+      {/* No "swaps" — there is no swap feature; the moves are Make private / Make public. */}
       <div style={{ fontSize: 12.5, color: C.mutedDim, marginTop: 4, lineHeight: 1.5, textWrap: 'pretty' }}>
-        Payments and moves between your private and public balances will appear here.
+        Your payments will appear here.
       </div>
     </div>
   )

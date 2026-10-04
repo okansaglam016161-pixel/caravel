@@ -18,6 +18,7 @@ import PendingBubble, { type PendingSend } from './PendingBubble'
 import { loadNicknames, setNickname, MAX_NICKNAME_LEN, type NicknameMap } from '../../messaging/nicknameStore'
 import { loadAddressSent, markAddressSent, clearAddressSent, type AddressSentMap } from '../../messaging/addressSentStore'
 import { sendConfidential, tariToMicrotari, MAX_FEE } from '../../crypto/confidentialSend'
+import { SubmitMaybeLandedError } from '../../crypto/submitGuard'
 import { beginEntry, settleEntry } from '../../crypto/journalStore'
 import { resolveOnsNameToHex, toOnsName, type OnsResolveErrorKind } from '../../crypto/ons'
 import { ConnectionIndicator, RelayHealthPanel } from './ConnectionStatus'
@@ -341,7 +342,7 @@ function SentPaymentCard({ message, lid, flashed }: { message: CaravelMessage; l
   const amount = message.localPayment ? microToTari(message.localPayment.amountMicrotari) : null
   const state: PayCardState = amount !== null
     ? { dir: 'SENT', amount, pill: true }                                                   // S1
-    : { dir: 'SENT', masked: true, tone: 'dim', status: 'Sent from another device, so the amount isn’t cached here.' }  // S2
+    : { dir: 'SENT', masked: true, tone: 'dim', status: 'The amount isn’t stored on this device.' }  // S2
   return <PaymentCard sent state={state} timestamp={message.timestamp} plaintext={message.plaintext} lid={lid} flashed={flashed} />
 }
 
@@ -354,9 +355,9 @@ function ReceivedPaymentCard({ message, lid, flashed }: { message: CaravelMessag
   } else if (res.kind === 'loading') {
     state = { dir: 'RECEIVED', tone: 'dim', spin: true, status: 'Resolving amount…' }        // R2
   } else if (res.kind === 'retrying' && res.reason === 'not_found') {
-    // NO SPINNER, deliberately. The payment arrived; only the index is behind, and a spinner would
-    // make a settled fact look like a request in doubt.
-    state = { dir: 'RECEIVED', tone: 'dim', status: 'Waiting for the payment to be indexed. It will appear on its own.' }  // R3
+    // NO SPINNER, and no promise. A miss here is "spent OR not yet indexed" — or a reference to an
+    // output that never existed — and the retries are bounded, so it may end at "Could not verify".
+    state = { dir: 'RECEIVED', tone: 'dim', status: 'Not found on the network yet. Checking again…' }  // R3
   } else if (res.kind === 'retrying') {
     state = { dir: 'RECEIVED', tone: 'dim', spin: true, status: 'Reaching the indexer…' }    // R4
   } else if (res.reason === 'spent') {
@@ -382,11 +383,7 @@ function PaymentMessageCard({ message, lid, flashed }: { message: CaravelMessage
 
 // ── Component ────────────────────────────────────────────────────────────────────
 
-export default function ChatApp({ onOpenWallet }: {
-  /** Switch the shell to the Wallet service. Chat cannot reach it otherwise — the service lives in
-   *  AppShell — and CNS's timeout screen sends people to Activity to check a transaction. */
-  onOpenWallet: () => void
-}) {
+export default function ChatApp() {
   const { wallet, address, scan, messages, historyUnreadable, nostrPubkeyHex, messagingStatus, contacts, acceptContact, contactAddresses, setManualTariAddress, createMessagingProvider, recordSentMessage, deleteConversation, editMessage, reactMessage, getRelayStates, reconnectAll, groups, createGroup, acceptGroup, declineGroup, leaveGroup, reinviteGroup, balanceHidden } = useWallet()
   // Logo has no theme awareness of its own — `onLight` is a manual prop. Both marks in this view
   // sit on surfaces that are now light in the light theme, so the white mark would vanish.
@@ -1355,7 +1352,7 @@ export default function ChatApp({ onOpenWallet }: {
 
       if (result.outcome === 'Reject') {
         // Nothing happened — keep payment mode + fields so the user can adjust and retry.
-        setPayError('Payment was rejected on-chain — nothing was sent.', true)
+        setPayError(result.reason ? `Payment was rejected on-chain: ${result.reason}` : 'Payment was rejected on-chain — nothing was sent.', true)
         return
       }
       if (result.outcome === 'Timeout') {
@@ -1406,7 +1403,11 @@ export default function ChatApp({ onOpenWallet }: {
       settleEntry(address, journalId, { outcome: 'pending' })
       // NO `safe` FLAG HERE, deliberately — same reason the journal records this as ATTEMPTED. The
       // error strip will not add "Nothing left your wallet."; on this one path we do not know that.
-      setPayError(e instanceof Error ? e.message : String(e))
+      // The busy-then-unsure error says "Check Activity", which is true in the wallet and not here:
+      // chat payments are never rows in Activity. Same fact, a pointer that can be followed.
+      setPayError(e instanceof SubmitMaybeLandedError
+        ? 'The network was busy, and this payment may already have gone through. Watch your private balance for a few minutes before trying again.'
+        : e instanceof Error ? e.message : String(e))
     } finally {
       setPayBusy(false)
       setPayProgress(null)
@@ -1929,7 +1930,7 @@ export default function ChatApp({ onOpenWallet }: {
                   const nick = nicknames[c.peerHex]
                   const lm = c.lastMessage
                   const isPay = !!lm?.payment
-                  const preview = !lm ? '' : isPay ? 'Payment sent' : lm.direction === 'sent' ? `You: ${lm.plaintext}` : lm.plaintext
+                  const preview = !lm ? '' : isPay ? (lm.direction === 'sent' ? 'Payment sent' : 'Payment received') : lm.direction === 'sent' ? `You: ${lm.plaintext}` : lm.plaintext
                   return (
                     <div key={c.peerHex} onClick={() => { setSelectedPeer(c.peerHex); setSelectedGroupId(null) }} className="cv-conv" style={{ ...CONV_ROW, background: active ? 'var(--accent-wash)' : 'transparent' }}>
                       {/* A person's avatar is a CIRCLE and a group's is a rounded tile — the shape
@@ -2244,7 +2245,7 @@ export default function ChatApp({ onOpenWallet }: {
                   composer. Logic unchanged.
                   THE DESIGN'S BANNER IS TRIMMED BACK TO TWO SENTENCES; the txId, its Copy and the
                   dismiss are kept anyway. This alert is the only place the product can hand over a
-                  transaction id, "Check Activity before trying again" is unactionable without one,
+                  transaction id — chat payments are not rows in Activity, so this is the only record —
                   and setPayAlert(null) is the single thing that clears it — a banner with no
                   acknowledge would either never leave or leave on its own, and both are wrong here.
                   This is the one screen where dropping information is the dangerous choice. */}
@@ -2255,7 +2256,7 @@ export default function ChatApp({ onOpenWallet }: {
                     <div style={{ fontSize: 11.5, lineHeight: 1.5, textWrap: 'pretty' }}>
                       {payAlert.kind === 'orphan'
                         ? <><span style={{ fontWeight: 600, color: 'var(--warn)' }}>The funds left your wallet, but no note was attached.</span> <span style={{ color: 'var(--text-body-dim)' }}>{displayName(selectedConvo.peerHex)} received {payAlert.amountTari} {TICKER} without your message, so tell them separately.</span></>
-                        : <><span style={{ fontWeight: 600, color: 'var(--warn)' }}>The send timed out. Do not resend.</span> <span style={{ color: 'var(--text-body-dim)' }}>{payAlert.amountTari} {TICKER} may still have gone through. Check Activity before trying again.</span></>}
+                        : <><span style={{ fontWeight: 600, color: 'var(--warn)' }}>The send timed out. Do not resend.</span> <span style={{ color: 'var(--text-body-dim)' }}>{payAlert.amountTari} {TICKER} may still go through — check your private balance in a few minutes before trying again. If it does, {displayName(selectedConvo.peerHex)} receives it without your note.</span></>}
                     </div>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '9px 12px', borderRadius: 9, background: 'var(--surface-trough)' }}>
@@ -2357,7 +2358,7 @@ export default function ChatApp({ onOpenWallet }: {
                     <div style={{ fontSize: 11, color: 'var(--warn)', lineHeight: 1.5, marginTop: -6, textWrap: 'pretty' }}>{incompleteAvailableNote()}</div>
                   )}
                   {payInsufficient && (
-                    <div style={{ fontSize: 11.5, color: 'var(--danger-300)', marginTop: -6 }}>Exceeds your balance</div>
+                    <div style={{ fontSize: 11.5, color: 'var(--danger-300)', marginTop: -6 }}>Amount plus the {FEE_CEIL_XTR} {TICKER} fee reserve is more than your private balance</div>
                   )}
 
                   <textarea
@@ -2405,7 +2406,7 @@ export default function ChatApp({ onOpenWallet }: {
                       <span style={{ color: 'var(--text-muted-dim)' }}>Fee, at most</span>
                       <span style={{ fontFamily: MONO, fontWeight: 600, color: 'var(--text-primary)' }}>{FEE_CEIL_XTR} {TICKER}</span>
                     </div>
-                    <div style={{ fontSize: 11, color: 'var(--text-muted-dim)', marginTop: -3, textAlign: 'right' }}>The exact fee is known once it settles</div>
+                    <div style={{ fontSize: 11, color: 'var(--text-muted-dim)', marginTop: -3, textAlign: 'right' }}>The actual fee is usually lower</div>
                   </div>
 
                   <div style={{ display: 'flex', gap: 8, padding: '9px 11px', borderRadius: 9, background: 'var(--card-warn)', color: 'var(--warn)', fontSize: 11.5, lineHeight: 1.5, textWrap: 'pretty' }}>
@@ -2598,7 +2599,7 @@ export default function ChatApp({ onOpenWallet }: {
       />
     )}
 
-    {cnsOpen && <CnsOverlay onClose={() => setCnsOpen(false)} onOpenWallet={onOpenWallet} />}
+    {cnsOpen && <CnsOverlay onClose={() => setCnsOpen(false)} />}
 
     {createGroupOpen && (
       <CreateGroupModal

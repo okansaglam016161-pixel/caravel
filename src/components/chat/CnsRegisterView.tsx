@@ -81,12 +81,10 @@ const WarnTriangle = () => (
   <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><path d="M12 9v4M12 17h.01" /></svg>
 )
 
-export default function CnsRegisterView({ onBack, onDone, onOpenWallet }: {
+export default function CnsRegisterView({ onBack, onDone }: {
   onBack: () => void
   /** Finished with the whole flow — the overlay returns to the list and re-reads it. */
   onDone: () => void
-  /** Switch to the Wallet service, for the timeout screen's "Check Activity". */
-  onOpenWallet: () => void
 }) {
   const { wallet, address, nostrNpub } = useWallet()
   const [raw, setRaw] = useState('')
@@ -168,7 +166,6 @@ export default function CnsRegisterView({ onBack, onDone, onOpenWallet }: {
         // Back to a clean field: the name that was just registered — or just lost — is not the one
         // to offer next.
         onTryAnother={() => { setCommitting(false); setRaw(''); setPhase({ kind: 'idle' }) }}
-        onOpenWallet={onOpenWallet}
       />
     )
   }

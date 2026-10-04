@@ -201,7 +201,9 @@ function UnattributedReceiveRowV2({ row, hidden }: {
   const seen = `first seen ${firstSeenLabel(row.timestamp)}`
   const note = row.message !== null
     ? `“${row.message}” · sender unknown · ${seen}`
-    : `Sender unknown · ${seen}`
+    // No message, so this may be our own change from a send made on another device: that send is
+    // in the other device's journal, not this one's, and the coin looks like anyone else's.
+    : `Sender unknown · may be change from this wallet on another device · ${seen}`
   return <ActivityRowShell hidden={hidden} row={{
     id: row.id, direction: 'in', title: 'Received', note,
     status: 'received', amountMicrotari: row.amountMicrotari,
@@ -269,6 +271,8 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
   const [sendTxId, setSendTxId] = useState('')
   const [sendError, setSendError] = useState('')
   const [sendFee, setSendFee] = useState<bigint | null>(null)
+  // Whether the faucet's open banner is showing — the empty-wallet line only mentions it then.
+  const [faucetOffered, setFaucetOffered] = useState(false)
   const [sendOutcome, setSendOutcome] = useState<SendOutcome | null>(null)
   /**
    * Which balance the payment is spent from. The destination is always the recipient's stealth
@@ -1019,7 +1023,7 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
   const moveLeftoverNote =
     moveDir === 'reveal' && moveExact !== null && privateAmount > ceiling
       ? [
-          `${toInput(privateAmount - ceiling)} ${TICKER} stays private to cover the fee. It’s still yours and still spendable.`,
+          `${toInput(privateAmount - ceiling)} ${TICKER} stays private: room for the fee plus a small change output. It’s still yours.`,
           privateFiguresIncomplete ? incompleteAvailableNote() : '',
         ].filter(Boolean).join(' ')
       : moveDir === 'reveal' && privateFiguresIncomplete
@@ -1140,6 +1144,8 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
       step: 'success', recipient: sendRecipient,
       amountMicrotari: sendAmountMicro,
       feeMicrotari: sendFee ?? (sendSource === 'public' ? (sendPrepared?.feeMicrotari ?? MAX_FEE) : MAX_FEE),
+      // No reported fee and no priced one: the figure above is the MAX_FEE ceiling, not what was paid.
+      feeIsCeiling: sendFee === null && (sendSource !== 'public' || !sendPrepared),
       txId: sendTxId,
       // A passed deadline is still a success — the payment committed, only the index is behind.
       lagged: sendLagging,
@@ -1154,7 +1160,12 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
       step: 'form', recipient: sendRecipient, amount: sendAmount, note: sendNote,
       source: sendSource, canChooseSource,
       available: sendAvailable,
-      availabilityNote: sendSource === 'private' && privateFiguresIncomplete ? incompleteAvailableNote() : undefined,
+      availabilityNote: sendSource === 'private' && privateFiguresIncomplete ? incompleteAvailableNote()
+        // The figure shown is the whole balance; MAX fills less (the fee reserve, and for private
+        // funds the 64-output cap). Say so, or MAX looks like it ignored the number above it.
+        : sendAvailable !== null && sendCeiling > 0n && sendCeiling < sendAvailable
+          ? `Up to ${toInput(sendCeiling)} ${TICKER} can be sent in one payment (${toInput(MAX_FEE)} ${TICKER} held for the fee).`
+          : undefined,
       canReview: !!sendRecipient && !!sendAmount,
       error: sendValidationError || undefined,
     }
@@ -1241,7 +1252,8 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
       // is funded or the prompt has been dismissed. The @name card left the overview, then left the
       // wallet: names are a property of the identity you message with, so CNS lives in chat, opened
       // by the [@] on the conversation list's search row.
-      overviewNotice={<FaucetClaimPanel />}
+      overviewNotice={<FaucetClaimPanel onOfferChange={setFaucetOffered} />}
+      faucetOffered={faucetOffered}
       send={{
         view: sendView, hidden: balanceHidden,
         onSource: s => { setSendSource(s); setSendExact(null); setSendValidationError('') },

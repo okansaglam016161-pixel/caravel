@@ -216,9 +216,10 @@ export function unreadableReasonText(reason: TotalUnreadableReason): string {
     case 'private-incomplete':
       return 'We couldn’t read all of your private balance, so a total would be too low. The figures below are what we can see.'
     case 'settle-lagged':
-      // Says what is true — the money moved, the figures have not caught up — and names the one
-      // action that fixes it. Never "something went wrong": nothing did.
-      return 'Your last transaction went through, but your balances haven’t caught up yet, so a total would be wrong. Tap Refresh in a moment.'
+      // A lagged settle can start from a Timeout as well as a Commit, so "went through" is not
+      // always known. Say only what is: the figures have not caught up. Names the one action that
+      // fixes it, and never "something went wrong".
+      return 'Your last transaction hasn’t shown up in your balances yet, so a total could be wrong. Tap Refresh in a moment.'
   }
 }
 

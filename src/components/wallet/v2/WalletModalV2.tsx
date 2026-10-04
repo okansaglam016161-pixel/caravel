@@ -193,8 +193,6 @@ export interface WalletModalV2Props {
    * faucet alone.
    */
   overviewNotice?: ReactNode
-  /** The faucet's open banner is on screen, so the empty-wallet line may point at it. */
-  faucetOffered?: boolean
   send?: SendPanelProps
   receive?: { address: string | null; copied: boolean; onCopy: () => void }
   /**
@@ -288,7 +286,7 @@ export default function WalletModalV2(p: WalletModalV2Props) {
             {p.overviewNotice}
             <TotalHero
               total={p.total} privateBalance={p.privateBalance} publicBalance={p.publicBalance}
-              hidden={p.hidden} onRetry={p.onRetryBalance} faucetOffered={p.faucetOffered}
+              hidden={p.hidden} onRetry={p.onRetryBalance}
               onSend={p.send && p.onTab ? () => p.onTab!('send') : undefined}
               onReceive={p.receive && p.onTab ? () => p.onTab!('receive') : undefined}
             />
@@ -552,7 +550,7 @@ function MoveBody({ m, p, onClose }: {
       <div style={OUTCOME_CARD}>
         <Spinner size={28} ring={3} />
         <div style={{ fontSize: 17, fontWeight: 600, color: C.primary, marginTop: 18 }}>Settling</div>
-        <div style={{ fontSize: 13, color: C.mutedDim, marginTop: 6 }}>This usually takes a minute or two.</div>
+        <div style={{ fontSize: 13, color: C.mutedDim, marginTop: 6 }}>This can take a moment.</div>
       </div>
     )
   }

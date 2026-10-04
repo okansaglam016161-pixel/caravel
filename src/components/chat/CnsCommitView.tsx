@@ -151,7 +151,7 @@ const CheckMark = () => <svg width={19} height={19} viewBox="0 0 24 24" fill="no
 const Cross = () => <svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12" /></svg>
 const Clock = () => <svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><circle cx={12} cy={12} r={9} /><path d="M12 7v5l3 3" /></svg>
 
-export default function CnsCommitView({ name, onCancel, onDone, onTryAnother }: {
+export default function CnsCommitView({ name, onCancel, onDone, onTryAnother, onOpenWallet }: {
   name: string
   /** Back to the availability screen, with its answer intact. Nothing has been written. */
   onCancel: () => void
@@ -159,6 +159,8 @@ export default function CnsCommitView({ name, onCancel, onDone, onTryAnother }: 
   onDone: () => void
   /** The name is gone; go back and pick a different one. */
   onTryAnother: () => void
+  /** Switch to the Wallet service so "Check Activity" goes somewhere. */
+  onOpenWallet: () => void
 }) {
   const { wallet, address, nostrNpub } = useWallet()
   const [state, setState] = useState<Commit>({ kind: 'estimating' })
@@ -277,7 +279,7 @@ export default function CnsCommitView({ name, onCancel, onDone, onTryAnother }: 
       <div style={{ fontSize: 14, fontWeight: 600, letterSpacing: '-0.01em', color: 'var(--text-primary)', marginBottom: 11 }}>
         Register @{name}
       </div>
-      {commitBody(state, name, { estimate, submit, onCancel, onDone, onTryAnother })}
+      {commitBody(state, name, { estimate, submit, onCancel, onDone, onTryAnother, onOpenWallet })}
     </div>
   )
 }
@@ -288,6 +290,7 @@ interface Acts {
   onCancel: () => void
   onDone: () => void
   onTryAnother: () => void
+  onOpenWallet: () => void
 }
 
 /** One switch, exhaustive by construction — see the `never` at the foot. */
@@ -386,7 +389,7 @@ function commitBody(state: Commit, name: string, a: Acts) {
           <Ring size={16} />
           <div style={{ fontSize: 12.5, color: 'var(--text-body-dim)' }}>Registering @{name} on the Tari network…</div>
           <div style={{ fontSize: 11.5, color: 'var(--text-muted-dim)', lineHeight: 1.5, maxWidth: 280, textWrap: 'pretty' }}>
-            This usually takes a minute or two. Keep Caravel open until it finishes.
+            This can take a moment. Keep Caravel open until it finishes.
           </div>
         </div>
       )
@@ -444,17 +447,16 @@ function commitBody(state: Commit, name: string, a: Acts) {
     case 'timed-out':
       // PENDING. NOT FAILED. WARN, NEVER RED. We stopped waiting; the network did not stop working,
       // and this may be registered already. So the primary action is to go and LOOK — a confident
-      // "try again" here is how somebody pays a second fee for a name they already own. LOOK WHERE
-      // THE ANSWER IS: registrations are not rows in Activity, but the @names list re-reads the
-      // registry when it is shown again, so that is where a landed name appears.
+      // "try again" here is how somebody pays a second fee for a name they already own.
       return (
         <>
           <Outcome tone="warn" title={`@${name} didn’t confirm in time`} emblem={<Clock />}>
-            It may still have gone through. Give it a minute, then check Your @names before trying again.
+            It may still have gone through. Check your Activity before trying again.
           </Outcome>
           {state.txId && <TxRow txId={state.txId} />}
           <div style={ACTIONS}>
-            <button onClick={a.onDone} className="cv-btn-primary" style={PRIMARY}>Check Your @names</button>
+            <button onClick={a.onDone} style={QUIET}>Close</button>
+            <button onClick={a.onOpenWallet} className="cv-btn-primary" style={PRIMARY}>Check Activity</button>
           </div>
         </>
       )

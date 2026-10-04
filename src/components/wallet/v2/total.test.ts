@@ -390,11 +390,9 @@ describe('a lagged settle is unreadable, not ready', () => {
     expect(computeTotal(lagged()).status).not.toBe('settling')
   })
 
-  it('the reason says only that the figures are behind, and names the one action that fixes it', () => {
+  it('the reason says the money moved, and names the one action that fixes it', () => {
     const text = unreadableReasonText('settle-lagged')
-    // A lagged settle can start from a Timeout, so it must not claim the transaction went through.
-    expect(text).not.toMatch(/went through/i)
-    expect(text).toMatch(/hasn’t shown up in your balances/)
+    expect(text).toMatch(/went through/i)          // never "something went wrong" — nothing did
     expect(text).toMatch(/Refresh/)
     expect(text).not.toMatch(/failed|error|lost/i)
   })

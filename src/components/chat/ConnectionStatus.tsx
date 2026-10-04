@@ -44,7 +44,7 @@ export function ConnectionIndicator({ status, connected, total, onClick }: {
   let border: string, lead: React.ReactNode, label: string, labelC: string, countC: string
   if (status === 'connected') {
     border = 'var(--border-strong)'; lead = dot('var(--positive)', 'cv-breathe 3s ease-in-out infinite')
-    label = 'Connected'; labelC = 'var(--text-body-dim)'; countC = 'var(--text-muted-dim)'
+    label = 'Private & connected'; labelC = 'var(--text-body-dim)'; countC = 'var(--text-muted-dim)'
   } else if (status === 'connecting') {
     border = 'var(--border-strong)'; lead = spinner
     label = 'Connecting…'; labelC = 'var(--text-body-dim)'; countC = 'var(--text-muted-dim)'
@@ -132,15 +132,14 @@ export function RelayHealthPanel({ getRelayStates, reconnectAll, onClose }: {
             <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round"><path d="M5 12.5a7 7 0 0 1 14 0" /><path d="M8.5 15.5a4 4 0 0 1 7 0" /><path d="M12 18.5h.01" /></svg>
           </span>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--text-primary)' }}>{healthy ? 'Connected' : 'Still connected'}</div>
+            <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--text-primary)' }}>{healthy ? 'Privately connected' : 'Still connected'}</div>
             {/* OUR sentence, at the design's type scale. §7B's own sub is "All 3 relays connected",
-                which the rows below already say — and it drops the privacy line, which is the claim
-                this panel exists to make. Said exactly: the wrap hides content and sender, but the
-                outer event names the recipient, so relays can see who a message is for. The colour is --text-muted-dim (the design's --muted);
+                which the rows below already say — and it drops "relayed blind", which is the claim
+                this panel exists to make. The colour is --text-muted-dim (the design's --muted);
                 it was --text-muted, which maps to the design's --text2, one step too bright. */}
             <div style={{ fontSize: 11.5, color: 'var(--text-muted-dim)', marginTop: 1, lineHeight: 1.5, textWrap: 'pretty' }}>
               {healthy
-                ? `Connected to ${connected} of ${total} relays. Relays can’t read your messages or see who sent them.`
+                ? `Connected to ${connected} of ${total} relays. Your messages are relayed blind.`
                 : `Connected to ${connected} of ${total} relays. Messages still send, delivery may be slower.`}
             </div>
           </div>

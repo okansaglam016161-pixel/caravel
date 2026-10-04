@@ -54,11 +54,7 @@ function readDismissed(address: string | null): boolean {
 }
 
 
-/**
- * `onOfferChange` reports whether the open banner — the one thing here that offers a claim — is on
- * screen, so the balance's empty-wallet line only points at the faucet when there is one to use.
- */
-export default function FaucetClaimPanel({ onOfferChange }: { onOfferChange?: (offering: boolean) => void } = {}) {
+export default function FaucetClaimPanel() {
   const { wallet, address, scan, rescan, settles, beginSettle, acknowledgeSettle } = useWallet()
   const balance = scan.balance
   const [p, setPhase] = useState<ClaimState>('idle')
@@ -141,7 +137,7 @@ export default function FaucetClaimPanel({ onOfferChange }: { onOfferChange?: (o
     if (!wallet || !address) return
     setPhase('claiming')
     setCanRetry(true)
-    setMsg('Requesting test tokens…')
+    setMsg('Requesting test tokens (self-signed, no daemon)…')
 
     // A claim deposits a confidential output into this wallet, and a later scan cannot tell that
     // output apart from a payment somebody else sent — it carries no sender either. Journalled
@@ -248,9 +244,6 @@ export default function FaucetClaimPanel({ onOfferChange }: { onOfferChange?: (o
     status: status?.kind ?? null,
     unlocked: !!wallet && !!address,
   })
-
-  const offering = phase === 'open' && !dismissed
-  useEffect(() => { onOfferChange?.(offering) }, [offering, onOfferChange])
 
   if (isHidden(phase)) return null
 

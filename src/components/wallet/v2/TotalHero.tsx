@@ -53,10 +53,8 @@ function Figure({ usd }: { usd: string }) {
   )
 }
 
-export function TotalHero({ total, privateBalance, publicBalance, hidden, onRetry, onSend, onReceive, faucetOffered = false }: {
+export function TotalHero({ total, privateBalance, publicBalance, hidden, onRetry, onSend, onReceive }: {
   total: TotalView
-  /** The faucet's open banner is on screen. Only then does the empty line mention it. */
-  faucetOffered?: boolean
   /** The SHIELDED balance. The prop keeps the name of the state it is derived from. */
   privateBalance: BalanceView
   /** The UNSHIELDED balance. */
@@ -192,14 +190,12 @@ export function TotalHero({ total, privateBalance, publicBalance, hidden, onRetr
           prints it like any other; this is a supporting line, not a replacement for the number.
           Hiding the 0.000000 would make an empty wallet look like a wallet that had not loaded.
 
-          EVERY ROUTE IT NAMES IS ON THIS SCREEN: Receive is the button directly below, and the
-          faucet is named only while its open banner sits above the balance — hidden, paused, empty,
-          claimed or dismissed, it is not offered, so it is not mentioned. */}
+          BOTH ROUTES IT NAMES ARE ON THIS SCREEN: Receive is the button directly below, and the
+          faucet panel sits under the vault on the same overview, offering "free test funds" in those
+          words. Nothing here promises a capability that does not exist. */}
       {emptyWallet && (
         <div style={{ fontSize: 12.5, color: 'var(--vault-label)', marginTop: 12, lineHeight: 1.5, textWrap: 'pretty' }}>
-          {faucetOffered
-            ? 'Nothing here yet. Claim free test funds above, or receive a payment to get started.'
-            : 'Nothing here yet. Receive a payment to get started.'}
+          Nothing here yet. Claim free test funds below, or receive a payment to get started.
         </div>
       )}
 

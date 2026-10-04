@@ -188,7 +188,7 @@ function Drive() {
             : 'More than your public balance.')
           : undefined,
       leftoverNote: dir === 'reveal' && usedMax
-        ? `About ${fmt6(RESERVE)} TARI stays private: room for the fee plus a small change output. It’s still yours.`
+        ? `About ${fmt6(RESERVE)} TARI stays private to cover the fee. It’s still yours and still spendable.`
         : undefined,
     })
   }
@@ -246,7 +246,6 @@ function Drive() {
     // THE SLOT IS DRIVEN THE WAY THE APP DRIVES IT. FaucetClaimPanel shows a banner while the
     // faucet is resting and the card once a claim is running, so the harness picks the same way —
     // otherwise the one screen built to show what ships would be showing something that does not.
-    faucetOffered: faucet === 'open',
     overviewNotice: faucet === 'open' || faucet === 'paused' || faucet === 'empty' ? (
       <FaucetBanner
         text={faucet === 'open' ? 'Testnet faucet is open.'
@@ -353,12 +352,12 @@ function Drive() {
         <Group title="Jump to a move state" note="Bypasses the flow — for states that are hard to reach">
           {jump('Form · make private', { step: 'form', dir: 'conceal', amount: '100', maxUsed: false, available: pubV, minMicrotari: 100_000n, maxMicrotari: pubV, canReview: true })}
           {jump('Form · make public', { step: 'form', dir: 'reveal', amount: '1', maxUsed: false, available: privV, minMicrotari: 100_000n, maxMicrotari: privV - RESERVE, canReview: true })}
-          {jump('Form · MAX pressed', { step: 'form', dir: 'reveal', amount: toInput(privV - RESERVE), maxUsed: true, available: privV, minMicrotari: 100_000n, maxMicrotari: privV - RESERVE, canReview: true, leftoverNote: `${fmt6(RESERVE)} ${TICKER} stays private: room for the fee plus a small change output. It’s still yours.` })}
+          {jump('Form · MAX pressed', { step: 'form', dir: 'reveal', amount: toInput(privV - RESERVE), maxUsed: true, available: privV, minMicrotari: 100_000n, maxMicrotari: privV - RESERVE, canReview: true, leftoverNote: `${fmt6(RESERVE)} ${TICKER} stays private to cover the fee. It’s still yours and still spendable.` })}
           {jump('Form · below minimum', { step: 'form', dir: 'reveal', amount: '0.05', maxUsed: false, available: privV, minMicrotari: 100_000n, maxMicrotari: privV - RESERVE, canReview: false, error: `Minimum 0.10 ${TICKER}.` })}
           {jump('Review · pricing', { step: 'review', dir: 'conceal', amountMicrotari: 100_000_000n, feeMicrotari: null, resulting: null })}
           {jump('Review · make private', { step: 'review', dir: 'conceal', amountMicrotari: 100_000_000n, feeMicrotari: FEE, resulting: resulting(100_000_000n, 'conceal') })}
           {jump('Review · make public', { step: 'review', dir: 'reveal', amountMicrotari: 1_000_000n, feeMicrotari: FEE, resulting: resulting(1_000_000n, 'reveal') })}
-          {jump('Review · make public MAX (leftover)', { step: 'review', dir: 'reveal', amountMicrotari: privV - RESERVE, feeMicrotari: FEE, resulting: resulting(privV - RESERVE, 'reveal'), leftoverNote: `${fmt6(RESERVE)} ${TICKER} stays private: room for the fee plus a small change output. It’s still yours.` })}
+          {jump('Review · make public MAX (leftover)', { step: 'review', dir: 'reveal', amountMicrotari: privV - RESERVE, feeMicrotari: FEE, resulting: resulting(privV - RESERVE, 'reveal'), leftoverNote: `${fmt6(RESERVE)} ${TICKER} stays private to cover the fee. It’s still yours and still spendable.` })}
           {jump('Moving', { step: 'moving', dir: 'reveal', amountMicrotari: 1_000_000n, progress: 'Submitting to the network — a few seconds.' })}
           {jump('Settling', { step: 'settling', dir: 'reveal', amountMicrotari: 1_000_000n, txId: TXID })}
           {jump('Success', { step: 'success', dir: 'reveal', amountMicrotari: 1_000_000n, txId: TXID, lagged: false })}
@@ -444,12 +443,12 @@ function Gallery() {
     { label: 'HIDDEN · ONE TOGGLE, EVERYTHING', props: still({ hidden: true }) },
     { label: 'IN FLIGHT · LOCKED', props: still({ inFlightText: `Making 1.000000 ${TICKER} public`, entries: [], lockedText: 'Locked while a move is in flight', lockedIsFlight: true }) },
     { label: 'FORM · MAKE PRIVATE', props: still({ move: { step: 'form', dir: 'conceal', amount: '100', maxUsed: false, available: PUBLIC, minMicrotari: 100_000n, maxMicrotari: PUBLIC, canReview: true } }) },
-    { label: 'FORM · MAKE PUBLIC, MAX', props: still({ move: { step: 'form', dir: 'reveal', amount: toInput(PRIVATE - RESERVE), maxUsed: true, available: PRIVATE, minMicrotari: 100_000n, maxMicrotari: PRIVATE - RESERVE, canReview: true, leftoverNote: `${fmt6(RESERVE)} ${TICKER} stays private: room for the fee plus a small change output. It’s still yours.` } }) },
+    { label: 'FORM · MAKE PUBLIC, MAX', props: still({ move: { step: 'form', dir: 'reveal', amount: toInput(PRIVATE - RESERVE), maxUsed: true, available: PRIVATE, minMicrotari: 100_000n, maxMicrotari: PRIVATE - RESERVE, canReview: true, leftoverNote: `${fmt6(RESERVE)} ${TICKER} stays private to cover the fee. It’s still yours and still spendable.` } }) },
     { label: 'FORM · BELOW MINIMUM', props: still({ move: { step: 'form', dir: 'reveal', amount: '0.05', maxUsed: false, available: PRIVATE, minMicrotari: 100_000n, maxMicrotari: PRIVATE - RESERVE, canReview: false, error: `Minimum 0.10 ${TICKER}.` } }) },
     { label: 'REVIEW · PRICING', props: still({ move: { step: 'review', dir: 'conceal', amountMicrotari: 100_000_000n, feeMicrotari: null, resulting: null } }) },
     { label: 'REVIEW · MAKE PRIVATE', props: still({ move: { step: 'review', dir: 'conceal', amountMicrotari: 100_000_000n, feeMicrotari: FEE, resulting: r(100_000_000n, 'conceal') } }) },
     { label: 'REVIEW · MAKE PUBLIC', props: still({ move: { step: 'review', dir: 'reveal', amountMicrotari: 1_000_000n, feeMicrotari: FEE, resulting: r(1_000_000n, 'reveal') } }) },
-    { label: 'REVIEW · MAKE PUBLIC MAX (fee remainder)', props: still({ move: { step: 'review', dir: 'reveal', amountMicrotari: PRIVATE - RESERVE, feeMicrotari: FEE, resulting: r(PRIVATE - RESERVE, 'reveal'), leftoverNote: `${fmt6(RESERVE)} ${TICKER} stays private: room for the fee plus a small change output. It’s still yours.` } }) },
+    { label: 'REVIEW · MAKE PUBLIC MAX (fee remainder)', props: still({ move: { step: 'review', dir: 'reveal', amountMicrotari: PRIVATE - RESERVE, feeMicrotari: FEE, resulting: r(PRIVATE - RESERVE, 'reveal'), leftoverNote: `${fmt6(RESERVE)} ${TICKER} stays private to cover the fee. It’s still yours and still spendable.` } }) },
     { label: 'REVIEW · MAKE PUBLIC (no note — design as drawn)', props: still({ move: { step: 'review', dir: 'reveal', amountMicrotari: 1_000_000n, feeMicrotari: FEE, resulting: r(1_000_000n, 'reveal') } }) },
     { label: 'MOVING', props: still({ move: { step: 'moving', dir: 'conceal', amountMicrotari: 100_000_000n, progress: 'Submitting to the network — a few seconds.' } }) },
     { label: 'SETTLING · DONE, CATCHING UP', props: still({ move: { step: 'settling', dir: 'conceal', amountMicrotari: 100_000_000n, txId: TXID } }) },

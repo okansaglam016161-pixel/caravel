@@ -147,8 +147,11 @@ function NameRow({ record }: { record: NameRecord }) {
   )
 }
 
-export default function CnsOverlay({ onClose }: {
+export default function CnsOverlay({ onClose, onOpenWallet }: {
   onClose: () => void
+  /** Switch to the Wallet service. The timeout screen's "Check Activity" is the only thing that
+   *  needs it, and it needs it to be a real destination rather than a word. */
+  onOpenWallet: () => void
 }) {
   const { state, retry } = useOwnedNames()
 
@@ -177,6 +180,7 @@ export default function CnsOverlay({ onClose }: {
         ? <CnsRegisterView
             onBack={backToList}
             onDone={backToList}
+            onOpenWallet={() => { onClose(); onOpenWallet() }}
           />
         : body(state, retry, openRegister)}
     </ModalCard>

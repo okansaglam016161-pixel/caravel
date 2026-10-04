@@ -398,8 +398,6 @@ export type SendView =
     }
   | {
       step: 'success'; recipient: string; amountMicrotari: bigint; feeMicrotari: bigint; txId: string
-      /** `feeMicrotari` is the MAX_FEE ceiling, not a reported fee. */
-      feeIsCeiling?: boolean
       /** The settle deadline passed. STILL A SUCCESS — different copy, same shape. */
       lagged?: boolean
     }
@@ -562,7 +560,7 @@ function PrivacyNote({ source }: { source: SendSource }) {
         : <Eye size={12} color={C.mutedDim} />}
       <span style={{ fontSize: 12.5, color: C.mutedDim, lineHeight: 1.5, textWrap: 'pretty' }}>
         {isPrivate
-          ? 'Private. The amount and the recipient stay hidden.'
+          ? 'Private. The amount and your address stay hidden.'
           : 'Public. Your spend is visible on chain.'}
       </span>
     </div>
@@ -685,19 +683,15 @@ export function Emblem({ tone, children }: { tone: 'positive' | 'accent' | 'dang
   )
 }
 
-/**
- * A monospace receipt line — the fee actually paid, and the transaction it was paid on. When the
- * network never reported the fee (a send that timed out and settled later), `fee` is only the
- * ceiling, and the line says so rather than presenting it as what was paid.
- */
-function Receipt({ fee, feeIsCeiling, txId, onCopy }: { fee: bigint; feeIsCeiling?: boolean; txId: string; onCopy: () => void }) {
+/** A monospace receipt line — the fee actually paid, and the transaction it was paid on. */
+function Receipt({ fee, txId, onCopy }: { fee: bigint; txId: string; onCopy: () => void }) {
   const short = txId.length > 14 ? `${txId.slice(0, 6)}…${txId.slice(-6)}` : txId
   return (
     <div style={{
       display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
       marginTop: 18, fontFamily: MONO, fontSize: 11, color: C.faint, flexWrap: 'wrap',
     }}>
-      <span>{feeIsCeiling ? <>fee ≤ {fmt6(fee)} {TICKER} (exact fee not reported)</> : <>fee {fmt6(fee)} {TICKER}</>}</span>
+      <span>fee {fmt6(fee)} {TICKER}</span>
       <span aria-hidden="true">·</span>
       <span
         role="button" tabIndex={0} onClick={onCopy} onKeyDown={e => e.key === 'Enter' && onCopy()}
@@ -727,7 +721,7 @@ export function SendPanel({ view, hidden, onSource, onRecipient, onAmount, onNot
           // NAMED ONLY WHEN THE TOGGLE IS NOT THERE TO NAME IT. With the segmented control directly
           // above showing Private or Public selected, repeating the word here is the same fact
           // twice; without it, this label is the only thing saying which balance the figure is.
-          availableLabel={view.canChooseSource ? 'Balance' : view.source === 'private' ? 'Private balance' : 'Public balance'}
+          availableLabel={view.canChooseSource ? 'Available' : view.source === 'private' ? 'Private available' : 'Public available'}
           availableValue={hidden ? '••••••' : view.available !== null ? `${fmt6(view.available)} ${TICKER}` : '—'}
           onMax={onMax}
           error={view.error}
@@ -847,7 +841,7 @@ export function SendPanel({ view, hidden, onSource, onRecipient, onAmount, onNot
       <div style={OUTCOME_CARD}>
         <Spinner size={28} ring={3} />
         <div style={{ fontSize: 17, fontWeight: 600, color: C.primary, marginTop: 18 }}>Settling</div>
-        <div style={{ fontSize: 13, color: C.mutedDim, marginTop: 6 }}>This usually takes a minute or two.</div>
+        <div style={{ fontSize: 13, color: C.mutedDim, marginTop: 6 }}>This can take a moment.</div>
       </div>
     )
   }
@@ -870,7 +864,7 @@ export function SendPanel({ view, hidden, onSource, onRecipient, onAmount, onNot
         {/* THE OTHER HALF OF THE CEILING. Review could only promise "at most"; this is what was
             actually paid, and dropping it would leave a private send with no place that ever
             states its real fee. */}
-        <Receipt fee={view.feeMicrotari} feeIsCeiling={view.feeIsCeiling} txId={view.txId} onCopy={() => onCopyTx(view.txId)} />
+        <Receipt fee={view.feeMicrotari} txId={view.txId} onCopy={() => onCopyTx(view.txId)} />
         <ActionButton tone="quiet" onClick={onDone} mt={24}>Done</ActionButton>
       </Outcome>
     )
@@ -886,8 +880,8 @@ export function SendPanel({ view, hidden, onSource, onRecipient, onAmount, onNot
     return (
       <Outcome
         emblem={<Emblem tone="accent"><Clock size={17} color="currentColor" /></Emblem>}
-        title="Sent — not confirmed yet"
-        sub="The network hasn’t confirmed this payment yet. It may still go through. Don’t send it again — check your balance in a few minutes."
+        title="Sent, not yet confirmed"
+        sub="The recipient may need to come online. It will confirm on its own."
       >
         {/* The one identifier an undecided payment has. It must stay reachable from here — this
             card is the last place the transaction is named before it becomes a row in Activity. */}
@@ -1300,11 +1294,11 @@ export function ActivityEmpty({ compact = false }: { compact?: boolean }) {
           <path d="M3 12h4l3-8 4 16 3-8h4" />
         </svg>
       </span>
-      <div style={{ fontSize: 13.5, fontWeight: 600, color: C.primary, marginTop: 12 }}>No activity on this device yet</div>
-      {/* No "swaps" — there is no swap feature; the moves are Make private / Make public. And
-          "on this device": the history is kept locally, so a restored wallet starts empty here. */}
+      <div style={{ fontSize: 13.5, fontWeight: 600, color: C.primary, marginTop: 12 }}>No activity yet</div>
+      {/* "swaps", not "shields" — the last of that vocabulary in the wallet surfaces. The flow is
+          called Make private / Make public everywhere the user can see it. */}
       <div style={{ fontSize: 12.5, color: C.mutedDim, marginTop: 4, lineHeight: 1.5, textWrap: 'pretty' }}>
-        Payments and moves between your private and public balances will appear here.
+        Your sends, receives, and swaps will appear here.
       </div>
     </div>
   )

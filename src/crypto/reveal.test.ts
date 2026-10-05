@@ -57,7 +57,9 @@ describe('planReveal — the amount is what LANDS, and the fee sits on top', () 
 
     expect(revealed.amount).toBe(amount)
     expect(concealed.stealthAmount).toBe(amount)
-    expect(revealed.revealedOutput).toBe(concealed.withdrawAmount)   // both: amount + fee leaves the source
+    // Both put the fee on top of the amount; a reveal reveals it with the amount, a conceal pays it
+    // from the vault separately.
+    expect(revealed.revealedOutput).toBe(concealed.withdrawAmount + concealed.feeBudget)
   })
 
   it('returns the change as everything the inputs are worth beyond amount + fee', () => {

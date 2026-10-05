@@ -7,13 +7,13 @@
 // that is not the destination stays untouched.
 //
 //     createAccount(ownerPk)                            → 'account'   [idempotent — reuses existing]
+//     callMethod(account, 'pay_fee', [budget])          the fee, from the vault — REFUNDED down to cost
 //     callMethod(account, 'withdraw', [TARI, amount])   → 'bucket'    revealed OUT of the vault
-//     StealthTransfer { revealedInputBucket: 'bucket' } → 'fee_bucket'
-//     PayFeeFromBucket { fee_bucket }
+//     StealthTransfer { revealedInputBucket: 'bucket' } no revealed output; nothing left over
 //
-// A conceal sends the stealth output to `ownerAddress`; this sends it to the recipient's. Measured
-// at ~18 705 µtTARI by dry run — identical whether the destination is self or a stranger, which is
-// the strongest evidence available that it really is the same transaction shape.
+// A conceal sends the stealth output to `ownerAddress`; this sends it to the recipient's — the same
+// transaction shape. Like a conceal it pays its fee from the vault with the account's REFUNDABLE
+// `pay_fee`, so only the real cost is taken (see conceal.ts for the engine references).
 //
 // ── THE DESTINATION IS ALWAYS PRIVATE, AND THAT IS A FEATURE ──────────────────
 //
@@ -38,6 +38,7 @@
 
 import { submitOnce, versionsUnchanged } from './submitGuard'
 import { confirmer } from './quote'
+import { feesPaid } from './conceal'
 import { RETRYING_MESSAGE } from './indexerRetry'
 import {
   Mask,
@@ -171,26 +172,23 @@ export function assertValidRecipient(
 export interface PublicSendSplit {
   /** What the recipient receives. Caller-chosen; never adjusted behind their back. */
   recipientAmount: bigint
-  /** Paid to the network out of the same withdraw. */
-  feeMicrotari: bigint
-  /** Revealed µtTARI leaving the vault. IS the statement's revealed input — one value, both uses. */
+  /** What `pay_fee` offers from the vault. The engine takes the cost and refunds the rest. */
+  feeBudget: bigint
+  /** Withdrawn into the bucket. IS the statement's revealed input — and, with no revealed output, the recipient's amount. */
   withdrawAmount: bigint
 }
 
 /**
- * Split a public send into what leaves the vault, what arrives, and the fee.
+ * Split a public send into the withdraw, what arrives, and the fee budget.
  *
  * The amount is what ARRIVES, so the fee goes ON TOP — the one rule every action follows (planReveal
- * and planConceal too). Carving it out instead would quietly short-pay every recipient by the fee.
+ * and planConceal too). It is paid separately from the vault by `pay_fee(budget)`, refunded down to
+ * the cost, so the bucket holds exactly the amount and the vault gives up `amount + cost`.
  */
-export function planPublicSend(amountMicrotari: bigint, feeMicrotari: bigint): PublicSendSplit {
+export function planPublicSend(amountMicrotari: bigint, feeBudget: bigint): PublicSendSplit {
   if (amountMicrotari <= 0n) throw new Error('Amount must be greater than zero.')
-  if (feeMicrotari <= 0n) throw new Error('Fee must be greater than zero.')
-  return {
-    recipientAmount: amountMicrotari,
-    feeMicrotari,
-    withdrawAmount: amountMicrotari + feeMicrotari,
-  }
+  if (feeBudget <= 0n) throw new Error('Fee must be greater than zero.')
+  return { recipientAmount: amountMicrotari, feeBudget, withdrawAmount: amountMicrotari }
 }
 
 /**
@@ -202,12 +200,13 @@ export function planPublicSend(amountMicrotari: bigint, feeMicrotari: bigint): P
  * whose reason is a bucket-mismatch string from the engine.
  */
 export function assertPublicSendSplit(split: PublicSendSplit): void {
-  const { recipientAmount, feeMicrotari, withdrawAmount } = split
-  if (recipientAmount <= 0n || feeMicrotari <= 0n || withdrawAmount <= 0n) {
-    throw new Error(`publicSend: non-positive component in split (amount ${recipientAmount}, fee ${feeMicrotari}, withdraw ${withdrawAmount})`)
+  const { recipientAmount, feeBudget, withdrawAmount } = split
+  if (recipientAmount <= 0n || feeBudget <= 0n || withdrawAmount <= 0n) {
+    throw new Error(`publicSend: non-positive component in split (amount ${recipientAmount}, fee ${feeBudget}, withdraw ${withdrawAmount})`)
   }
-  if (recipientAmount + feeMicrotari !== withdrawAmount) {
-    throw new Error(`publicSend: split does not balance — amount ${recipientAmount} + fee ${feeMicrotari} !== withdraw ${withdrawAmount}`)
+  // No revealed output: everything withdrawn into the bucket goes to the recipient.
+  if (recipientAmount !== withdrawAmount) {
+    throw new Error(`publicSend: split does not balance — amount ${recipientAmount} !== withdraw ${withdrawAmount}`)
   }
 }
 
@@ -236,6 +235,7 @@ function buildPublicSend(
   maxEpoch: number,
   ownerPkHex: string,
   withdrawAmount: bigint,
+  feeBudget: bigint,
   statement: StealthTransferStatement,
   declaredInputs: string[],
 ) {
@@ -246,19 +246,20 @@ function buildPublicSend(
         // existing component if there is one, so this is safe to issue on every send.
         .createAccount(ownerPkHex)
         .saveVar('account')
+        // REFUNDABLE: the vault offers `feeBudget`, the engine takes the cost, the rest goes back.
+        .callMethod({ fromWorkspace: 'account', methodName: 'pay_fee' }, [amountLiteral(feeBudget)])
         .callMethod({ fromWorkspace: 'account', methodName: 'withdraw' }, [
           resourceAddressLiteral(TARI_RESOURCE_ADDRESS),
           amountLiteral(withdrawAmount),
         ])
         .saveVar('bucket')
+        // No revealed output, so the transfer returns no bucket — nothing to save or pay from.
         .addInstruction(
           stealthTransferInstruction(
             { resourceAddress: TARI_RESOURCE_ADDRESS, revealedInputBucket: 'bucket', statement },
             (name) => b.resolveWorkspaceOffsetId(name),
           ),
-        )
-        .saveVar('fee_bucket')
-        .addInstruction({ PayFeeFromBucket: { bucket: b.resolveWorkspaceOffsetId('fee_bucket') } }),
+        ),
     )
     // ── THE INPUTS ARE NOT OPTIONAL (ce04b60's lesson) ──
     //
@@ -272,11 +273,13 @@ function buildPublicSend(
 
 /** A priced, built, signed public send — everything except pressing send. */
 export interface PreparedPublicSend {
-  /** Measured fee including margin (µtTARI) — what the review screen shows and the tx pays. */
+  /** The exact measured cost (µtTARI) — what the review screen shows and what is charged. */
   feeMicrotari: bigint
+  /** What `pay_fee` offers from the vault. Above the cost by a buffer that is REFUNDED, never shown. */
+  feeBudget: bigint
   /** What the recipient receives: exactly the amount asked for. */
   recipientAmount: bigint
-  /** Total leaving the vault — the withdraw, and the statement's revealed input. */
+  /** Total leaving the public balance: the amount plus the fee. */
   withdrawAmount: bigint
   /** What the pricing dry run measured, before the margin (µtTARI). */
   dryRunCost: bigint
@@ -339,9 +342,7 @@ export async function preparePublicSend(
   log('Connecting…')
   const provider = await IndexerProvider.connect({ url: INDEXER_URL, network: Network.Esmeralda })
   const crypto = new WasmStealthCrypto(Network.Esmeralda)
-  // The owner key signs for the account, so it is also the RECEIVER of the statement's revealed
-  // output: since Ootle 0.42 the engine only creates that bucket if the receiver's badge is in the
-  // transaction's auth scope, which a statement lifted into someone else's transaction cannot satisfy.
+  // The owner key signs for the account — the withdraw and the vault-paid fee both need it.
   const ownerPk = await wallet.getPublicKey()
   const ownerPkHex = toHexStr(ownerPk)
 
@@ -365,14 +366,15 @@ export async function preparePublicSend(
 
   // The whole build is a function OF the fee — the outputs statement commits to it and the balance
   // proof signs over both — so it runs once to price and once to send.
-  async function buildEnvelope(feeMicrotari: bigint, dryRun: boolean) {
-    const split = planPublicSend(amountMicrotari, feeMicrotari)
+  async function buildEnvelope(feeBudget: bigint, dryRun: boolean) {
+    const split = planPublicSend(amountMicrotari, feeBudget)
     assertPublicSendSplit(split)
 
     // THE ONE LINE THAT DIFFERS FROM A CONCEAL: the destination is the recipient, not ownerAddress.
+    // No revealed output: the fee is paid from the vault, not out of this transfer.
     const { statement: outputsStatement, outputMask } = await crypto.generateOutputsStatement(
       [createOutput({ destination: recipient.trim(), amount: split.recipientAmount, resourceAddress: TARI_RESOURCE_ADDRESS })],
-      { amount: split.feeMicrotari, receiver: ownerPk },
+      null,
     )
     // THE SINGLE VALUE. `split.withdrawAmount` feeds the statement here and the withdraw
     // instruction below; there is no second computation of it anywhere.
@@ -381,7 +383,7 @@ export async function preparePublicSend(
     const balanceProof = await signBalanceProof(crypto, Mask.zero(), outputMask, inputsStatement, outputsStatement)
     const statement = new StealthTransferStatement(inputsStatement, outputsStatement, balanceProof)
 
-    const builder = buildPublicSend(maxEpoch, ownerPkHex, split.withdrawAmount, statement, declaredInputs)
+    const builder = buildPublicSend(maxEpoch, ownerPkHex, split.withdrawAmount, split.feeBudget, statement, declaredInputs)
     const unsigned = await resolveTransaction(provider, builder.buildUnsignedTransaction())
     const signed = await signTransaction([wallet], dryRun ? { ...unsigned, dry_run: true } : unsigned)
     return { envelope: sealTransaction(signed), split }
@@ -390,13 +392,17 @@ export async function preparePublicSend(
   log('Estimating network fee…')
   const probe = await buildEnvelope(PUBLIC_SEND_FEE_RESERVE, true)
   const cost = await dryRunFee(INDEXER_URL, probe.envelope, { onBusyRetry: () => log(RETRYING_MESSAGE) })
-  const fee = withFeeMargin(cost)
+  // THE FEE SHOWN IS THE COST. `pay_fee` offers the cost plus a small buffer that the engine
+  // refunds, capped by the reserve the amount left in the vault (maxPublicSend).
+  const fee = cost
+  const buffered = withFeeMargin(cost)
+  const budget = buffered < PUBLIC_SEND_FEE_RESERVE ? buffered : PUBLIC_SEND_FEE_RESERVE
 
   // ── THE PROBE→REAL FEE GUARD ──
   //
   // This path's OUTPUT COUNT is invariant — one stealth output, always — so it cannot suffer the
   // shape divergence that rejected a MAX send. What it can suffer is a withdraw larger than the one
-  // simulated: `withdrawAmount` is `amount + fee`, so a fee above the reservation asks the vault
+  // simulated: the vault gives up `amount + fee`, so a fee above the reservation asks the vault
   // for more than the dry run ever tried, and if the balance does not stretch it fails on-chain
   // AFTER the user has confirmed. Refused here, where nothing has been sent.
   if (fee > PUBLIC_SEND_FEE_RESERVE) {
@@ -407,13 +413,14 @@ export async function preparePublicSend(
   }
 
   log('Building…')
-  const real = await buildEnvelope(fee, false)
+  const real = await buildEnvelope(budget, false)
   const preparedAt = Date.now()
-  const simulate = async (feeMicrotari: bigint = fee) => simulateFee(INDEXER_URL, (await buildEnvelope(feeMicrotari, true)).envelope, { fee: feeMicrotari })
+  // The twin carries a BUDGET; the requirement is checked against it (feeProbe.simulateFee).
+  const simulate = async (feeBudget: bigint = budget) => simulateFee(INDEXER_URL, (await buildEnvelope(feeBudget, true)).envelope, { fee: feeBudget })
   // THE VAULT VERSIONS THE REAL BUILD PINNED. A vault that moves before confirm (a receive, another
   // tab's move) makes the pinned transaction stale, so the confirm check refuses it and re-prices.
   const vaultsAsBuilt = await versionsUnchanged(declaredInputs.filter(id => id.startsWith('vault_')))
-  const check = confirmer({ preparedAt, simulate: () => simulate(fee), inputs: { landed: vaultsAsBuilt } })
+  const check = confirmer({ preparedAt, simulate: () => simulate(budget), inputs: { landed: vaultsAsBuilt } })
 
   return {
     feeMicrotari: fee,
@@ -423,8 +430,9 @@ export async function preparePublicSend(
     confirm: check.confirm,
     // Spends a vault, not selected coins: nothing is reserved, so there is nothing to release.
     release: () => {},
+    feeBudget: budget,
     recipientAmount: real.split.recipientAmount,
-    withdrawAmount: real.split.withdrawAmount,
+    withdrawAmount: real.split.recipientAmount + fee,
     submit: async (onSubmitProgress?: (msg: string) => void) => {
       const slog = (m: string) => onSubmitProgress?.(m)
       slog('Checking the fee…')
@@ -457,8 +465,9 @@ export async function preparePublicSend(
         outcome,
         reason,
         recipientAmount: real.split.recipientAmount,
-        feeMicrotari: fee,
-        withdrawAmount: real.split.withdrawAmount,
+        // WHAT WAS CHARGED, from the receipt — the budget is refunded down to the cost.
+        feeMicrotari: feesPaid(body) ?? fee,
+        withdrawAmount: real.split.recipientAmount + (feesPaid(body) ?? fee),
         accountAddress: confirmedAccount,
       }
     },

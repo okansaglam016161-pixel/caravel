@@ -50,6 +50,8 @@ import { prepareConceal, MIN_CONCEAL_MICROTARI } from '../src/crypto/conceal'
 import { prepareReveal, MIN_REVEAL_MICROTARI, maxRevealable } from '../src/crypto/reveal'
 import { prepareConfidentialSend, sendConfidential, describeMicrotari, maxStealthSend, MAX_FEE } from '../src/crypto/confidentialSend'
 import { claimFaucet, prepareClaim, FaucetClaimRefused, type PreparedClaim } from '../src/crypto/faucet'
+import { preparePublicSend } from '../src/crypto/publicSend'
+import { parseOotleAddress } from '@tari-project/ootle-wasm'
 import { FAUCET_COMPONENT_ADDRESS, FAUCET_VAULT_ADDRESS, faucetReceiptId } from '../src/crypto/faucetConfig'
 import { decodeFaucetState, decodeFaucetVault, faucetStatusFrom } from '../src/crypto/faucetStatus'
 import { readFinalizedVerdict, describeFailure } from '../src/crypto/txResult'
@@ -500,7 +502,12 @@ async function printTxResult(txId: string, opts: { raw?: boolean } = {}): Promis
 
   const receipt = exec?.fee_receipt as Record<string, unknown> | undefined
   if (receipt) {
-    field('fees paid', String(receipt.total_fees_paid ?? '?') + ' µtTARI  (RESERVED, and not refunded on this path)')
+    const offered = receipt.total_fee_payment
+    field('fee offered', String(offered ?? '?') + ' µtTARI  (total_fee_payment — bucket or vault budget)')
+    field('fees paid', String(receipt.total_fees_paid ?? '?') + ' µtTARI  (what was taken)')
+    if (offered != null && receipt.total_fees_paid != null) {
+      field('refunded', `${BigInt(offered as string | number) - BigInt(receipt.total_fees_paid as string | number)} µtTARI  (returned to the vault; 0 on a bucket-paid fee)`)
+    }
     field('overcharge', String(receipt.total_fee_overcharge ?? '?') + ' µtTARI')
     const breakdown = (receipt.cost_breakdown as Record<string, unknown> | undefined)?.breakdown
     if (breakdown) field('cost breakdown', JSON.stringify(breakdown))
@@ -747,6 +754,7 @@ async function cmdMakePrivate(h: Harnessed, requested: bigint | 'all', yes: bool
   const prepared = await prepareConceal(h.wallet, h.address, { amountMicrotari: amount, all, onProgress: stage })
   field('withdraw', amt(prepared.withdrawAmount) + '   [leaves the vault]')
   field('fee', amt(prepared.feeMicrotari) + (all ? '   [MAX: out of the whole balance]' : '   [ON TOP of the amount]'))
+  field('fee budget', `${prepared.feeBudget} µtTARI   [offered by account.pay_fee; the engine refunds all but the cost]`)
   field('lands private', amt(prepared.concealedAmount) + (all ? '' : '   [exactly what was asked for]'))
   printDryRun(mark)
   printNet(mark)
@@ -867,6 +875,40 @@ async function cmdSend(h: Harnessed, dest: string, amount: bigint | 'all', yes: 
   printSettlement(markSubmit, performance.now() - t0, result.outcome)
   field('recipient utxo', result.recipientUtxoId ?? 'undefined (commitment unreadable)')
   field('self outputs', result.selfOutputIds ? JSON.stringify(result.selfOutputIds) : 'undefined (statement unreadable)')
+  await printSubmitted(result.txId, prepared.feeMicrotari, result.outcome, result.reason)
+  printNet(markSubmit)
+}
+
+/** WRITE (with --yes). Public send: account vault → the recipient's private balance (preparePublicSend). */
+async function cmdSendPublic(h: Harnessed, dest: string, amount: bigint, yes: boolean): Promise<void> {
+  writeBanner('send-public  (crypto/publicSend.preparePublicSend)', amount, yes)
+  field('recipient', dest)
+  const account = await primeAccount(h)
+  if (!account) console.log('\n  ▶ No account address. preparePublicSend refuses before building — see below.')
+
+  rule('build + price')
+  const mark = net.length
+  const prepared = await preparePublicSend(h.wallet, h.address, parseOotleAddress, { recipient: dest, amountMicrotari: amount, onProgress: stage })
+  field('arrives', amt(prepared.recipientAmount) + '   [exactly what was asked for]')
+  field('fee', amt(prepared.feeMicrotari) + '   [the exact cost — what the UI shows]')
+  field('fee budget', `${prepared.feeBudget} µtTARI   [offered by account.pay_fee; the engine refunds all but the cost]`)
+  field('leaves public', amt(prepared.withdrawAmount) + '   [amount + fee]')
+  printDryRun(mark)
+  printNet(mark)
+
+  if (!yes) {
+    rule('confirm check  (crypto/quote — what Confirm runs before anything is sent)')
+    await prepared.confirm()
+    field('confirm check', 'PASSES — fresh, inputs unchanged, final transaction accepted at the exact fee')
+    console.log('\n  STOPPED BEFORE SUBMIT. Nothing was sent. Re-run with --yes to submit.')
+    return
+  }
+
+  rule('submit')
+  const markSubmit = net.length
+  const t0 = performance.now()
+  const result = await prepared.submit(stage)
+  printSettlement(markSubmit, performance.now() - t0, result.outcome)
   await printSubmitted(result.txId, prepared.feeMicrotari, result.outcome, result.reason)
   printNet(markSubmit)
 }
@@ -2120,6 +2162,9 @@ WRITE — MOVES REAL TESTNET FUNDS. Builds and prices without --yes; submits wit
   make-private <amount|all>   conceal: revealed vault  →  private stealth output. The fee goes on
                               top; 'all' (MAX) moves the whole public balance, fee out of it.
   make-public  <amount>       reveal:  private outputs →  revealed vault balance.
+  send-public <ootle-address> <amount>
+                              publicSend: account vault → the recipient's private balance. The fee
+                              is paid from the vault and refunded down to the exact cost.
   send <ootle-address> <amount|all> [memo]
                               prepareConfidentialSend → submit. 'all' is MAX: everything reachable,
                               the exact fee out of it, no change. Builds and prices without --yes.
@@ -2214,6 +2259,10 @@ export async function main(argv: string[]): Promise<void> {
       case 'prove-settle':
         if (!args[1] || !args[2]) throw new Error('prove-settle needs a recipient address and an amount.')
         await cmdProveSettle(h, args[1], parseAmount(args[2]), yes)
+        break
+      case 'send-public':
+        if (!args[1] || !args[2]) throw new Error('send-public needs a recipient address and an amount.')
+        await cmdSendPublic(h, args[1], parseAmount(args[2]), yes)
         break
       case 'prove-short-fee':
         if (!args[1] || !args[2]) throw new Error('prove-short-fee needs a recipient address and an amount.')

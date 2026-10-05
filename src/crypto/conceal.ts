@@ -4,9 +4,18 @@
 // irreversible in the way revealing is. Structurally it is the shape faucet.ts's claim also uses:
 //
 //     createAccount(ownerPk)                            → 'account'   [idempotent — reuses existing]
+//     callMethod(account, 'pay_fee', [budget])          the fee, from the vault — REFUNDED down to cost
 //     callMethod(account, 'withdraw', [TARI, amount])   → 'bucket'    revealed OUT of the vault
-//     StealthTransfer { revealedInputBucket: 'bucket' } → 'fee_bucket'
-//     PayFeeFromBucket { fee_bucket }
+//     StealthTransfer { revealedInputBucket: 'bucket' } no revealed output; nothing left over
+//
+// ── THE FEE IS PAID FROM THE VAULT, SO ONLY THE REAL COST IS TAKEN ───────────
+//
+// It used to be carved out of the withdrawn bucket and paid with PayFeeFromBucket, which takes the
+// whole bucket — the margin was spent on every conceal. The account's `pay_fee` is the engine's
+// REFUNDABLE fee payment (tari-ootle 0.43 runtime/impl.rs VaultAction::PayFee → pay_fee with a
+// return vault; working_state.rs finalize_fees_and_refunds withdraws only what is required and
+// deposits the rest back). So the budget can carry a buffer and the user is still charged exactly
+// the cost. The money is public on this path anyway, so paying from the vault reveals nothing new.
 //
 // The claim takes its revealed bucket from the faucet's `claim()` instead of from an account, so it
 // needs no account at all; a conceal withdraws a balance that is already in one. Everything else —
@@ -125,40 +134,34 @@ export interface ConcealParams {
 // ── The fund-critical arithmetic, isolated so it can be tested ────────────────
 
 export interface ConcealSplit {
-  /** Revealed µtTARI leaving the vault. IS the statement's revealed input — one value, both uses. */
+  /** Withdrawn into the bucket. IS the statement's revealed input — one value, both uses. */
   withdrawAmount: bigint
-  /** Stealth output: what ends up private. */
+  /** Stealth output: what ends up private. Equal to the withdraw — the fee is not in the bucket. */
   stealthAmount: bigint
-  /** Revealed output: becomes the fee bucket. */
-  feeMicrotari: bigint
+  /** What `pay_fee` offers from the vault. The engine takes the cost and refunds the rest. */
+  feeBudget: bigint
 }
 
 /**
- * Split a conceal into what leaves the vault, what lands private, and the fee.
+ * Split a conceal into the withdraw, what lands private, and the fee budget.
  *
  * FEE ON TOP, by default — the same rule as planPublicSend and planReveal: `amount` is what
- * ARRIVES (the stealth output), and the vault gives up `amount + fee`. Typing 2 makes 2 private.
+ * ARRIVES (the stealth output). The fee is paid separately from the vault by `pay_fee(budget)`,
+ * so the bucket holds exactly the amount and the vault gives up `amount + cost`.
  *
- * `all` is MAX: `amount` is the whole balance leaving the vault, and the fee is carved out of it,
- * so `withdraw === amount` and the stealth output is the remainder. Throws rather than returning a
- * degenerate split there: a fee at or above the balance would mean no stealth output at all.
- *
- * Either way `withdrawAmount` is the ONE number the engine compares against the bucket.
+ * `all` is MAX: `amount` is the whole public balance, and the budget comes out of it — the budget
+ * is then the exact cost, so the vault empties exactly. Throws rather than returning a degenerate
+ * split: a budget at or above the balance would leave no stealth output at all.
  */
-export function planConceal(amountMicrotari: bigint, feeMicrotari: bigint, all = false): ConcealSplit {
+export function planConceal(amountMicrotari: bigint, feeBudget: bigint, all = false): ConcealSplit {
   if (amountMicrotari <= 0n) throw new Error('Amount must be greater than zero.')
-  if (feeMicrotari <= 0n) throw new Error('Fee must be greater than zero.')
-  if (!all) {
-    return { withdrawAmount: amountMicrotari + feeMicrotari, stealthAmount: amountMicrotari, feeMicrotari }
+  if (feeBudget <= 0n) throw new Error('Fee must be greater than zero.')
+  if (!all) return { withdrawAmount: amountMicrotari, stealthAmount: amountMicrotari, feeBudget }
+  if (feeBudget >= amountMicrotari) {
+    throw new Error(`The network fee (${feeBudget} µtTARI) is not covered by the amount being moved (${amountMicrotari} µtTARI).`)
   }
-  if (feeMicrotari >= amountMicrotari) {
-    throw new Error(`The network fee (${feeMicrotari} µtTARI) is not covered by the amount being moved (${amountMicrotari} µtTARI).`)
-  }
-  return {
-    withdrawAmount: amountMicrotari,
-    stealthAmount: amountMicrotari - feeMicrotari,
-    feeMicrotari,
-  }
+  const moved = amountMicrotari - feeBudget
+  return { withdrawAmount: moved, stealthAmount: moved, feeBudget }
 }
 
 /**
@@ -179,12 +182,13 @@ export function maxConcealTyped(publicBalance: bigint): bigint {
  * transaction whose reason is a bucket-mismatch string from the engine.
  */
 export function assertConcealSplit(split: ConcealSplit): void {
-  const { withdrawAmount, stealthAmount, feeMicrotari } = split
-  if (withdrawAmount <= 0n || stealthAmount <= 0n || feeMicrotari <= 0n) {
-    throw new Error(`conceal: non-positive component in split (withdraw ${withdrawAmount}, stealth ${stealthAmount}, fee ${feeMicrotari})`)
+  const { withdrawAmount, stealthAmount, feeBudget } = split
+  if (withdrawAmount <= 0n || stealthAmount <= 0n || feeBudget <= 0n) {
+    throw new Error(`conceal: non-positive component in split (withdraw ${withdrawAmount}, stealth ${stealthAmount}, fee ${feeBudget})`)
   }
-  if (stealthAmount + feeMicrotari !== withdrawAmount) {
-    throw new Error(`conceal: split does not balance — stealth ${stealthAmount} + fee ${feeMicrotari} !== withdraw ${withdrawAmount}`)
+  // No revealed output: everything withdrawn into the bucket becomes the stealth output.
+  if (stealthAmount !== withdrawAmount) {
+    throw new Error(`conceal: split does not balance — stealth ${stealthAmount} !== withdraw ${withdrawAmount}`)
   }
 }
 
@@ -202,6 +206,7 @@ function buildConceal(
   maxEpoch: number,
   ownerPkHex: string,
   withdrawAmount: bigint,
+  feeBudget: bigint,
   statement: StealthTransferStatement,
   declaredInputs: string[],
 ) {
@@ -212,19 +217,20 @@ function buildConceal(
         // existing component if there is one, so this is safe to issue on every conceal.
         .createAccount(ownerPkHex)
         .saveVar('account')
+        // REFUNDABLE: the vault offers `feeBudget`, the engine takes the cost, the rest goes back.
+        .callMethod({ fromWorkspace: 'account', methodName: 'pay_fee' }, [amountLiteral(feeBudget)])
         .callMethod({ fromWorkspace: 'account', methodName: 'withdraw' }, [
           resourceAddressLiteral(TARI_RESOURCE_ADDRESS),
           amountLiteral(withdrawAmount),
         ])
         .saveVar('bucket')
+        // No revealed output, so the transfer returns no bucket — nothing to save or pay from.
         .addInstruction(
           stealthTransferInstruction(
             { resourceAddress: TARI_RESOURCE_ADDRESS, revealedInputBucket: 'bucket', statement },
             (name) => b.resolveWorkspaceOffsetId(name),
           ),
-        )
-        .saveVar('fee_bucket')
-        .addInstruction({ PayFeeFromBucket: { bucket: b.resolveWorkspaceOffsetId('fee_bucket') } }),
+        ),
     )
     // ── THE INPUTS ARE NOT OPTIONAL ──
     //
@@ -248,11 +254,13 @@ function buildConceal(
  * during prepare, and `submit` sends the very envelope that was priced.
  */
 export interface PreparedConceal {
-  /** Measured fee including margin (µtTARI) — what the review screen shows and the tx pays. */
+  /** The exact measured cost (µtTARI) — what the review screen shows and what is charged. */
   feeMicrotari: bigint
+  /** What `pay_fee` offers from the vault. Above the cost by a buffer that is REFUNDED, never shown. */
+  feeBudget: bigint
   /** What will land private: the amount asked for (on `all`, the balance − fee). */
   concealedAmount: bigint
-  /** Total leaving the vault — the withdraw, and the statement's revealed input. */
+  /** Total leaving the public balance: what lands private plus the fee. */
   withdrawAmount: bigint
   /** What the pricing dry run measured, before the margin (µtTARI). */
   dryRunCost: bigint
@@ -305,9 +313,7 @@ export async function prepareConceal(
   log('Connecting…')
   const provider = await IndexerProvider.connect({ url: INDEXER_URL, network: Network.Esmeralda })
   const crypto = new WasmStealthCrypto(Network.Esmeralda)
-  // The owner key signs for the account, so it is also the RECEIVER of the statement's revealed
-  // output: since Ootle 0.42 the engine only creates that bucket if the receiver's badge is in the
-  // transaction's auth scope, which a statement lifted into someone else's transaction cannot satisfy.
+  // The owner key signs for the account — the withdraw and the vault-paid fee both need it.
   const ownerPk = await wallet.getPublicKey()
   const ownerPkHex = toHexStr(ownerPk)
 
@@ -332,13 +338,14 @@ export async function prepareConceal(
 
   // The whole build is a function OF the fee — the outputs statement commits to it and the balance
   // proof signs over both — so it runs once to price and once to send.
-  async function buildEnvelope(feeMicrotari: bigint, dryRun: boolean) {
-    const split = planConceal(amountMicrotari, feeMicrotari, all)
+  async function buildEnvelope(feeBudget: bigint, dryRun: boolean) {
+    const split = planConceal(amountMicrotari, feeBudget, all)
     assertConcealSplit(split)
 
+    // No revealed output: the fee is paid from the vault, not out of this transfer.
     const { statement: outputsStatement, outputMask } = await crypto.generateOutputsStatement(
       [createOutput({ destination: ownerAddress, amount: split.stealthAmount, resourceAddress: TARI_RESOURCE_ADDRESS })],
-      { amount: split.feeMicrotari, receiver: ownerPk },
+      null,
     )
     // THE SINGLE VALUE. `split.withdrawAmount` feeds the statement here and the withdraw
     // instruction below; there is no second computation of it anywhere.
@@ -347,7 +354,7 @@ export async function prepareConceal(
     const balanceProof = await signBalanceProof(crypto, Mask.zero(), outputMask, inputsStatement, outputsStatement)
     const statement = new StealthTransferStatement(inputsStatement, outputsStatement, balanceProof)
 
-    const builder = buildConceal(maxEpoch, ownerPkHex, split.withdrawAmount, statement, declaredInputs)
+    const builder = buildConceal(maxEpoch, ownerPkHex, split.withdrawAmount, split.feeBudget, statement, declaredInputs)
     // resolveTransaction still runs, to pin versions on the ids we declared — but it is the explicit
     // declaration above that makes the transaction work, not this.
     const unsigned = await resolveTransaction(provider, builder.buildUnsignedTransaction())
@@ -357,30 +364,41 @@ export async function prepareConceal(
 
   log('Estimating network fee\u2026')
   const probe = await buildEnvelope(CONCEAL_FEE_RESERVE, true)
-  const cost = await dryRunFee(INDEXER_URL, probe.envelope, { onBusyRetry: () => log(RETRYING_MESSAGE) })
-  const fee = withFeeMargin(cost)
-  // The probe→real fee guard, applied here for the same reason as the other three builders even
-  // though this path is the least exposed: its output count is invariant (one stealth output at any
-  // fee), so no shape can diverge. What remains true everywhere is that a fee above the reservation
-  // was never simulated, and building on an unsimulated number is how the MAX rejection happened.
-  if (fee > CONCEAL_FEE_RESERVE) {
+  let cost = await dryRunFee(INDEXER_URL, probe.envelope, { onBusyRetry: () => log(RETRYING_MESSAGE) })
+  // MAX MOVES `balance − budget`, and its budget is the cost itself — so the amount priced above
+  // (balance − reserve) is not the amount it will move. Price that exact shape once more, so the
+  // budget it carries is measured against the transaction it is.
+  if (all && cost < amountMicrotari) {
+    const again = await dryRunFee(INDEXER_URL, (await buildEnvelope(cost, true)).envelope, { onBusyRetry: () => log(RETRYING_MESSAGE) })
+    if (again > cost) cost = again
+  }
+  // A cost above the reservation was never simulated with the vault holding enough for it.
+  if (cost > CONCEAL_FEE_RESERVE) {
     throw new Error(
-      `The network fee (${fee} µtTARI) exceeds the ${CONCEAL_FEE_RESERVE} µtTARI this transaction reserved for it. ` +
+      `The network fee (${cost} µtTARI) exceeds the ${CONCEAL_FEE_RESERVE} µtTARI this transaction reserved for it. ` +
       `Fees have risen — try again in a moment.`,
     )
   }
-  if (all && fee >= amountMicrotari) {
-    throw new Error(`The network fee (${fee} \u00b5tTARI) exceeds the amount being made private. Try a larger amount.`)
+  if (all && cost >= amountMicrotari) {
+    throw new Error(`The network fee (${cost} \u00b5tTARI) exceeds the amount being made private. Try a larger amount.`)
   }
+  // THE FEE SHOWN IS THE COST. The budget `pay_fee` offers is the cost plus a small buffer that the
+  // engine refunds — or, on MAX, exactly the cost, since the vault holds nothing beyond it (a cost
+  // that rose is then a free reject, and the user is asked again). A typed amount left the whole
+  // reserve in the vault (maxConcealTyped), so the buffer always fits.
+  const fee = cost
+  const buffered = withFeeMargin(cost)
+  const budget = all ? cost : buffered < CONCEAL_FEE_RESERVE ? buffered : CONCEAL_FEE_RESERVE
 
   log('Building\u2026')
-  const real = await buildEnvelope(fee, false)
+  const real = await buildEnvelope(budget, false)
   const preparedAt = Date.now()
-  const simulate = async (feeMicrotari: bigint = fee) => simulateFee(INDEXER_URL, (await buildEnvelope(feeMicrotari, true)).envelope, { fee: feeMicrotari })
+  // The twin carries a BUDGET; the requirement is checked against it (feeProbe.simulateFee).
+  const simulate = async (feeBudget: bigint = budget) => simulateFee(INDEXER_URL, (await buildEnvelope(feeBudget, true)).envelope, { fee: feeBudget })
   // THE VAULT VERSIONS THE REAL BUILD PINNED. A vault that moves before confirm (a receive, another
   // tab's move) makes the pinned transaction stale, so the confirm check refuses it and re-prices.
   const vaultsAsBuilt = await versionsUnchanged(declaredInputs.filter(id => id.startsWith('vault_')))
-  const check = confirmer({ preparedAt, simulate: () => simulate(fee), inputs: { landed: vaultsAsBuilt } })
+  const check = confirmer({ preparedAt, simulate: () => simulate(budget), inputs: { landed: vaultsAsBuilt } })
 
   return {
     feeMicrotari: fee,
@@ -390,8 +408,9 @@ export async function prepareConceal(
     confirm: check.confirm,
     // Spends a vault, not selected coins: nothing is reserved, so there is nothing to release.
     release: () => {},
+    feeBudget: budget,
     concealedAmount: real.split.stealthAmount,
-    withdrawAmount: real.split.withdrawAmount,
+    withdrawAmount: real.split.stealthAmount + fee,
     submit: async (onSubmitProgress?: (msg: string) => void) => {
       const slog = (m: string) => onSubmitProgress?.(m)
       slog('Checking the fee\u2026')
@@ -419,7 +438,10 @@ export async function prepareConceal(
       // from a claim gets one here. saveAccountAddress is first-write-wins, so a repeat is a no-op.
       if (confirmedAccount) saveAccountAddress(ownerAddress, confirmedAccount)
 
-      return { txId, outcome, reason, concealedAmount: real.split.stealthAmount, feeMicrotari: fee, accountAddress: confirmedAccount, selfOutputIds: real.selfOutputIds }
+      // WHAT WAS CHARGED, from the receipt: with the budget refunded down to the cost, this is the
+      // figure to compare against the fee that was shown.
+      const charged = feesPaid(body)
+      return { txId, outcome, reason, concealedAmount: real.split.stealthAmount, feeMicrotari: charged ?? fee, accountAddress: confirmedAccount, selfOutputIds: real.selfOutputIds }
     },
   }
 }
@@ -440,4 +462,12 @@ function toHexStr(bytes: Uint8Array): string {
   let s = ''
   for (const b of bytes) s += b.toString(16).padStart(2, '0')
   return s
+}
+
+/** `total_fees_paid` from a committed result — what the transaction was actually charged. */
+export function feesPaid(body: unknown): bigint | undefined {
+  const v = (body as {
+    result?: { Finalized?: { execution_result?: { finalize?: { fee_receipt?: { total_fees_paid?: number | string } } } } }
+  } | null)?.result?.Finalized?.execution_result?.finalize?.fee_receipt?.total_fees_paid
+  return v != null ? BigInt(v) : undefined
 }

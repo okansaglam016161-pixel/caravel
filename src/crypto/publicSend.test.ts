@@ -2,7 +2,8 @@
 //
 // Two fund-critical things live in this file and they fail in different ways:
 //
-//   THE SPLIT — the engine compares the withdrawn bucket against the statement's revealed input
+//   THE SPLIT — the fee is paid separately from the vault (account.pay_fee, refunded down to the
+//   cost), so the bucket holds exactly the amount. The engine compares the withdrawn bucket against the statement's revealed input
 //   with NO tolerance (tari-ootle: runtime/working_state.rs:2062-2074). Drift between those two
 //   numbers is a rejected transaction, and in the class of bug that produces it, potentially a
 //   withdraw that does not match what the statement spends. planPublicSend exists so that number is
@@ -25,52 +26,43 @@ const TARI = 1_000_000n
 
 // ── The split ─────────────────────────────────────────────────────────────────
 
-describe('planPublicSend — the amount is what ARRIVES, the fee goes on top', () => {
+describe('planPublicSend — the amount is what ARRIVES; the fee is paid from the vault on top', () => {
   it('pays the recipient exactly what was asked for', () => {
     expect(planPublicSend(10n * TARI, 18_705n).recipientAmount).toBe(10n * TARI)
   })
 
-  it('withdraws amount + fee from the vault', () => {
+  it('withdraws exactly the amount into the bucket — the fee is a separate, refunded vault payment', () => {
     const s = planPublicSend(10n * TARI, 18_705n)
-    expect(s.withdrawAmount).toBe(10n * TARI + 18_705n)
-    expect(s.feeMicrotari).toBe(18_705n)
+    expect(s.withdrawAmount).toBe(10n * TARI)
+    expect(s.feeBudget).toBe(18_705n)
   })
 
-  it('ONE RULE WITH CONCEAL: both deliver the amount typed and put the fee on top', () => {
-    // The amount you type is the amount that arrives — for a payment and for a move alike.
+  it('ONE RULE WITH CONCEAL: both deliver the amount typed and pay the fee from the vault on top', () => {
     const amount = 10n * TARI
     const fee = 18_705n
     const sent = planPublicSend(amount, fee)
     const concealed = planConceal(amount, fee)
-
     expect(sent.recipientAmount).toBe(amount)
     expect(concealed.stealthAmount).toBe(amount)
-    expect(sent.withdrawAmount).toBe(concealed.withdrawAmount)   // both: amount + fee leaves the vault
+    expect(sent.withdrawAmount).toBe(concealed.withdrawAmount)   // both: the amount, and only it, into the bucket
+    expect(sent.feeBudget).toBe(concealed.feeBudget)
   })
 
-  it('BALANCES: amount + fee === withdraw, at every scale', () => {
+  it('BALANCES: what is withdrawn is what arrives, at every scale and budget', () => {
     for (const amount of [MIN_PUBLIC_SEND_MICROTARI, 1n * TARI, 999_595_988n, 1_000n * TARI, 2n ** 63n]) {
       for (const fee of [1n, 13_211n, 18_705n, PUBLIC_SEND_FEE_RESERVE]) {
         const s = planPublicSend(amount, fee)
-        expect(s.recipientAmount + s.feeMicrotari).toBe(s.withdrawAmount)
+        expect(s.withdrawAmount).toBe(s.recipientAmount)
         expect(s.recipientAmount).toBe(amount)
       }
     }
   })
 
-  it('stays exact past Number.MAX_SAFE_INTEGER', () => {
-    const amount = 18_446_744_073_709_551_615n
-    const s = planPublicSend(amount, 18_705n)
-    expect(s.withdrawAmount).toBe(18_446_744_073_709_570_320n)
-    expect(s.recipientAmount).toBe(amount)
-  })
-
-  it('a measured fee below the reserve changes only the withdraw, never the payment', () => {
-    // Why the amount can be fixed before the fee is known: the recipient's figure is invariant.
+  it('the budget never changes the payment', () => {
     const priced = planPublicSend(5n * TARI, PUBLIC_SEND_FEE_RESERVE)
     const real = planPublicSend(5n * TARI, 18_705n)
     expect(real.recipientAmount).toBe(priced.recipientAmount)
-    expect(priced.withdrawAmount - real.withdrawAmount).toBe(PUBLIC_SEND_FEE_RESERVE - 18_705n)
+    expect(real.withdrawAmount).toBe(priced.withdrawAmount)
   })
 })
 
@@ -90,8 +82,6 @@ describe('assertPublicSendSplit — the tripwire for a second derivation', () =>
   })
 
   it('catches a withdraw that drifted from the statement input', () => {
-    // The exact bug this guards: someone recomputes the withdraw separately and the two stop
-    // agreeing. On-chain that is an opaque bucket-mismatch rejection; here it is a caught bug.
     const good = planPublicSend(10n * TARI, 18_705n)
     expect(() => assertPublicSendSplit({ ...good, withdrawAmount: good.withdrawAmount + 1n }))
       .toThrow(/does not balance/)
@@ -104,9 +94,9 @@ describe('assertPublicSendSplit — the tripwire for a second derivation', () =>
   })
 
   it.each([
-    ['zero amount', { recipientAmount: 0n, feeMicrotari: 100n, withdrawAmount: 100n }],
-    ['zero fee', { recipientAmount: 100n, feeMicrotari: 0n, withdrawAmount: 100n }],
-    ['zero withdraw', { recipientAmount: 0n, feeMicrotari: 0n, withdrawAmount: 0n }],
+    ['zero amount', { recipientAmount: 0n, feeBudget: 100n, withdrawAmount: 100n }],
+    ['zero fee', { recipientAmount: 100n, feeBudget: 0n, withdrawAmount: 100n }],
+    ['zero withdraw', { recipientAmount: 0n, feeBudget: 0n, withdrawAmount: 0n }],
   ])('refuses a non-positive component (%s)', (_label, split) => {
     expect(() => assertPublicSendSplit(split)).toThrow(/non-positive component/)
   })
@@ -172,13 +162,14 @@ describe('maxPublicSend', () => {
     expect(maxPublicSend(1_000n * TARI)).toBe(1_000n * TARI - PUBLIC_SEND_FEE_RESERVE)
   })
 
-  it('MAX never withdraws more than the balance holds, at any fee up to the reserve', () => {
-    // The whole chain's guarantee: withdraw = amount + fee must fit inside the public balance.
+  it('MAX never asks the vault for more than it holds, at any budget up to the reserve', () => {
+    // The whole chain's guarantee: the withdraw plus the fee budget fit inside the public balance.
     for (const balance of [50_001n, 100_000n, 700_997_686n, 1_000n * TARI, 2n ** 70n]) {
       const amount = maxPublicSend(balance)
       if (amount === 0n) continue
       for (const fee of [1n, 18_705n, PUBLIC_SEND_FEE_RESERVE]) {
-        expect(planPublicSend(amount, fee).withdrawAmount).toBeLessThanOrEqual(balance)
+        const s = planPublicSend(amount, fee)
+        expect(s.withdrawAmount + s.feeBudget).toBeLessThanOrEqual(balance)
       }
     }
   })
@@ -205,7 +196,7 @@ describe('the constants hang together', () => {
     expect(maxPublicSend(balance)).toBeGreaterThanOrEqual(MIN_PUBLIC_SEND_MICROTARI)
     const s = planPublicSend(MIN_PUBLIC_SEND_MICROTARI, 18_705n)
     assertPublicSendSplit(s)
-    expect(s.withdrawAmount).toBeLessThanOrEqual(balance)
+    expect(s.withdrawAmount + s.feeBudget).toBeLessThanOrEqual(balance)
   })
 
   it('matches the conceal and reveal floors, so every amount field behaves the same', () => {

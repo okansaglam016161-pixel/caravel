@@ -17,7 +17,7 @@ import { useJumpToMessage } from './useJumpToMessage'
 import PendingBubble, { type PendingSend } from './PendingBubble'
 import { loadNicknames, setNickname, MAX_NICKNAME_LEN, type NicknameMap } from '../../messaging/nicknameStore'
 import { loadAddressSent, markAddressSent, clearAddressSent, type AddressSentMap } from '../../messaging/addressSentStore'
-import { sendConfidential, tariToMicrotari, MAX_FEE } from '../../crypto/confidentialSend'
+import { prepareConfidentialSend, tariToMicrotari, MAX_FEE, type PreparedConfidentialSend } from '../../crypto/confidentialSend'
 import { beginEntry, settleEntry } from '../../crypto/journalStore'
 import { resolveOnsNameToHex, toOnsName, type OnsResolveErrorKind } from '../../crypto/ons'
 import { ConnectionIndicator, RelayHealthPanel } from './ConnectionStatus'
@@ -203,13 +203,6 @@ function PayPanelHeader({ onClose }: { onClose: () => void }) {
   )
 }
 
-// Fee ceiling shown in the confirm step, from confidentialSend.MAX_FEE.
-//
-// fmt6 rather than `Number(MAX_FEE) / 1_000_000` — the third instance of the pattern 8A removed.
-// Constant-folded, so it could never have been wrong here; replaced anyway, because the argument
-// for the other two was that there should be one way to turn µtTARI into a figure, and an exception
-// that happens to be safe is how the next unsafe one gets written.
-const FEE_CEIL_XTR = fmt6(MAX_FEE)
 
 // Compose-modal resolution state (Flag 1b). `ok` carries the resolved peer; `name` is the ONS name
 // (null for a raw npub), `existing` true when it is already an accepted conversation.
@@ -471,6 +464,13 @@ export default function ChatApp({ onOpenWallet }: {
   const [payAmount, setPayAmount] = useState('')       // XTR, as typed
   const [payAddress, setPayAddress] = useState('')     // recipient otl_esm_ (manual — see caveat)
   const [confirming, setConfirming] = useState(false)  // inline confirm panel shown
+  /**
+   * The payment priced for the confirm card — the envelope Send submits, so the fee it shows is the
+   * fee it pays. Null while pricing (the card says "Pricing…" and Send is disabled) and whenever
+   * the card is closed. `payPriceGen` drops a pricing result the user has already walked away from.
+   */
+  const [payPrepared, setPayPrepared] = useState<PreparedConfidentialSend | null>(null)
+  const payPriceGen = useRef(0)
   const [payBusy, setPayBusy] = useState(false)        // payment/message in flight
   const [payProgress, setPayProgress] = useState<string | null>(null)
   const [payError, setPayErrorRaw] = useState<string | null>(null)
@@ -1199,7 +1199,7 @@ export default function ChatApp({ onOpenWallet }: {
         if (selectedConvo) setPayAddress(contactAddresses[selectedConvo.peerHex]?.address ?? '')
         setPayError(null)
       } else {
-        setConfirming(false)
+        closeConfirm()
       }
       return next
     })
@@ -1267,7 +1267,7 @@ export default function ChatApp({ onOpenWallet }: {
       const err = validatePayment()
       if (err) { setPayError(err, true); return }   // validation — nothing has been attempted
       setPayError(null)
-      setConfirming(true)
+      void pricePayment()
     } else if (attachment) {
       // Reached only outside edit mode — both callers check `editing` first — and after the payment
       // branch above. composerSend.ts owns that precedence and is where it is tested; this arm is
@@ -1278,12 +1278,48 @@ export default function ChatApp({ onOpenWallet }: {
     }
   }
 
-  // Runs only after the user confirms. Sequencing (decided): pre-flight connection check → real
-  // confidential payment → only on Commit send the message carrying the recipient UTXO id.
+  /**
+   * Open the confirm gate and PRICE the payment for it: scan, select, dry run and build happen now,
+   * so the card shows the exact fee the transaction pays and Send submits that very envelope. The
+   * quick pre-check (validatePayment, against the fee ceiling) has already run; this is the real
+   * answer. A failure here sent nothing.
+   */
+  async function pricePayment() {
+    if (!wallet || !address) { setPayError('Wallet is locked — unlock to send.', true); return }
+    const gen = ++payPriceGen.current
+    setPayPrepared(null)
+    setConfirming(true)
+    try {
+      const prepared = await prepareConfidentialSend(wallet, address, {
+        recipient: effectivePayAddress,
+        amountMicrotari: tariToMicrotari(Number(payAmount)),
+      })
+      if (gen !== payPriceGen.current) return
+      setPayPrepared(prepared)
+    } catch (e) {
+      if (gen !== payPriceGen.current) return
+      setConfirming(false)
+      setPayError(e instanceof Error ? e.message : String(e), true)   // priced, not sent
+    }
+  }
+
+  /** Close the confirm gate and drop whatever it priced — a later Send must price afresh. */
+  function closeConfirm() {
+    payPriceGen.current++
+    setPayPrepared(null)
+    setConfirming(false)
+  }
+
+  // Runs only after the user confirms. Sequencing (decided): pre-flight connection check → submit
+  // the payment priced on the confirm card → only on Commit send the message carrying the recipient
+  // UTXO id.
   async function submitPayment() {
     if (!selectedConvo) return
-    setConfirming(false)
+    const prepared = payPrepared
+    closeConfirm()
     setPayError(null)
+    // The card's Send is disabled until this exists; refusing here keeps it a rule, not UI state.
+    if (!prepared) { setPayError('This payment wasn’t ready yet, so nothing was sent. Try again.', true); return }
 
     // PRE-FLIGHT: never spend money we cannot announce.
     if (messagingStatus !== 'connected' && messagingStatus !== 'degraded') {
@@ -1292,7 +1328,7 @@ export default function ChatApp({ onOpenWallet }: {
     }
     if (!wallet || !address) { setPayError('Wallet is locked — unlock to send.', true); return }
 
-    const amountMicro = tariToMicrotari(Number(payAmount))
+    const amountMicro = prepared.recipientAmount
     const recipientAddr = effectivePayAddress   // exchanged address, or the manually-entered one
     const note = draft.trim() || '💸 Payment'   // NIP-44 needs ≥1 byte; empty note gets a caption
     const peerHex = selectedConvo.peerHex
@@ -1319,7 +1355,7 @@ export default function ChatApp({ onOpenWallet }: {
     const journalId = beginEntry(address, {
       kind: 'chat-payment',
       amountMicrotari: amountMicro,
-      feeMicrotari: null,
+      feeMicrotari: prepared.feeMicrotari,   // priced on the confirm card; the receipt confirms it
       from: 'private',
       to: 'external',
       counterparty: null,
@@ -1330,11 +1366,7 @@ export default function ChatApp({ onOpenWallet }: {
     }).entry.id
 
     try {
-      const result = await sendConfidential(wallet, address, {
-        recipient: recipientAddr,
-        amountMicrotari: amountMicro,
-        onProgress: (m) => setPayProgress(m),
-      })
+      const result = await prepared.submit((m) => setPayProgress(m))
 
       // BEFORE THE BRANCHING, AND THAT IS THE POINT. Every exit below — rejected, timed out, no
       // recipient id, no provider, and the orphan where the payment lands but the message does not
@@ -1439,7 +1471,7 @@ export default function ChatApp({ onOpenWallet }: {
   useEffect(() => {
     setAttachment(null)
     setPaymentMode(false)
-    setConfirming(false)
+    closeConfirm()
     setPayError(null)
     setPayAmount('')
     setMenuOpen(false)
@@ -2398,14 +2430,19 @@ export default function ChatApp({ onOpenWallet }: {
                       <span style={{ color: 'var(--text-muted-dim)', flexShrink: 0 }}>Note</span>
                       <span style={{ color: 'var(--text-body-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{draft.trim() || '💸 Payment'}</span>
                     </div>
-                    {/* A CEILING, said as one. The exact fee is not known until the transaction
-                        settles — the send has no prepare/submit split to price it — so the caption
-                        is doing real work rather than softening a number. */}
+                    {/* THE EXACT FEE — priced when this card opened, and what the payment pays. */}
                     <div style={{ borderTop: '1px solid var(--border)', paddingTop: 8, display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 12.5 }}>
-                      <span style={{ color: 'var(--text-muted-dim)' }}>Fee, at most</span>
-                      <span style={{ fontFamily: MONO, fontWeight: 600, color: 'var(--text-primary)' }}>{FEE_CEIL_XTR} {TICKER}</span>
+                      <span style={{ color: 'var(--text-muted-dim)' }}>Network fee</span>
+                      <span style={{ fontFamily: MONO, fontWeight: 600, color: payPrepared ? 'var(--text-primary)' : 'var(--text-muted-dim)' }}>
+                        {payPrepared ? `${fmt6(payPrepared.feeMicrotari)} ${TICKER}` : 'Pricing…'}
+                      </span>
                     </div>
-                    <div style={{ fontSize: 11, color: 'var(--text-muted-dim)', marginTop: -3, textAlign: 'right' }}>The exact fee is known once it settles</div>
+                    {payPrepared && (
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 12.5 }}>
+                        <span style={{ color: 'var(--text-muted-dim)' }}>Total</span>
+                        <span style={{ fontFamily: MONO, fontWeight: 600, color: 'var(--text-primary)' }}>{fmt6(payPrepared.recipientAmount + payPrepared.feeMicrotari)} {TICKER}</span>
+                      </div>
+                    )}
                   </div>
 
                   <div style={{ display: 'flex', gap: 8, padding: '9px 11px', borderRadius: 9, background: 'var(--card-warn)', color: 'var(--warn)', fontSize: 11.5, lineHeight: 1.5, textWrap: 'pretty' }}>
@@ -2414,8 +2451,8 @@ export default function ChatApp({ onOpenWallet }: {
                   </div>
 
                   <div style={{ display: 'flex', gap: 8 }}>
-                    <button onClick={() => setConfirming(false)} style={{ ...PAY_BTN, flex: 1, border: '1px solid var(--border-strong)', background: 'transparent', color: 'var(--text-body-dim)' }}>Cancel</button>
-                    <button onClick={submitPayment} className="cv-btn-primary" style={{ ...PAY_BTN, flex: 1, border: 'none', background: 'var(--accent-400)', color: 'var(--ink-on-accent)', cursor: 'pointer' }}>Send payment</button>
+                    <button onClick={closeConfirm} style={{ ...PAY_BTN, flex: 1, border: '1px solid var(--border-strong)', background: 'transparent', color: 'var(--text-body-dim)' }}>Cancel</button>
+                    <button onClick={payPrepared ? submitPayment : undefined} disabled={!payPrepared} className={payPrepared ? 'cv-btn-primary' : undefined} style={{ ...PAY_BTN, flex: 1, border: payPrepared ? 'none' : '1px solid var(--border)', background: payPrepared ? 'var(--accent-400)' : 'var(--surface-inset)', color: payPrepared ? 'var(--ink-on-accent)' : 'var(--text-disabled)', cursor: payPrepared ? 'pointer' : 'default' }}>Send payment</button>
                   </div>
                 </div>
               )}

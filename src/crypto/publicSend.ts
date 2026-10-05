@@ -179,9 +179,8 @@ export interface PublicSendSplit {
 /**
  * Split a public send into what leaves the vault, what arrives, and the fee.
  *
- * THE ASYMMETRY WITH planConceal, and it is the same one reveal has: conceal's `amount` is what
- * LEAVES the vault and the fee is carved out of it. A send's amount is what ARRIVES, so the fee
- * goes ON TOP. Getting these the same way round would quietly short-pay every recipient by the fee.
+ * The amount is what ARRIVES, so the fee goes ON TOP — the one rule every action follows (planReveal
+ * and planConceal too). Carving it out instead would quietly short-pay every recipient by the fee.
  */
 export function planPublicSend(amountMicrotari: bigint, feeMicrotari: bigint): PublicSendSplit {
   if (amountMicrotari <= 0n) throw new Error('Amount must be greater than zero.')

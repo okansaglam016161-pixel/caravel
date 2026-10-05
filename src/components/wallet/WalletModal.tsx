@@ -27,7 +27,7 @@
 
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { useWallet } from '../../context/WalletContext'
-import { MIN_CONCEAL_MICROTARI, prepareConceal, type PreparedConceal } from '../../crypto/conceal'
+import { MIN_CONCEAL_MICROTARI, maxConcealTyped, prepareConceal, type PreparedConceal } from '../../crypto/conceal'
 import { MIN_REVEAL_MICROTARI, maxRevealable, prepareReveal, type PreparedReveal } from '../../crypto/reveal'
 import { loadAccountAddress } from '../../crypto/accountStore'
 import FaucetClaimPanel from './FaucetClaimPanel'
@@ -333,6 +333,12 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
    * then the string IS the intent.
    */
   const [moveExact, setMoveExact] = useState<bigint | null>(null)
+  /**
+   * MAX on make-private: move the WHOLE public balance and take the exact fee out of it (conceal
+   * `all`). A typed amount is what lands private, with the fee on top; this is the one exception,
+   * and the form and review both say so.
+   */
+  const [moveAll, setMoveAll] = useState(false)
   const [moveLagging, setMoveLagging] = useState(false)
   /**
    * Discards a pricing result the user has already walked away from.
@@ -584,7 +590,7 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
     setMoveStep('idle')
     // `moveDir` is deliberately NOT reset — it is set fresh by whichever entry is pressed.
     setMoveAmount(''); setMoveError(''); setMoveProgress('')
-    setMovePrepared(null); setMoveExact(null); setMoveLagging(false)
+    setMovePrepared(null); setMoveExact(null); setMoveAll(false); setMoveLagging(false)
     setMoveTxId(''); setMoveLanded(null)
   }
 
@@ -608,7 +614,7 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
       const amountMicrotari = moveExact ?? tariToMicrotari(parseFloat(moveAmount))
       const prepared: PreparedMove = moveDir === 'reveal'
         ? { dir: 'reveal', p: await prepareReveal(wallet, address, { amountMicrotari, onProgress: setMoveProgress }) }
-        : { dir: 'conceal', p: await prepareConceal(wallet, address, { amountMicrotari, onProgress: setMoveProgress }) }
+        : { dir: 'conceal', p: await prepareConceal(wallet, address, { amountMicrotari, all: moveAll, onProgress: setMoveProgress }) }
       // The user may have pressed Back while this was on the wire. Drop it rather than re-arming
       // a screen they dismissed.
       if (moveGen.current.isStale(token)) return
@@ -949,10 +955,10 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
   })
 
 
-  // The amount the form is currently asking for, and the guards around it. `ceiling` differs by
-  // direction because the fee comes from different places: a conceal carves it out of the amount
-  // leaving the vault, a reveal pays it from the private side ON TOP — which is what maxRevealable
-  // accounts for, along with the small stealth reserve.
+  // The amount the form is currently asking for, and the guards around it. Both directions put the
+  // fee ON TOP of a typed amount — the amount typed is the amount that arrives — so `ceiling` is the
+  // balance less what pricing reserves: maxConcealTyped for a conceal, maxRevealable (with its small
+  // stealth reserve) for a reveal. A conceal's MAX is `all` instead, which is not held to it.
   /**
    * Set when the private figures — and therefore the private MAX — came from a truncated scan.
    *
@@ -963,10 +969,11 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
   const privateFiguresIncomplete = scan.incomplete && status === 'done'
 
   const enteredMicro = moveExact ?? (moveAmount === '' ? 0n : tariToMicrotari(parseFloat(moveAmount) || 0))
-  const ceiling = moveDir === 'conceal' ? revealedAmount : maxRevealable(outputValues)
+  const ceiling = moveDir === 'conceal' ? maxConcealTyped(revealedAmount) : maxRevealable(outputValues)
+  const concealAll = moveDir === 'conceal' && moveAll
   const minAmount = moveDir === 'conceal' ? MIN_CONCEAL_MICROTARI : MIN_REVEAL_MICROTARI
   const belowMin = moveAmount !== '' && enteredMicro < minAmount
-  const overCeiling = moveAmount !== '' && enteredMicro > ceiling
+  const overCeiling = moveAmount !== '' && !concealAll && enteredMicro > ceiling
 
   /**
    * Balances after this move lands. The M4 report's gap #10 — the number users actually want.
@@ -1034,7 +1041,9 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
    * stories about the same move.
    */
   const moveLeftoverNote =
-    moveDir === 'reveal' && moveExact !== null && privateAmount > ceiling
+    concealAll
+      ? 'Max moves everything. The fee comes out of it, and the review shows exactly what lands private.'
+    : moveDir === 'reveal' && moveExact !== null && privateAmount > ceiling
       ? [
           `${toInput(privateAmount - ceiling)} ${TICKER} stays private to cover the fee. It’s still yours and still spendable.`,
           privateFiguresIncomplete ? incompleteAvailableNote() : '',
@@ -1052,12 +1061,12 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
       // balance: on the unshield side the fee comes out of the shielded total, so what MAX pins is
       // less than what the breakdown shows, and the form must say the number MAX will actually use.
       minMicrotari: minAmount,
-      maxMicrotari: ceiling,
+      maxMicrotari: moveDir === 'conceal' ? revealedAmount : ceiling,
       canReview: moveAmount !== '' && !belowMin && !overCeiling,
       error: belowMin ? `The smallest amount you can move is ${toInput(minAmount)} ${TICKER}.`
         : overCeiling ? (moveDir === 'reveal'
             ? `More than you can make public — the fee comes out of your private balance too. Most you can move now: ${toInput(ceiling)} ${TICKER}.`
-            : 'More than your public balance.')
+            : `More than you can make private — the fee is added on top. Most you can type now: ${toInput(ceiling)} ${TICKER}, or use Max to move everything.`)
           : moveError || undefined,
       // Said BEFORE they notice it: a private balance that stops just short of zero after "move
       // everything" reads as a bug, or as funds gone astray on an irreversible action.
@@ -1075,6 +1084,8 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
       step: 'review', dir: movePrepared.dir,
       amountMicrotari: movePrepared.dir === 'reveal' ? movePrepared.p.revealedAmount : movePrepared.p.concealedAmount,
       feeMicrotari: movePrepared.p.feeMicrotari,
+      // What leaves the source balance: the amount plus the fee, on either direction.
+      totalMicrotari: movePrepared.dir === 'reveal' ? movePrepared.p.revealedOutput : movePrepared.p.withdrawAmount,
       resulting: resultingFor(movePrepared),
       leftoverNote: moveLeftoverNote,
     }
@@ -1111,7 +1122,7 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
         : revealed.status !== 'done' ? 'Checking your public balance…'
         : revealedAmount <= 0n ? 'Nothing public to make private'
         : undefined,
-      onClick: () => { setMoveDir('conceal'); setMoveStep('form'); setMoveAmount(''); setMoveExact(null); setMoveError('') },
+      onClick: () => { setMoveDir('conceal'); setMoveStep('form'); setMoveAmount(''); setMoveExact(null); setMoveAll(false); setMoveError('') },
     },
     {
       dir: 'reveal',
@@ -1123,7 +1134,7 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
         : !hasAccount ? 'Still identifying this wallet’s account — try again in a moment'
         : maxRevealable(outputValues) < MIN_REVEAL_MICROTARI ? 'Not enough private balance to cover an amount plus the fee'
         : undefined,
-      onClick: () => { setMoveDir('reveal'); setMoveStep('form'); setMoveAmount(''); setMoveExact(null); setMoveError('') },
+      onClick: () => { setMoveDir('reveal'); setMoveStep('form'); setMoveAmount(''); setMoveExact(null); setMoveAll(false); setMoveError('') },
     },
   ]
 
@@ -1227,8 +1238,13 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
       onRefresh={handleRefresh}
       onClose={onClose}
       onBack={resetMove}
-      onAmountChange={v => { setMoveAmount(v); setMoveExact(null); setMoveError('') }}
-      onMax={() => { setMoveExact(ceiling); setMoveAmount(toInput(ceiling)); setMoveError('') }}
+      onAmountChange={v => { setMoveAmount(v); setMoveExact(null); setMoveAll(false); setMoveError('') }}
+      // A conceal's MAX is `all`: the whole public balance, the exact fee out of it. A reveal's MAX
+      // pins its ceiling, as before.
+      onMax={() => {
+        const max = moveDir === 'conceal' ? revealedAmount : ceiling
+        setMoveAll(moveDir === 'conceal'); setMoveExact(max); setMoveAmount(toInput(max)); setMoveError('')
+      }}
       onReview={() => void handlePrepareMove()}
       onConfirm={() => void handleConfirmMove()}
       onDone={resetMove}

@@ -79,6 +79,8 @@ export type MoveView =
       step: 'review'; dir: Dir; amountMicrotari: bigint
       /** null while the dry run is in flight — the fee row spins and confirm stays inert. */
       feeMicrotari: bigint | null
+      /** What leaves the source balance — amount + fee. Absent while pricing. */
+      totalMicrotari?: bigint
       resulting: Resulting | null
       /**
        * The fee-reserve remainder, WHEN THERE IS ONE.
@@ -485,6 +487,9 @@ function MoveBody({ m, p, onClose }: {
           <MoveRow label="Network fee" mono value={pricing
             ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontFamily: 'inherit', color: C.faint }}><Spinner size={12} />Pricing…</span>
             : `${fmt6(m.feeMicrotari!)} ${TICKER}`} />
+          {m.totalMicrotari !== undefined && !pricing && (
+            <MoveRow label={`Total from your ${DIR[m.dir].from} balance`} mono value={`${fmt6(m.totalMicrotari)} ${TICKER}`} />
+          )}
           {/* WHAT YOU ARE LEFT WITH. The frames stop at the fee; this is the figure a person
               actually wants before confirming, and it is the only thing on the screen that answers
               "and then what do I have". Drawn as two more rows in the same block, so it costs the

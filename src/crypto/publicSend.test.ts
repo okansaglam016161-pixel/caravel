@@ -36,16 +36,16 @@ describe('planPublicSend — the amount is what ARRIVES, the fee goes on top', (
     expect(s.feeMicrotari).toBe(18_705n)
   })
 
-  it('THE ASYMMETRY WITH CONCEAL: a send adds the fee, a conceal carves it out', () => {
-    // Getting these the same way round would quietly short-pay every recipient by the fee.
+  it('ONE RULE WITH CONCEAL: both deliver the amount typed and put the fee on top', () => {
+    // The amount you type is the amount that arrives — for a payment and for a move alike.
     const amount = 10n * TARI
     const fee = 18_705n
     const sent = planPublicSend(amount, fee)
     const concealed = planConceal(amount, fee)
 
-    expect(sent.recipientAmount).toBe(amount)              // send: the recipient's number, untouched
-    expect(concealed.stealthAmount).toBe(amount - fee)     // conceal: the fee came out of it
-    expect(sent.withdrawAmount - concealed.withdrawAmount).toBe(fee)
+    expect(sent.recipientAmount).toBe(amount)
+    expect(concealed.stealthAmount).toBe(amount)
+    expect(sent.withdrawAmount).toBe(concealed.withdrawAmount)   // both: amount + fee leaves the vault
   })
 
   it('BALANCES: amount + fee === withdraw, at every scale', () => {

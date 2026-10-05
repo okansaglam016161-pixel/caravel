@@ -57,21 +57,21 @@ import { INDEXER_URL } from './indexerConfig'
 
 
 /**
- * Fee reserved for the DRY RUN only — never submitted for real, and free because a simulation
+ * Fee reserved for the DRY RUN only, and the room a TYPED amount must leave in the vault (see
+ * maxConcealTyped). Never submitted for real, and free in the probe because a simulation
  * charges nothing. (A REAL transaction spends its whole reserved fee; see feeProbe's margin note.)
  * Mirrors the faucet's probe for the same reason: an under-funded probe aborts before
  * the network has priced the whole transaction, reporting a cost far below the truth.
  */
-const FEE_PROBE_MICROTARI = 50_000n
+export const CONCEAL_FEE_RESERVE = 50_000n
 
 /**
  * Smallest amount that may be concealed, in µtTARI (0.1 tTARI).
  *
- * Not arbitrary: the dry run reserves FEE_PROBE_MICROTARI out of the amount being moved, so an
- * amount at or below the probe cannot be simulated at all — the withdraw would have to produce a
- * negative stealth output. This floor sits comfortably above both the probe and every measured real
- * fee (~13–16k), so the probe always has room and the user gets a clear refusal instead of a
- * confusing simulation failure.
+ * A judgement, kept identical to MIN_REVEAL_MICROTARI so both directions of "Move funds" behave the
+ * same way: moving less than the fee it costs is a bad trade, and a floor says so more clearly than
+ * a warning. (It used to be structural too, when the probe was carved out of the amount; the fee is
+ * on top now, so a smaller amount would simulate — it is still not worth moving.)
  */
 export const MIN_CONCEAL_MICROTARI = 100_000n
 
@@ -88,7 +88,7 @@ export interface ConcealResult {
    * taken for nothing, or a rejection, is exactly the moment a user deserves the real reason.
    */
   reason?: string
-  /** What actually landed in stealth (µtTARI) — the amount moved minus the fee. */
+  /** What actually landed in stealth (µtTARI) — the amount asked for (on `all`, the balance − fee). */
   concealedAmount: bigint
   /** Fee actually reserved for this transaction (µtTARI). */
   feeMicrotari: bigint
@@ -109,11 +109,15 @@ export interface ConcealResult {
 
 export interface ConcealParams {
   /**
-   * Total revealed µtTARI to move OUT of the vault. The fee is paid FROM this, so what lands
-   * private is `amount - fee`. Defined this way so "conceal everything" is expressible exactly —
-   * pass the whole revealed balance and the withdraw can never exceed it.
+   * What lands PRIVATE, exactly. The fee goes on top: the vault gives up `amount + fee`. The amount
+   * you type is the amount that arrives — the same rule as a send and a reveal.
+   *
+   * With `all`, this is instead the WHOLE public balance to move, and the fee comes out of it (MAX):
+   * the vault empties exactly and `amount − fee` lands private. That is the only way "everything"
+   * is expressible exactly, since the fee is not known until priced.
    */
   amountMicrotari: bigint
+  all?: boolean
   onProgress?: (msg: string) => void
 }
 
@@ -129,18 +133,23 @@ export interface ConcealSplit {
 }
 
 /**
- * Split an amount into its stealth output and its fee, for a given fee.
+ * Split a conceal into what leaves the vault, what lands private, and the fee.
  *
- * The whole `amount` leaves the vault; the fee is carved out of it as the transaction's revealed
- * output, and the remainder becomes the stealth output. So `withdrawAmount === amount` always, and
- * that is the number the engine will compare against the bucket.
+ * FEE ON TOP, by default — the same rule as planPublicSend and planReveal: `amount` is what
+ * ARRIVES (the stealth output), and the vault gives up `amount + fee`. Typing 2 makes 2 private.
  *
- * Throws rather than returning a degenerate split: a fee at or above the amount would mean a
- * zero-or-negative stealth output, and a StealthTransfer with no stealth output is not a conceal.
+ * `all` is MAX: `amount` is the whole balance leaving the vault, and the fee is carved out of it,
+ * so `withdraw === amount` and the stealth output is the remainder. Throws rather than returning a
+ * degenerate split there: a fee at or above the balance would mean no stealth output at all.
+ *
+ * Either way `withdrawAmount` is the ONE number the engine compares against the bucket.
  */
-export function planConceal(amountMicrotari: bigint, feeMicrotari: bigint): ConcealSplit {
+export function planConceal(amountMicrotari: bigint, feeMicrotari: bigint, all = false): ConcealSplit {
   if (amountMicrotari <= 0n) throw new Error('Amount must be greater than zero.')
   if (feeMicrotari <= 0n) throw new Error('Fee must be greater than zero.')
+  if (!all) {
+    return { withdrawAmount: amountMicrotari + feeMicrotari, stealthAmount: amountMicrotari, feeMicrotari }
+  }
   if (feeMicrotari >= amountMicrotari) {
     throw new Error(`The network fee (${feeMicrotari} µtTARI) is not covered by the amount being moved (${amountMicrotari} µtTARI).`)
   }
@@ -149,6 +158,15 @@ export function planConceal(amountMicrotari: bigint, feeMicrotari: bigint): Conc
     stealthAmount: amountMicrotari - feeMicrotari,
     feeMicrotari,
   }
+}
+
+/**
+ * The largest TYPED amount a public balance can make private: the fee goes on top, and pricing
+ * withdraws `amount + CONCEAL_FEE_RESERVE`, so that reserve has to be left in the vault. MAX does
+ * not use this — it is `all`, which moves the whole balance and pays only the exact fee.
+ */
+export function maxConcealTyped(publicBalance: bigint): bigint {
+  return publicBalance > CONCEAL_FEE_RESERVE ? publicBalance - CONCEAL_FEE_RESERVE : 0n
 }
 
 /**
@@ -231,7 +249,7 @@ function buildConceal(
 export interface PreparedConceal {
   /** Measured fee including margin (µtTARI) — what the review screen shows and the tx pays. */
   feeMicrotari: bigint
-  /** What will land private: the amount moved minus the fee. */
+  /** What will land private: the amount asked for (on `all`, the balance − fee). */
   concealedAmount: bigint
   /** Total leaving the vault — the withdraw, and the statement's revealed input. */
   withdrawAmount: bigint
@@ -257,7 +275,7 @@ export interface PreparedConceal {
 export async function prepareConceal(
   wallet: SecretKeyWallet,
   ownerAddress: string,
-  { amountMicrotari, onProgress }: ConcealParams,
+  { amountMicrotari, all = false, onProgress }: ConcealParams,
 ): Promise<PreparedConceal> {
   const log = (m: string) => onProgress?.(m)
 
@@ -305,7 +323,7 @@ export async function prepareConceal(
   // The whole build is a function OF the fee — the outputs statement commits to it and the balance
   // proof signs over both — so it runs once to price and once to send.
   async function buildEnvelope(feeMicrotari: bigint, dryRun: boolean) {
-    const split = planConceal(amountMicrotari, feeMicrotari)
+    const split = planConceal(amountMicrotari, feeMicrotari, all)
     assertConcealSplit(split)
 
     const { statement: outputsStatement, outputMask } = await crypto.generateOutputsStatement(
@@ -328,20 +346,20 @@ export async function prepareConceal(
   }
 
   log('Estimating network fee\u2026')
-  const probe = await buildEnvelope(FEE_PROBE_MICROTARI, true)
+  const probe = await buildEnvelope(CONCEAL_FEE_RESERVE, true)
   const cost = await dryRunFee(INDEXER_URL, probe.envelope, { onBusyRetry: () => log(RETRYING_MESSAGE) })
   const fee = withFeeMargin(cost)
   // The probe→real fee guard, applied here for the same reason as the other three builders even
   // though this path is the least exposed: its output count is invariant (one stealth output at any
   // fee), so no shape can diverge. What remains true everywhere is that a fee above the reservation
   // was never simulated, and building on an unsimulated number is how the MAX rejection happened.
-  if (fee > FEE_PROBE_MICROTARI) {
+  if (fee > CONCEAL_FEE_RESERVE) {
     throw new Error(
-      `The network fee (${fee} µtTARI) exceeds the ${FEE_PROBE_MICROTARI} µtTARI this transaction reserved for it. ` +
+      `The network fee (${fee} µtTARI) exceeds the ${CONCEAL_FEE_RESERVE} µtTARI this transaction reserved for it. ` +
       `Fees have risen — try again in a moment.`,
     )
   }
-  if (fee >= amountMicrotari) {
+  if (all && fee >= amountMicrotari) {
     throw new Error(`The network fee (${fee} \u00b5tTARI) exceeds the amount being made private. Try a larger amount.`)
   }
 

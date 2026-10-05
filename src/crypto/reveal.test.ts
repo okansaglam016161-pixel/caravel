@@ -47,18 +47,17 @@ describe('planReveal — the amount is what LANDS, and the fee sits on top', () 
     expect(split.feeMicrotari).toBe(15_000n)
   })
 
-  it('THE ASYMMETRY WITH CONCEAL: reveal adds the fee, conceal carves it out', () => {
-    // Getting these the same way round would publish a number the user never chose. Conceal moves
-    // `amount` out of the vault and `amount - fee` lands private; reveal deposits `amount` and
-    // spends `amount + fee`. Same inputs, deliberately opposite results.
+  it('ONE RULE WITH CONCEAL: both land the amount typed and put the fee on top', () => {
+    // The amount you type is the amount that arrives — in either direction. Reveal deposits
+    // `amount` and spends `amount + fee`; conceal lands `amount` private and withdraws `amount + fee`.
     const amount = 100n * TARI
     const fee = 16_138n
     const revealed = planReveal(amount, fee, 500n * TARI)
     const concealed = planConceal(amount, fee)
 
-    expect(revealed.amount).toBe(amount)                    // reveal: the user's number, untouched
-    expect(concealed.stealthAmount).toBe(amount - fee)      // conceal: the fee came out of it
-    expect(revealed.revealedOutput - concealed.withdrawAmount).toBe(fee)
+    expect(revealed.amount).toBe(amount)
+    expect(concealed.stealthAmount).toBe(amount)
+    expect(revealed.revealedOutput).toBe(concealed.withdrawAmount)   // both: amount + fee leaves the source
   })
 
   it('returns the change as everything the inputs are worth beyond amount + fee', () => {

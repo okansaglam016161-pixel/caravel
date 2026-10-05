@@ -6,74 +6,70 @@
 // rejected transaction — and, in the class of bug that produces it, potentially a withdraw that
 // does not match what the statement spends.
 //
-// planConceal exists so that number is computed ONCE. These tests pin that: the identity
-// `withdrawAmount === amount`, the balance `stealth + fee === withdraw`, and the refusals that keep
-// a degenerate split from ever reaching a transaction builder.
+// planConceal exists so that number is computed ONCE. These tests pin that: the fee goes ON TOP of
+// a typed amount (what lands private is exactly what was asked for), MAX (`all`) carves it out of
+// the whole balance, `stealth + fee === withdraw` either way, and the refusals that keep a
+// degenerate split from ever reaching a transaction builder.
 
 import { describe, expect, it } from 'vitest'
-import { MIN_CONCEAL_MICROTARI, assertConcealSplit, planConceal } from './conceal'
+import { CONCEAL_FEE_RESERVE, MIN_CONCEAL_MICROTARI, assertConcealSplit, maxConcealTyped, planConceal } from './conceal'
 
 const TARI = 1_000_000n
 
-describe('planConceal — the withdraw amount IS the statement input', () => {
-  it('withdraws exactly the amount asked for', () => {
-    // The identity the engine checks. Whatever else changes, this must not.
-    const split = planConceal(100n * TARI, 15_000n)
-    expect(split.withdrawAmount).toBe(100n * TARI)
+describe('planConceal — the fee on top: the amount typed is the amount that lands private', () => {
+  it('lands exactly the amount asked for', () => {
+    const split = planConceal(2n * TARI, 9_491n)
+    expect(split.stealthAmount).toBe(2n * TARI)
+    expect(split.feeMicrotari).toBe(9_491n)
   })
 
-  it('carves the fee out of the amount, leaving the rest private', () => {
-    const split = planConceal(100n * TARI, 15_000n)
-    expect(split.stealthAmount).toBe(100n * TARI - 15_000n)
-    expect(split.feeMicrotari).toBe(15_000n)
+  it('withdraws amount + fee — the one number the engine compares against the bucket', () => {
+    const split = planConceal(2n * TARI, 9_491n)
+    expect(split.withdrawAmount).toBe(2n * TARI + 9_491n)
   })
 
   it('balances: stealth + fee === withdraw, at every scale', () => {
     for (const amount of [MIN_CONCEAL_MICROTARI, 1n * TARI, 999_595_988n, 1_000n * TARI, 2n ** 63n]) {
-      for (const fee of [1n, 13_211n, 16_138n, 50_000n]) {
-        if (fee >= amount) continue
+      for (const fee of [1n, 9_291n, 16_138n, 50_000n]) {
         const s = planConceal(amount, fee)
         expect(s.stealthAmount + s.feeMicrotari).toBe(s.withdrawAmount)
-        expect(s.withdrawAmount).toBe(amount)
+        expect(s.stealthAmount).toBe(amount)
       }
     }
   })
 
   it('stays exact past Number.MAX_SAFE_INTEGER', () => {
-    // Amounts are 128-bit; a split that went through Number would drift here.
     const amount = 18_446_744_073_709_551_615n
     const s = planConceal(amount, 16_138n)
-    expect(s.stealthAmount).toBe(18_446_744_073_709_535_477n)
-    expect(s.stealthAmount + s.feeMicrotari).toBe(amount)
+    expect(s.withdrawAmount).toBe(18_446_744_073_709_567_753n)
+    expect(s.stealthAmount).toBe(amount)
   })
+})
 
-  it('handles the MAX case — concealing an entire revealed balance', () => {
-    // The whole balance leaves the vault, so the withdraw can never exceed what is there. This is
-    // why the amount is defined as "moved out" rather than "landed private".
+describe('planConceal — `all` (MAX): the whole balance leaves, the exact fee comes out of it', () => {
+  it('withdraws exactly the balance and lands the rest private', () => {
     const balance = 999_595_988n
-    const s = planConceal(balance, 16_138n)
+    const s = planConceal(balance, 16_138n, true)
     expect(s.withdrawAmount).toBe(balance)
     expect(s.stealthAmount).toBe(999_579_850n)
   })
 
-  it('allows a fee one below the amount — the tightest legal split', () => {
-    const s = planConceal(1000n, 999n)
+  it('allows a fee one below the balance — the tightest legal split', () => {
+    const s = planConceal(1000n, 999n, true)
     expect(s.stealthAmount).toBe(1n)
     assertConcealSplit(s)
+  })
+
+  it('refuses a fee that equals or exceeds the balance (no stealth output is not a conceal)', () => {
+    expect(() => planConceal(15_000n, 15_000n, true)).toThrow(/not covered by the amount/)
+    expect(() => planConceal(10_000n, 15_000n, true)).toThrow(/not covered by the amount/)
   })
 })
 
 describe('planConceal — refusals', () => {
-  it('refuses a fee that equals the amount (zero stealth output is not a conceal)', () => {
-    expect(() => planConceal(15_000n, 15_000n)).toThrow(/not covered by the amount/)
-  })
-
-  it('refuses a fee above the amount', () => {
-    expect(() => planConceal(10_000n, 15_000n)).toThrow(/not covered by the amount/)
-  })
-
   it.each([0n, -1n, -1_000_000n])('refuses a non-positive amount (%s)', (amount) => {
     expect(() => planConceal(amount, 1_000n)).toThrow(/Amount must be greater than zero/)
+    expect(() => planConceal(amount, 1_000n, true)).toThrow(/Amount must be greater than zero/)
   })
 
   it.each([0n, -1n])('refuses a non-positive fee (%s)', (fee) => {
@@ -81,15 +77,26 @@ describe('planConceal — refusals', () => {
   })
 })
 
+describe('maxConcealTyped — a typed amount leaves the pricing reserve in the vault', () => {
+  it('is the balance minus the reserve', () => {
+    expect(maxConcealTyped(3n * TARI)).toBe(3n * TARI - CONCEAL_FEE_RESERVE)
+  })
+  it('is zero when the balance cannot cover the reserve', () => {
+    expect(maxConcealTyped(CONCEAL_FEE_RESERVE)).toBe(0n)
+    expect(maxConcealTyped(0n)).toBe(0n)
+  })
+})
+
 describe('assertConcealSplit — the tripwire for a future second derivation', () => {
   it('passes every split planConceal produces', () => {
     expect(() => assertConcealSplit(planConceal(100n * TARI, 16_138n))).not.toThrow()
+    expect(() => assertConcealSplit(planConceal(100n * TARI, 16_138n, true))).not.toThrow()
   })
 
   it('catches a withdraw that drifted from the statement input', () => {
     // The exact bug this guards: someone recomputes the withdraw amount separately and the two
     // stop agreeing. On-chain this is an opaque bucket-mismatch rejection; here it is a caught bug.
-    const drifted = { withdrawAmount: 100n * TARI + 1n, stealthAmount: 100n * TARI - 16_138n, feeMicrotari: 16_138n }
+    const drifted = { withdrawAmount: 100n * TARI + 16_138n + 1n, stealthAmount: 100n * TARI, feeMicrotari: 16_138n }
     expect(() => assertConcealSplit(drifted)).toThrow(/does not balance/)
   })
 
@@ -109,10 +116,9 @@ describe('assertConcealSplit — the tripwire for a future second derivation', (
 })
 
 describe('MIN_CONCEAL_MICROTARI', () => {
-  it('sits above the dry-run probe, so a legal amount can always be simulated', () => {
-    // The probe reserves 50_000 out of the amount being moved. An amount at or below that cannot be
-    // simulated at all, which is what this floor exists to prevent.
-    expect(MIN_CONCEAL_MICROTARI).toBeGreaterThan(50_000n)
+  it('matches the reveal floor, so both directions of Move behave the same', async () => {
+    const { MIN_REVEAL_MICROTARI } = await import('./reveal')
+    expect(MIN_CONCEAL_MICROTARI).toBe(MIN_REVEAL_MICROTARI)
   })
 
   it('sits above every fee measured on this network', () => {
@@ -122,7 +128,7 @@ describe('MIN_CONCEAL_MICROTARI', () => {
 
   it('produces a viable split at exactly the floor', () => {
     const s = planConceal(MIN_CONCEAL_MICROTARI, 16_138n)
-    expect(s.stealthAmount).toBeGreaterThan(0n)
+    expect(s.stealthAmount).toBe(MIN_CONCEAL_MICROTARI)
     assertConcealSplit(s)
   })
 })
@@ -171,8 +177,8 @@ describe('MAX must not overshoot the balance', () => {
     })
 
   it('a MAX-sized conceal splits without exceeding the balance', () => {
-    // What the whole chain has to guarantee: MAX withdraws exactly the balance, never more.
-    const split = planConceal(SEEDED, 16_138n)
+    // What the whole chain has to guarantee: MAX (`all`) withdraws exactly the balance, never more.
+    const split = planConceal(SEEDED, 16_138n, true)
     expect(split.withdrawAmount).toBe(SEEDED)
     expect(split.withdrawAmount).toBeLessThanOrEqual(SEEDED)
     assertConcealSplit(split)

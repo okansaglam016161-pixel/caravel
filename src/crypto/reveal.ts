@@ -124,8 +124,8 @@ import { INDEXER_URL } from './indexerConfig'
 /**
  * Fee reserved while PRICING a reveal, and the amount MAX holds back (µtTARI).
  *
- * Unlike conceal — where the probe is carved out of the amount being moved — a reveal pays its fee
- * out of the STEALTH INPUTS, so this is what the input selection must cover on top of the amount.
+ * A reveal pays its fee out of the STEALTH INPUTS, on top of the amount, so this is what the input
+ * selection must cover beyond the amount.
  * It is deliberately far above every fee measured on this network (~13–20k), because the probe has
  * to be generous enough for the simulation to run to completion: an under-funded probe aborts
  * before the network has priced the whole transaction and reports a cost far below the truth.
@@ -154,9 +154,8 @@ export const MIN_STEALTH_CHANGE = 1_000n
 /**
  * Smallest amount that may be revealed (µtTARI, 0.1 TARI).
  *
- * HONESTLY LABELLED: unlike MIN_CONCEAL_MICROTARI this is NOT structural. Conceal's floor exists
- * because its probe is carved out of the amount, so a smaller amount cannot be simulated at all.
- * Reveal's fee comes from the inputs, so a 1 µtTARI reveal would simulate fine.
+ * HONESTLY LABELLED: this is NOT structural. Reveal's fee comes from the inputs on top of the
+ * amount, so a 1 µtTARI reveal would simulate fine (as would a conceal, now that its fee is on top).
  *
  * It is a judgement instead, and it is kept identical to conceal's so that both directions of the
  * same "Move funds" control behave the same way. Revealing less than the fee it costs is a bad
@@ -234,11 +233,9 @@ export interface RevealSplit {
 /**
  * Split a reveal into its revealed output, its fee and its stealth change.
  *
- * THE ASYMMETRY WITH planConceal, which is the whole point of this function: conceal carves the fee
- * OUT of the amount (`stealth = amount − fee`), because there the amount is what leaves the vault.
- * Reveal adds the fee ON TOP (`revealedOutput = amount + fee`), because here the amount is what
- * arrives — and what arrives is what the chain publishes. Getting these two the same way round
- * would publish a number the user never chose.
+ * The fee goes ON TOP (`revealedOutput = amount + fee`), because the amount is what arrives — and
+ * here what arrives is what the chain publishes. The same rule as planConceal and planPublicSend;
+ * carving the fee out instead would publish a number the user never chose.
  *
  * Throws rather than returning a degenerate split: a reveal whose inputs cannot cover
  * `amount + fee` has no valid balance equation, and one with a negative change is not a

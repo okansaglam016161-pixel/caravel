@@ -722,8 +722,19 @@ async function printSubmitted(txId: string, quoted: bigint, outcome: string, rea
 }
 
 /** WRITE. The conceal path: revealed vault → private stealth output. */
-async function cmdMakePrivate(h: Harnessed, amount: bigint, yes: boolean): Promise<void> {
-  writeBanner('make-private  (crypto/conceal.prepareConceal)', amount, yes)
+async function cmdMakePrivate(h: Harnessed, requested: bigint | 'all', yes: boolean): Promise<void> {
+  const all = requested === 'all'
+  let amount: bigint
+  if (requested === 'all') {
+    const acct = await primeAccount(h)
+    if (!acct) throw new Error('make-private all: no account address, so the public balance cannot be read.')
+    const provider = await IndexerProvider.connect({ url: INDEXER, network: Network.Esmeralda })
+    amount = await readRevealedBalance(provider, acct)
+    provider.stopWatcher?.()
+  } else {
+    amount = requested
+  }
+  writeBanner(`make-private${all ? ' ALL' : ''}  (crypto/conceal.prepareConceal)`, amount, yes)
   if (amount < MIN_CONCEAL_MICROTARI) {
     console.log(`\n  (below the module's floor of ${MIN_CONCEAL_MICROTARI} µtTARI — prepareConceal will refuse; showing you that refusal.)`)
   }
@@ -732,10 +743,10 @@ async function cmdMakePrivate(h: Harnessed, amount: bigint, yes: boolean): Promi
 
   rule('build + price')
   const mark = net.length
-  const prepared = await prepareConceal(h.wallet, h.address, { amountMicrotari: amount, onProgress: stage })
+  const prepared = await prepareConceal(h.wallet, h.address, { amountMicrotari: amount, all, onProgress: stage })
   field('withdraw', amt(prepared.withdrawAmount) + '   [leaves the vault]')
-  field('fee', amt(prepared.feeMicrotari) + '   [carved OUT of the amount]')
-  field('lands private', amt(prepared.concealedAmount))
+  field('fee', amt(prepared.feeMicrotari) + (all ? '   [MAX: out of the whole balance]' : '   [ON TOP of the amount]'))
+  field('lands private', amt(prepared.concealedAmount) + (all ? '' : '   [exactly what was asked for]'))
   printDryRun(mark)
   printNet(mark)
 
@@ -2001,7 +2012,8 @@ WRITE — MOVES REAL TESTNET FUNDS. Builds and prices without --yes; submits wit
   faucet-claim [--fresh]      Claim from Caravel's faucet (once per key, ever) — the way to get a
                               wallet into a state prove-spend can work against. --fresh claims for
                               a NEW wallet; its phrase is written to a 600 file, never printed.
-  make-private <amount>       conceal: revealed vault  →  private stealth output.
+  make-private <amount|all>   conceal: revealed vault  →  private stealth output. The fee goes on
+                              top; 'all' (MAX) moves the whole public balance, fee out of it.
   make-public  <amount>       reveal:  private outputs →  revealed vault balance.
   send <ootle-address> <amount|all> [memo]
                               prepareConfidentialSend → submit. 'all' is MAX: everything reachable,
@@ -2110,7 +2122,7 @@ export async function main(argv: string[]): Promise<void> {
         break
       case 'make-private':
         if (!args[1]) throw new Error('make-private needs an amount.')
-        await cmdMakePrivate(h, parseAmount(args[1]), yes)
+        await cmdMakePrivate(h, args[1] === 'all' ? 'all' : parseAmount(args[1]), yes)
         break
       case 'make-public':
         if (!args[1]) throw new Error('make-public needs an amount.')

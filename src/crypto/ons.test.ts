@@ -274,9 +274,20 @@ const NPUB = 'npub1test'
 
 /** Stub the browser writer. `estimate` and `submit` are whatever the test needs them to do. */
 function stubWriter(impl: { estimate?: () => Promise<{ feeMicroTari: bigint }>; submit?: () => Promise<{ transactionId: string; fee: bigint }> }) {
+  const estimate = impl.estimate ?? (async () => ({ feeMicroTari: 1_000n }))
+  const submit = impl.submit ?? (async () => ({ transactionId: 'tx1', fee: 1_000n }))
   return vi.spyOn(ons, 'withBrowserSigner').mockResolvedValue({
-    estimateRegisterWithNostr: impl.estimate ?? (async () => ({ feeMicroTari: 1_000n })),
-    submitRegisterWithNostr: impl.submit ?? (async () => ({ transactionId: 'tx1', fee: 1_000n })),
+    estimateRegisterWithNostr: estimate,
+    submitRegisterWithNostr: submit,
+    // The prepare the confirm screen uses: priced by the same estimate, submitted by the same submit.
+    prepareRegisterWithNostr: async (_n: string, _k: string, budgetFor: (c: bigint) => bigint) => {
+      const { feeMicroTari: required } = await estimate()
+      return {
+        feeMicroTari: budgetFor(required), requiredFee: required, feeInputId: 'utxo_0101_feecoin',
+        simulate: async () => ({ accepted: true, requiredFee: required }),
+        submit,
+      }
+    },
   } as unknown as Awaited<ReturnType<typeof ons.withBrowserSigner>>)
 }
 
@@ -466,12 +477,18 @@ describe('the fee input comes from Caravel, and is locked like any other spend',
     const seen: Signer[] = []
     vi.spyOn(ons, 'withBrowserSigner').mockImplementation(async (signer: Signer) => {
       seen.push(signer)
+      const submit = async () => {
+        signer.onSubmitted?.('tx9', [FEE_COIN])
+        return outcome()
+      }
       return {
         estimateRegisterWithNostr: async () => ({ feeMicroTari: 1_000n }),
-        submitRegisterWithNostr: async () => {
-          signer.onSubmitted?.('tx9', [FEE_COIN])
-          return outcome()
-        },
+        submitRegisterWithNostr: submit,
+        prepareRegisterWithNostr: async (_n: string, _k: string, budgetFor: (c: bigint) => bigint) => ({
+          feeMicroTari: budgetFor(1_000n), requiredFee: 1_000n, feeInputId: FEE_COIN,
+          simulate: async () => ({ accepted: true, requiredFee: 1_000n }),
+          submit,
+        }),
       } as unknown as Awaited<ReturnType<typeof ons.withBrowserSigner>>
     })
     return seen
@@ -486,8 +503,20 @@ describe('the fee input comes from Caravel, and is locked like any other spend',
     const seen = writerThatSubmits(async () => ({ transactionId: 'tx9', fee: 1n }))
     await estimateOnsRegistration(WALLET, ADDR, 'okz', NPUB)
     expect(typeof seen[0]!.ownedUtxos).toBe('function')
-    // Nothing is submitted by an estimate, so nothing may be locked.
-    expect(seen[0]!.onSubmitted).toBeUndefined()
+    // The estimate PREPARES the transaction its confirm will send, so it carries the lock hook —
+    // but preparing submits nothing, so nothing may be locked yet.
+    expect(typeof seen[0]!.onSubmitted).toBe('function')
+    expect(await statusOf(FEE_COIN)).toBeUndefined()
+  })
+
+  it('the prepared registration submits what was priced, and its fee coin is locked then spent', async () => {
+    writerThatSubmits(async () => ({ transactionId: 'tx9', fee: 1_200n }))
+    const est = await estimateOnsRegistration(WALLET, ADDR, 'okz', NPUB)
+    expect(est.prepared!.feeMicroTari).toBe(withFeeMargin(1_000n))
+    expect(est.feeMicroTari).toBe(est.prepared!.feeMicroTari)
+    const r = await est.prepared!.submit()
+    expect(r).toMatchObject({ ok: true, outcome: 'accepted', txId: 'tx9' })
+    expect(await statusOf(FEE_COIN)).toBe('spent')
   })
 
   it('the submit hands it the same source, and a lock hook', async () => {

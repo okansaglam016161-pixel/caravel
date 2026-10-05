@@ -1,17 +1,28 @@
 ONS client — vendored build provenance
 ======================================
 source repo   : ootle-name-service (github.com/okansaglam016161-pixel/ootle-name-service)
-source commit : bb94ae7bdd41b8edb66974d2ce13ea654233c35d
-              : (bb94ae7, branch: ootle-0.43; client/ last changed in bb94ae7)
+source commit : def323d731f577da2f7ab9870c85b0a8859ea7ce
+              : (def323d, branch: fees-exact, from main efd753a; client/ last changed in def323d)
 built from    : client/src → client/dist  (npm run build = tsc -p client/tsconfig.json)
-vendored at   : 2026-10-03
+vendored at   : 2026-10-05
 tree state    : clean (dist matches the commit above exactly — diff -rq, excluding this file)
-src digest    : bd6e66b0356c4e009f201759370246da5b2d25f59de03a40464f3b34de23613e
+src digest    : 77effd4402651416dd0a96205ab7e8a159f1411bc11041d63e06363122636994
                 (shasum -a 256 client/src/*.ts | sort | shasum -a 256)
 
 NO LOCAL PATCHES. Everything Caravel needs is in the upstream source.
 
-This build is for Ootle 0.43 / @tari-project/ootle 0.7 (ootle-wasm 0.43):
+This build adds exact fees before signing (fees-exact):
+  - browser-writer.ts : prepareRegisterWithNostr(name, npub, budgetFor?) → PreparedOnsWrite. The fee
+                        input is chosen ONCE, dry-run to learn the cost, and the REAL transaction is
+                        built and sealed at the caller's budget; submit() sends that envelope, once
+                        (no rescan, reselection or rebuild). simulate() dry-runs a twin at the same
+                        fee and accepts only when total_fees_required is within it — the dry run
+                        itself does not enforce the fee. The estimate reads total_fees_required
+                        first. submitRegisterWithNostr and the single-call writes go through prepare.
+  - index.ts          : exports the PreparedOnsWrite type.
+  - tests             : npm test — 14, unchanged (node:test via tsx); excluded from this dist.
+
+Carried forward from the 0.43 build (Ootle 0.43 / @tari-project/ootle 0.7, ootle-wasm 0.43):
   - retry.ts          : NEW. Busy-indexer retry (0.43 rate limits: 429, dry-run cap: 503).
                         Reads and dry runs retry with Retry-After / jittered backoff; a submit is
                         retried only on a busy refusal, only with the same sealed envelope, and
@@ -25,7 +36,6 @@ This build is for Ootle 0.43 / @tari-project/ootle 0.7 (ootle-wasm 0.43):
                         dist is byte-identical to 0.6, so no API change was needed.
   - ootle-sdk.d.ts    : unchanged; the source was also type-checked against the real SDK 0.7.0
                         (stub excluded) with no errors.
-  - tests             : npm test — 14 (node:test via tsx); excluded from this dist.
 
 Carried forward from the 0.42 build:
   - browser-writer.ts : the fee reveal names the wallet's owner public key as the revealed

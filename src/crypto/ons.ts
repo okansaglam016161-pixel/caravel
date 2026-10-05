@@ -202,8 +202,25 @@ export interface OnsRegisterResult {
  */
 export type OnsEstimateErrorKind = 'no-private' | 'private-settling' | 'fragmented' | 'unreachable' | 'policy'
 
+/**
+ * A registration priced AND built, ready to send. The confirm screen shows `feeMicroTari` — exactly
+ * what is charged — and `submit` sends the very transaction that was priced (ootle-name-service
+ * prepareRegisterWithNostr: one fee input, one dry run, one real build; no rebuild at submit).
+ */
+export interface OnsPreparedRegistration {
+  feeMicroTari: bigint
+  /** The stealth output the fee is paid from — the one coin this registration spends. */
+  feeInputId: string
+  /** Free dry run of a twin at the same fee; accepted only when the requirement is within it. */
+  simulate: () => Promise<{ accepted: boolean; requiredFee?: bigint; reason?: string }>
+  /** Send it, once. Never throws: every outcome comes back labelled, as registerOnsName's does. */
+  submit: () => Promise<OnsRegisterResult>
+}
+
 export interface OnsEstimateResult {
   ok: boolean
+  /** Present iff `ok`: the priced, built registration the confirm screen submits. */
+  prepared?: OnsPreparedRegistration
   /** The µtTARI budget to reveal for the fee — the estimated network cost plus the shared margin (feeProbe.withFeeMargin). This
    *  is the amount the user actually pays (the whole revealed budget is consumed; overcharge is not
    *  refunded), so it's what we show on the confirm gate. */
@@ -261,9 +278,10 @@ function caravelFeeSource(wallet: SecretKeyWallet, senderAddress: string): Pick<
 }
 
 /**
- * Estimate the fee (µtTARI) to register `name` + its nostr record, WITHOUT committing anything —
- * a simulated dry-run on the network, nothing spent. Returns the budget to reveal (estimate +
- * the shared margin, feeProbe.withFeeMargin), which is what to show the user before they confirm.
+ * Price AND build the registration of `name` + its nostr record, WITHOUT committing anything — a
+ * dry run, nothing spent. Returns the fee (cost + the shared margin, feeProbe.withFeeMargin), which
+ * is exactly what is charged and what the confirm screen shows, and `prepared`, whose `submit`
+ * sends the very transaction that was priced.
  */
 export async function estimateOnsRegistration(
   wallet: SecretKeyWallet,
@@ -273,10 +291,22 @@ export async function estimateOnsRegistration(
 ): Promise<OnsEstimateResult> {
   const policy = validateOnsName(name)
   if (policy) return { ok: false, errorKind: 'policy', error: policy }
+  const lock = feeInputLock(senderAddress)
   try {
-    const writer = await ons.withBrowserSigner({ wallet, senderAddress, ...caravelFeeSource(wallet, senderAddress) })
-    const { feeMicroTari } = await writer.estimateRegisterWithNostr(name, ownNpub)
-    return { ok: true, feeMicroTari: withFeeMargin(feeMicroTari) }
+    const writer = await ons.withBrowserSigner({
+      wallet, senderAddress, ...caravelFeeSource(wallet, senderAddress), onSubmitted: lock.onSubmitted,
+    })
+    const prepared = await writer.prepareRegisterWithNostr(name, ownNpub, withFeeMargin)
+    return {
+      ok: true,
+      feeMicroTari: prepared.feeMicroTari,
+      prepared: {
+        feeMicroTari: prepared.feeMicroTari,
+        feeInputId: prepared.feeInputId,
+        simulate: () => prepared.simulate(),
+        submit: () => settleRegistration(lock, () => prepared.submit()),
+      },
+    }
   } catch (e) {
     const message = (e as Error).message || 'Could not estimate the fee.'
     return { ok: false, errorKind: classifyEstimateError(message, senderAddress), error: message }
@@ -284,10 +314,55 @@ export async function estimateOnsRegistration(
 }
 
 /**
+ * The fee input goes into the spend record, like every other spend: locked the moment the writer
+ * has submitted, before its ~30 s result poll — the window in which a send or a reveal could
+ * otherwise select the same output and have the chain reject it after taking its fee.
+ */
+function feeInputLock(senderAddress: string) {
+  const state = { txId: null as string | null }
+  return {
+    state,
+    onSubmitted: (txId: string, spentInputIds: string[]) => {
+      state.txId = txId
+      markLocked(senderAddress, spentInputIds, txId)
+    },
+    promote: () => { if (state.txId) promoteToSpent(senderAddress, state.txId) },
+  }
+}
+
+/**
+ * Run a registration submit and label what happened. Then, for the lock taken at submit:
+ *
+ *   Accept            → promote. The output is spent.
+ *   FeeIntentCommit   → promote, TOO. The fee input sits in the FEE instructions, and a fee-only
+ *                       commit is precisely the one where those committed: the output is consumed
+ *                       and the change exists. lockSweep would map this verdict to `release`
+ *                       (right for inputs in the body, wrong for this one), so it is settled here,
+ *                       where the outcome is known, rather than left for the sweep.
+ *   anything else     → KEEP. A plain Reject or a timeout is not something this can read with
+ *                       confidence from a sentence; lockSweep resolves the lock against the chain.
+ */
+async function settleRegistration(
+  lock: ReturnType<typeof feeInputLock>,
+  send: () => Promise<{ transactionId: string; fee: bigint }>,
+): Promise<OnsRegisterResult> {
+  try {
+    const res = await send()
+    lock.promote()
+    return { ok: true, outcome: 'accepted', txId: res.transactionId, fee: res.fee }
+  } catch (e) {
+    const message = (e as Error).message || 'Registration failed.'
+    if (message.includes('the fee was still spent')) lock.promote()
+    return { ok: false, outcome: classifyRegisterOutcome(message), txId: txIdFrom(message), error: message }
+  }
+}
+
+/**
  * Register `name` for this wallet and set its "nostr" record to the wallet's own npub, in one
- * atomic on-chain transaction (client-signed, fee paid from a confidential UTXO). `feeBudget` is the
- * µtTARI the user approved (from {@link estimateOnsRegistration}) — revealed exactly. On-chain
- * uniqueness is the final authority; a name free at preview can still be taken.
+ * atomic on-chain transaction (client-signed, fee paid from a confidential UTXO), revealing exactly
+ * `feeBudget`. The ONE-SHOT form, for a caller with a budget already in hand; the confirm screen
+ * submits {@link estimateOnsRegistration}'s `prepared` instead, so what it sends is what it priced.
+ * On-chain uniqueness is the final authority; a name free at preview can still be taken.
  */
 export async function registerOnsName(
   wallet: SecretKeyWallet,
@@ -301,37 +376,14 @@ export async function registerOnsName(
   // to say that rather than implying a failed write.
   if (policy) return { ok: false, outcome: 'not-submitted', error: policy }
 
-  // ── THE FEE INPUT GOES INTO THE SPEND RECORD, like every other spend ──────
-  //
-  // Locked the moment the writer has submitted, before its ~30 s result poll — the window in which a
-  // send or a reveal could otherwise select the same output and have the chain reject it after
-  // taking its fee. Then:
-  //
-  //   Accept            → promote. The output is spent.
-  //   FeeIntentCommit   → promote, TOO. The fee input sits in the FEE instructions, and a fee-only
-  //                       commit is precisely the one where those committed: the output is consumed
-  //                       and the change exists. lockSweep would map this verdict to `release`
-  //                       (right for inputs in the body, wrong for this one), so it is settled here,
-  //                       where the outcome is known, rather than left for the sweep.
-  //   anything else     → KEEP. A plain Reject or a timeout is not something this can read with
-  //                       confidence from a sentence; lockSweep resolves the lock against the chain.
-  let lockTx: string | null = null
-  const onSubmitted = (txId: string, spentInputIds: string[]) => {
-    lockTx = txId
-    markLocked(senderAddress, spentInputIds, txId)
-  }
-  try {
+  // The fee input is locked at submit and settled by outcome — see feeInputLock / settleRegistration.
+  const lock = feeInputLock(senderAddress)
+  return settleRegistration(lock, async () => {
     const writer = await ons.withBrowserSigner({
-      wallet, senderAddress, ...caravelFeeSource(wallet, senderAddress), onSubmitted,
+      wallet, senderAddress, ...caravelFeeSource(wallet, senderAddress), onSubmitted: lock.onSubmitted,
     })
-    const res = await writer.submitRegisterWithNostr(name, ownNpub, feeBudget)
-    if (lockTx) promoteToSpent(senderAddress, lockTx)
-    return { ok: true, outcome: 'accepted', txId: res.transactionId, fee: res.fee }
-  } catch (e) {
-    const message = (e as Error).message || 'Registration failed.'
-    if (lockTx && message.includes('the fee was still spent')) promoteToSpent(senderAddress, lockTx)
-    return { ok: false, outcome: classifyRegisterOutcome(message), txId: txIdFrom(message), error: message }
-  }
+    return writer.submitRegisterWithNostr(name, ownNpub, feeBudget)
+  })
 }
 
 /**

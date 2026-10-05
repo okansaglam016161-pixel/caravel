@@ -33,7 +33,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useWallet } from '../../context/WalletContext'
 import {
-  checkOnsAvailable, estimateOnsRegistration, registerOnsName,
+  checkOnsAvailable, estimateOnsRegistration, type OnsPreparedRegistration,
   type OnsEstimateErrorKind,
 } from '../../crypto/ons'
 import { beginEntry, markDegraded, settleEntry } from '../../crypto/journalStore'
@@ -47,7 +47,8 @@ const XTR = (micro: bigint) => `${fmt6(micro)} ${TICKER}`
 type Commit =
   | { kind: 'estimating' }
   | { kind: 'estimate-failed'; errorKind: OnsEstimateErrorKind; error: string }
-  | { kind: 'confirm'; budget: bigint }
+  /** Priced and built: `budget` is exactly what is charged, `prepared` is what Register sends. */
+  | { kind: 'confirm'; budget: bigint; prepared: OnsPreparedRegistration }
   | { kind: 'submitting' }
   /** A true on-chain Accept. The only success. */
   | { kind: 'accepted'; txId?: string }
@@ -191,17 +192,18 @@ export default function CnsCommitView({ name, onCancel, onDone, onTryAnother, on
     setState({ kind: 'estimating' })
     const r = await estimateOnsRegistration(wallet, address, name, nostrNpub)
     if (gen.current !== mine) return
-    if (!r.ok || r.feeMicroTari === undefined) {
+    if (!r.ok || r.feeMicroTari === undefined || !r.prepared) {
       setState({ kind: 'estimate-failed', errorKind: r.errorKind ?? 'unreachable', error: r.error ?? 'Could not work out the fee.' })
       return
     }
-    setState({ kind: 'confirm', budget: r.feeMicroTari })
+    setState({ kind: 'confirm', budget: r.feeMicroTari, prepared: r.prepared })
   }, [wallet, address, nostrNpub, name])
 
   useEffect(() => { void estimate() }, [estimate])
 
-  async function submit(budget: bigint) {
+  async function submit(prepared: OnsPreparedRegistration) {
     if (!wallet || !address || !nostrNpub) return
+    const budget = prepared.feeMicroTari
     // Stamped like the estimate. NOTE WHAT IS NOT GUARDED: everything below writes to the JOURNAL
     // unconditionally, and must. A superseded run may not touch the screen, but the transaction it
     // sent is real and its record has to be written whether or not anyone is still looking.
@@ -218,17 +220,18 @@ export default function CnsCommitView({ name, onCancel, onDone, onTryAnother, on
     const journalId = beginEntry(address, {
       kind: 'ons-register',
       amountMicrotari: null,      // nothing is sent; the fee is the whole cost
-      feeMicrotari: null,
+      feeMicrotari: budget,       // priced on the confirm screen — the whole revealed budget is charged
       from: 'private',
       to: 'private',              // the change comes straight back to us
       counterparty: { kind: 'self', value: address },
       note: null,
       source: 'local-journal',
       selfOutputIds: null,
-      spentInputIds: null,             // the ONS path does not report its inputs
+      spentInputIds: null,             // recorded on Accept — the prepared registration's one fee coin
     }).entry.id
 
-    const r = await registerOnsName(wallet, address, name, nostrNpub, budget)
+    // THE TRANSACTION THAT WAS PRICED — no rescan, no reselection, no rebuild.
+    const r = await prepared.submit()
 
     if (!r.ok) {
       // ATTEMPTED, NOT FAILED. `pending` is what Activity draws neutral — nothing here is known to
@@ -259,6 +262,7 @@ export default function CnsCommitView({ name, onCancel, onDone, onTryAnother, on
       outcome: 'committed',
       txId: r.txId ?? null,
       feeMicrotari: r.fee ?? null,
+      spentInputIds: [prepared.feeInputId],
     })
     if (gen.current === mine) setState({ kind: 'accepted', txId: r.txId })
 
@@ -286,7 +290,7 @@ export default function CnsCommitView({ name, onCancel, onDone, onTryAnother, on
 
 interface Acts {
   estimate: () => Promise<void>
-  submit: (budget: bigint) => Promise<void>
+  submit: (prepared: OnsPreparedRegistration) => Promise<void>
   onCancel: () => void
   onDone: () => void
   onTryAnother: () => void
@@ -376,7 +380,7 @@ function commitBody(state: Commit, name: string, a: Acts) {
           </div>
           <div style={ACTIONS}>
             <button onClick={a.onCancel} style={QUIET}>Cancel</button>
-            <button onClick={() => { void a.submit(state.budget) }} className="cv-btn-primary" style={PRIMARY}>Register @{name}</button>
+            <button onClick={() => { void a.submit(state.prepared) }} className="cv-btn-primary" style={PRIMARY}>Register @{name}</button>
           </div>
         </>
       )

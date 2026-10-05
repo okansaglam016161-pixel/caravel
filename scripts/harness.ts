@@ -1888,7 +1888,7 @@ async function cmdProveCnsFee(h: Harnessed): Promise<void> {
   // ── The writer as ons.ts now drives it ──
   rule('3 · estimateOnsRegistration — the writer fed Caravel\'s owned set')
   const now = await estimateOnsRegistration(h.wallet, h.address, name, h.npub)
-  field('result', now.ok ? `ok — budget ${now.feeMicroTari} µtTARI (dry-run estimate + 10% margin)` : `${now.errorKind}: ${now.error}`)
+  field('result', now.ok ? `ok — budget ${now.feeMicroTari} µtTARI (dry-run estimate + the shared margin, feeProbe.withFeeMargin)` : `${now.errorKind}: ${now.error}`)
   if (owned.length > 0) {
     check('the fee input is found and the estimate succeeds', now.ok && (now.feeMicroTari ?? 0n) > 0n, now.ok ? `${now.feeMicroTari} µtTARI` : String(now.errorKind))
   } else {

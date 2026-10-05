@@ -54,27 +54,70 @@ export declare class OnsBrowserWriter {
     registerWithNostr(name: string, nostrPubkey: string): Promise<WriteResult>;
     /**
      * Estimate — WITHOUT committing — the fee (µtTARI) to register `name` + its `nostr` record. Runs a
-     * simulated dry-run on the network; nothing is spent. Pair with {@link submitRegisterWithNostr} to
-     * show the user the cost and register only on their confirmation.
+     * simulated dry-run on the network; nothing is spent. For a confirm screen prefer
+     * {@link prepareRegisterWithNostr}, which also builds the transaction the confirm will send.
      */
     estimateRegisterWithNostr(name: string, nostrPubkey: string): Promise<{
         feeMicroTari: bigint;
     }>;
     /**
-     * Register `name` + its `nostr` record, revealing exactly `feeBudget` µtTARI for the fee (from a
-     * prior {@link estimateRegisterWithNostr}, plus the caller's chosen margin). Throws an honest error
-     * on any non-Accept outcome — including a fee-only commit where the fee was burned but no name set.
+     * Price AND build a register-with-nostr, without sending it.
+     *
+     * The two-phase form a confirm screen needs: the fee input is chosen ONCE, the transaction is
+     * dry-run to learn its cost, `budgetFor(cost)` sets the fee it will pay (default: this client's
+     * margin), and the REAL transaction is built and sealed at that fee. `submit()` sends that very
+     * envelope — no rescan, no reselection, no rebuild — so the fee shown is the fee charged: the whole
+     * revealed budget, since the overcharge is not refunded on this path.
+     */
+    prepareRegisterWithNostr(name: string, nostrPubkey: string, budgetFor?: (requiredFee: bigint) => bigint): Promise<PreparedOnsWrite>;
+    /**
+     * Register `name` + its `nostr` record, revealing exactly `feeBudget` µtTARI for the fee. Kept for
+     * callers with a budget already in hand: it prepares at that budget and submits what it prepared.
+     * Throws an honest error on any non-Accept outcome — including a fee-only commit.
      */
     submitRegisterWithNostr(name: string, nostrPubkey: string, feeBudget: bigint): Promise<WriteResult>;
-    /** Convenience: dry-run estimate → submit with a small safety margin. Used by the single-call API. */
+    /** Convenience: prepare with this client's margin and submit at once. Used by the single-call API. */
     private estimateAndSubmit;
+    /** The prepare step shared by every write: one fee input, one dry run, one real build. */
+    private prepare;
+    private readonly onBusyRetry;
+    /**
+     * The fee input: the smallest owned output larger than the dry-run budget. Chosen ONCE per write
+     * and used for both the pricing dry run and the real build, so the transaction that is priced is
+     * the transaction that is sent.
+     */
+    private feeInput;
     /** Dry-run the call(s) to learn the exact required fee (µtTARI). Nothing is committed. */
     private estimate;
     /**
-     * Build the fee (reveal `feeBudget` from one UTXO, change to self) + the ONS method call(s), sign,
-     * and submit — or, when `dryRun`, submit a simulated transaction the network won't commit. Returns
-     * the classified execution outcome; callers decide whether a non-Accept is fatal.
+     * Build the fee (reveal `feeBudget` from `utxo`, change to self) + the ONS method call(s), sign
+     * and seal — a dry run when `dryRun`. Returns the envelope and the provider it was resolved on;
+     * nothing is sent here.
      */
-    private buildSubmit;
+    private build;
+}
+/**
+ * A priced, built, sealed ONS write — everything except sending it. See
+ * {@link OnsBrowserWriter.prepareRegisterWithNostr}.
+ */
+export interface PreparedOnsWrite {
+    /** The fee the transaction pays, exactly (µtTARI): the whole revealed budget. */
+    feeMicroTari: bigint;
+    /** What the pricing dry run measured the write to require (µtTARI), before any margin. */
+    requiredFee: bigint;
+    /** Substate id of the stealth output the fee is paid from — the one input this write spends. */
+    feeInputId: string;
+    /**
+     * Dry-run a twin of the prepared transaction (same fee input, same budget, same calls). Free.
+     * `accepted` only when the network would Accept it AND its required fee is within the budget —
+     * the dry run itself does not enforce the fee.
+     */
+    simulate(): Promise<{
+        accepted: boolean;
+        requiredFee?: bigint;
+        reason?: string;
+    }>;
+    /** Send THE prepared envelope, once. Throws an honest error on any non-Accept outcome. */
+    submit(): Promise<WriteResult>;
 }
 //# sourceMappingURL=browser-writer.d.ts.map

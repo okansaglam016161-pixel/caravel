@@ -131,6 +131,14 @@ export interface SendParams {
   memo?: string
   payRef?: string
   onProgress?: (msg: string) => void
+  /** How the fee is set from the measured cost. Default: feeProbe.withFeeMargin. */
+  feeFor?: (costMicrotari: bigint) => bigint
+  /**
+   * PROOF ONLY — the harness's `prove-short-fee`, which submits a deliberately short fee to show
+   * that the network rejects it and charges nothing. Skips the confirm-time check that would
+   * otherwise (correctly) refuse to send it. Never set by the app.
+   */
+  unsafeSkipConfirm?: boolean
 }
 
 /** A priced, built, signed private send — everything except pressing send. */
@@ -191,7 +199,7 @@ export async function prepareConfidentialSend(
   senderAddress: string,
   params: SendParams,
 ): Promise<PreparedConfidentialSend> {
-  const { recipient, memo, payRef, onProgress, sendAll = false } = params
+  const { recipient, memo, payRef, onProgress, sendAll = false, feeFor = withFeeMargin, unsafeSkipConfirm = false } = params
   const log = (msg: string) => onProgress?.(msg)
 
   // Connect indexer first — lets ootle-secret-key-wallet __tla tick before wallet ops
@@ -336,7 +344,7 @@ export async function prepareConfidentialSend(
   const reserved = sendAll ? MAX_FEE : probeFeeFor(selection.total, params.amountMicrotari)
   const probe = await buildEnvelope(reserved, true)
   const cost  = await dryRunFee(INDEXER_URL, probe.envelope, { onBusyRetry: () => log(RETRYING_MESSAGE) })
-  const fee   = withFeeMargin(cost)
+  const fee   = feeFor(cost)
   // AGAINST WHAT THE PROBE RESERVED, not the raw ceiling. Two things follow from that, and the
   // second is the one that matters: a fee above the reservation was never simulated, and — because
   // the probe reserves the LARGEST fee this transaction may pay — a real fee at or below it always
@@ -380,7 +388,7 @@ export async function prepareConfidentialSend(
     submit: async (onSubmitProgress?: (msg: string) => void) => {
       const slog = (m: string) => onSubmitProgress?.(m)
       slog('Checking the fee…')
-      await check.ensureConfirmed()
+      if (!unsafeSkipConfirm) await check.ensureConfirmed()
       slog('Submitting transaction…')
       const sub = await submitOnce(() => provider.submitTransaction(real.envelope), {
         landed: inputsStillUnspent(spentInputIds),

@@ -494,7 +494,8 @@ async function printTxResult(txId: string, opts: { raw?: boolean } = {}): Promis
 
   field('final_decision', rejected
     ? `Rejected by the indexer at ${String(rejected.rejected_time ?? '?')} (never reached consensus)`
-    : String(finalized?.final_decision ?? '(none — not yet decided)'))
+    : finalized?.final_decision === undefined ? '(none — not yet decided)'
+    : typeof finalized.final_decision === 'string' ? finalized.final_decision : JSON.stringify(finalized.final_decision))
   field('result', exec?.result !== undefined ? JSON.stringify(exec.result).slice(0, 600) : '(no execution_result.finalize.result)')
 
   const receipt = exec?.fee_receipt as Record<string, unknown> | undefined
@@ -2012,6 +2013,64 @@ async function cmdFeeBoundary(h: Harnessed, amount: bigint, dest?: string): Prom
   }
 }
 
+/**
+ * WRITE (with --yes). THE SAFETY PROOF for pricing at the exact cost with no margin.
+ *
+ * Submits a REAL private send whose fee is one microtari below what the dry run says it requires,
+ * with the confirm-time check deliberately bypassed (it would refuse to send it). The engine source
+ * (tari-ootle 0.43, runtime/tracker.rs finalize) says a transaction whose instructions all sit in
+ * the fee intent, and that does not cover its fee, is a Reject that persists nothing and takes
+ * nothing. This checks that against the chain: Reject, nothing charged, the inputs still unspent,
+ * the balance unchanged to the microtari, and no lock left behind.
+ */
+async function cmdProveShortFee(h: Harnessed, dest: string, amount: bigint, yes: boolean): Promise<void> {
+  writeBanner('prove-short-fee  (a real send at cost − 1 µtTARI)', amount, yes)
+  const sig = new AbortController().signal
+  const balanceNow = async () =>
+    (await scanWallet(h.viewSecret, () => {}, sig, { excluded: loadExcludedIds(h.address), walletAddress: h.address })).balance
+
+  rule('before')
+  const before = await balanceNow()
+  const locksBefore = Object.values(loadSpentOutputs(h.address).records).filter(r => r.status === 'locked').length
+  field('private balance', amt(before))
+  field('locked', String(locksBefore))
+
+  rule('price, then pay one microtari less')
+  const prepared = await prepareConfidentialSend(h.wallet, h.address, {
+    recipient: dest, amountMicrotari: amount, onProgress: stage,
+    feeFor: cost => cost - 1n,
+    unsafeSkipConfirm: true,
+  })
+  field('required', `${prepared.dryRunCost} µtTARI  (the dry run's total_fees_required)`)
+  field('paying', `${prepared.feeMicrotari} µtTARI  (required − 1)`)
+  field('inputs', prepared.spentInputIds.join(', '))
+  if (!yes) { prepared.release(); console.log('\n  STOPPED BEFORE SUBMIT. Nothing was sent. Re-run with --yes to submit.'); return }
+
+  rule('submit')
+  const result = await prepared.submit(stage)
+  field('tx id', result.txId)
+  field('module outcome', result.outcome + (result.reason ? `  — ${result.reason}` : ''))
+  await printTxResult(result.txId)
+
+  let failures = 0
+  const check = (label: string, ok: boolean, detail: string) => {
+    if (!ok) failures++
+    console.log(`  ${ok ? 'PASS' : '◀ FAIL'}  ${label.padEnd(40)} ${detail}`)
+  }
+  rule('after')
+  const unspent = await Promise.all(prepared.spentInputIds.map(async id => (await pointRead(`/substates/${encodeURIComponent(id)}`)).body !== null))
+  const after = await balanceNow()
+  const locksAfter = Object.values(loadSpentOutputs(h.address).records).filter(r => r.status === 'locked').length
+  field('private balance', amt(after))
+  field('locked', String(locksAfter))
+  check('the network REJECTED it', result.outcome === 'Reject', result.outcome)
+  check('every input is still unspent', unspent.every(Boolean), JSON.stringify(unspent))
+  check('balance unchanged to the µtTARI', after === before, `${before} → ${after}`)
+  check('no lock left behind', locksAfter === locksBefore, `${locksBefore} → ${locksAfter}`)
+  rule(failures === 0 ? 'PROVEN — a short fee is a clean, free reject' : `${failures} CHECK(S) FAILED — NOT a clean free reject`)
+  if (failures) process.exitCode = 1
+}
+
 const USAGE = `
 CARAVEL TERMINAL HARNESS — the real crypto/tx paths against the live Esmeralda indexer.
 
@@ -2043,6 +2102,9 @@ READ-ONLY — safe to run freely, costs nothing:
                               WRITE. Submits a real send, then prints the settle tick by tick with
                               the OLD direction test beside the NEW evidence test, so the window
                               where they disagree is visible. The no-change case runs without --yes.
+  prove-short-fee <addr> <amount>
+                              WRITE with --yes. A real private send paying cost − 1: proves a short
+                              fee is a clean Reject that charges nothing and spends nothing.
   fee-boundary <amount> [ootle-address]
                               Price each write action, then dry-run the real transaction at the
                               quoted fee, at exactly the measured cost, and at cost − 1. Shows where
@@ -2152,6 +2214,10 @@ export async function main(argv: string[]): Promise<void> {
       case 'prove-settle':
         if (!args[1] || !args[2]) throw new Error('prove-settle needs a recipient address and an amount.')
         await cmdProveSettle(h, args[1], parseAmount(args[2]), yes)
+        break
+      case 'prove-short-fee':
+        if (!args[1] || !args[2]) throw new Error('prove-short-fee needs a recipient address and an amount.')
+        await cmdProveShortFee(h, args[1], parseAmount(args[2]), yes)
         break
       case 'fee-boundary':
         if (!args[1]) throw new Error('fee-boundary needs an amount.')

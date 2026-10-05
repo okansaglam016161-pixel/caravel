@@ -109,8 +109,17 @@ export function readFinalizedVerdict(body: unknown): TxVerdict | null {
   if (!finalized) return null
 
   // Undecided. Nothing to report yet, and NOT a failure — the caller keeps waiting.
-  const decision = finalized.final_decision
-  if (typeof decision !== 'string' || decision === '') return null
+  //
+  // THE DECISION IS NOT ALWAYS A STRING. `Commit` arrives as the bare string, but an abort arrives as
+  // `{ "Abort": "<reason>" }` — measured on Esmeralda 2026-10-05 for a send paying one microtari
+  // short: `{"Abort":"InsufficientFeesPaid"}`, fees paid 0. Reading only strings mistook that FINAL
+  // reject for "not yet", ran finality to its timeout, and left the inputs locked.
+  const raw = finalized.final_decision
+  const decisionObj = obj(raw)
+  const decision = typeof raw === 'string'
+    ? raw
+    : decisionObj && Object.keys(decisionObj).length > 0 ? Object.keys(decisionObj)[0]! : ''
+  if (decision === '') return null
 
   const result = obj(obj(obj(finalized.execution_result)?.finalize)?.result)
 
@@ -124,7 +133,7 @@ export function readFinalizedVerdict(body: unknown): TxVerdict | null {
   if (!result) {
     return decision === 'Commit'
       ? { kind: 'unreadable', reason: 'the network committed this transaction but returned no readable result' }
-      : { kind: 'reject', reason: `the network did not commit this transaction (${decision})` }
+      : { kind: 'reject', reason: `the network did not commit this transaction (${decisionObj ? describeRejectReason(decisionObj) : decision})` }
   }
 
   if (result.Accept !== undefined) return { kind: 'accept' }

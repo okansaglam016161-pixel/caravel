@@ -9,9 +9,8 @@
 //   in shape: journal before submission, a rise watch plus the claim's own output as evidence.
 //
 //   PRICED BEFORE IT IS OFFERED. While the faucet is open the claim is prepared in the background
-//   (prepareClaim — a status read and a dry run, nothing submitted), so the banner states exactly
-//   what lands: "You receive X (1,000 − fee)". Claim is the confirm, and it submits that priced
-//   claim at that fee.
+//   (prepareClaim — a status read and a dry run at the exact fee, nothing submitted). The banner
+//   stays the simple "Testnet faucet is open." and Claim submits that priced claim.
 
 import { useEffect, useState, useRef } from 'react'
 import { useWallet } from '../../context/WalletContext'
@@ -30,13 +29,11 @@ import { settleVerdict, journalOutcomeFor, type SettleStartedBy } from './v2/set
 import { FaucetBanner, FaucetPanel } from './v2/panels'
 import { faucetPhase, isHidden, type ClaimState } from './v2/faucetPhase'
 import { plainError } from './v2/plainError'
-import { fmt2, fmt6, TICKER } from './v2/format'
+import { fmt2, TICKER } from './v2/format'
 
 const shortTx = (t: string | null) => (t ? `${t.slice(0, 8)}…${t.slice(-6)}` : '')
 
-/** The payout as people say it — "1,000" for a whole amount, six places otherwise. */
-const payoutText = (microtari: bigint) =>
-  microtari % 1_000_000n === 0n ? (microtari / 1_000_000n).toLocaleString('en-US') : fmt6(microtari)
+
 
 function toHexStr(bytes: Uint8Array): string {
   let s = ''
@@ -80,8 +77,6 @@ export default function FaucetClaimPanel() {
    */
   const [prepared, setPrepared] = useState<PreparedClaim | null>(null)
   const [pricing, setPricing] = useState<'idle' | 'pricing' | 'failed'>('idle')
-  /** Set when Claim found the quote no longer held and it was re-priced — nothing was sent. */
-  const [repriced, setRepriced] = useState(false)
   const priceGen = useRef(0)
   const lastTx = useRef<string | null>(null)
   // How the watch began, and the row it must correct. Both refs: the effect reads them, nothing
@@ -195,12 +190,11 @@ export default function FaucetClaimPanel() {
       await pc.confirm()
     } catch (e) {
       // Clearing the quote with pricing idle is what makes the open banner price again (wantPrice).
-      if (e instanceof QuoteChanged) { setRepriced(true); setPrepared(null); setPricing('idle'); return }
+      if (e instanceof QuoteChanged) { setPrepared(null); setPricing('idle'); return }
       setPricing('failed')
       return
     }
     setPricing('idle')
-    setRepriced(false)
     setPrepared(null)
     setPhase('claiming')
     setCanRetry(true)
@@ -267,7 +261,7 @@ export default function FaucetClaimPanel() {
     if (r.outcome === 'Reject' && isFeeShortRejection(r.reason)) {
       // THE FEE ROSE AS IT WAS SENT — a free reject. Back to the banner, which prices again; Claim
       // confirms the new figure. Never resent on our own.
-      setRepriced(true); setPrepared(null); setPricing('idle'); setPhase('idle')
+      setPrepared(null); setPricing('idle'); setPhase('idle')
       return
     }
     if (r.outcome === 'Reject') {
@@ -349,14 +343,9 @@ export default function FaucetClaimPanel() {
     return (
       <FaucetBanner
         text={
-          phase === 'open' ? (
-            // EXACTLY WHAT LANDS, before anything is pressed: the payout less the fee the claim
-            // will pay. Claim submits this priced claim.
-            prepared ? `${repriced ? 'The fee was checked again. ' : 'Testnet faucet is open. '}You receive ${fmt6(prepared.privateAmount)} ${TICKER} (${payoutText(prepared.claimAmount)} − ${fmt6(prepared.fee)} fee).`
-            : pricing === 'failed' ? 'Testnet faucet is open, but the network fee couldn’t be worked out.'
-            : prepared === null && repriced ? 'The fee changed — working it out again…'
-            : 'Testnet faucet is open. Working out the network fee…'
-          )
+          // THE SIMPLE PROMPT. The claim is still priced underneath (exact fee, no margin) and Claim
+          // submits that priced claim; the banner just does not spell the arithmetic out.
+          phase === 'open' ? 'Testnet faucet is open.'
           : phase === 'paused' ? 'The faucet is paused right now. Check back soon.'
           : 'The faucet is empty right now. Check back soon.'
         }

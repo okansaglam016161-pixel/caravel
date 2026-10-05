@@ -69,8 +69,8 @@ npm run preview  # serve the production build locally
 ## Dependencies note
 
 The Tari Ootle SDK (`@tari-project/ootle`) is installed from npm. The Caravel Name Service
-client is vendored as a pre-built dist under `vendor/ons/`, built from the ootle-name-service
-source with no local patches, so the repo builds on a fresh clone with no external setup. See
+client is vendored as a pre-built dist under `vendor/ons/`, built from the
+[ootle-name-service](https://github.com/okansaglam016161-pixel/ootle-name-service) source with no local patches, so the repo builds on a fresh clone with no external setup. See
 `vendor/README.md`.
 
 ## Contracts
@@ -79,7 +79,7 @@ Both are published on Ootle 0.42, running on 0.43 (re-verified live on 0.43).
 
 | | address (esmeralda) |
 |---|---|
-| Caravel Name Service registry (the Ootle Name Service contract) | `component_0109d5287493affc06ec8902fcbf85bd2362832580feeac2a70cba7e5ac6da4d` |
+| Caravel Name Service registry (the [Ootle Name Service](https://github.com/okansaglam016161-pixel/ootle-name-service) contract) | `component_0109d5287493affc06ec8902fcbf85bd2362832580feeac2a70cba7e5ac6da4d` |
 | [Caravel Faucet](https://github.com/okansaglam016161-pixel/caravel-faucet) | `component_568f84a0cc7ccfe49116ee86d072f02b99e246a4750e680a8cbfcd2b7862f37b` |
 
 The faucet is funded with 598,000 tTARI.

@@ -7,15 +7,21 @@
 //
 //   The claim itself (crypto/faucet) and the settle that verifies it (WalletContext) are unchanged
 //   in shape: journal before submission, a rise watch plus the claim's own output as evidence.
+//
+//   PRICED BEFORE IT IS OFFERED. While the faucet is open the claim is prepared in the background
+//   (prepareClaim — a status read and a dry run, nothing submitted), so the banner states exactly
+//   what lands: "You receive X (1,000 − fee)". Claim is the confirm, and it submits that priced
+//   claim at that fee.
 
 import { useEffect, useState, useRef } from 'react'
 import { useWallet } from '../../context/WalletContext'
 import {
-  claimFaucet,
+  prepareClaim,
   claimRefusalMessage,
   classifyClaimFailure,
   FaucetClaimRefused,
   type ClaimResult,
+  type PreparedClaim,
 } from '../../crypto/faucet'
 import { readFaucetStatus, type FaucetStatus } from '../../crypto/faucetStatus'
 import { beginEntry, settleEntry } from '../../crypto/journalStore'
@@ -23,9 +29,13 @@ import { settleVerdict, journalOutcomeFor, type SettleStartedBy } from './v2/set
 import { FaucetBanner, FaucetPanel } from './v2/panels'
 import { faucetPhase, isHidden, type ClaimState } from './v2/faucetPhase'
 import { plainError } from './v2/plainError'
-import { fmt2, TICKER } from './v2/format'
+import { fmt2, fmt6, TICKER } from './v2/format'
 
 const shortTx = (t: string | null) => (t ? `${t.slice(0, 8)}…${t.slice(-6)}` : '')
+
+/** The payout as people say it — "1,000" for a whole amount, six places otherwise. */
+const payoutText = (microtari: bigint) =>
+  microtari % 1_000_000n === 0n ? (microtari / 1_000_000n).toLocaleString('en-US') : fmt6(microtari)
 
 function toHexStr(bytes: Uint8Array): string {
   let s = ''
@@ -63,6 +73,13 @@ export default function FaucetClaimPanel() {
   // refused again.
   const [canRetry, setCanRetry] = useState(true)
   const [status, setStatus] = useState<FaucetStatus | null>(null)
+  /**
+   * The claim, priced for the banner: what lands, and the fee it pays. Claim submits exactly this.
+   * `pricing` is the state of getting it — 'failed' offers a retry rather than a claim on a guess.
+   */
+  const [prepared, setPrepared] = useState<PreparedClaim | null>(null)
+  const [pricing, setPricing] = useState<'idle' | 'pricing' | 'failed'>('idle')
+  const priceGen = useRef(0)
   const lastTx = useRef<string | null>(null)
   // How the watch began, and the row it must correct. Both refs: the effect reads them, nothing
   // renders them. See settleVerdict.ts.
@@ -133,8 +150,39 @@ export default function FaucetClaimPanel() {
     acknowledgeSettle(settle.txId)
   }, [settle, acknowledgeSettle, address])
 
-  async function claim() {
+  /**
+   * Price the claim for the banner. A dry run — nothing is submitted. A refusal found here (claimed,
+   * paused, empty) becomes the wallet's status, exactly as a refused claim would.
+   */
+  async function priceClaim() {
     if (!wallet || !address) return
+    const gen = ++priceGen.current
+    setPrepared(null)
+    setPricing('pricing')
+    try {
+      const pc = await prepareClaim(wallet, address)
+      if (gen !== priceGen.current) return
+      setPrepared(pc)
+      setPricing('idle')
+    } catch (e) {
+      if (gen !== priceGen.current) return
+      setPricing('failed')
+      // A refusal is the faucet's answer about THIS wallet: show that instead of a claim. Claimed is
+      // final; paused / empty are re-read so the banner states them with the faucet's own figures.
+      if (e instanceof FaucetClaimRefused) {
+        if (e.refusal === 'already-claimed') { setStatus({ kind: 'claimed' }); return }
+        try {
+          const s2 = await readFaucetStatus(address, toHexStr(await wallet.getPublicKey()))
+          if (gen === priceGen.current) setStatus(s2)
+        } catch { /* keep 'failed' — the banner offers a retry */ }
+      }
+    }
+  }
+
+  async function claim() {
+    if (!wallet || !address || !prepared) return
+    const pc = prepared
+    setPrepared(null)
     setPhase('claiming')
     setCanRetry(true)
     setMsg('Requesting test tokens (self-signed, no daemon)…')
@@ -144,8 +192,8 @@ export default function FaucetClaimPanel() {
     // before submission so the attempt survives a throw, and so the output it creates is on record.
     const journalId = beginEntry(address, {
       kind: 'faucet',
-      amountMicrotari: null,      // the payout is only known once the claim returns
-      feeMicrotari: null,
+      amountMicrotari: null,      // recorded once the claim commits — see the settle below
+      feeMicrotari: pc.fee,       // priced before the user pressed Claim; the receipt confirms it
       from: 'external',
       to: 'private',
       counterparty: { kind: 'faucet', value: 'caravel-faucet' },
@@ -165,7 +213,7 @@ export default function FaucetClaimPanel() {
 
     let r: ClaimResult
     try {
-      r = await claimFaucet(wallet, address, m => setMsg(m))
+      r = await pc.submit(m => setMsg(m))
     } catch (e) {
       if (e instanceof FaucetClaimRefused) {
         // The faucet answered, and nothing was submitted — so this attempt definitely failed, and
@@ -238,12 +286,32 @@ export default function FaucetClaimPanel() {
     rescan()
   }
 
+  /** Back from the error card to the open banner, which prices afresh — Claim is the confirm again. */
+  function retry() {
+    setPhase('idle')
+    setMsg(null)
+    setPrepared(null)
+    setPricing('idle')
+  }
+
   // ── PRESENTATION ──
   const phase = faucetPhase({
     claim: p,
     status: status?.kind ?? null,
     unlocked: !!wallet && !!address,
   })
+
+  // PRICE WHILE OPEN. Runs once per open banner (and again after a retry): `pricing` leaves 'idle'
+  // the moment it starts, and a failure stops at 'failed' with a retry rather than looping.
+  const wantPrice = phase === 'open' && !dismissed && !prepared && pricing === 'idle'
+  useEffect(() => {
+    if (wantPrice) void priceClaim()
+    // priceClaim reads only refs and setters plus wallet/address, which wantPrice already tracks.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wantPrice])
+
+  // A different wallet: whatever was priced was priced for the old one.
+  useEffect(() => { priceGen.current++; setPrepared(null); setPricing('idle') }, [address])
 
   if (isHidden(phase)) return null
 
@@ -256,11 +324,20 @@ export default function FaucetClaimPanel() {
     return (
       <FaucetBanner
         text={
-          phase === 'open' ? 'Testnet faucet is open.'
+          phase === 'open' ? (
+            // EXACTLY WHAT LANDS, before anything is pressed: the payout less the fee the claim
+            // will pay. Claim submits this priced claim.
+            prepared ? `Testnet faucet is open. You receive ${fmt6(prepared.privateAmount)} ${TICKER} (${payoutText(prepared.claimAmount)} − ${fmt6(prepared.fee)} fee).`
+            : pricing === 'failed' ? 'Testnet faucet is open, but the network fee couldn’t be worked out.'
+            : 'Testnet faucet is open. Working out the network fee…'
+          )
           : phase === 'paused' ? 'The faucet is paused right now. Check back soon.'
           : 'The faucet is empty right now. Check back soon.'
         }
-        action={phase === 'open' ? { label: 'Claim test funds', onClick: claim } : undefined}
+        action={phase !== 'open' ? undefined
+          : prepared ? { label: 'Claim', onClick: () => void claim() }
+          : pricing === 'failed' ? { label: 'Try again', onClick: () => void priceClaim() }
+          : undefined}
         onDismiss={phase === 'open' ? dismiss : undefined}
       />
     )
@@ -272,7 +349,7 @@ export default function FaucetClaimPanel() {
       // The claim's own message already carries the delta; plainError is a no-op on it, and is
       // applied for the same reason it is everywhere else — a failure here can quote a fee.
       message={msg ? plainError(msg) : undefined}
-      onClaim={claim}
+      onClaim={retry}
       canRetry={canRetry}
     />
   )

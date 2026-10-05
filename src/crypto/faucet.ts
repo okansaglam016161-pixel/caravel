@@ -169,7 +169,7 @@ export interface PreparedClaim {
   /** What lands in the wallet as a private coin: claimAmount − fee. */
   privateAmount: bigint
   /** Build at `fee`, submit, and wait for the final decision. The only step that writes. */
-  submit: () => Promise<ClaimResult>
+  submit: (onProgress?: (msg: string) => void) => Promise<ClaimResult>
 }
 
 /**
@@ -243,7 +243,8 @@ export async function prepareClaim(
     throw new Error(`Network fee (${fee} µtTARI) exceeds the faucet's payout — the faucet cannot cover its own claim.`)
   }
 
-  async function submit(): Promise<ClaimResult> {
+  async function submit(onSubmitProgress?: (msg: string) => void): Promise<ClaimResult> {
+    const log = (m: string) => (onSubmitProgress ?? onProgress)?.(m)
     log('Building claim…')
     const real = await buildEnvelope(fee, false)
 

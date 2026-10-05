@@ -20,6 +20,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SecretKeyWallet } from '@tari-project/ootle-secret-key-wallet'
 import { checkOnsAvailable, estimateOnsRegistration, ons, ownedOnsNames, registerOnsName, type NameRecord } from './ons'
 import { NETWORK_BUSY_MESSAGE } from './indexerRetry'
+import { withFeeMargin } from './feeProbe'
 import { NETWORK_BUSY_MESSAGE as ONS_BUSY, SubmitMaybeLandedError } from '@ootle/name-service'
 
 // A 32-byte key whose hex is easy to assert against: 0x00, 0x01, … 0x1f.
@@ -406,34 +407,27 @@ describe('registerOnsName — the outcome, not the sentence', () => {
   })
 })
 
-describe('the fee margin — 10%, and the floor that used to hide behind it', () => {
-  // Pinned at four scales because the OLD formula (2% + a 100 µtTARI floor) was safe only where the
-  // floor happened to exceed the measured 2.7% drift, and stopped being safe above ~5 000 µtTARI —
-  // where it would have burned the fee on every attempt. These numbers are the evidence for 10%.
+describe('the fee margin — the one shared rule (feeProbe.withFeeMargin)', () => {
+  // CNS used to carry its own 10%, justified by a "measured 2.7% drift". That figure is the send
+  // path's 2026-08-20 note — dry run 16 580, actual 16 138 — i.e. the dry run OVER-estimating by
+  // 2.7%, the safe direction. Registration now pays the same margin as every other action, and
+  // the drift it really fears is caught at confirm by re-simulating at the exact fee.
   const budgetFor = async (realFee: bigint) => {
     stubWriter({ estimate: async () => ({ feeMicroTari: realFee }) })
     const r = await estimateOnsRegistration(WALLET, ADDR, 'okz', NPUB)
     return r.feeMicroTari!
   }
 
-  it('adds 10% once the percentage clears the floor', async () => {
-    expect(await budgetFor(1_400n)).toBe(1_540n)   // +140, was +100 under 2%+floor
-    expect(await budgetFor(2_451n)).toBe(2_696n)   // +245, was +100
-    expect(await budgetFor(5_000n)).toBe(5_500n)   // +500, was +100 — the old cliff
-    expect(await budgetFor(10_000n)).toBe(11_000n) // +1000, was +200
-  })
-
-  it('the floor still covers a fee too small for a percentage to matter', async () => {
-    expect(await budgetFor(500n)).toBe(600n)   // 10% = 50, below the floor → 100
-    expect(await budgetFor(1n)).toBe(101n)
-  })
-
-  it('clears the measured 2.7% drift at every scale, which 2% did not', async () => {
-    for (const fee of [1_400n, 2_451n, 5_000n, 10_000n, 100_000n]) {
-      const budget = await budgetFor(fee)
-      const drifted = fee + (fee * 27n) / 1000n   // +2.7%
-      expect(budget, `budget for ${fee} must cover a 2.7% drift`).toBeGreaterThanOrEqual(drifted)
+  it('is exactly withFeeMargin, at every scale', async () => {
+    for (const fee of [1n, 500n, 1_400n, 10_000n, 10_761n, 100_000n]) {
+      expect(await budgetFor(fee)).toBe(withFeeMargin(fee))
     }
+  })
+
+  it('2% above the floor, 200 µtTARI below it', async () => {
+    expect(await budgetFor(10_761n)).toBe(10_976n)   // the live @livetest1 cost: 2% = 215 clears the floor
+    expect(await budgetFor(20_000n)).toBe(20_400n)   // 2% = 400 clears the floor
+    expect(await budgetFor(1_400n)).toBe(1_600n)     // 2% = 28 → floor 200
   })
 })
 

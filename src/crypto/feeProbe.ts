@@ -36,24 +36,35 @@ const DRY_RUN_TIMEOUT_MS = 20_000
 // many attempts, alternating to the other indexer. See indexerRetry.ts.
 const DRY_RUN_ATTEMPTS = 4
 
-// Safety margin added to the measured cost, as a percentage.
+// THE MARGIN — one rule for every action that pays a fee (send, public send, make public, make
+// private, chat payment, faucet claim, @name register).
 //
-// 25% is deliberately generous, because OVERCHARGE IS REFUNDED and under-paying is fatal. The
-// measured probe proves it: reserving 50 000 against a 13 211 cost returned `total_fee_overcharge:
-// 36 789`, so the only real price of over-reserving is that the amount is briefly committed to the
-// fee bucket. Under-reserving, by contrast, aborts the whole transaction — which is the outage this
-// module was written to end.
+// IT IS NEVER REFUNDED, and that is the fact the old 25% was built on the opposite of. Every path
+// pays with PayFeeFromBucket, which spends the WHOLE reserved bucket: the receipt's
+// `total_fee_overcharge` is reported, and burned. Measured live on 2026-10-04 across six
+// transactions (claim, two sends, make public, make private, @name) — each was charged its full
+// reserved fee, and the wallet's balance reconciled to the microtari only with the overcharge
+// counted as spent. So the margin is not a float that comes back: it is part of the price, the
+// figure the user is shown, and the figure that leaves the wallet.
 //
-// It has to absorb genuine drift, not just noise: the dry run executes against the state of one
-// moment and the real submission lands a few seconds later, and the cost breakdown is dominated by
-// terms that depend on that state (`Storage` 2 287, `NativeExecution` 8 100 on a faucet claim). A
-// tighter 5% would re-open exactly this failure on any modest upward move. In absolute terms 25% of
-// a ~13 200 fee is ~3 300 µtTARI — 0.0033 tTARI, against a claim of ~1 000 tTARI.
-export const FEE_MARGIN_PERCENT = 25n
+// What it insures against is DRIFT between the dry run and the real submission — the cost depends
+// on state (Storage, NativeExecution) that can move in the seconds between. The measurements:
+//   - the same six transactions consumed EXACTLY their dry-run cost, to the microtari;
+//   - the required fee does not depend on the fee paid (fee-boundary: 9 452 at every payment from
+//     1 000 to 11 815), so building the real transaction at a different fee than the probe does
+//     not move its cost;
+//   - the confirm step re-simulates the final transaction at the exact quoted fee and refuses to
+//     submit if the requirement has risen above it (see simulateFee's `underpaid`), so drift is
+//     caught before signing rather than absorbed by the margin.
+// 2%, floor 200 µtTARI: ~200–300 µtTARI on every fee measured here (9–19k), against the ~2 300–
+// 3 800 that 25% spent. The floor covers a fee small enough that 2% rounds to nothing.
+export const FEE_MARGIN_PERCENT = 2n
+export const FEE_MARGIN_FLOOR = 200n
 
-/** Measured cost plus FEE_MARGIN_PERCENT, rounded down (bigint division). */
+/** Measured cost plus the margin: max(FEE_MARGIN_PERCENT of it, FEE_MARGIN_FLOOR). Exact bigint. */
 export function withFeeMargin(costMicrotari: bigint): bigint {
-  return (costMicrotari * (100n + FEE_MARGIN_PERCENT)) / 100n
+  const pct = (costMicrotari * FEE_MARGIN_PERCENT) / 100n
+  return costMicrotari + (pct > FEE_MARGIN_FLOOR ? pct : FEE_MARGIN_FLOOR)
 }
 
 // The indexer reports 64-bit amounts as either a JSON number or a decimal string depending on the
@@ -96,16 +107,33 @@ interface DryRunResponse {
         total_fee_overcharge?: number | string
         cost_breakdown?: { breakdown?: Record<string, number | string> }
       }
+      total_fees_required?: number | string
     }
   }
 }
 
 /**
+ * What a dry run said, as data rather than as a throw.
+ *
+ * `accepted` carries the cost the engine REQUIRES (see measuredCost). Anything that is not a clean `Accept`
+ * is `accepted: false` with the network's reason in a sentence fit to show — see the check below
+ * for why `AcceptFeeRejectRest` is in that group. A transport failure, a non-OK HTTP status or a
+ * malformed body is NOT a verdict and still throws: those say nothing about the transaction.
+ *
+ * This is the form the confirm-time check and the harness's fee-boundary measurement read, because
+ * both need to know WHETHER a transaction is accepted at a given fee, not only what it costs.
+ */
+export type FeeSimulation =
+  | { accepted: true; cost: bigint }
+  | { accepted: false; kind: 'reject' | 'fee-only' | 'unrecognised' | 'underpaid'; reason: string; message: string }
+
+/**
  * Ask the network what `envelope` would actually cost, in µtTARI.
  *
  * `envelope` MUST have been sealed from a transaction carrying `dry_run: true` — see the note above.
- * The reserved fee inside it only has to be GENEROUS ENOUGH for execution to complete; whatever is
- * not consumed comes back as overcharge, and it is the consumed part this returns.
+ * The reserved fee inside it only has to be GENEROUS ENOUGH for execution to complete. In a dry run
+ * nothing is charged, so over-reserving the PROBE is free — unlike the real transaction, whose
+ * whole reserved fee is spent (see the margin note above). This returns the required cost.
  *
  * Throws with a message fit to show a user on every failure path — a dead indexer, a timeout, a
  * malformed body, or a transaction the network rejects for a reason that is not about fees at all
@@ -117,6 +145,28 @@ export async function dryRunFee(
   envelope: unknown,
   opts: { onBusyRetry?: () => void } = {},
 ): Promise<bigint> {
+  const sim = await simulateFee(indexerUrl, envelope, opts)
+  if (sim.accepted) return sim.cost
+  throw new Error(sim.message)
+}
+
+/**
+ * The same dry run, returning the verdict instead of throwing on a non-Accept. See FeeSimulation.
+ *
+ * `opts.fee` — the fee the simulated transaction pays — turns on the one check THE DRY RUN DOES NOT
+ * MAKE ITSELF. Measured on Esmeralda (2026-10-05, harness `fee-boundary`): a reveal whose cost is
+ * 9 452 µtTARI was dry-run paying 11 815, 9 452, 9 451, 9 352, 8 452, 4 726 and 1 000, and EVERY
+ * ONE came back `Accept`, its receipt simply reporting the payment as consumed. The simulation
+ * does not enforce the fee; a real submission does ("Required fees 16546 but 14791 paid"). What
+ * the dry run does report is `total_fees_required` — 9 452 at every one of those payments — so
+ * "is this fee enough" is answered by comparing against that, here, and a short payment comes back
+ * as `underpaid` rather than as the Accept the network printed.
+ */
+export async function simulateFee(
+  indexerUrl: string,
+  envelope: unknown,
+  opts: { onBusyRetry?: () => void; fee?: bigint } = {},
+): Promise<FeeSimulation> {
   // The named indexer first, then the others: a simulation is answered the same by any of them.
   const urls = [indexerUrl, ...INDEXER_URLS.filter(u => u !== indexerUrl)]
   let resp: Response
@@ -177,33 +227,61 @@ export async function dryRunFee(
   }
 
   if (result.Reject !== undefined) {
-    throw new Error(`The network rejected this transaction in simulation: ${describeRejectReason(result.Reject)}`)
+    const reason = describeRejectReason(result.Reject)
+    return { accepted: false, kind: 'reject', reason, message: `The network rejected this transaction in simulation: ${reason}` }
   }
 
   if (result.AcceptFeeRejectRest !== undefined) {
     // Shape is [SubstateDiff, RejectReason] — the reason is the second element and the only part
     // worth reporting. Tolerant of a non-array in case the wire form ever changes.
     const pair = result.AcceptFeeRejectRest
-    const reason = Array.isArray(pair) ? pair[1] : pair
-    throw new Error(
-      'This transaction would fail after the fee was taken, so it was not priced. ' +
-      `The network reported: ${describeRejectReason(reason)}`,
-    )
+    const reason = describeRejectReason(Array.isArray(pair) ? pair[1] : pair)
+    return {
+      accepted: false, kind: 'fee-only', reason,
+      message: 'This transaction would fail after the fee was taken, so it was not priced. ' +
+        `The network reported: ${reason}`,
+    }
   }
 
   if (result.Accept === undefined) {
     // An unknown variant. Refuse rather than guess — see the note above.
     const seen = Object.keys(result).join(', ') || '(none)'
-    throw new Error(`Could not estimate the network fee: the dry run returned an unrecognised result (${seen}).`)
+    return {
+      accepted: false, kind: 'unrecognised', reason: seen,
+      message: `Could not estimate the network fee: the dry run returned an unrecognised result (${seen}).`,
+    }
   }
 
   const receipt = finalize.fee_receipt
   if (!receipt) throw new Error('Could not estimate the network fee: the dry run carried no fee receipt.')
 
-  // WHAT WAS ACTUALLY CONSUMED = reserved − refunded. Preferred over summing `cost_breakdown`
-  // because the breakdown is an open-ended map whose keys grow with the runtime (0.39 added
-  // WasmExecution, ExhaustBurn and NativeExecution to it), so a sum silently under-counts against a
-  // newer node. The breakdown is kept only as a fallback for a receipt that omits the totals.
+  const cost = measuredCost(finalize.total_fees_required, receipt)
+  if (cost === null) throw new Error('Could not estimate the network fee: the dry run reported no cost.')
+  if (opts.fee !== undefined && cost > opts.fee) {
+    const reason = `Required fees ${cost} but ${opts.fee} paid`
+    return { accepted: false, kind: 'underpaid', reason, message: `The network fee has risen to ${cost} µtTARI, above the ${opts.fee} µtTARI quoted.` }
+  }
+  return { accepted: true, cost }
+}
+
+/**
+ * The cost a dry run reports, most authoritative source first.
+ *
+ *   1. `total_fees_required` — the engine's own figure, and the only one that does not depend on
+ *      how generously the probe was funded (see simulateFee: it is the same at every payment).
+ *   2. reserved − overcharge — equal to (1) whenever the probe paid at least the cost, which every
+ *      probe here does. Kept for a node that omits (1).
+ *   3. the cost breakdown, summed — an open-ended map whose keys grow with the runtime (0.39 added
+ *      WasmExecution, ExhaustBurn and NativeExecution to it), so a sum can under-count against a
+ *      newer node. Last resort only.
+ */
+function measuredCost(
+  required: number | string | undefined,
+  receipt: NonNullable<NonNullable<DryRunResponse['result']>['finalize']>['fee_receipt'] & object,
+): bigint | null {
+  const req = toBigInt(required)
+  if (req !== null && req > 0n) return req
+
   const paid = toBigInt(receipt.total_fees_paid)
   const overcharge = toBigInt(receipt.total_fee_overcharge)
   if (paid !== null && overcharge !== null && paid >= overcharge) {
@@ -220,6 +298,5 @@ export async function dryRunFee(
     }
     if (sum > 0n) return sum
   }
-
-  throw new Error('Could not estimate the network fee: the dry run reported no cost.')
+  return null
 }

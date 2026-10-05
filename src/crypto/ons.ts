@@ -11,6 +11,7 @@ import { createOnsClient, type BrowserSigner, type NameRecord } from '@ootle/nam
 import type { SecretKeyWallet } from '@tari-project/ootle-secret-key-wallet'
 import { Network, WasmStealthCrypto } from '@tari-project/ootle'
 import { scanOwnedUtxos } from './stealthUtxos'
+import { withFeeMargin } from './feeProbe'
 import { loadExcludedIds, loadSpentOutputs, markLocked, promoteToSpent } from './spentOutputs'
 import * as nip19 from 'nostr-tools/nip19'
 
@@ -203,47 +204,13 @@ export type OnsEstimateErrorKind = 'no-private' | 'private-settling' | 'fragment
 
 export interface OnsEstimateResult {
   ok: boolean
-  /** The µtTARI budget to reveal for the fee — the estimated network cost plus a small margin. This
+  /** The µtTARI budget to reveal for the fee — the estimated network cost plus the shared margin (feeProbe.withFeeMargin). This
    *  is the amount the user actually pays (the whole revealed budget is consumed; overcharge is not
    *  refunded), so it's what we show on the confirm gate. */
   feeMicroTari?: bigint
   error?: string
   /** Present iff `!ok`. Lets each problem render its own instruction instead of one generic card. */
   errorKind?: OnsEstimateErrorKind
-}
-
-/**
- * The safety margin over the dry-run estimate. TEN PERCENT, and the number is not arbitrary.
- *
- * WHAT IT IS PROTECTING AGAINST. The whole revealed budget is consumed on this path — overcharge is
- * not refunded — so the margin is money spent every time. But a budget BELOW the real cost is not a
- * partial refund, it is `AcceptFeeRejectRest`: the fee goes anyway and no name is written. Losing
- * the entire fee AND the registration costs far more than the margin ever saves, so the trade is
- * asymmetric and should lean generous. The question is only how generous.
- *
- * WHY NOT THE 2% THIS USED TO BE. Measured dry-run-to-actual drift on this engine is 2.7%, which 2%
- * does not cover. It has not been biting because of the 100 µtTARI FLOOR below, not because of the
- * percentage — at ONS's real costs the floor is doing all the work:
- *
- *     real fee    2% of it    floor wins?   budget    effective margin
- *     1 400          28          yes         1 500        +7.1%
- *     2 451          49          yes         2 551        +4.1%
- *     5 000         100          tie         5 100        +2.0%
- *    10 000         200          no         10 200        +2.0%
- *
- * So the old formula was safe by coincidence and stopped being safe the moment a registration cost
- * more than about 5 000 µtTARI — where it would burn the fee on every attempt. 10% is ~3.7x the
- * measured drift at every scale rather than at some of them, and costs 140 µtTARI on a 1 400 µtTARI
- * fee: a fortieth of a thousandth of a TARI, against losing the lot.
- *
- * WHY NOT THE WRITER'S 25%. Its own comment reaches that number by reasoning "lean generous", not
- * from a measurement. 25% is ~9x the drift and is consumed on every single registration.
- *
- * The floor stays: it is what covers a fee small enough that a percentage rounds to nothing.
- */
-function withOnsFeeMargin(required: bigint): bigint {
-  const margin = (required * 10n) / 100n
-  return required + (margin > 100n ? margin : 100n)
 }
 
 /**
@@ -295,8 +262,8 @@ function caravelFeeSource(wallet: SecretKeyWallet, senderAddress: string): Pick<
 
 /**
  * Estimate the fee (µtTARI) to register `name` + its nostr record, WITHOUT committing anything —
- * a simulated dry-run on the network, nothing spent. Returns the budget to reveal (estimate + a
- * small margin), which is what to show the user before they confirm.
+ * a simulated dry-run on the network, nothing spent. Returns the budget to reveal (estimate +
+ * the shared margin, feeProbe.withFeeMargin), which is what to show the user before they confirm.
  */
 export async function estimateOnsRegistration(
   wallet: SecretKeyWallet,
@@ -309,7 +276,7 @@ export async function estimateOnsRegistration(
   try {
     const writer = await ons.withBrowserSigner({ wallet, senderAddress, ...caravelFeeSource(wallet, senderAddress) })
     const { feeMicroTari } = await writer.estimateRegisterWithNostr(name, ownNpub)
-    return { ok: true, feeMicroTari: withOnsFeeMargin(feeMicroTari) }
+    return { ok: true, feeMicroTari: withFeeMargin(feeMicroTari) }
   } catch (e) {
     const message = (e as Error).message || 'Could not estimate the fee.'
     return { ok: false, errorKind: classifyEstimateError(message, senderAddress), error: message }

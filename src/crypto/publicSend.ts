@@ -60,7 +60,7 @@ import { extractAccountAddress } from './accountAddress'
 import { loadAccountAddress, saveAccountAddress } from './accountStore'
 import { resolveAccountInputs } from './substates'
 import { nextMaxEpoch } from './epoch'
-import { dryRunFee, withFeeMargin } from './feeProbe'
+import { dryRunFee, simulateFee, withFeeMargin, type FeeSimulation } from './feeProbe'
 import { awaitFinality } from './finality'
 import { INDEXER_URL } from './indexerConfig'
 
@@ -278,6 +278,14 @@ export interface PreparedPublicSend {
   recipientAmount: bigint
   /** Total leaving the vault — the withdraw, and the statement's revealed input. */
   withdrawAmount: bigint
+  /** What the pricing dry run measured, before the margin (µtTARI). */
+  dryRunCost: bigint
+  /**
+   * Dry-run a twin of the real transaction at `feeMicrotari` (default: the prepared fee) and return
+   * the verdict. Free — nothing is submitted. The confirm step runs it at the exact fee; the harness
+   * runs it at the cost and one below to find the boundary.
+   */
+  simulate: (feeMicrotari?: bigint) => Promise<FeeSimulation>
   /** Send it. Resolves once the transaction has a final on-chain decision. */
   submit: (onProgress?: (msg: string) => void) => Promise<PublicSendResult>
 }
@@ -394,6 +402,8 @@ export async function preparePublicSend(
 
   return {
     feeMicrotari: fee,
+    dryRunCost: cost,
+    simulate: async (feeMicrotari: bigint = fee) => simulateFee(INDEXER_URL, (await buildEnvelope(feeMicrotari, true)).envelope, { fee: feeMicrotari }),
     recipientAmount: real.split.recipientAmount,
     withdrawAmount: real.split.withdrawAmount,
     submit: async (onSubmitProgress?: (msg: string) => void) => {

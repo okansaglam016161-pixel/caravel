@@ -110,7 +110,7 @@ import { extractAccountAddress } from './accountAddress'
 import { loadAccountAddress, saveAccountAddress } from './accountStore'
 import { resolveAccountInputs } from './substates'
 import { nextMaxEpoch } from './epoch'
-import { dryRunFee, withFeeMargin } from './feeProbe'
+import { dryRunFee, simulateFee, withFeeMargin, type FeeSimulation } from './feeProbe'
 import { readOutputSubstateIds } from './outputIds'
 import { probeFeeFor } from './confidentialSend'
 import {
@@ -449,6 +449,14 @@ export interface PreparedReveal {
   inputCount: number
   /** Total value of the stealth inputs being spent. */
   inputTotal: bigint
+  /** What the pricing dry run measured, before the margin (µtTARI). */
+  dryRunCost: bigint
+  /**
+   * Dry-run a twin of the real transaction at `feeMicrotari` (default: the prepared fee) and return
+   * the verdict. Free — nothing is submitted. The confirm step runs it at the exact fee; the harness
+   * runs it at the cost and one below to find the boundary.
+   */
+  simulate: (feeMicrotari?: bigint) => Promise<FeeSimulation>
   /** Send it. Resolves once the transaction has a final on-chain decision. */
   submit: (onProgress?: (msg: string) => void) => Promise<RevealResult>
 }
@@ -631,6 +639,8 @@ export async function prepareReveal(
 
   return {
     feeMicrotari: fee,
+    dryRunCost: cost,
+    simulate: async (feeMicrotari: bigint = fee) => simulateFee(INDEXER_URL, (await buildEnvelope(feeMicrotari, true)).envelope, { fee: feeMicrotari }),
     revealedAmount: real.split.amount,
     revealedOutput: real.split.revealedOutput,
     changeAmount: real.split.changeAmount,

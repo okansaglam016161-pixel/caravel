@@ -53,6 +53,7 @@ import { claimFaucet, prepareClaim, FaucetClaimRefused } from '../src/crypto/fau
 import { FAUCET_COMPONENT_ADDRESS, FAUCET_VAULT_ADDRESS, faucetReceiptId } from '../src/crypto/faucetConfig'
 import { decodeFaucetState, decodeFaucetVault, faucetStatusFrom } from '../src/crypto/faucetStatus'
 import { readFinalizedVerdict, describeFailure } from '../src/crypto/txResult'
+import type { FeeSimulation } from '../src/crypto/feeProbe'
 import {
   loadExcludedIds, loadSpentOutputs, markLocked, release, heldOutOfBalance,
   ABSENT_SCANS_TO_FORGET, MIN_RETENTION_MS, UNRESOLVED_AFTER_ATTEMPTS, UNRESOLVED_AFTER_MS,
@@ -1916,6 +1917,51 @@ async function cmdProveCnsFee(h: Harnessed): Promise<void> {
 
 // ── Entry point ──────────────────────────────────────────────────────────────
 
+/**
+ * READ-ONLY. Where the network's fee check actually draws the line.
+ *
+ * Every write path pays its fee with PayFeeFromBucket, which spends the whole reserved bucket — the
+ * margin over the measured cost is never refunded. So the margin is money spent on every
+ * transaction, and the only question it answers is "how far can the real cost drift from the dry
+ * run". This measures the floor of that: each action is priced, then a twin of the REAL
+ * transaction is dry-run at the quoted fee, at exactly the measured cost, and below it. Nothing is
+ * submitted — `simulate` only ever dry-runs.
+ *
+ * WHAT IT FOUND (2026-10-05): the dry run itself does not enforce the fee — every payment down to
+ * 1 000 µtTARI came back `Accept`. It does report `total_fees_required`, identical at every
+ * payment, and simulateFee compares against that; so the lines below read Accept at the cost and
+ * UNDERPAID one microtari under it. The requirement does not move with the fee paid.
+ */
+async function cmdFeeBoundary(h: Harnessed, amount: bigint, dest?: string): Promise<void> {
+  rule(`fee-boundary  ·  ${amt(amount)}  ·  DRY RUNS ONLY, nothing is submitted`)
+  await primeAccount(h)
+
+  type Probe = { dryRunCost: bigint; feeMicrotari: bigint; simulate: (fee?: bigint) => Promise<FeeSimulation> }
+  const cases: [string, () => Promise<Probe>][] = [
+    ['make-public  (reveal)', () => prepareReveal(h.wallet, h.address, { amountMicrotari: amount, onProgress: stage })],
+    ['make-private (conceal)', () => prepareConceal(h.wallet, h.address, { amountMicrotari: amount, onProgress: stage })],
+  ]
+  void dest
+
+  const show = (s: FeeSimulation) => s.accepted ? `Accept  (required ${s.cost})` : `${s.kind.toUpperCase()} — ${s.reason}`
+  for (const [label, prepare] of cases) {
+    rule(label)
+    let p: Probe
+    try { p = await prepare() } catch (e) { field('prepare', `FAILED — ${e instanceof Error ? e.message : String(e)}`); continue }
+    field('dry-run cost', amt(p.dryRunCost))
+    field('quoted fee', `${amt(p.feeMicrotari)}   (cost + margin ${p.feeMicrotari - p.dryRunCost} µtTARI)`)
+    const probes: [string, bigint][] = [
+      ['at the quoted fee', p.feeMicrotari], ['at exactly the cost', p.dryRunCost], ['at cost − 1', p.dryRunCost - 1n],
+      ['at cost − 100', p.dryRunCost - 100n], ['at cost − 1000', p.dryRunCost - 1000n], ['at half the cost', p.dryRunCost / 2n],
+      ['at 1000', 1000n],
+    ]
+    for (const [what, fee] of probes) {
+      try { field(what, `${fee} µtTARI → ${show(await p.simulate(fee))}`) }
+      catch (e) { field(what, `${fee} µtTARI → THREW — ${e instanceof Error ? e.message : String(e)}`) }
+    }
+  }
+}
+
 const USAGE = `
 CARAVEL TERMINAL HARNESS — the real crypto/tx paths against the live Esmeralda indexer.
 
@@ -1947,6 +1993,10 @@ READ-ONLY — safe to run freely, costs nothing:
                               WRITE. Submits a real send, then prints the settle tick by tick with
                               the OLD direction test beside the NEW evidence test, so the window
                               where they disagree is visible. The no-change case runs without --yes.
+  fee-boundary <amount> [ootle-address]
+                              Price each write action, then dry-run the real transaction at the
+                              quoted fee, at exactly the measured cost, and at cost − 1. Shows where
+                              the network's fee check draws the line. Dry runs only.
   prove-spend                 End-to-end proof, against the live indexer, that a spent coin leaves
                               BOTH the balance and coin selection. Submits nothing, spends nothing,
                               and releases what it locked.
@@ -2050,6 +2100,10 @@ export async function main(argv: string[]): Promise<void> {
       case 'prove-settle':
         if (!args[1] || !args[2]) throw new Error('prove-settle needs a recipient address and an amount.')
         await cmdProveSettle(h, args[1], parseAmount(args[2]), yes)
+        break
+      case 'fee-boundary':
+        if (!args[1]) throw new Error('fee-boundary needs an amount.')
+        await cmdFeeBoundary(h, parseAmount(args[1]), args[2])
         break
       case 'faucet-status':
         await cmdFaucetStatus(h)

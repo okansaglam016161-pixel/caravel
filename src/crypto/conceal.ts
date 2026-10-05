@@ -50,15 +50,16 @@ import { extractAccountAddress } from './accountAddress'
 import { loadAccountAddress, saveAccountAddress } from './accountStore'
 import { resolveAccountInputs } from './substates'
 import { nextMaxEpoch } from './epoch'
-import { dryRunFee, withFeeMargin } from './feeProbe'
+import { dryRunFee, simulateFee, withFeeMargin, type FeeSimulation } from './feeProbe'
 import { readOutputSubstateIds } from './outputIds'
 import { awaitFinality } from './finality'
 import { INDEXER_URL } from './indexerConfig'
 
 
 /**
- * Fee reserved for the DRY RUN only — never submitted for real, and refunded as overcharge in the
- * simulation. Mirrors the faucet's probe for the same reason: an under-funded probe aborts before
+ * Fee reserved for the DRY RUN only — never submitted for real, and free because a simulation
+ * charges nothing. (A REAL transaction spends its whole reserved fee; see feeProbe's margin note.)
+ * Mirrors the faucet's probe for the same reason: an under-funded probe aborts before
  * the network has priced the whole transaction, reporting a cost far below the truth.
  */
 const FEE_PROBE_MICROTARI = 50_000n
@@ -234,6 +235,14 @@ export interface PreparedConceal {
   concealedAmount: bigint
   /** Total leaving the vault — the withdraw, and the statement's revealed input. */
   withdrawAmount: bigint
+  /** What the pricing dry run measured, before the margin (µtTARI). */
+  dryRunCost: bigint
+  /**
+   * Dry-run a twin of the real transaction at `feeMicrotari` (default: the prepared fee) and return
+   * the verdict. Free — nothing is submitted. The confirm step runs it at the exact fee; the harness
+   * runs it at the cost and one below to find the boundary.
+   */
+  simulate: (feeMicrotari?: bigint) => Promise<FeeSimulation>
   /** Send it. Resolves once the transaction has a final on-chain decision. */
   submit: (onProgress?: (msg: string) => void) => Promise<ConcealResult>
 }
@@ -341,6 +350,8 @@ export async function prepareConceal(
 
   return {
     feeMicrotari: fee,
+    dryRunCost: cost,
+    simulate: async (feeMicrotari: bigint = fee) => simulateFee(INDEXER_URL, (await buildEnvelope(feeMicrotari, true)).envelope, { fee: feeMicrotari }),
     concealedAmount: real.split.stealthAmount,
     withdrawAmount: real.split.withdrawAmount,
     submit: async (onSubmitProgress?: (msg: string) => void) => {

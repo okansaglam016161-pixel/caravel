@@ -66,7 +66,8 @@ import { markFaucetClaimed, readFaucetStatus } from './faucetStatus'
  * Fee reserved for the DRY RUN only — never submitted for real. It has to be comfortably above the
  * true cost so the simulation runs to completion (an under-funded probe aborts before the network
  * has priced the whole transaction), and far under the claim amount so the statement still
- * balances. Unconsumed reservation is reported back as overcharge and costs nothing.
+ * balances. A dry run charges nothing, so over-reserving here is free. (The REAL claim is another
+ * matter: its whole reserved fee is spent, overcharge included — see feeProbe's margin note.)
  */
 export const FEE_PROBE_MICROTARI = 50_000n
 

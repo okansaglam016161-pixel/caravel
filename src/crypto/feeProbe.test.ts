@@ -11,7 +11,7 @@
 // recipient's vault declared.
 
 import { describe, expect, it, afterEach, vi } from 'vitest'
-import { dryRunFee, withFeeMargin, FEE_MARGIN_PERCENT } from './feeProbe'
+import { dryRunFee, simulateFee, withFeeMargin, FEE_MARGIN_FLOOR, FEE_MARGIN_PERCENT } from './feeProbe'
 import { NETWORK_BUSY_MESSAGE, retryTiming } from './indexerRetry'
 
 const URL = 'https://indexer.test'
@@ -168,14 +168,71 @@ describe('transport failures', () => {
   })
 })
 
-describe('withFeeMargin', () => {
-  it('adds the margin, rounding down in bigint', () => {
-    expect(withFeeMargin(9_941n)).toBe((9_941n * (100n + FEE_MARGIN_PERCENT)) / 100n)
-    expect(withFeeMargin(9_941n)).toBe(12_426n)
+describe('withFeeMargin — 2%, floor 200 µtTARI', () => {
+  it('adds 2% once it clears the floor, rounding down in bigint', () => {
+    expect(FEE_MARGIN_PERCENT).toBe(2n)
+    expect(FEE_MARGIN_FLOOR).toBe(200n)
+    expect(withFeeMargin(15_199n)).toBe(15_502n)   // 2% = 303
+    expect(withFeeMargin(20_001n)).toBe(20_401n)   // 2% = 400.02 → 400
+  })
+
+  it('adds the floor when 2% is smaller', () => {
+    expect(withFeeMargin(9_452n)).toBe(9_652n)     // 2% = 189 → 200
+    expect(withFeeMargin(1n)).toBe(201n)
+    expect(withFeeMargin(10_000n)).toBe(10_200n)   // 2% = 200 exactly — the floor and the percentage agree
   })
 
   it('stays exact past Number.MAX_SAFE_INTEGER', () => {
-    expect(withFeeMargin(18_446_744_073_709_551_615n)).toBe(23_058_430_092_136_939_518n)
+    expect(withFeeMargin(18_446_744_073_709_551_615n)).toBe(18_446_744_073_709_551_615n + 368_934_881_474_191_032n)
+  })
+})
+
+// ── simulateFee: the dry run does not enforce the fee, so this does ─────────────
+//
+// Measured 2026-10-05 (harness fee-boundary): a reveal costing 9 452 dry-ran as `Accept` while
+// paying 1 000, its receipt reporting the payment as consumed and overcharge 0. Only
+// `total_fees_required` told the truth — 9 452 at every payment. These bodies are that shape.
+
+describe('simulateFee — the required fee, and whether a payment covers it', () => {
+  const underfunded = (paid: number, required: number) => ({
+    result: {
+      finalize: {
+        result: { Accept: { up_substates: [], down_substates: [] } },
+        fee_receipt: { total_fee_payment: paid, total_fees_paid: paid, total_fee_overcharge: 0, exhaust_burn: paid },
+        total_fees_required: required,
+      },
+    },
+  })
+
+  it('prefers total_fees_required over paid − overcharge', async () => {
+    respond(underfunded(1_000, 9_452))
+    expect(await simulateFee(URL, {})).toEqual({ accepted: true, cost: 9_452n })
+    expect(await dryRunFee(URL, {})).toBe(9_452n)
+  })
+
+  it('an Accept that paid less than required is `underpaid`, not accepted', async () => {
+    respond(underfunded(9_451, 9_452))
+    const sim = await simulateFee(URL, {}, { fee: 9_451n })
+    expect(sim.accepted).toBe(false)
+    expect(sim.accepted === false && sim.kind).toBe('underpaid')
+    expect(sim.accepted === false && sim.reason).toBe('Required fees 9452 but 9451 paid')
+  })
+
+  it('a payment at exactly the requirement is accepted', async () => {
+    respond(underfunded(9_452, 9_452))
+    expect(await simulateFee(URL, {}, { fee: 9_452n })).toEqual({ accepted: true, cost: 9_452n })
+  })
+
+  it('falls back to paid − overcharge on a node that omits the requirement', async () => {
+    respond(accept())
+    expect(await simulateFee(URL, {})).toEqual({ accepted: true, cost: 9_941n })
+  })
+
+  it('returns a Reject as data, with the sentence dryRunFee throws', async () => {
+    respond({ result: { finalize: { result: { Reject: { ExecutionFailure: 'boom' } }, fee_receipt: feeReceipt } } })
+    const sim = await simulateFee(URL, {})
+    expect(sim.accepted === false && sim.kind).toBe('reject')
+    await expect(dryRunFee(URL, {})).rejects.toThrow(/rejected this transaction in simulation/)
   })
 })
 

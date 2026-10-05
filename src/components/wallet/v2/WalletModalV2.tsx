@@ -91,6 +91,8 @@ export type MoveView =
        * happened. Same value the form shows, so the two screens cannot disagree.
        */
       leftoverNote?: string
+      /** Why review is asking again: the quote was re-checked at confirm and re-priced. Nothing was sent. */
+      notice?: string
     }
   | { step: 'moving'; dir: Dir; amountMicrotari: bigint; progress: string }
   | { step: 'settling'; dir: Dir; amountMicrotari: bigint; txId: string }
@@ -507,6 +509,12 @@ function MoveBody({ m, p, onClose }: {
         {m.dir === 'reveal' && (
           <div style={{ fontSize: 12.5, color: C.mutedDim, marginTop: 12, textAlign: 'center' }}>
             Public funds are visible on chain.
+          </div>
+        )}
+
+        {m.notice && (
+          <div role="status" style={{ fontSize: 12.5, color: 'var(--warn)', marginTop: 12, textAlign: 'center', lineHeight: 1.5 }}>
+            {m.notice}
           </div>
         )}
 

@@ -117,7 +117,9 @@ import {
   StaticSigner, reachableTotal, scanOwnedUtxos, selectStealthInputs, type OwnedUtxo,
 } from './stealthUtxos'
 import { awaitFinality } from './finality'
-import { loadExcludedIds, markLocked, promoteToSpent, release } from './spentOutputs'
+import { markLocked, promoteToSpent, release } from './spentOutputs'
+import { loadSelectionExcludedIds, newReservationToken, releaseCoins, reserveCoins } from './coinReservations'
+import { confirmer } from './quote'
 import { INDEXER_URL } from './indexerConfig'
 
 
@@ -454,7 +456,16 @@ export interface PreparedReveal {
    * runs it at the cost and one below to find the boundary.
    */
   simulate: (feeMicrotari?: bigint) => Promise<FeeSimulation>
-  /** Send it. Resolves once the transaction has a final on-chain decision. */
+  /** When it was priced. Past QUOTE_MAX_AGE_MS the confirm check refuses it (crypto/quote). */
+  preparedAt: number
+  /**
+   * The confirm-time check: quote age, inputs unchanged, and a dry run of the final transaction at
+   * the exact fee. Throws QuoteChanged — NOTHING SENT — when it no longer holds; re-prepare.
+   */
+  confirm: () => Promise<void>
+  /** Let go of whatever this prepare holds (cancel, or before re-pricing). Idempotent. */
+  release: () => void
+  /** Send it — the confirm check first, unless confirm() just passed. Resolves on a final decision. */
   submit: (onProgress?: (msg: string) => void) => Promise<RevealResult>
 }
 
@@ -501,7 +512,8 @@ export async function prepareReveal(
   // crypto/spentOutputs. A reveal selects from the identical set, so it inherits the identical bug
   // if it does not exclude.
   const utxos = await scanOwnedUtxos(crypto, viewSecret, {
-    excluded: loadExcludedIds(ownerAddress),
+    // Spent, on the wire, or held by another prepared transaction — see crypto/coinReservations.
+    excluded: loadSelectionExcludedIds(ownerAddress),
     walletAddress: ownerAddress,
   })
 
@@ -633,11 +645,25 @@ export async function prepareReveal(
   // outputs this transaction consumes. Read here, at the only point where both the selection and
   // the built transaction are known to agree.
   const spentInputIds = selection.inputs.map(u => u.substateId)
+  const preparedAt = Date.now()
+  const simulate = async (feeMicrotari: bigint = fee) => simulateFee(INDEXER_URL, (await buildEnvelope(feeMicrotari, true)).envelope, { fee: feeMicrotari })
+  const check = confirmer({ preparedAt, simulate: () => simulate(fee), inputs: { ids: spentInputIds } })
+
+  // HELD until submitted, released or expired, so nothing else selects these coins while this
+  // reveal sits on its review screen. A clash means two prepares raced; the first keeps them.
+  const reservation = newReservationToken()
+  if (!reserveCoins(ownerAddress, spentInputIds, reservation)) {
+    releaseCoins(ownerAddress, reservation)
+    throw new Error('Another transaction being prepared is using some of these funds. Try again in a moment.')
+  }
 
   return {
     feeMicrotari: fee,
     dryRunCost: cost,
-    simulate: async (feeMicrotari: bigint = fee) => simulateFee(INDEXER_URL, (await buildEnvelope(feeMicrotari, true)).envelope, { fee: feeMicrotari }),
+    simulate,
+    preparedAt,
+    confirm: check.confirm,
+    release: () => releaseCoins(ownerAddress, reservation),
     revealedAmount: real.split.amount,
     revealedOutput: real.split.revealedOutput,
     changeAmount: real.split.changeAmount,
@@ -645,6 +671,8 @@ export async function prepareReveal(
     inputTotal: selection.total,
     submit: async (onSubmitProgress?: (msg: string) => void) => {
       const slog = (m: string) => onSubmitProgress?.(m)
+      slog('Checking the fee…')
+      await check.ensureConfirmed()
       slog('Submitting…')
       const sub = await submitOnce(() => provider.submitTransaction(real.envelope), {
         landed: inputsStillUnspent(spentInputIds),
@@ -671,6 +699,8 @@ export async function prepareReveal(
 //                              legible — not that the transaction failed — so unlocking on one
 //                              would risk handing a spent coin back to the next selection.
       markLocked(ownerAddress, spentInputIds, txId)
+      // The spend record holds them now; the review-time hold is done.
+      releaseCoins(ownerAddress, reservation)
 
       slog('Confirming on-chain…')
       // TOLD, NOT ASKED — see crypto/finality. The verdict is still read by crypto/txResult, so

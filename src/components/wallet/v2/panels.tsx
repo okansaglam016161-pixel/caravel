@@ -380,6 +380,8 @@ export type SendView =
        */
       /** MAX: everything reachable is sent, and the fee comes out of it. `amountMicrotari` is what arrives. */
       sendAll?: boolean
+      /** Why review is asking again: the quote was re-checked at confirm and re-priced. Nothing was sent. */
+      notice?: string
     }
   /** `recipient` is display-only — the V3 frame names who the payment is going to while it runs. */
   | { step: 'sending'; recipient: string; amountMicrotari: bigint; progress: string; source: SendSource }
@@ -787,6 +789,12 @@ export function SendPanel({ view, hidden, onSource, onRecipient, onAmount, onNot
             </div>
           )}
         </div>
+
+        {view.notice && (
+          <div role="status" style={{ fontSize: 12.5, color: 'var(--warn)', marginTop: 12, textAlign: 'center', lineHeight: 1.5 }}>
+            {view.notice}
+          </div>
+        )}
 
         {view.sendAll && !pricing && (
           <div style={{ fontSize: 12.5, color: C.mutedDim, marginTop: 12, textAlign: 'center' }}>

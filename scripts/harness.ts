@@ -49,7 +49,7 @@ import { readRevealedBalance } from '../src/crypto/revealedBalance'
 import { prepareConceal, MIN_CONCEAL_MICROTARI } from '../src/crypto/conceal'
 import { prepareReveal, MIN_REVEAL_MICROTARI, maxRevealable } from '../src/crypto/reveal'
 import { prepareConfidentialSend, sendConfidential, describeMicrotari, maxStealthSend, MAX_FEE } from '../src/crypto/confidentialSend'
-import { claimFaucet, prepareClaim, FaucetClaimRefused } from '../src/crypto/faucet'
+import { claimFaucet, prepareClaim, FaucetClaimRefused, type PreparedClaim } from '../src/crypto/faucet'
 import { FAUCET_COMPONENT_ADDRESS, FAUCET_VAULT_ADDRESS, faucetReceiptId } from '../src/crypto/faucetConfig'
 import { decodeFaucetState, decodeFaucetVault, faucetStatusFrom } from '../src/crypto/faucetStatus'
 import { readFinalizedVerdict, describeFailure } from '../src/crypto/txResult'
@@ -750,7 +750,14 @@ async function cmdMakePrivate(h: Harnessed, requested: bigint | 'all', yes: bool
   printDryRun(mark)
   printNet(mark)
 
-  if (!yes) { console.log('\n  STOPPED BEFORE SUBMIT. Nothing was sent. Re-run with --yes to submit.'); return }
+  if (!yes) {
+    rule('confirm check  (crypto/quote — what Confirm runs before anything is sent)')
+    await prepared.confirm()
+    field('confirm check', 'PASSES — fresh, inputs unchanged, final transaction accepted at the exact fee')
+    prepared.release()
+    console.log('\n  STOPPED BEFORE SUBMIT. Nothing was sent. Re-run with --yes to submit.')
+    return
+  }
 
   rule('submit')
   const markSubmit = net.length
@@ -782,7 +789,14 @@ async function cmdMakePublic(h: Harnessed, amount: bigint, yes: boolean): Promis
   printDryRun(mark)
   printNet(mark)
 
-  if (!yes) { console.log('\n  STOPPED BEFORE SUBMIT. Nothing was sent. Re-run with --yes to submit.'); return }
+  if (!yes) {
+    rule('confirm check  (crypto/quote — what Confirm runs before anything is sent)')
+    await prepared.confirm()
+    field('confirm check', 'PASSES — fresh, inputs unchanged, final transaction accepted at the exact fee')
+    prepared.release()
+    console.log('\n  STOPPED BEFORE SUBMIT. Nothing was sent. Re-run with --yes to submit.')
+    return
+  }
 
   rule('submit')
   const markSubmit = net.length
@@ -836,7 +850,14 @@ async function cmdSend(h: Harnessed, dest: string, amount: bigint | 'all', yes: 
   printDryRun(mark)
   printNet(mark)
 
-  if (!yes) { console.log('\n  STOPPED BEFORE SUBMIT. Nothing was sent. Re-run with --yes to submit.'); return }
+  if (!yes) {
+    rule('confirm check  (crypto/quote — what Confirm runs before anything is sent)')
+    await prepared.confirm()
+    field('confirm check', 'PASSES — fresh, inputs unchanged, final transaction accepted at the exact fee')
+    prepared.release()
+    console.log('\n  STOPPED BEFORE SUBMIT. Nothing was sent. Re-run with --yes to submit.')
+    return
+  }
 
   rule('submit')
   const markSubmit = net.length
@@ -1059,8 +1080,28 @@ async function cmdFaucetClaim(h: Harnessed, yes: boolean): Promise<void> {
   rule('faucet-claim  (crypto/faucet.claimFaucet)')
   console.log(yes
     ? '  ⚠  WRITE COMMAND. Submits a real claim. One per key, ever.'
-    : '  Add --yes to actually claim. Nothing is submitted without it — faucet-status shows the dry run.')
-  if (!yes) return
+    : '  Add --yes to actually claim. Without it the claim is PRICED and CHECKED (dry runs), never sent.')
+  if (!yes) {
+    rule('price + confirm check  (prepareClaim → confirm — dry runs only)')
+    let who = h
+    let pc: PreparedClaim
+    try {
+      pc = await prepareClaim(who.wallet, who.address, stage)
+    } catch (e) {
+      if (!(e instanceof FaucetClaimRefused)) throw e
+      field('this wallet', `${e.refusal} — pricing a throwaway wallet instead (in memory only, never funded, never written)`)
+      const { mnemonic } = await createWalletSeed()
+      const id = await deriveIdentity(mnemonic, 'cipherseed')
+      who = { ...h, wallet: id.wallet, address: await id.wallet.getAddress() }
+      pc = await prepareClaim(who.wallet, who.address, stage)
+    }
+    field('banner', `You receive ${describeMicrotari(pc.privateAmount)} (${describeMicrotari(pc.claimAmount)} − ${describeMicrotari(pc.fee)} fee)`)
+    field('dry-run cost', `${pc.dryRunCost} µtTARI  → fee ${pc.fee} (margin ${pc.fee - pc.dryRunCost})`)
+    await pc.confirm()
+    field('confirm check', 'PASSES — fresh, receipt absent, final claim accepted at the exact fee')
+    console.log('\n  STOPPED BEFORE SUBMIT. Nothing was sent.')
+    return
+  }
 
   const mark = net.length
   const result = await claimFaucet(h.wallet, h.address, stage)
@@ -1940,7 +1981,7 @@ async function cmdFeeBoundary(h: Harnessed, amount: bigint, dest?: string): Prom
   rule(`fee-boundary  ·  ${amt(amount)}  ·  DRY RUNS ONLY, nothing is submitted`)
   await primeAccount(h)
 
-  type Probe = { dryRunCost: bigint; feeMicrotari: bigint; simulate: (fee?: bigint) => Promise<FeeSimulation> }
+  type Probe = { dryRunCost: bigint; feeMicrotari: bigint; simulate: (fee?: bigint) => Promise<FeeSimulation>; release: () => void }
   const cases: [string, () => Promise<Probe>][] = [
     ['make-public  (reveal)', () => prepareReveal(h.wallet, h.address, { amountMicrotari: amount, onProgress: stage })],
     ['make-private (conceal)', () => prepareConceal(h.wallet, h.address, { amountMicrotari: amount, onProgress: stage })],
@@ -1966,6 +2007,8 @@ async function cmdFeeBoundary(h: Harnessed, amount: bigint, dest?: string): Prom
       try { field(what, `${fee} µtTARI → ${show(await p.simulate(fee))}`) }
       catch (e) { field(what, `${fee} µtTARI → THREW — ${e instanceof Error ? e.message : String(e)}`) }
     }
+    // Nothing is sent, so the coins this prepare reserved go back for the next case.
+    p.release()
   }
 }
 

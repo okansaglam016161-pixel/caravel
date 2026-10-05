@@ -12,7 +12,9 @@ import type { SecretKeyWallet } from '@tari-project/ootle-secret-key-wallet'
 import { Network, WasmStealthCrypto } from '@tari-project/ootle'
 import { scanOwnedUtxos } from './stealthUtxos'
 import { withFeeMargin } from './feeProbe'
-import { loadExcludedIds, loadSpentOutputs, markLocked, promoteToSpent } from './spentOutputs'
+import { loadSelectionExcludedIds, newReservationToken, releaseCoins, reserveCoins } from './coinReservations'
+import { confirmer } from './quote'
+import { loadSpentOutputs, markLocked, promoteToSpent } from './spentOutputs'
 import * as nip19 from 'nostr-tools/nip19'
 
 /**
@@ -213,7 +215,20 @@ export interface OnsPreparedRegistration {
   feeInputId: string
   /** Free dry run of a twin at the same fee; accepted only when the requirement is within it. */
   simulate: () => Promise<{ accepted: boolean; requiredFee?: bigint; reason?: string }>
-  /** Send it, once. Never throws: every outcome comes back labelled, as registerOnsName's does. */
+  /** When it was priced. Past QUOTE_MAX_AGE_MS the confirm check refuses it (crypto/quote). */
+  preparedAt: number
+  /**
+   * The confirm-time check: quote age, the fee coin still unspent, and a dry run of the final
+   * transaction at the exact fee. Throws QuoteChanged — NOTHING SENT — when it no longer holds.
+   */
+  confirm: () => Promise<void>
+  /** Let go of the fee coin this prepare reserved (cancel, or before re-pricing). Idempotent. */
+  release: () => void
+  /**
+   * Send it, once — the confirm check first, unless confirm() just passed. Every on-chain outcome
+   * comes back labelled, as registerOnsName's does; the one throw is QuoteChanged, and it means
+   * nothing was sent.
+   */
   submit: () => Promise<OnsRegisterResult>
 }
 
@@ -270,7 +285,8 @@ function caravelFeeSource(wallet: SecretKeyWallet, senderAddress: string): Pick<
       const crypto = new WasmStealthCrypto(Network.Esmeralda)
       const viewSecret = await wallet.getViewSecret()
       return scanOwnedUtxos(crypto, viewSecret, {
-        excluded: loadExcludedIds(senderAddress),
+        // Spent, on the wire, or held by another prepared transaction — see crypto/coinReservations.
+        excluded: loadSelectionExcludedIds(senderAddress),
         walletAddress: senderAddress,
       })
     },
@@ -297,6 +313,20 @@ export async function estimateOnsRegistration(
       wallet, senderAddress, ...caravelFeeSource(wallet, senderAddress), onSubmitted: lock.onSubmitted,
     })
     const prepared = await writer.prepareRegisterWithNostr(name, ownNpub, withFeeMargin)
+    const preparedAt = Date.now()
+    const check = confirmer({
+      preparedAt,
+      simulate: async () => {
+        const v = await prepared.simulate()
+        return v.accepted ? { accepted: true } : { accepted: false, kind: /^Required fees/.test(v.reason ?? '') ? 'underpaid' : 'reject', reason: v.reason }
+      },
+      inputs: { ids: [prepared.feeInputId] },
+    })
+    // HELD until submitted, released or expired, so a send or a reveal prepared meanwhile cannot
+    // select the coin this registration's fee comes from. See crypto/coinReservations.
+    const reservation = newReservationToken()
+    reserveCoins(senderAddress, [prepared.feeInputId], reservation)
+    const release = () => releaseCoins(senderAddress, reservation)
     return {
       ok: true,
       feeMicroTari: prepared.feeMicroTari,
@@ -304,7 +334,19 @@ export async function estimateOnsRegistration(
         feeMicroTari: prepared.feeMicroTari,
         feeInputId: prepared.feeInputId,
         simulate: () => prepared.simulate(),
-        submit: () => settleRegistration(lock, () => prepared.submit()),
+        preparedAt,
+        confirm: check.confirm,
+        release,
+        submit: async () => {
+          await check.ensureConfirmed()
+          try {
+            return await settleRegistration(lock, () => prepared.submit())
+          } finally {
+            // Submitted (the spend record's lock took over) or refused before sending: either way
+            // the review-time hold is done.
+            release()
+          }
+        },
       },
     }
   } catch (e) {

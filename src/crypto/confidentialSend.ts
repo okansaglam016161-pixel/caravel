@@ -52,7 +52,9 @@ import {
 } from './stealthUtxos'
 import type { SecretKeyWallet } from '@tari-project/ootle-secret-key-wallet'
 import { awaitFinality } from './finality'
-import { loadExcludedIds, markLocked, promoteToSpent, release } from './spentOutputs'
+import { markLocked, promoteToSpent, release } from './spentOutputs'
+import { loadSelectionExcludedIds, newReservationToken, releaseCoins, reserveCoins } from './coinReservations'
+import { confirmer } from './quote'
 import { INDEXER_URL } from './indexerConfig'
 
 
@@ -149,7 +151,19 @@ export interface PreparedConfidentialSend {
   spentInputIds: string[]
   /** Dry-run a twin of the real transaction at `feeMicrotari` (default: the prepared fee). Free. */
   simulate: (feeMicrotari?: bigint) => Promise<FeeSimulation>
-  /** Send THE envelope that was priced. Resolves once the transaction has a final decision. */
+  /** When it was priced. Past QUOTE_MAX_AGE_MS the confirm check refuses it (crypto/quote). */
+  preparedAt: number
+  /**
+   * The confirm-time check: quote age, inputs still unspent, and a dry run of the final transaction
+   * at the exact fee. Throws QuoteChanged — NOTHING SENT — when it no longer holds; re-prepare.
+   */
+  confirm: () => Promise<void>
+  /** Let go of the coins this prepare reserved (cancel, or before re-pricing). Idempotent. */
+  release: () => void
+  /**
+   * Send THE envelope that was priced. Runs the confirm check first unless confirm() just passed.
+   * Resolves once the transaction has a final decision.
+   */
   submit: (onProgress?: (msg: string) => void) => Promise<SendResult>
 }
 
@@ -195,8 +209,9 @@ export async function prepareConfidentialSend(
   // EXCLUDING WHAT WE HAVE ALREADY SPENT. `/utxos` keeps listing a spent output until the indexer
   // catches up, and selecting one builds a transaction the chain can only reject ("Input substate
   // utxo_... is down") after taking its fee. See crypto/spentOutputs.
+  // AND WHAT ANOTHER PREPARED TRANSACTION IS HOLDING — see crypto/coinReservations.
   const utxos = await scanOwnedUtxos(crypto, viewSecret, {
-    excluded: loadExcludedIds(senderAddress),
+    excluded: loadSelectionExcludedIds(senderAddress),
     walletAddress: senderAddress,
   })
   if (utxos.length === 0) throw new Error('No owned UTXOs found. Your wallet may need a balance from the faucet.')
@@ -215,6 +230,8 @@ export async function prepareConfidentialSend(
     throw new Error(`Your private balance (${selection.total} µtTARI) is too small to cover a network fee.`)
   }
   log(`Spending ${describeMicrotari(selection.total)} TARI from ${selection.inputs.length} payment${selection.inputs.length === 1 ? '' : 's'} you’ve received`)
+
+  const spentInputIds = selection.inputs.map(u => u.substateId)
 
   /** What the recipient gets at a given fee. Fixed for a typed amount; the remainder on send-all. */
   const amountAt = (feeMicrotari: bigint) => sendAll ? selection.total - feeMicrotari : params.amountMicrotari
@@ -334,7 +351,19 @@ export async function prepareConfidentialSend(
   log(`Network fee: ${fee} µtTARI`)
 
   const real = await buildEnvelope(fee, false)
-  const spentInputIds = selection.inputs.map(u => u.substateId)
+  const preparedAt = Date.now()
+  const simulate = async (feeMicrotari: bigint = fee) =>
+    simulateFee(INDEXER_URL, (await buildEnvelope(feeMicrotari, true)).envelope, { fee: feeMicrotari })
+  const check = confirmer({ preparedAt, simulate: () => simulate(fee), inputs: { ids: spentInputIds } })
+
+  // HELD FROM HERE until submitted, released, or expired — so nothing else selects these coins while
+  // this payment sits on a review screen. Selection above already skipped every live hold, so a
+  // clash means two prepares raced in the last few seconds; the first to reserve keeps the coins.
+  const reservation = newReservationToken()
+  if (!reserveCoins(senderAddress, spentInputIds, reservation)) {
+    releaseCoins(senderAddress, reservation)
+    throw new Error('Another payment being prepared is using some of these funds. Try again in a moment.')
+  }
 
   return {
     feeMicrotari: fee,
@@ -344,10 +373,14 @@ export async function prepareConfidentialSend(
     inputCount: selection.inputs.length,
     inputTotal: selection.total,
     spentInputIds,
-    simulate: async (feeMicrotari: bigint = fee) =>
-      simulateFee(INDEXER_URL, (await buildEnvelope(feeMicrotari, true)).envelope, { fee: feeMicrotari }),
+    simulate,
+    preparedAt,
+    confirm: check.confirm,
+    release: () => releaseCoins(senderAddress, reservation),
     submit: async (onSubmitProgress?: (msg: string) => void) => {
       const slog = (m: string) => onSubmitProgress?.(m)
+      slog('Checking the fee…')
+      await check.ensureConfirmed()
       slog('Submitting transaction…')
       const sub = await submitOnce(() => provider.submitTransaction(real.envelope), {
         landed: inputsStillUnspent(spentInputIds),
@@ -373,6 +406,8 @@ export async function prepareConfidentialSend(
       //                              the transaction failed — so unlocking on one would risk handing
       //                              a spent coin back to the next selection.
       markLocked(senderAddress, spentInputIds, txId)
+      // The spend record holds them now; the review-time hold is done.
+      releaseCoins(senderAddress, reservation)
 
       // TOLD, NOT ASKED — see crypto/finality.
       const { outcome, reason, body } = await awaitFinality(provider, txId)

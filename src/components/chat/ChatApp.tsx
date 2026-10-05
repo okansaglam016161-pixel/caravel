@@ -18,6 +18,7 @@ import PendingBubble, { type PendingSend } from './PendingBubble'
 import { loadNicknames, setNickname, MAX_NICKNAME_LEN, type NicknameMap } from '../../messaging/nicknameStore'
 import { loadAddressSent, markAddressSent, clearAddressSent, type AddressSentMap } from '../../messaging/addressSentStore'
 import { prepareConfidentialSend, tariToMicrotari, MAX_FEE, type PreparedConfidentialSend } from '../../crypto/confidentialSend'
+import { QuoteChanged } from '../../crypto/quote'
 import { beginEntry, settleEntry } from '../../crypto/journalStore'
 import { resolveOnsNameToHex, toOnsName, type OnsResolveErrorKind } from '../../crypto/ons'
 import { ConnectionIndicator, RelayHealthPanel } from './ConnectionStatus'
@@ -471,6 +472,11 @@ export default function ChatApp({ onOpenWallet }: {
    */
   const [payPrepared, setPayPrepared] = useState<PreparedConfidentialSend | null>(null)
   const payPriceGen = useRef(0)
+  /** Why the card is asking again — the quote was re-checked at Send and re-priced. Nothing was sent. */
+  const [payNotice, setPayNotice] = useState<string | null>(null)
+  // The priced payment holds its coins (crypto/coinReservations); let them go whenever it is
+  // replaced or the chat unmounts. Idempotent, and never touches a submitted payment's lock.
+  useEffect(() => () => payPrepared?.release(), [payPrepared])
   const [payBusy, setPayBusy] = useState(false)        // payment/message in flight
   const [payProgress, setPayProgress] = useState<string | null>(null)
   const [payError, setPayErrorRaw] = useState<string | null>(null)
@@ -1284,17 +1290,20 @@ export default function ChatApp({ onOpenWallet }: {
    * quick pre-check (validatePayment, against the fee ceiling) has already run; this is the real
    * answer. A failure here sent nothing.
    */
-  async function pricePayment() {
+  async function pricePayment(notice: string | null = null) {
     if (!wallet || !address) { setPayError('Wallet is locked — unlock to send.', true); return }
     const gen = ++payPriceGen.current
+    // A previous quote's coins go back before this one selects — otherwise it would skip them.
+    payPrepared?.release()
     setPayPrepared(null)
+    setPayNotice(notice)
     setConfirming(true)
     try {
       const prepared = await prepareConfidentialSend(wallet, address, {
         recipient: effectivePayAddress,
         amountMicrotari: tariToMicrotari(Number(payAmount)),
       })
-      if (gen !== payPriceGen.current) return
+      if (gen !== payPriceGen.current) { prepared.release(); return }
       setPayPrepared(prepared)
     } catch (e) {
       if (gen !== payPriceGen.current) return
@@ -1307,6 +1316,7 @@ export default function ChatApp({ onOpenWallet }: {
   function closeConfirm() {
     payPriceGen.current++
     setPayPrepared(null)
+    setPayNotice(null)
     setConfirming(false)
   }
 
@@ -1316,17 +1326,40 @@ export default function ChatApp({ onOpenWallet }: {
   async function submitPayment() {
     if (!selectedConvo) return
     const prepared = payPrepared
-    closeConfirm()
-    setPayError(null)
     // The card's Send is disabled until this exists; refusing here keeps it a rule, not UI state.
-    if (!prepared) { setPayError('This payment wasn’t ready yet, so nothing was sent. Try again.', true); return }
+    if (!prepared) { closeConfirm(); setPayError('This payment wasn’t ready yet, so nothing was sent. Try again.', true); return }
+
+    // ── THE CONFIRM-TIME CHECK, BEFORE ANYTHING IS RECORDED OR SENT ──
+    //
+    // Quote age, the coins, and a dry run of this very payment at the quoted fee (crypto/quote). If
+    // it no longer holds, nothing has been sent: the card re-prices and asks again.
+    setPayBusy(true)
+    setPayProgress('Checking the fee…')
+    try {
+      await prepared.confirm()
+    } catch (e) {
+      setPayBusy(false)
+      setPayProgress(null)
+      if (e instanceof QuoteChanged) { void pricePayment(e.message); return }
+      closeConfirm()
+      setPayError(e instanceof Error ? e.message : String(e), true)   // checked, not sent
+      return
+    }
+    // The card closes; the payment it priced is what goes. `payPrepared` is KEPT until submit
+    // returns: its coins pass from the review hold to the spend record inside submit, and clearing
+    // the state now would fire the release effect before that hand-over.
+    payPriceGen.current++
+    setConfirming(false)
+    setPayNotice(null)
+    setPayError(null)
 
     // PRE-FLIGHT: never spend money we cannot announce.
     if (messagingStatus !== 'connected' && messagingStatus !== 'degraded') {
+      setPayPrepared(null)   // releases its coins (see the effect above) — nothing was sent
       setPayError('Not connected to relays — cannot announce the payment. Try again once connected.', true)
       return
     }
-    if (!wallet || !address) { setPayError('Wallet is locked — unlock to send.', true); return }
+    if (!wallet || !address) { setPayPrepared(null); setPayError('Wallet is locked — unlock to send.', true); return }
 
     const amountMicro = prepared.recipientAmount
     const recipientAddr = effectivePayAddress   // exchanged address, or the manually-entered one
@@ -1442,6 +1475,7 @@ export default function ChatApp({ onOpenWallet }: {
     } finally {
       setPayBusy(false)
       setPayProgress(null)
+      setPayPrepared(null)
     }
   }
 
@@ -2437,6 +2471,9 @@ export default function ChatApp({ onOpenWallet }: {
                         {payPrepared ? `${fmt6(payPrepared.feeMicrotari)} ${TICKER}` : 'Pricing…'}
                       </span>
                     </div>
+                    {payNotice && (
+                      <div role="status" style={{ fontSize: 11.5, color: 'var(--warn)', lineHeight: 1.5 }}>{payNotice}</div>
+                    )}
                     {payPrepared && (
                       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 12.5 }}>
                         <span style={{ color: 'var(--text-muted-dim)' }}>Total</span>

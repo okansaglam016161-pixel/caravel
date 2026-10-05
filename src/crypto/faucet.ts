@@ -49,7 +49,8 @@ import {
 } from '@tari-project/ootle'
 import { IndexerProvider } from '@tari-project/ootle-indexer'
 import { nextMaxEpoch } from './epoch'
-import { dryRunFee, withFeeMargin } from './feeProbe'
+import { dryRunFee, simulateFee, withFeeMargin, type FeeSimulation } from './feeProbe'
+import { confirmer } from './quote'
 import { readOutputSubstateIds } from './outputIds'
 import type { SecretKeyWallet } from '@tari-project/ootle-secret-key-wallet'
 import { awaitFinality } from './finality'
@@ -168,7 +169,18 @@ export interface PreparedClaim {
   fee: bigint
   /** What lands in the wallet as a private coin: claimAmount − fee. */
   privateAmount: bigint
-  /** Build at `fee`, submit, and wait for the final decision. The only step that writes. */
+  /** When it was priced. Past QUOTE_MAX_AGE_MS the confirm check refuses it (crypto/quote). */
+  preparedAt: number
+  /** Dry-run a twin of the real claim at the exact fee. Free. */
+  simulate: () => Promise<FeeSimulation>
+  /**
+   * The confirm-time check: quote age, the receipt still absent (not claimed elsewhere meanwhile),
+   * and a dry run of the final claim at the exact fee. Throws QuoteChanged — nothing sent.
+   */
+  confirm: () => Promise<void>
+  /** Nothing is held by a claim (it spends none of the wallet's coins); present for symmetry. */
+  release: () => void
+  /** Submit the claim built at `fee`, and wait for the final decision. The only step that writes. */
   submit: (onProgress?: (msg: string) => void) => Promise<ClaimResult>
 }
 
@@ -243,10 +255,18 @@ export async function prepareClaim(
     throw new Error(`Network fee (${fee} µtTARI) exceeds the faucet's payout — the faucet cannot cover its own claim.`)
   }
 
+  // THE REAL CLAIM IS BUILT HERE, at prepare, so the claim confirmed is the claim sent — submit
+  // only sends it.
+  log('Building claim…')
+  const real = await buildEnvelope(fee, false)
+  const preparedAt = Date.now()
+  const simulate = async () => simulateFee(INDEXER_URL, (await buildEnvelope(fee, true)).envelope, { fee })
+  const check = confirmer({ preparedAt, simulate, inputs: { landed: substateStillAbsent(faucetReceiptId(ownerPkHex)) } })
+
   async function submit(onSubmitProgress?: (msg: string) => void): Promise<ClaimResult> {
     const log = (m: string) => (onSubmitProgress ?? onProgress)?.(m)
-    log('Building claim…')
-    const real = await buildEnvelope(fee, false)
+    log('Checking the fee…')
+    await check.ensureConfirmed()
 
     log('Submitting…')
     // A claim creates this key's receipt, so while every indexer says it is absent the claim has not landed.
@@ -267,7 +287,10 @@ export async function prepareClaim(
     return { txId, outcome, reason, amount: real.privateAmount, feeMicrotari: fee, selfOutputIds: real.selfOutputIds }
   }
 
-  return { claimAmount, dryRunCost: cost, fee, privateAmount: claimAmount - fee, submit }
+  return {
+    claimAmount, dryRunCost: cost, fee, privateAmount: claimAmount - fee,
+    preparedAt, simulate, confirm: check.confirm, release: () => {}, submit,
+  }
 }
 
 /**

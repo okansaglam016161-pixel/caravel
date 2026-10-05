@@ -40,6 +40,7 @@ import { beginEntry, markDegraded, settleEntry } from '../../crypto/journalStore
 import { fetchCreatedUtxoIds } from '../../crypto/txOutputs'
 import { fmt6, TICKER } from '../wallet/v2/format'
 import { MONO } from './chatDisplay'
+import { QuoteChanged } from '../../crypto/quote'
 
 /** µtTARI as the product says it everywhere else. One formatter, one unit on screen. */
 const XTR = (micro: bigint) => `${fmt6(micro)} ${TICKER}`
@@ -48,7 +49,7 @@ type Commit =
   | { kind: 'estimating' }
   | { kind: 'estimate-failed'; errorKind: OnsEstimateErrorKind; error: string }
   /** Priced and built: `budget` is exactly what is charged, `prepared` is what Register sends. */
-  | { kind: 'confirm'; budget: bigint; prepared: OnsPreparedRegistration }
+  | { kind: 'confirm'; budget: bigint; prepared: OnsPreparedRegistration; notice?: string }
   | { kind: 'submitting' }
   /** A true on-chain Accept. The only success. */
   | { kind: 'accepted'; txId?: string }
@@ -182,24 +183,39 @@ export default function CnsCommitView({ name, onCancel, onDone, onTryAnother, on
    * async paths now guard the same way — per-run, never per-mount.
    */
   const gen = useRef(0)
+  /**
+   * The registration currently priced, which holds its fee coin (crypto/coinReservations). Released
+   * when it is replaced, cancelled, or this screen goes away; release is idempotent.
+   */
+  const held = useRef<OnsPreparedRegistration | null>(null)
+  const hold = (p: OnsPreparedRegistration | null) => { held.current?.release(); held.current = p }
+  useEffect(() => () => hold(null), [])
 
-  const estimate = useCallback(async () => {
+  const estimate = useCallback(async (notice?: string) => {
     if (!wallet || !address || !nostrNpub) {
       setState({ kind: 'estimate-failed', errorKind: 'unreachable', error: 'This wallet is locked.' })
       return
     }
     const mine = ++gen.current
+    // A previous quote's fee coin goes back before this one selects — otherwise it would skip it.
+    hold(null)
     setState({ kind: 'estimating' })
     const r = await estimateOnsRegistration(wallet, address, name, nostrNpub)
-    if (gen.current !== mine) return
+    if (gen.current !== mine) { r.prepared?.release(); return }
     if (!r.ok || r.feeMicroTari === undefined || !r.prepared) {
       setState({ kind: 'estimate-failed', errorKind: r.errorKind ?? 'unreachable', error: r.error ?? 'Could not work out the fee.' })
       return
     }
-    setState({ kind: 'confirm', budget: r.feeMicroTari, prepared: r.prepared })
+    hold(r.prepared)
+    setState({ kind: 'confirm', budget: r.feeMicroTari, prepared: r.prepared, notice })
   }, [wallet, address, nostrNpub, name])
 
   useEffect(() => { void estimate() }, [estimate])
+
+  function cancel() {
+    hold(null)
+    onCancel()
+  }
 
   async function submit(prepared: OnsPreparedRegistration) {
     if (!wallet || !address || !nostrNpub) return
@@ -208,6 +224,23 @@ export default function CnsCommitView({ name, onCancel, onDone, onTryAnother, on
     // unconditionally, and must. A superseded run may not touch the screen, but the transaction it
     // sent is real and its record has to be written whether or not anyone is still looking.
     const mine = ++gen.current
+
+    // ── THE CONFIRM-TIME CHECK, BEFORE ANYTHING IS RECORDED OR SENT ──
+    //
+    // Quote age, the fee coin still unspent, and a dry run of this very registration at the quoted
+    // fee (crypto/quote) — which also catches a name taken since pricing, before its fee is spent.
+    // If it no longer holds, nothing has been sent: price again and ask again.
+    setState({ kind: 'estimating' })
+    try {
+      await prepared.confirm()
+    } catch (e) {
+      if (gen.current !== mine) return
+      if (e instanceof QuoteChanged) { void estimate(e.message); return }
+      hold(null)
+      setState({ kind: 'estimate-failed', errorKind: 'unreachable', error: (e as Error).message || 'Could not check the fee.' })
+      return
+    }
+    if (gen.current !== mine) return
     setState({ kind: 'submitting' })
 
     // ── JOURNALLED BEFORE THE WRITE, NOT AFTER ──
@@ -283,7 +316,7 @@ export default function CnsCommitView({ name, onCancel, onDone, onTryAnother, on
       <div style={{ fontSize: 14, fontWeight: 600, letterSpacing: '-0.01em', color: 'var(--text-primary)', marginBottom: 11 }}>
         Register @{name}
       </div>
-      {commitBody(state, name, { estimate, submit, onCancel, onDone, onTryAnother, onOpenWallet })}
+      {commitBody(state, name, { estimate: () => estimate(), submit, onCancel: cancel, onDone, onTryAnother, onOpenWallet })}
     </div>
   )
 }
@@ -375,6 +408,11 @@ function commitBody(state: Commit, name: string, a: Acts) {
           {/* THE GATE SAYS WHAT PRESSING IT COSTS, and that nothing has happened yet. The whole
               revealed budget is consumed on this path, so the figure above is not an estimate of
               what might be taken — it is what leaves. */}
+          {state.notice && (
+            <div role="status" style={{ fontSize: 11.5, color: 'var(--warn)', marginTop: 8, lineHeight: 1.5, textWrap: 'pretty' }}>
+              {state.notice}
+            </div>
+          )}
           <div style={{ fontSize: 11.5, color: 'var(--text-muted-dim)', marginTop: 8, lineHeight: 1.5, textWrap: 'pretty' }}>
             The fee leaves your wallet when you press Register. Nothing has been written yet.
           </div>

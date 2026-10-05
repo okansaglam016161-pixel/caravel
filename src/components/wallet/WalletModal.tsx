@@ -59,6 +59,7 @@ import { loadEpoch } from '../../crypto/journalStore'
 import { loadLedger } from '../../crypto/utxoLedger'
 import { plainError } from './v2/plainError'
 import { resolveSendPath, type PreparedFor } from './v2/sendPath'
+import { QuoteChanged } from '../../crypto/quote'
 import { settleVerdict, journalOutcomeFor, type SettleStartedBy } from './v2/settleVerdict'
 import { GenerationGuard } from './v2/generation'
 import { firstSeenLabel, toInput, TICKER } from './v2/format'
@@ -291,6 +292,11 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
    */
   const [sendAll, setSendAll] = useState(false)
   /**
+   * Why the review is asking again — set when confirm found the quote no longer held (crypto/quote)
+   * and the payment was re-priced. Nothing was sent; the user confirms the new figures.
+   */
+  const [sendNotice, setSendNotice] = useState<string | null>(null)
+  /**
    * The exact µtTARI MAX asked for, when MAX was used — the M2 lesson, applied to Send.
    *
    * MAX must mean the whole spendable balance to the last microtari. Deriving it back out of the
@@ -339,6 +345,8 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
    * and the form and review both say so.
    */
   const [moveAll, setMoveAll] = useState(false)
+  /** The move's equivalent of sendNotice: re-priced at confirm, nothing sent. */
+  const [moveNotice, setMoveNotice] = useState<string | null>(null)
   const [moveLagging, setMoveLagging] = useState(false)
   /**
    * Discards a pricing result the user has already walked away from.
@@ -349,6 +357,12 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
    */
   const moveGen = useRef(new GenerationGuard())
   const sendGen = useRef(new GenerationGuard())
+
+  // A prepared quote holds its coins (crypto/coinReservations). Whenever it is replaced or the modal
+  // goes away, let them go — release is idempotent, and a submitted quote's coins are already held
+  // by the spend record instead, which this does not touch.
+  useEffect(() => () => sendPrepared?.p.release(), [sendPrepared])
+  useEffect(() => () => movePrepared?.p.release(), [movePrepared])
 
   // Escape closes the MODAL. A page has nothing to close, and binding a global key handler that
   // did nothing would still swallow Escape from anything inside it.
@@ -531,14 +545,17 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
    * transaction pays, since the margin is never refunded. Confirm then submits the very envelope
    * that was priced.
    */
-  async function handleReview() {
+  async function handleReview(notice: string | null = null) {
     const err = validateSendForm()
     // Through the translator like every other error on this screen: most of what this returns is
     // already plain, but assertValidRecipient's message comes from a fund module and a future check
     // added here would arrive in µtTARI by default. plainError leaves plain text alone.
     if (err) { setSendValidationError(plainError(err)); return }
     setSendValidationError('')
+    // A previous quote's coins go back before this one selects — otherwise it would skip them.
+    sendPrepared?.p.release()
     setSendPrepared(null)
+    setSendNotice(notice)
 
     // Priced in place: review renders with a spinner on the fee row until this resolves.
     const token = sendGen.current.begin()
@@ -560,7 +577,8 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
             memo: sendNote || undefined,
             onProgress: setSendProgress,
           }) }
-      if (sendGen.current.isStale(token)) return
+      // Walked away from while pricing: let go of what it holds rather than keep it armed.
+      if (sendGen.current.isStale(token)) { prepared.p.release(); return }
       setSendPrepared(prepared)
     } catch (e) {
       if (sendGen.current.isStale(token)) return
@@ -572,6 +590,8 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
 
   function resetSend() {
     sendGen.current.cancel()
+    sendPrepared?.p.release()
+    setSendNotice(null)
     setSendRecipient(''); setSendAmount(''); setSendNote('')
     setSendStep('form'); setSendValidationError(''); setSendProgress('')
     setSendTxId(''); setSendError(''); setSendFee(null); setSendOutcome(null)
@@ -583,6 +603,8 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
 
   function resetMove() {
     moveGen.current.cancel()
+    movePrepared?.p.release()
+    setMoveNotice(null)
     // Tells the context the user has SEEN this outcome. A still-settling entry is deliberately not
     // dropped by this — Done finishes the screen, not the transaction, and the overview behind it
     // needs the poll to carry on so it can correct itself without a manual Refresh.
@@ -600,8 +622,12 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
    * Everything that can fail for a boring reason happens here rather than after the user has
    * confirmed — a dead indexer, an unresolvable account, a rejected simulation. Confirm only submits.
    */
-  async function handlePrepareMove() {
+  async function handlePrepareMove(notice: string | null = null) {
     if (!wallet || !address) return
+    // A previous quote's coins go back before this one selects — otherwise it would skip them.
+    movePrepared?.p.release()
+    setMovePrepared(null)
+    setMoveNotice(notice)
     const token = moveGen.current.begin()
     setMoveStep('pricing')
     setMoveProgress('')
@@ -617,7 +643,7 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
         : { dir: 'conceal', p: await prepareConceal(wallet, address, { amountMicrotari, all: moveAll, onProgress: setMoveProgress }) }
       // The user may have pressed Back while this was on the wire. Drop it rather than re-arming
       // a screen they dismissed.
-      if (moveGen.current.isStale(token)) return
+      if (moveGen.current.isStale(token)) { prepared.p.release(); return }
       setMovePrepared(prepared)
       setMoveStep('review')
     } catch (e) {
@@ -632,8 +658,21 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
   async function handleConfirmMove() {
     if (!movePrepared || !address) return
     setMoveStep('moving')
-    setMoveProgress('')
+    setMoveProgress('Checking the fee…')
     setMoveError('')
+
+    // ── THE CONFIRM-TIME CHECK, BEFORE ANYTHING IS RECORDED OR SENT ──
+    //
+    // Quote age, the inputs, and a dry run of this very transaction at the quoted fee (crypto/quote).
+    // If it no longer holds, nothing has been sent: re-price and ask again with the new figures.
+    try {
+      await movePrepared.p.confirm()
+    } catch (e) {
+      if (e instanceof QuoteChanged) { void handlePrepareMove(e.message); return }
+      setMoveError(plainError(e instanceof Error ? e.message : String(e)))
+      setMoveStep('error')
+      return
+    }
 
     // The move flow journalled NOTHING before this — not the direction, not the amount, not the
     // fee, and not the output it creates for us, which is the one a later scan cannot tell apart
@@ -775,9 +814,22 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
     // What arrives, from the priced envelope — on send-all it is not what the field showed.
     const amountMicrotari = sendPrepared.p.recipientAmount
     setSendStep('sending')
-    setSendProgress('Connecting…')
+    setSendProgress('Checking the fee…')
     setSendTxId('')
     setSendError('')
+
+    // ── THE CONFIRM-TIME CHECK, BEFORE ANYTHING IS RECORDED OR SENT ──
+    //
+    // Quote age, the inputs, and a dry run of this very transaction at the quoted fee (crypto/quote).
+    // If it no longer holds, nothing has been sent: re-price and ask again with the new figures.
+    try {
+      await sendPrepared.p.confirm()
+    } catch (e) {
+      if (e instanceof QuoteChanged) { void handleReview(e.message); return }
+      setSendError(plainError(e instanceof Error ? e.message : String(e)))
+      setSendStep('error')
+      return
+    }
 
     // ── THE JOURNAL, WRITTEN BEFORE ANYTHING IS SUBMITTED ──
     //
@@ -1079,6 +1131,7 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
     // instead of watching a blank card.
     : moveStep === 'pricing' ? {
       step: 'review', dir: moveDir, amountMicrotari: enteredMicro, feeMicrotari: null, resulting: null,
+      notice: moveNotice ?? undefined,
     }
     : moveStep === 'review' && movePrepared ? {
       step: 'review', dir: movePrepared.dir,
@@ -1088,6 +1141,7 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
       totalMicrotari: movePrepared.dir === 'reveal' ? movePrepared.p.revealedOutput : movePrepared.p.withdrawAmount,
       resulting: resultingFor(movePrepared),
       leftoverNote: moveLeftoverNote,
+      notice: moveNotice ?? undefined,
     }
     : moveStep === 'moving' ? {
       step: 'moving', dir: moveDir,
@@ -1148,6 +1202,7 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
       // EXACT, on both sources: priced by dry run before review, and what the transaction pays.
       feeMicrotari: sendPrepared?.p.feeMicrotari ?? null,
       sendAll: sendSource === 'private' && sendAll,
+      notice: sendNotice ?? undefined,
     }
     : sendStep === 'sending' ? {
       step: 'sending', source: sendSource, recipient: sendRecipient, amountMicrotari: sendPrepared?.p.recipientAmount ?? sendAmountMicro,
@@ -1297,7 +1352,7 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
         },
         onReview: () => void handleReview(),
         // Back out of review: whatever is being priced must not come back and re-arm it.
-        onBack: () => { sendGen.current.cancel(); setSendPrepared(null); setSendStep('form') },
+        onBack: () => { sendGen.current.cancel(); sendPrepared?.p.release(); setSendPrepared(null); setSendNotice(null); setSendStep('form') },
         onConfirm: () => void handleConfirmSend(),
         onDone: resetSend,
         onRetry: resetSend,

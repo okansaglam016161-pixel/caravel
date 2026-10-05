@@ -24,6 +24,7 @@ import {
   type PreparedClaim,
 } from '../../crypto/faucet'
 import { readFaucetStatus, type FaucetStatus } from '../../crypto/faucetStatus'
+import { QuoteChanged } from '../../crypto/quote'
 import { beginEntry, settleEntry } from '../../crypto/journalStore'
 import { settleVerdict, journalOutcomeFor, type SettleStartedBy } from './v2/settleVerdict'
 import { FaucetBanner, FaucetPanel } from './v2/panels'
@@ -79,6 +80,8 @@ export default function FaucetClaimPanel() {
    */
   const [prepared, setPrepared] = useState<PreparedClaim | null>(null)
   const [pricing, setPricing] = useState<'idle' | 'pricing' | 'failed'>('idle')
+  /** Set when Claim found the quote no longer held and it was re-priced — nothing was sent. */
+  const [repriced, setRepriced] = useState(false)
   const priceGen = useRef(0)
   const lastTx = useRef<string | null>(null)
   // How the watch began, and the row it must correct. Both refs: the effect reads them, nothing
@@ -182,6 +185,22 @@ export default function FaucetClaimPanel() {
   async function claim() {
     if (!wallet || !address || !prepared) return
     const pc = prepared
+
+    // ── THE CONFIRM-TIME CHECK, BEFORE ANYTHING IS RECORDED OR SENT ──
+    //
+    // Quote age, the receipt still absent, and a dry run of this very claim at the quoted fee
+    // (crypto/quote). If it no longer holds nothing was sent: price again and let Claim confirm that.
+    setPricing('pricing')
+    try {
+      await pc.confirm()
+    } catch (e) {
+      // Clearing the quote with pricing idle is what makes the open banner price again (wantPrice).
+      if (e instanceof QuoteChanged) { setRepriced(true); setPrepared(null); setPricing('idle'); return }
+      setPricing('failed')
+      return
+    }
+    setPricing('idle')
+    setRepriced(false)
     setPrepared(null)
     setPhase('claiming')
     setCanRetry(true)
@@ -327,15 +346,17 @@ export default function FaucetClaimPanel() {
           phase === 'open' ? (
             // EXACTLY WHAT LANDS, before anything is pressed: the payout less the fee the claim
             // will pay. Claim submits this priced claim.
-            prepared ? `Testnet faucet is open. You receive ${fmt6(prepared.privateAmount)} ${TICKER} (${payoutText(prepared.claimAmount)} − ${fmt6(prepared.fee)} fee).`
+            prepared ? `${repriced ? 'The fee was checked again. ' : 'Testnet faucet is open. '}You receive ${fmt6(prepared.privateAmount)} ${TICKER} (${payoutText(prepared.claimAmount)} − ${fmt6(prepared.fee)} fee).`
             : pricing === 'failed' ? 'Testnet faucet is open, but the network fee couldn’t be worked out.'
+            : prepared === null && repriced ? 'The fee changed — working it out again…'
             : 'Testnet faucet is open. Working out the network fee…'
           )
           : phase === 'paused' ? 'The faucet is paused right now. Check back soon.'
           : 'The faucet is empty right now. Check back soon.'
         }
         action={phase !== 'open' ? undefined
-          : prepared ? { label: 'Claim', onClick: () => void claim() }
+          // Inert while the quote is being checked, so a second press cannot start a second claim.
+          : prepared && pricing === 'idle' ? { label: 'Claim', onClick: () => void claim() }
           : pricing === 'failed' ? { label: 'Try again', onClick: () => void priceClaim() }
           : undefined}
         onDismiss={phase === 'open' ? dismiss : undefined}

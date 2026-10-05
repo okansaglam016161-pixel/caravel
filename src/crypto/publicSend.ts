@@ -37,6 +37,7 @@
 // planPublicSend computes the split once and the single `withdrawAmount` is threaded to both.
 
 import { submitOnce, versionsUnchanged } from './submitGuard'
+import { confirmer } from './quote'
 import { RETRYING_MESSAGE } from './indexerRetry'
 import {
   Mask,
@@ -285,7 +286,16 @@ export interface PreparedPublicSend {
    * runs it at the cost and one below to find the boundary.
    */
   simulate: (feeMicrotari?: bigint) => Promise<FeeSimulation>
-  /** Send it. Resolves once the transaction has a final on-chain decision. */
+  /** When it was priced. Past QUOTE_MAX_AGE_MS the confirm check refuses it (crypto/quote). */
+  preparedAt: number
+  /**
+   * The confirm-time check: quote age, inputs unchanged, and a dry run of the final transaction at
+   * the exact fee. Throws QuoteChanged — NOTHING SENT — when it no longer holds; re-prepare.
+   */
+  confirm: () => Promise<void>
+  /** Let go of whatever this prepare holds (cancel, or before re-pricing). Idempotent. */
+  release: () => void
+  /** Send it — the confirm check first, unless confirm() just passed. Resolves on a final decision. */
   submit: (onProgress?: (msg: string) => void) => Promise<PublicSendResult>
 }
 
@@ -398,15 +408,27 @@ export async function preparePublicSend(
 
   log('Building…')
   const real = await buildEnvelope(fee, false)
+  const preparedAt = Date.now()
+  const simulate = async (feeMicrotari: bigint = fee) => simulateFee(INDEXER_URL, (await buildEnvelope(feeMicrotari, true)).envelope, { fee: feeMicrotari })
+  // THE VAULT VERSIONS THE REAL BUILD PINNED. A vault that moves before confirm (a receive, another
+  // tab's move) makes the pinned transaction stale, so the confirm check refuses it and re-prices.
+  const vaultsAsBuilt = await versionsUnchanged(declaredInputs.filter(id => id.startsWith('vault_')))
+  const check = confirmer({ preparedAt, simulate: () => simulate(fee), inputs: { landed: vaultsAsBuilt } })
 
   return {
     feeMicrotari: fee,
     dryRunCost: cost,
-    simulate: async (feeMicrotari: bigint = fee) => simulateFee(INDEXER_URL, (await buildEnvelope(feeMicrotari, true)).envelope, { fee: feeMicrotari }),
+    simulate,
+    preparedAt,
+    confirm: check.confirm,
+    // Spends a vault, not selected coins: nothing is reserved, so there is nothing to release.
+    release: () => {},
     recipientAmount: real.split.recipientAmount,
     withdrawAmount: real.split.withdrawAmount,
     submit: async (onSubmitProgress?: (msg: string) => void) => {
       const slog = (m: string) => onSubmitProgress?.(m)
+      slog('Checking the fee…')
+      await check.ensureConfirmed()
       slog('Submitting…')
       // Snapshot the account vaults this spends from, so a busy refusal can be checked against them.
       const landed = await versionsUnchanged(declaredInputs.filter(id => id.startsWith('vault_')))

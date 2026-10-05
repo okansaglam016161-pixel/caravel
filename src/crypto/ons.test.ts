@@ -509,7 +509,18 @@ describe('the fee input comes from Caravel, and is locked like any other spend',
     expect(await statusOf(FEE_COIN)).toBeUndefined()
   })
 
+  /** The confirm check reads the fee coin by id: answer it as present (200) or spent (404). */
+  function feeCoinReads(status: 200 | 404) {
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: status === 200, status,
+      json: async () => ({ substate: {} }),
+      text: async () => '{}',
+      headers: new Headers(),
+    })))
+  }
+
   it('the prepared registration submits what was priced, and its fee coin is locked then spent', async () => {
+    feeCoinReads(200)
     writerThatSubmits(async () => ({ transactionId: 'tx9', fee: 1_200n }))
     const est = await estimateOnsRegistration(WALLET, ADDR, 'okz', NPUB)
     expect(est.prepared!.feeMicroTari).toBe(withFeeMargin(1_000n))
@@ -517,6 +528,21 @@ describe('the fee input comes from Caravel, and is locked like any other spend',
     const r = await est.prepared!.submit()
     expect(r).toMatchObject({ ok: true, outcome: 'accepted', txId: 'tx9' })
     expect(await statusOf(FEE_COIN)).toBe('spent')
+    vi.unstubAllGlobals()
+  })
+
+  it('a fee coin spent since pricing is refused at confirm — nothing sent, the hold released', async () => {
+    feeCoinReads(404)
+    const submitted = vi.fn(async () => ({ transactionId: 'tx9', fee: 1_200n }))
+    writerThatSubmits(submitted)
+    const est = await estimateOnsRegistration(WALLET, ADDR, 'okz', NPUB)
+    const { loadReservedIds } = await import('./coinReservations')
+    expect(loadReservedIds(ADDR).has(FEE_COIN)).toBe(true)
+    await expect(est.prepared!.confirm()).rejects.toMatchObject({ name: 'QuoteChanged', reason: 'inputs-gone' })
+    expect(submitted).not.toHaveBeenCalled()
+    est.prepared!.release()
+    expect(loadReservedIds(ADDR).has(FEE_COIN)).toBe(false)
+    vi.unstubAllGlobals()
   })
 
   it('the submit hands it the same source, and a lock hook', async () => {

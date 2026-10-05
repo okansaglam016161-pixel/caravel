@@ -2472,7 +2472,7 @@ export default function ChatApp({ onOpenWallet }: {
                     </div>
                     {/* THE EXACT FEE — priced when this card opened, and what the payment pays. */}
                     <div style={{ borderTop: '1px solid var(--border)', paddingTop: 8, display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 12.5 }}>
-                      <span style={{ color: 'var(--text-muted-dim)' }}>Network fee</span>
+                      <span style={{ color: 'var(--text-muted-dim)' }}>Fee</span>
                       <span style={{ fontFamily: MONO, fontWeight: 600, color: payPrepared ? 'var(--text-primary)' : 'var(--text-muted-dim)' }}>
                         {payPrepared ? `${fmt6(payPrepared.feeMicrotari)} ${TICKER}` : 'Pricing…'}
                       </span>

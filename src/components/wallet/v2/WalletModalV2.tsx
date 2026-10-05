@@ -486,7 +486,7 @@ function MoveBody({ m, p, onClose }: {
           marginTop: 28, paddingTop: 20, borderTop: '1px solid var(--border)',
         }}>
           <MoveRow label="Direction" value={moveDirectionRow(m.dir)} />
-          <MoveRow label="Network fee" mono value={pricing
+          <MoveRow label="Fee" mono value={pricing
             ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontFamily: 'inherit', color: C.faint }}><Spinner size={12} />Pricing…</span>
             : `${fmt6(m.feeMicrotari!)} ${TICKER}`} />
           {m.totalMicrotari !== undefined && !pricing && (

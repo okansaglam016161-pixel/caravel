@@ -691,7 +691,7 @@ function Receipt({ fee, txId, onCopy }: { fee: bigint; txId: string; onCopy: () 
       display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
       marginTop: 18, fontFamily: MONO, fontSize: 11, color: C.faint, flexWrap: 'wrap',
     }}>
-      <span>fee {fmt6(fee)} {TICKER}</span>
+      <span>Fee {fmt6(fee)} {TICKER}</span>
       <span aria-hidden="true">·</span>
       <span
         role="button" tabIndex={0} onClick={onCopy} onKeyDown={e => e.key === 'Enter' && onCopy()}
@@ -775,7 +775,7 @@ export function SendPanel({ view, hidden, onSource, onRecipient, onAmount, onNot
           {/* THE EXACT FEE. Both sources dry-run before review, and the transaction pays exactly this
               — the margin included, since nothing comes back — so it is stated flatly. */}
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
-            <span style={{ color: C.mutedDim }}>Network fee</span>
+            <span style={{ color: C.mutedDim }}>Fee</span>
             <span style={{ fontFamily: MONO, fontWeight: 500, color: C.primary }}>
               {pricing
                 ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontFamily: 'inherit', color: C.faint }}><Spinner size={12} />Pricing…</span>

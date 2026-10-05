@@ -401,7 +401,7 @@ function commitBody(state: Commit, name: string, a: Acts) {
               <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>@{name}</span>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 12.5 }}>
-              <span style={{ color: 'var(--text-muted-dim)' }}>Network fee</span>
+              <span style={{ color: 'var(--text-muted-dim)' }}>Fee</span>
               <span style={{ fontFamily: MONO, fontWeight: 600, color: 'var(--text-primary)' }}>{XTR(state.budget)}</span>
             </div>
           </div>

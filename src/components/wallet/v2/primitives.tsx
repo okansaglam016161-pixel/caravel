@@ -324,12 +324,12 @@ export function DetailRow({ label, value, valueColor = C.muted, last = false }: 
 /** Fee row that can be in flight — the design prices INSIDE review rather than on its own screen. */
 export function FeeRow({ fee, last = false }: { fee: string | null; last?: boolean }) {
   return fee === null
-    ? <DetailRow label="Network fee" last={last} value={
+    ? <DetailRow label="Fee" last={last} value={
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
           <Spinner size={12} /><span style={{ fontSize: 12.5, color: C.faint, fontFamily: 'inherit' }}>Pricing…</span>
         </span>
       } />
-    : <DetailRow label="Network fee" value={`${fee} ${TICKER}`} last={last} />
+    : <DetailRow label="Fee" value={`${fee} ${TICKER}`} last={last} />
 }
 
 export function TxRow({ txId, onCopy }: { txId: string; onCopy?: () => void }) {

@@ -43,7 +43,7 @@ import {
 } from '@tari-project/ootle'
 import { IndexerProvider } from '@tari-project/ootle-indexer'
 import { nextMaxEpoch } from './epoch'
-import { dryRunFee, simulateFee, withFeeMargin, type FeeSimulation } from './feeProbe'
+import { dryRunFee, exactFee, simulateFee, type FeeSimulation } from './feeProbe'
 import { readOutputSubstateIds } from './outputIds'
 // The owned-UTXO scan lives in stealthUtxos.ts so the send and reveal paths share ONE input
 // discovery. It was moved out of this file unchanged; nothing about the behaviour here differs.
@@ -131,7 +131,7 @@ export interface SendParams {
   memo?: string
   payRef?: string
   onProgress?: (msg: string) => void
-  /** How the fee is set from the measured cost. Default: feeProbe.withFeeMargin. */
+  /** How the fee is set from the measured cost. Default: feeProbe.exactFee — no margin. */
   feeFor?: (costMicrotari: bigint) => bigint
   /**
    * PROOF ONLY — the harness's `prove-short-fee`, which submits a deliberately short fee to show
@@ -143,7 +143,7 @@ export interface SendParams {
 
 /** A priced, built, signed private send — everything except pressing send. */
 export interface PreparedConfidentialSend {
-  /** Measured fee including margin (µtTARI) — what the review screen shows and the tx pays. */
+  /** The exact measured fee (µtTARI), no margin — what the review screen shows and the tx pays. */
   feeMicrotari: bigint
   /** What the pricing dry run measured, before the margin (µtTARI). */
   dryRunCost: bigint
@@ -199,7 +199,7 @@ export async function prepareConfidentialSend(
   senderAddress: string,
   params: SendParams,
 ): Promise<PreparedConfidentialSend> {
-  const { recipient, memo, payRef, onProgress, sendAll = false, feeFor = withFeeMargin, unsafeSkipConfirm = false } = params
+  const { recipient, memo, payRef, onProgress, sendAll = false, feeFor = exactFee, unsafeSkipConfirm = false } = params
   const log = (msg: string) => onProgress?.(msg)
 
   // Connect indexer first — lets ootle-secret-key-wallet __tla tick before wallet ops

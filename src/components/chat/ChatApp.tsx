@@ -18,7 +18,7 @@ import PendingBubble, { type PendingSend } from './PendingBubble'
 import { loadNicknames, setNickname, MAX_NICKNAME_LEN, type NicknameMap } from '../../messaging/nicknameStore'
 import { loadAddressSent, markAddressSent, clearAddressSent, type AddressSentMap } from '../../messaging/addressSentStore'
 import { prepareConfidentialSend, tariToMicrotari, MAX_FEE, type PreparedConfidentialSend } from '../../crypto/confidentialSend'
-import { QuoteChanged } from '../../crypto/quote'
+import { FEE_SHORT_MESSAGE, QuoteChanged, isFeeShortRejection } from '../../crypto/quote'
 import { beginEntry, settleEntry } from '../../crypto/journalStore'
 import { resolveOnsNameToHex, toOnsName, type OnsResolveErrorKind } from '../../crypto/ons'
 import { ConnectionIndicator, RelayHealthPanel } from './ConnectionStatus'
@@ -1418,6 +1418,12 @@ export default function ChatApp({ onOpenWallet }: {
         spentInputIds: result.outcome === 'Reject' ? [] : result.spentInputIds,
       })
 
+      if (result.outcome === 'Reject' && isFeeShortRejection(result.reason)) {
+        // THE FEE ROSE AS IT WAS SENT — a free reject. Re-open the card with the new price and ask
+        // again; never resend on our own at a different fee.
+        void pricePayment(FEE_SHORT_MESSAGE)
+        return
+      }
       if (result.outcome === 'Reject') {
         // Nothing happened — keep payment mode + fields so the user can adjust and retry.
         setPayError('Payment was rejected on-chain — nothing was sent.', true)

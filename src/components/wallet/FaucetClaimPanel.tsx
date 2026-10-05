@@ -24,7 +24,7 @@ import {
   type PreparedClaim,
 } from '../../crypto/faucet'
 import { readFaucetStatus, type FaucetStatus } from '../../crypto/faucetStatus'
-import { QuoteChanged } from '../../crypto/quote'
+import { QuoteChanged, isFeeShortRejection } from '../../crypto/quote'
 import { beginEntry, settleEntry } from '../../crypto/journalStore'
 import { settleVerdict, journalOutcomeFor, type SettleStartedBy } from './v2/settleVerdict'
 import { FaucetBanner, FaucetPanel } from './v2/panels'
@@ -264,6 +264,12 @@ export default function FaucetClaimPanel() {
     //
     // A Timeout means the poll gave up against the indexer's lag; the balance watch below is what
     // can actually tell.
+    if (r.outcome === 'Reject' && isFeeShortRejection(r.reason)) {
+      // THE FEE ROSE AS IT WAS SENT — a free reject. Back to the banner, which prices again; Claim
+      // confirms the new figure. Never resent on our own.
+      setRepriced(true); setPrepared(null); setPricing('idle'); setPhase('idle')
+      return
+    }
     if (r.outcome === 'Reject') {
       setPhase('error')
       // The faucet's own refusals in plain words; anything else is THE NETWORK'S REASON, rendered

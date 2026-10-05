@@ -108,3 +108,19 @@ export function confirmer(quote: Quote) {
     },
   }
 }
+
+/**
+ * Did the network turn a SUBMITTED transaction down because its fee fell short?
+ *
+ * With the exact fee and no margin (feeProbe.exactFee) this is the one way a confirmed quote can
+ * still fail: the cost rose in the seconds between the confirm check and execution. It is a free
+ * reject — nothing taken, nothing spent — so callers treat it exactly like a QuoteChanged: re-price
+ * and ask again. NEVER resend automatically at the new fee.
+ */
+export function isFeeShortRejection(reason: string | undefined): boolean {
+  return !!reason && (/InsufficientFeesPaid/.test(reason) || /Required fees \d+ but \d+ paid/.test(reason))
+}
+
+/** What the re-priced review says after a submitted transaction was turned down for its fee. */
+export const FEE_SHORT_MESSAGE =
+  'The network fee went up just as it was sent, so the network turned it down. Nothing was taken. Check the new fee and confirm.'

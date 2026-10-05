@@ -59,7 +59,7 @@ import { loadEpoch } from '../../crypto/journalStore'
 import { loadLedger } from '../../crypto/utxoLedger'
 import { plainError } from './v2/plainError'
 import { resolveSendPath, type PreparedFor } from './v2/sendPath'
-import { QuoteChanged } from '../../crypto/quote'
+import { FEE_SHORT_MESSAGE, QuoteChanged, isFeeShortRejection } from '../../crypto/quote'
 import { settleVerdict, journalOutcomeFor, type SettleStartedBy } from './v2/settleVerdict'
 import { GenerationGuard } from './v2/generation'
 import { firstSeenLabel, toInput, TICKER } from './v2/format'
@@ -793,6 +793,8 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
         // network's reason out of the poll — including which of those two happened — so the only
         // honest thing to show is that reason. The fallback keeps the shape of the old sentence
         // minus the part that was guessing.
+        // THE FEE ROSE AS IT WAS SENT — a free reject; price it again and ask (crypto/quote).
+        if (isFeeShortRejection(result.reason)) { void handlePrepareMove(FEE_SHORT_MESSAGE); return }
         setMoveError(plainError(
           result.reason
           ?? `The network rejected the transaction. Nothing was ${movePrepared.dir === 'reveal' ? 'made public' : 'moved'}.`,
@@ -922,6 +924,9 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
         setSendStep('settling')
         rescan()
       } else {
+        // THE FEE ROSE AS IT WAS SENT. A free reject (see crypto/quote): nothing was taken and the
+        // coins are back, so price it again and ask — never resend on our own at a new fee.
+        if (isFeeShortRejection(result.reason)) { void handleReview(FEE_SHORT_MESSAGE); return }
         // The network's own reason, for the same argument as the move flow above: "no fee was
         // taken" is not knowable from a rejection alone, and is false on the fee-only variant.
         setSendError(plainError(

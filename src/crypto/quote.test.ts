@@ -2,7 +2,7 @@
 // has moved, or when the final transaction would not be accepted at the exact quoted fee.
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { CONFIRM_FRESH_MS, QUOTE_MAX_AGE_MS, QuoteChanged, confirmQuote, confirmer } from './quote'
+import { CONFIRM_FRESH_MS, QUOTE_MAX_AGE_MS, QuoteChanged, confirmQuote, confirmer, isFeeShortRejection } from './quote'
 
 const accept = async () => ({ accepted: true as const })
 const fresh = () => Date.now()
@@ -76,5 +76,16 @@ describe('confirmer — confirm once, submit without paying for a second check',
     const c = confirmer({ preparedAt: Date.now(), simulate })
     await expect(c.ensureConfirmed()).rejects.toBeInstanceOf(QuoteChanged)
     expect(simulate).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('isFeeShortRejection', () => {
+  it('recognises the network\'s insufficient-fee rejection, in either wording', () => {
+    expect(isFeeShortRejection('The network rejected this transaction: InsufficientFeesPaid: Required fees 15199 but 15198 paid')).toBe(true)
+    expect(isFeeShortRejection('Required fees 9500 but 9491 paid')).toBe(true)
+  })
+  it('is false for every other rejection, and for none', () => {
+    expect(isFeeShortRejection('ExecutionFailure (Panic): name taken')).toBe(false)
+    expect(isFeeShortRejection(undefined)).toBe(false)
   })
 })

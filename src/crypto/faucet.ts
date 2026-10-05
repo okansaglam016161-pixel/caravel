@@ -49,7 +49,7 @@ import {
 } from '@tari-project/ootle'
 import { IndexerProvider } from '@tari-project/ootle-indexer'
 import { nextMaxEpoch } from './epoch'
-import { dryRunFee, simulateFee, withFeeMargin, type FeeSimulation } from './feeProbe'
+import { dryRunFee, exactFee, simulateFee, type FeeSimulation } from './feeProbe'
 import { confirmer } from './quote'
 import { readOutputSubstateIds } from './outputIds'
 import type { SecretKeyWallet } from '@tari-project/ootle-secret-key-wallet'
@@ -165,7 +165,7 @@ export interface PreparedClaim {
   claimAmount: bigint
   /** What the dry run measured the transaction to cost (µtTARI), before the margin. */
   dryRunCost: bigint
-  /** The fee the real transaction will reserve (µtTARI): the cost plus margin. */
+  /** The fee the claim pays (µtTARI): exactly the measured cost, no margin. */
   fee: bigint
   /** What lands in the wallet as a private coin: claimAmount − fee. */
   privateAmount: bigint
@@ -250,7 +250,8 @@ export async function prepareClaim(
     if (refusal) throw new FaucetClaimRefused(refusal)
     throw e
   }
-  const fee = withFeeMargin(cost)
+  // EXACT — no margin. A short fee here is a free reject; see feeProbe.exactFee.
+  const fee = exactFee(cost)
   if (fee >= claimAmount) {
     throw new Error(`Network fee (${fee} µtTARI) exceeds the faucet's payout — the faucet cannot cover its own claim.`)
   }

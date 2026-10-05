@@ -61,6 +61,24 @@ const DRY_RUN_ATTEMPTS = 4
 export const FEE_MARGIN_PERCENT = 2n
 export const FEE_MARGIN_FLOOR = 200n
 
+/**
+ * THE EXACT FEE — no margin — for every action whose instructions all sit in the fee intent
+ * (private send, chat payment, make public, faucet claim).
+ *
+ * Safe because a short fee there is FREE. The engine rejects a transaction that does not cover its
+ * fee and, with nothing in the main intent to fall back past, persists nothing and takes nothing
+ * (tari-ootle 0.43 runtime/tracker.rs finalize). Proven live 2026-10-05 (harness prove-short-fee,
+ * tx 8191c003…): paying 15 198 against 15 199 → Reject, fees paid 0, inputs unspent, balance
+ * unchanged. So the margin buys nothing but overcharge; a cost that moved is caught at confirm
+ * (crypto/quote) or, rarer, by that free reject — and either way the user is asked again.
+ *
+ * @names keep withFeeMargin: their register calls are in the MAIN intent, and a slightly short fee
+ * there can commit the fee intent alone — fee taken, no name.
+ */
+export function exactFee(costMicrotari: bigint): bigint {
+  return costMicrotari
+}
+
 /** Measured cost plus the margin: max(FEE_MARGIN_PERCENT of it, FEE_MARGIN_FLOOR). Exact bigint. */
 export function withFeeMargin(costMicrotari: bigint): bigint {
   const pct = (costMicrotari * FEE_MARGIN_PERCENT) / 100n

@@ -110,7 +110,7 @@ import { extractAccountAddress } from './accountAddress'
 import { loadAccountAddress, saveAccountAddress } from './accountStore'
 import { resolveAccountInputs } from './substates'
 import { nextMaxEpoch } from './epoch'
-import { dryRunFee, simulateFee, withFeeMargin, type FeeSimulation } from './feeProbe'
+import { dryRunFee, exactFee, simulateFee, type FeeSimulation } from './feeProbe'
 import { readOutputSubstateIds } from './outputIds'
 import { probeFeeFor } from './confidentialSend'
 import {
@@ -436,7 +436,7 @@ function buildReveal(
  * user saw and the amount the chain publishes.
  */
 export interface PreparedReveal {
-  /** Measured fee including margin (µtTARI) — what the review screen shows and the tx pays. */
+  /** The exact measured fee (µtTARI), no margin — what the review screen shows and the tx pays. */
   feeMicrotari: bigint
   /** What will be published: exactly the amount asked for. */
   revealedAmount: bigint
@@ -609,7 +609,8 @@ export async function prepareReveal(
   // luck rather than design — probeFeeFor makes it structural.
   const probe = await buildEnvelope(probeFeeFor(selection.total, amountMicrotari, REVEAL_FEE_RESERVE), true)
   const cost = await dryRunFee(INDEXER_URL, probe.envelope, { onBusyRetry: () => log(RETRYING_MESSAGE) })
-  const fee = withFeeMargin(cost)
+  // EXACT — no margin. A short fee here is a free reject; see feeProbe.exactFee.
+  const fee = exactFee(cost)
 
   // ── THE PROBE→REAL FEE GUARD ──
   //

@@ -717,7 +717,7 @@ async function printSubmitted(txId: string, quoted: bigint, outcome: string, rea
     if (v != null) charged = BigInt(v)
   } catch { /* leave null */ }
   rule('fees')
-  field('quoted', amt(quoted) + '   [dry run + crypto/feeProbe margin — what the UI would show]')
+  field('quoted', amt(quoted) + '   [what the UI showed before confirming]')
   field('charged', charged === null ? '(not readable from the result)' : amt(charged))
   if (charged !== null) field('shown − charged', `${quoted - charged} µtTARI` + (quoted === charged ? '   ✓ shown fee = charged fee' : '   ◀ MISMATCH'))
 }
@@ -846,7 +846,7 @@ async function cmdSend(h: Harnessed, dest: string, amount: bigint | 'all', yes: 
   })
   field('spending', `${prepared.inputCount} stealth output(s) worth ${amt(prepared.inputTotal)}`)
   field('arrives', amt(prepared.recipientAmount) + (sendAll ? '   [everything, minus the exact fee]' : '   [exactly what was asked for]'))
-  field('fee', amt(prepared.feeMicrotari) + `   [dry-run cost ${prepared.dryRunCost} + margin — charged in full]`)
+  field('fee', amt(prepared.feeMicrotari) + `   [dry-run cost ${prepared.dryRunCost}; margin ${prepared.feeMicrotari - prepared.dryRunCost}]`)
   field('change', amt(prepared.changeAmount))
   printDryRun(mark)
   printNet(mark)
@@ -1058,7 +1058,7 @@ async function cmdFaucetStatus(h: Harnessed): Promise<void> {
     const prepared = await prepareClaim(h.wallet, h.address, stage)
     field('verdict', 'Accept')
     field('dry-run cost', amt(prepared.dryRunCost))
-    field('fee (with margin)', amt(prepared.fee))
+    field('fee', amt(prepared.fee) + `   [dry-run cost ${prepared.dryRunCost}; margin ${prepared.fee - prepared.dryRunCost}]`)
     field('would receive', `${amt(prepared.privateAmount)}  (private, to this wallet)`)
   } catch (e) {
     if (e instanceof FaucetClaimRefused) field('verdict', `REFUSED — ${e.refusal}: ${e.message}`)
@@ -1998,7 +1998,7 @@ async function cmdFeeBoundary(h: Harnessed, amount: bigint, dest?: string): Prom
     let p: Probe
     try { p = await prepare() } catch (e) { field('prepare', `FAILED — ${e instanceof Error ? e.message : String(e)}`); continue }
     field('dry-run cost', amt(p.dryRunCost))
-    field('quoted fee', `${amt(p.feeMicrotari)}   (cost + margin ${p.feeMicrotari - p.dryRunCost} µtTARI)`)
+    field('quoted fee', `${amt(p.feeMicrotari)}   (cost + ${p.feeMicrotari - p.dryRunCost} µtTARI)`)
     const probes: [string, bigint][] = [
       ['at the quoted fee', p.feeMicrotari], ['at exactly the cost', p.dryRunCost], ['at cost − 1', p.dryRunCost - 1n],
       ['at cost − 100', p.dryRunCost - 100n], ['at cost − 1000', p.dryRunCost - 1000n], ['at half the cost', p.dryRunCost / 2n],

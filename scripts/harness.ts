@@ -48,7 +48,7 @@ import { beginEntry, loadJournal } from '../src/crypto/journalStore'
 import { readRevealedBalance } from '../src/crypto/revealedBalance'
 import { prepareConceal, MIN_CONCEAL_MICROTARI } from '../src/crypto/conceal'
 import { prepareReveal, MIN_REVEAL_MICROTARI, maxRevealable } from '../src/crypto/reveal'
-import { sendConfidential, describeMicrotari, maxStealthSend, MAX_FEE } from '../src/crypto/confidentialSend'
+import { prepareConfidentialSend, sendConfidential, describeMicrotari, maxStealthSend, MAX_FEE } from '../src/crypto/confidentialSend'
 import { claimFaucet, prepareClaim, FaucetClaimRefused } from '../src/crypto/faucet'
 import { FAUCET_COMPONENT_ADDRESS, FAUCET_VAULT_ADDRESS, faucetReceiptId } from '../src/crypto/faucetConfig'
 import { decodeFaucetState, decodeFaucetVault, faucetStatusFrom } from '../src/crypto/faucetStatus'
@@ -718,7 +718,7 @@ async function printSubmitted(txId: string, quoted: bigint, outcome: string, rea
   rule('fees')
   field('quoted', amt(quoted) + '   [dry run + crypto/feeProbe margin — what the UI would show]')
   field('charged', charged === null ? '(not readable from the result)' : amt(charged))
-  if (charged !== null) field('difference', amt(quoted - charged) + '   [reserved but unused; NOT refunded on this path]')
+  if (charged !== null) field('shown − charged', `${quoted - charged} µtTARI` + (quoted === charged ? '   ✓ shown fee = charged fee' : '   ◀ MISMATCH'))
 }
 
 /** WRITE. The conceal path: revealed vault → private stealth output. */
@@ -786,65 +786,58 @@ async function cmdMakePublic(h: Harnessed, amount: bigint, yes: boolean): Promis
 /**
  * WRITE. The confidential send path: private stealth inputs → someone else's stealth output.
  *
- * ── THIS ONE CANNOT BE DRY-RUN-ONLY, AND THAT IS A PROPERTY OF THE MODULE ────
- *
- * conceal and reveal expose prepare/submit as two calls, so the harness can stop between them.
- * `sendConfidential` is one call that scans, selects, prices AND submits, so there is no seam to
- * stop at — asking for one here would mean reimplementing the send, which is the one thing this
- * harness must not do. So `send` requires --yes and says why.
+ * prepareConfidentialSend gives this path the same prepare/submit seam conceal and reveal have, so
+ * without --yes it scans, selects, prices and BUILDS the real envelope, prints the exact fee, and
+ * stops one step short of submitting. With --yes it submits that same envelope, and printSubmitted
+ * compares the shown fee with the charged one.
  *
  * The recipient must be an Ootle ADDRESS. An npub is not accepted: nothing in src/crypto turns one
  * into an address — that mapping lives in the Nostr contact layer, where an address is something a
  * peer TOLD you, not something derived — so a harness that accepted an npub would have to invent
  * the lookup, and a wrong answer there sends money to a stranger.
  */
-async function cmdSend(h: Harnessed, dest: string, amount: bigint, yes: boolean, memo?: string): Promise<void> {
-  writeBanner('send  (crypto/confidentialSend.sendConfidential)', amount, yes)
+async function cmdSend(h: Harnessed, dest: string, amount: bigint | 'all', yes: boolean, memo?: string): Promise<void> {
+  const sendAll = amount === 'all'
+  writeBanner(`send${sendAll ? ' ALL' : ''}  (crypto/confidentialSend.prepareConfidentialSend)`, sendAll ? 0n : amount, yes)
   field('recipient', dest)
 
   if (dest.startsWith('npub')) {
     throw new Error(
-      'An npub cannot be resolved here. sendConfidential takes an Ootle address, and no module under\n' +
+      'An npub cannot be resolved here. A send takes an Ootle address, and no module under\n' +
       '  src/crypto maps npub → address (that lookup lives in the Nostr contact layer). Pass the\n' +
       '  recipient’s Ootle address.',
     )
   }
-  if (!yes) {
-    console.log(
-      '\n  CANNOT DRY-RUN THIS PATH. sendConfidential scans, prices AND submits in one call — there is\n' +
-      '  no prepare/submit split to stop between, unlike conceal and reveal. Re-run with --yes to\n' +
-      '  actually send, or use `make-private` / `make-public` to exercise a build without spending.',
-    )
-    return
-  }
 
-  rule('scan → select → price → submit')
+  rule('scan → select → price → build')
   const mark = net.length
-  const t0 = performance.now()
-  const result = await sendConfidential(h.wallet, h.address, {
+  const prepared = await prepareConfidentialSend(h.wallet, h.address, {
     recipient: dest,
-    amountMicrotari: amount,
+    amountMicrotari: sendAll ? 0n : amount,
+    sendAll,
     memo,
     onProgress: stage,
   })
-  const elapsed = performance.now() - t0
+  field('spending', `${prepared.inputCount} stealth output(s) worth ${amt(prepared.inputTotal)}`)
+  field('arrives', amt(prepared.recipientAmount) + (sendAll ? '   [everything, minus the exact fee]' : '   [exactly what was asked for]'))
+  field('fee', amt(prepared.feeMicrotari) + `   [dry-run cost ${prepared.dryRunCost} + margin — charged in full]`)
+  field('change', amt(prepared.changeAmount))
   printDryRun(mark)
-  // The whole call is timed, not just the wait — sendConfidential has no prepare/submit split, so
-  // scanning and pricing are inside it. The settlement figures below are still the interesting
-  // part: what matters is that the wait no longer ends at 30s with a Timeout.
-  printSettlement(mark, elapsed, result.outcome)
+  printNet(mark)
+
+  if (!yes) { console.log('\n  STOPPED BEFORE SUBMIT. Nothing was sent. Re-run with --yes to submit.'); return }
+
+  rule('submit')
+  const markSubmit = net.length
+  const t0 = performance.now()
+  const result = await prepared.submit(stage)
+  printSettlement(markSubmit, performance.now() - t0, result.outcome)
   field('recipient utxo', result.recipientUtxoId ?? 'undefined (commitment unreadable)')
   field('self outputs', result.selfOutputIds ? JSON.stringify(result.selfOutputIds) : 'undefined (statement unreadable)')
-  // The send path reads its own charged fee out of the receipt; MAX_FEE is the ceiling it priced
-  // against, so that is the honest "quoted" figure to compare when the poll came back empty.
-  await printSubmitted(result.txId, result.feeMicrotari ?? MAX_FEE, result.outcome, result.reason)
-  printNet(mark)
+  await printSubmitted(result.txId, prepared.feeMicrotari, result.outcome, result.reason)
+  printNet(markSubmit)
 }
 
-
-// ── The spend record ─────────────────────────────────────────────────────────
-
-/** What this wallet believes it has already spent, and why each entry is there. */
 function printSpendRecord(h: Harnessed): void {
   const store = loadSpentOutputs(h.address)
   const rows = Object.entries(store.records)
@@ -1941,7 +1934,10 @@ async function cmdFeeBoundary(h: Harnessed, amount: bigint, dest?: string): Prom
     ['make-public  (reveal)', () => prepareReveal(h.wallet, h.address, { amountMicrotari: amount, onProgress: stage })],
     ['make-private (conceal)', () => prepareConceal(h.wallet, h.address, { amountMicrotari: amount, onProgress: stage })],
   ]
-  void dest
+  if (dest) {
+    cases.unshift(['private send', () => prepareConfidentialSend(h.wallet, h.address, { recipient: dest, amountMicrotari: amount, onProgress: stage })])
+    cases.push(['private send ALL', () => prepareConfidentialSend(h.wallet, h.address, { recipient: dest, amountMicrotari: 0n, sendAll: true, onProgress: stage })])
+  }
 
   const show = (s: FeeSimulation) => s.accepted ? `Accept  (required ${s.cost})` : `${s.kind.toUpperCase()} — ${s.reason}`
   for (const [label, prepare] of cases) {
@@ -2007,8 +2003,9 @@ WRITE — MOVES REAL TESTNET FUNDS. Builds and prices without --yes; submits wit
                               a NEW wallet; its phrase is written to a 600 file, never printed.
   make-private <amount>       conceal: revealed vault  →  private stealth output.
   make-public  <amount>       reveal:  private outputs →  revealed vault balance.
-  send <ootle-address> <amount> [memo]
-                              confidentialSend. Requires --yes (no dry-run seam — see the source).
+  send <ootle-address> <amount|all> [memo]
+                              prepareConfidentialSend → submit. 'all' is MAX: everything reachable,
+                              the exact fee out of it, no change. Builds and prices without --yes.
 
 Amounts are TARI ("12.5") or raw µtTARI ("12500000u").
 
@@ -2121,7 +2118,7 @@ export async function main(argv: string[]): Promise<void> {
         break
       case 'send':
         if (!args[1] || !args[2]) throw new Error('send needs a recipient address and an amount.')
-        await cmdSend(h, args[1], parseAmount(args[2]), yes, args[3])
+        await cmdSend(h, args[1], args[2] === 'all' ? 'all' : parseAmount(args[2]), yes, args[3])
         break
       default:
         throw new Error(`Unknown command "${cmd}".\n${USAGE}`)

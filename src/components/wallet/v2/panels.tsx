@@ -374,14 +374,12 @@ export type SendView =
       source: SendSource
       feeMicrotari: bigint | null
       /**
-       * The fee is a CEILING, not a measurement.
-       *
-       * The move flow prices itself before review, so it shows an exact figure. A send does its dry
-       * run inside submission and has no prepare/submit split, so before confirming, a ceiling is
-       * the only honest thing we can say — and saying it as though it were exact would be a
-       * quieter kind of lie. The success screen then shows what was actually paid.
+       * The EXACT fee the transaction pays — both sources price by dry run before review, and the
+       * figure shown is the figure charged (the margin is part of it; nothing is refunded). Null
+       * while pricing.
        */
-      feeIsCeiling?: boolean
+      /** MAX: everything reachable is sent, and the fee comes out of it. `amountMicrotari` is what arrives. */
+      sendAll?: boolean
     }
   /** `recipient` is display-only — the V3 frame names who the payment is going to while it runs. */
   | { step: 'sending'; recipient: string; amountMicrotari: bigint; progress: string; source: SendSource }
@@ -772,24 +770,27 @@ export function SendPanel({ view, hidden, onSource, onRecipient, onAmount, onNot
               {isPrivate ? 'Private funds' : 'Public funds'}
             </span>
           </div>
-          {/* A CEILING IS NOT A MEASUREMENT. The private path dry-runs inside submission, so before
-              confirming there is no exact figure to give — and presenting the ceiling as though
-              there were would be a quieter kind of lie than showing no fee at all. The public path
-              prices itself before review, so it states the fee flatly. The LABEL carries the
-              difference; the note below spells it out. */}
+          {/* THE EXACT FEE. Both sources dry-run before review, and the transaction pays exactly this
+              — the margin included, since nothing comes back — so it is stated flatly. */}
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
-            <span style={{ color: C.mutedDim }}>{view.feeIsCeiling ? 'Fee, at most' : 'Network fee'}</span>
+            <span style={{ color: C.mutedDim }}>Network fee</span>
             <span style={{ fontFamily: MONO, fontWeight: 500, color: C.primary }}>
               {pricing
                 ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontFamily: 'inherit', color: C.faint }}><Spinner size={12} />Pricing…</span>
                 : `${fmt6(view.feeMicrotari!)} ${TICKER}`}
             </span>
           </div>
+          {!pricing && (
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
+              <span style={{ color: C.mutedDim }}>Total from your balance</span>
+              <span style={{ fontFamily: MONO, fontWeight: 600, color: C.primary }}>{fmt6(view.amountMicrotari + view.feeMicrotari!)} {TICKER}</span>
+            </div>
+          )}
         </div>
 
-        {view.feeIsCeiling && !pricing && (
+        {view.sendAll && !pricing && (
           <div style={{ fontSize: 12.5, color: C.mutedDim, marginTop: 12, textAlign: 'center' }}>
-            The exact fee is known once it settles.
+            Sending everything. The fee comes out of it, so this is exactly what arrives.
           </div>
         )}
 
@@ -861,9 +862,7 @@ export function SendPanel({ view, hidden, onSource, onRecipient, onAmount, onNot
           {view.lagged && <><br />Confirmed on the network — your balance hasn’t caught up yet. Nothing is at risk.</>}
         </>}
       >
-        {/* THE OTHER HALF OF THE CEILING. Review could only promise "at most"; this is what was
-            actually paid, and dropping it would leave a private send with no place that ever
-            states its real fee. */}
+        {/* What was charged, read from the receipt — the same figure review quoted. */}
         <Receipt fee={view.feeMicrotari} txId={view.txId} onCopy={() => onCopyTx(view.txId)} />
         <ActionButton tone="quiet" onClick={onDone} mt={24}>Done</ActionButton>
       </Outcome>

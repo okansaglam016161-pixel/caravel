@@ -16,36 +16,42 @@
 // STATE, one refactor away from not holding, protecting against a silent wrong-source spend. So the
 // decision is made here instead, where "public without an envelope" has no path to the private
 // builder at all and is a refusal rather than a fallback.
+//
+// BOTH SOURCES ARE PREPARED NOW. The private path used to be "built and submitted in one call", so
+// only the public branch carried an envelope. Since both price before review, both require theirs —
+// and the envelope is TAGGED with the source it was priced for, so an envelope from the other
+// balance (a source toggled after pricing) is refused rather than submitted.
 
 export type SendSourceChoice = 'private' | 'public'
 
-export type SendPath<TPrepared> =
+/** An envelope priced at review, tagged with the balance it spends. */
+export type PreparedFor<TPublic, TPrivate> =
+  | { source: 'public'; p: TPublic }
+  | { source: 'private'; p: TPrivate }
+
+export type SendPath<TPublic, TPrivate> =
   /** Spend the public balance, using exactly the envelope that was priced at review. */
-  | { kind: 'public'; prepared: TPrepared }
-  /** Spend the private balance, built and submitted in one call. */
-  | { kind: 'private' }
+  | { kind: 'public'; prepared: TPublic }
+  /** Spend the private balance, using exactly the envelope that was priced at review. */
+  | { kind: 'private'; prepared: TPrivate }
   /** Refuse. `reason` is fit to show a user. */
   | { kind: 'refuse'; reason: string }
+
+const NOT_READY = 'This payment wasn’t ready yet, so nothing was sent. Go back and try again.'
 
 /**
  * Decide, without a fallback.
  *
- * The public branch REQUIRES its prepared envelope. There is deliberately no "otherwise send it
- * privately" arm — a missing envelope means the pricing step did not complete, and the correct
- * response to that is to stop, not to quietly spend different money.
+ * Each branch REQUIRES its own prepared envelope. A missing one means the pricing step did not
+ * complete, and one priced for the other balance means the choice changed after pricing; the
+ * correct response to either is to stop, not to quietly spend different money.
  */
-export function resolveSendPath<TPrepared>(
+export function resolveSendPath<TPublic, TPrivate>(
   source: SendSourceChoice,
-  prepared: TPrepared | null | undefined,
-): SendPath<TPrepared> {
-  if (source === 'public') {
-    if (!prepared) {
-      return {
-        kind: 'refuse',
-        reason: 'This payment wasn’t ready yet, so nothing was sent. Go back and try again.',
-      }
-    }
-    return { kind: 'public', prepared }
-  }
-  return { kind: 'private' }
+  prepared: PreparedFor<TPublic, TPrivate> | null | undefined,
+): SendPath<TPublic, TPrivate> {
+  if (!prepared || prepared.source !== source) return { kind: 'refuse', reason: NOT_READY }
+  return prepared.source === 'public'
+    ? { kind: 'public', prepared: prepared.p }
+    : { kind: 'private', prepared: prepared.p }
 }

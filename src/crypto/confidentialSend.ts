@@ -43,12 +43,12 @@ import {
 } from '@tari-project/ootle'
 import { IndexerProvider } from '@tari-project/ootle-indexer'
 import { nextMaxEpoch } from './epoch'
-import { dryRunFee, withFeeMargin } from './feeProbe'
+import { dryRunFee, simulateFee, withFeeMargin, type FeeSimulation } from './feeProbe'
 import { readOutputSubstateIds } from './outputIds'
 // The owned-UTXO scan lives in stealthUtxos.ts so the send and reveal paths share ONE input
 // discovery. It was moved out of this file unchanged; nothing about the behaviour here differs.
 import {
-  RESOURCE_HEX, StaticSigner, reachableTotal, scanOwnedUtxos, selectStealthInputs,
+  MAX_STEALTH_INPUTS, RESOURCE_HEX, StaticSigner, reachableTotal, scanOwnedUtxos, selectStealthInputs,
 } from './stealthUtxos'
 import type { SecretKeyWallet } from '@tari-project/ootle-secret-key-wallet'
 import { awaitFinality } from './finality'
@@ -58,10 +58,10 @@ import { INDEXER_URL } from './indexerConfig'
 
 /**
  * CEILING, not the fee. The fee actually paid is discovered per transaction by dry run (see
- * crypto/feeProbe.ts) — 0.39's fee tables moved enough to break every hardcoded figure, so this is
- * now only the upper bound: what the UI shows as "≤ fee", what the balance guards reserve, and what
- * the dry run reserves while pricing. A transaction whose measured fee exceeds it is refused with a
- * clear message rather than submitted to fail on-chain.
+ * crypto/feeProbe.ts) and shown exactly before confirming — 0.39's fee tables moved enough to break
+ * every hardcoded figure, so this is only the upper bound: what the balance guards reserve, and what
+ * the dry run reserves while pricing. It is never shown as a fee. A transaction whose measured fee
+ * exceeds it is refused with a clear message rather than submitted to fail on-chain.
  *
  * RAISED FROM 10 000, WHICH 0.39 HAD ALREADY BROKEN. A send measured on esmeralda on 2026-08-20
  * cost 16 138 µtTARI (dry run predicted 16 580; reserved 20 725 with margin), so the old ceiling was
@@ -116,23 +116,68 @@ export interface SendResult {
 
 export interface SendParams {
   recipient: string
+  /**
+   * What the recipient receives — exactly, never adjusted. Ignored when `sendAll` is set, where
+   * the amount is whatever the reachable outputs hold once the fee is paid.
+   */
   amountMicrotari: bigint
+  /**
+   * "Send all" — MAX. Spend every output selection can reach (the largest MAX_STEALTH_INPUTS) and
+   * send their total minus the EXACT fee, with no change output. See prepareConfidentialSend.
+   */
+  sendAll?: boolean
   memo?: string
   payRef?: string
   onProgress?: (msg: string) => void
 }
 
-// ── helpers ───────────────────────────────────────────────────────────────────
-
+/** A priced, built, signed private send — everything except pressing send. */
+export interface PreparedConfidentialSend {
+  /** Measured fee including margin (µtTARI) — what the review screen shows and the tx pays. */
+  feeMicrotari: bigint
+  /** What the pricing dry run measured, before the margin (µtTARI). */
+  dryRunCost: bigint
+  /** What the recipient receives. The typed amount, or on `sendAll` the reachable total − fee. */
+  recipientAmount: bigint
+  /** Back to the sender: `inputTotal − amount − fee`. Zero on `sendAll` (and on exact cover). */
+  changeAmount: bigint
+  /** How many stealth outputs are being spent. */
+  inputCount: number
+  /** Their total value. */
+  inputTotal: bigint
+  /** Substate ids of the outputs this send will consume. */
+  spentInputIds: string[]
+  /** Dry-run a twin of the real transaction at `feeMicrotari` (default: the prepared fee). Free. */
+  simulate: (feeMicrotari?: bigint) => Promise<FeeSimulation>
+  /** Send THE envelope that was priced. Resolves once the transaction has a final decision. */
+  submit: (onProgress?: (msg: string) => void) => Promise<SendResult>
+}
 
 // ── main export ───────────────────────────────────────────────────────────────
 
+/** Prepare and submit in one call. The one-shot form, for callers with nothing to review. */
 export async function sendConfidential(
   wallet: SecretKeyWallet,
   senderAddress: string,
   params: SendParams,
 ): Promise<SendResult> {
-  const { recipient, amountMicrotari, memo, payRef, onProgress } = params
+  const prepared = await prepareConfidentialSend(wallet, senderAddress, params)
+  return prepared.submit(params.onProgress)
+}
+
+/**
+ * Price and build a private send without sending it.
+ *
+ * The same two-phase shape as prepareReveal: scanning, selection, the dry run and the REAL build
+ * all happen here, so the review screen shows the exact fee the transaction pays, and `submit`
+ * sends the very envelope that was priced — no rebuild, no re-selection, no second fee.
+ */
+export async function prepareConfidentialSend(
+  wallet: SecretKeyWallet,
+  senderAddress: string,
+  params: SendParams,
+): Promise<PreparedConfidentialSend> {
+  const { recipient, memo, payRef, onProgress, sendAll = false } = params
   const log = (msg: string) => onProgress?.(msg)
 
   // Connect indexer first — lets ootle-secret-key-wallet __tla tick before wallet ops
@@ -162,20 +207,17 @@ export async function sendConfidential(
   // which would change its fee, which would change the selection: a loop with no fixed point.
   // Because the measured fee is below the ceiling, the pinned inputs still cover it and the surplus
   // simply comes back as a slightly larger change output.
-  const selection = selectStealthInputs(utxos, amountMicrotari + MAX_FEE)
+  //
+  // SEND ALL takes every output selection can reach instead, and has no change at all: the amount
+  // is what is left of their total once the fee is paid.
+  const selection = sendAll ? selectAllReachable(utxos) : selectStealthInputs(utxos, params.amountMicrotari + MAX_FEE)
+  if (sendAll && selection.total <= MAX_FEE) {
+    throw new Error(`Your private balance (${selection.total} µtTARI) is too small to cover a network fee.`)
+  }
   log(`Spending ${describeMicrotari(selection.total)} TARI from ${selection.inputs.length} payment${selection.inputs.length === 1 ? '' : 's'} you’ve received`)
 
-  // Build outputs
-  const recipientOutput = createOutput({
-    destination: recipient,
-    amount: amountMicrotari,
-    resourceAddress: TARI_RESOURCE_ADDRESS,
-    ...(memo ? {
-      memo: payRef
-        ? { PayRefAndBytes: { pay_ref: payRef, message: memo } }
-        : { Message: memo },
-    } : {}),
-  })
+  /** What the recipient gets at a given fee. Fixed for a typed amount; the remainder on send-all. */
+  const amountAt = (feeMicrotari: bigint) => sendAll ? selection.total - feeMicrotari : params.amountMicrotari
 
   log('Building transaction…')
   // 0.39: mandatory validity window — read ONCE and reused by the pricing build and the real one,
@@ -188,8 +230,20 @@ export async function sendConfidential(
   // the two builds use fresh output masks, so the probe's commitment names a UTXO that will never
   // exist and announcing it would point every payment message at nothing.
   async function buildEnvelope(feeMicrotari: bigint, dryRun: boolean) {
+    const amountMicrotari = amountAt(feeMicrotari)
     const split = planStealthSend(amountMicrotari, feeMicrotari, selection.total)
     assertStealthSendSplit(split)
+
+    const recipientOutput = createOutput({
+      destination: recipient,
+      amount: amountMicrotari,
+      resourceAddress: TARI_RESOURCE_ADDRESS,
+      ...(memo ? {
+        memo: payRef
+          ? { PayRefAndBytes: { pay_ref: payRef, message: memo } }
+          : { Message: memo },
+      } : {}),
+    })
 
     // A zero-value change output would create a worthless UTXO, so exact cover emits none. The
     // recipient's output is always present, so the statement never has zero outputs.
@@ -254,14 +308,16 @@ export async function sendConfidential(
     // `dry_run` must ride INSIDE the sealed envelope — the dry-run endpoint refuses anything else.
     const toSign  = dryRun ? { ...unsignedTx, dry_run: true } : unsignedTx
     const signed  = await signTransaction([ootleWallet, new StaticSigner(oneTimeSigs)], toSign, sealKP)
-    return { envelope: sealTransaction(signed), recipientUtxoId, selfOutputIds }
+    return { envelope: sealTransaction(signed), split, recipientUtxoId, selfOutputIds }
   }
 
   log('Estimating network fee…')
   // Priced with (almost always) the ceiling reserved, which is also what the selection above set
   // aside — so a probe can never fail for want of funds the real send would have had. The "almost"
-  // is what keeps the probe the same SHAPE as the real send; see probeFeeFor.
-  const probe = await buildEnvelope(probeFeeFor(selection.total, amountMicrotari), true)
+  // is what keeps the probe the same SHAPE as the real send; see probeFeeFor. On send-all the
+  // probe reserves the full ceiling and, like the real send, has no change: one output either way.
+  const reserved = sendAll ? MAX_FEE : probeFeeFor(selection.total, params.amountMicrotari)
+  const probe = await buildEnvelope(reserved, true)
   const cost  = await dryRunFee(INDEXER_URL, probe.envelope, { onBusyRetry: () => log(RETRYING_MESSAGE) })
   const fee   = withFeeMargin(cost)
   // AGAINST WHAT THE PROBE RESERVED, not the raw ceiling. Two things follow from that, and the
@@ -269,7 +325,6 @@ export async function sendConfidential(
   // the probe reserves the LARGEST fee this transaction may pay — a real fee at or below it always
   // leaves at least as much change as the probe had. Since probeFeeFor guarantees the probe a
   // change output, the real build provably has one too, and the priced shape is the submitted shape.
-  const reserved = probeFeeFor(selection.total, amountMicrotari)
   if (fee > reserved) {
     throw new Error(
       `Network fee (${fee} µtTARI) exceeds this wallet's ${MAX_FEE} µtTARI ceiling. ` +
@@ -278,60 +333,77 @@ export async function sendConfidential(
   }
   log(`Network fee: ${fee} µtTARI`)
 
-  const { envelope, recipientUtxoId, selfOutputIds } = await buildEnvelope(fee, false)
-
+  const real = await buildEnvelope(fee, false)
   const spentInputIds = selection.inputs.map(u => u.substateId)
 
-  log('Submitting transaction…')
-  const sub = await submitOnce(() => provider.submitTransaction(envelope), {
-    landed: inputsStillUnspent(spentInputIds),
-    onBusyRetry: () => log(RETRYING_MESSAGE),
-  })
-  const txId = sub.transaction_id as string
-  log('Submitted — waiting for the network to finalise it…')
+  return {
+    feeMicrotari: fee,
+    dryRunCost: cost,
+    recipientAmount: real.split.recipientAmount,
+    changeAmount: real.split.changeAmount,
+    inputCount: selection.inputs.length,
+    inputTotal: selection.total,
+    spentInputIds,
+    simulate: async (feeMicrotari: bigint = fee) =>
+      simulateFee(INDEXER_URL, (await buildEnvelope(feeMicrotari, true)).envelope, { fee: feeMicrotari }),
+    submit: async (onSubmitProgress?: (msg: string) => void) => {
+      const slog = (m: string) => onSubmitProgress?.(m)
+      slog('Submitting transaction…')
+      const sub = await submitOnce(() => provider.submitTransaction(real.envelope), {
+        landed: inputsStillUnspent(spentInputIds),
+        onBusyRetry: () => slog(RETRYING_MESSAGE),
+      })
+      const txId = sub.transaction_id as string
+      slog('Submitted — waiting for the network to finalise it…')
 
-// ── THE SPEND RECORD, RESOLVED IN THE SAME FUNCTION THAT SUBMITS ─────────────
-//
-// Locking happens HERE rather than at the UI call site, and that is a correctness requirement
-// rather than a convenience. `markLocked` has to run between submitting and hearing back, and this
-// function does not return until it HAS heard back — so a call site could not lock in that window
-// even if it wanted to. Leaving it to the caller would also mean every future call site has to
-// remember, and the cost of forgetting is a transaction the chain rejects after taking its fee.
-//
-// The verdict mapping is the reference wallet's (crypto/spentOutputs, OutputStatus):
-//   Commit  → promoteToSpent   the locks become facts.
-//   Reject  → release          the inputs were never consumed; give them back. Note this covers
-//                              AcceptFeeRejectRest, where the fee committed and nothing moved —
-//                              txResult.ts folds that into `Reject`, and it is the right call
-//                              here: the coins are untouched.
-//   Timeout → LEAVE LOCKED     not a verdict. Since the wait moved to the SSE watcher
-//                              (crypto/finality, 180s) a timeout is rare and means nothing was
-//                              legible — not that the transaction failed — so unlocking on one
-//                              would risk handing a spent coin back to the next selection.
-  markLocked(senderAddress, spentInputIds, txId)
+      // ── THE SPEND RECORD, RESOLVED IN THE SAME FUNCTION THAT SUBMITS ─────────────
+      //
+      // Locking happens HERE rather than at the UI call site, and that is a correctness requirement
+      // rather than a convenience. `markLocked` has to run between submitting and hearing back, and
+      // this function does not return until it HAS heard back — so a call site could not lock in
+      // that window even if it wanted to.
+      //
+      // The verdict mapping is the reference wallet's (crypto/spentOutputs, OutputStatus):
+      //   Commit  → promoteToSpent   the locks become facts.
+      //   Reject  → release          the inputs were never consumed; give them back. Note this covers
+      //                              AcceptFeeRejectRest, where the fee committed and nothing moved —
+      //                              txResult.ts folds that into `Reject`, and it is the right call
+      //                              here: the coins are untouched.
+      //   Timeout → LEAVE LOCKED     not a verdict. A timeout means nothing was legible — not that
+      //                              the transaction failed — so unlocking on one would risk handing
+      //                              a spent coin back to the next selection.
+      markLocked(senderAddress, spentInputIds, txId)
 
-  // TOLD, NOT ASKED — see crypto/finality.
-  const { outcome, reason, body } = await awaitFinality(provider, txId)
-  // The fee lives at Finalized.execution_result.finalize.fee_receipt — NOT Finalized.finalize,
-  // which is where this looked until CP4 and why `feeMicrotari` was always undefined and the UI
-  // always fell back to showing the ceiling. (The DRY-RUN endpoint really does answer at
-  // result.finalize with no execution_result wrapper; the two shapes differ, which is what made
-  // the wrong path look plausible. See crypto/feeProbe.)
-  //
-  // `total_fees_paid` is the RESERVED amount, and that is the honest number to show: the
-  // overcharge is NOT refunded to the sender in this stealth flow. Measured — a send reserving
-  // 20 725 reported total_fee_overcharge 4 587, and the wallet's change UTXO came back at exactly
-  // value - amount - 20 725, with no refund output. So the user paid 20 725.
-  const feePaid = (body as {
-    result?: { Finalized?: { execution_result?: { finalize?: { fee_receipt?: { total_fees_paid?: number | string } } } } }
-  } | null)?.result?.Finalized?.execution_result?.finalize?.fee_receipt?.total_fees_paid
-  const feeMicrotari = feePaid != null ? BigInt(feePaid) : undefined
-  provider.stopWatcher?.()
+      // TOLD, NOT ASKED — see crypto/finality.
+      const { outcome, reason, body } = await awaitFinality(provider, txId)
+      // The fee lives at Finalized.execution_result.finalize.fee_receipt. `total_fees_paid` is the
+      // RESERVED amount — the overcharge is not refunded (see feeProbe's margin note) — so it is
+      // the prepared fee, and the honest number to show.
+      const feePaid = (body as {
+        result?: { Finalized?: { execution_result?: { finalize?: { fee_receipt?: { total_fees_paid?: number | string } } } } }
+      } | null)?.result?.Finalized?.execution_result?.finalize?.fee_receipt?.total_fees_paid
+      const feeMicrotari = feePaid != null ? BigInt(feePaid) : undefined
+      provider.stopWatcher?.()
 
-  if (outcome === 'Commit') promoteToSpent(senderAddress, txId)
-  else if (outcome === 'Reject') release(senderAddress, txId)
+      if (outcome === 'Commit') promoteToSpent(senderAddress, txId)
+      else if (outcome === 'Reject') release(senderAddress, txId)
 
-  return { txId, outcome, reason, recipientUtxoId, feeMicrotari, selfOutputIds, spentInputIds }
+      return { txId, outcome, reason, recipientUtxoId: real.recipientUtxoId, feeMicrotari, selfOutputIds: real.selfOutputIds, spentInputIds }
+    },
+  }
+}
+
+/**
+ * Every output selection can reach in one transaction — the largest MAX_STEALTH_INPUTS — for
+ * "send all". The same set reachableTotal sums, so MAX and the build agree on what "all" is.
+ */
+export function selectAllReachable<T extends { value: bigint }>(utxos: T[]): { inputs: T[]; total: bigint } {
+  const inputs = utxos
+    .filter(u => u.value > 0n)
+    .sort((a, b) => (a.value > b.value ? -1 : a.value < b.value ? 1 : 0))
+    .slice(0, MAX_STEALTH_INPUTS)
+  if (inputs.length === 0) throw new Error('No private funds found. This wallet holds no spendable outputs.')
+  return { inputs, total: inputs.reduce((sum, u) => sum + u.value, 0n) }
 }
 
 // ── The fund-critical arithmetic, isolated so it can be tested ────────────────
@@ -432,20 +504,14 @@ export function probeFeeFor(inputTotal: bigint, amountMicrotari: bigint, ceiling
 }
 
 /**
- * The largest amount a confidential send can carry, given the outputs the wallet holds.
+ * The largest TYPED amount a confidential send can carry, given the outputs the wallet holds.
  *
- * A STEALTH SEND SPENDS EXACTLY ONE OUTPUT. The selection above requires `u.value > amount + fee`
- * from a SINGLE utxo — there is no multi-input path here — so the spendable ceiling is set by the
- * LARGEST output, not by the balance. On a wallet whose value is spread across many outputs those
- * two numbers diverge enormously: measured on the real seeded wallet, a balance-based MAX offered
- * 1107.70 TARI when the largest output could carry 245.90, so every press of MAX was guaranteed to
- * fail with "Insufficient funds".
+ * A typed amount is priced with the full MAX_FEE ceiling reserved on top of it, so this is the
+ * reachable total (the largest MAX_STEALTH_INPUTS outputs — not the balance) minus that ceiling.
+ * MAX itself no longer uses it: MAX is `sendAll`, which spends the same reachable set and sends
+ * its total minus the EXACT fee, so nothing is held back for a ceiling that is never paid.
  *
- * THE MINUS ONE IS NOT PADDING. The filter is STRICTLY greater (`u.value > needed`), so an amount
- * of `largest - MAX_FEE` would need `largest > largest`, which is false. One microtari below that
- * is the true maximum, and getting this off by one would reintroduce exactly the bug it fixes.
- *
- * Returns 0n when no output can carry a payment at all — treat that as "MAX unavailable".
+ * Returns 0n when no output can carry a payment at all — treat that as "nothing sendable".
  */
 export function maxStealthSend(outputValues: readonly bigint[]): bigint {
   const reachable = reachableTotal(outputValues)

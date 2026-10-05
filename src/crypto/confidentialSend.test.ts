@@ -13,6 +13,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   MAX_FEE, assertStealthSendSplit, describeMicrotari, maxStealthSend, planStealthSend, probeFeeFor,
+  selectAllReachable,
 } from './confidentialSend'
 import { MAX_STEALTH_INPUTS, reachableTotal, selectStealthInputs } from './stealthUtxos'
 
@@ -276,6 +277,32 @@ describe('probe shape === submit shape', () => {
 // It was `(Number(selection.total) / Number(MICROTARI_PER_TARI)).toFixed(6)` — a float on an
 // amount, the one thing this module does not do, sitting in the line that tells the user how much
 // is being spent. "Only a log line" is how the first wrong amount always gets in.
+
+describe('send all — MAX spends the reachable set and sends its total minus the exact fee', () => {
+  const coin = (value: bigint) => ({ value })
+
+  it('selects the largest MAX_STEALTH_INPUTS outputs — the set reachableTotal sums', () => {
+    const many = Array.from({ length: MAX_STEALTH_INPUTS + 6 }, (_, i) => coin(BigInt(1_000 + i)))
+    const sel = selectAllReachable(many)
+    expect(sel.inputs).toHaveLength(MAX_STEALTH_INPUTS)
+    expect(sel.total).toBe(reachableTotal(many.map(c => c.value)))
+    expect(sel.inputs.every(c => c.value >= 1_006n)).toBe(true)   // the six smallest are the ones left out
+  })
+
+  it('skips zero-value outputs and refuses an empty set', () => {
+    expect(selectAllReachable([coin(0n), coin(5n)]).inputs).toHaveLength(1)
+    expect(() => selectAllReachable([coin(0n)])).toThrow(/No private funds/)
+  })
+
+  it('has no change at the probe fee or at the real one — one output, the same shape', () => {
+    const total = 994_912_975n
+    for (const fee of [MAX_FEE, 15_502n]) {
+      const split = planStealthSend(total - fee, fee, total)
+      expect(split.changeAmount).toBe(0n)
+      expect(split.recipientAmount + split.feeMicrotari).toBe(total)
+    }
+  })
+})
 
 describe('describeMicrotari', () => {
   it('formats a plain amount to six places', () => {

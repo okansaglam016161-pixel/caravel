@@ -5,9 +5,10 @@
 // It is a RESKIN. Every handler below is the one that shipped: handlePrepareMove still calls
 // prepareConceal / prepareReveal and holds the built envelope, handleConfirmMove still submits that
 // exact envelope and hands the committed transaction to WalletContext's settle loop,
-// handleConfirmSend still calls sendConfidential and records the outcome. Nothing under src/crypto
-// changed, and neither did the settle rules. What changed is that the states now render through the
-// v2 components in ./v2, so the modal matches the approved design.
+// handleConfirmSend submits the envelope priced at review (public or private) and records the
+// outcome. The reskin changed nothing under src/crypto and none of the settle rules. What changed
+// is that the states now render through the v2 components in ./v2, so the modal matches the
+// approved design.
 //
 // The one genuinely new piece of logic is the DERIVATION at the bottom — turning the shipped state
 // machine into the props those components take. It computes no amounts of its own beyond
@@ -30,7 +31,8 @@ import { MIN_CONCEAL_MICROTARI, prepareConceal, type PreparedConceal } from '../
 import { MIN_REVEAL_MICROTARI, maxRevealable, prepareReveal, type PreparedReveal } from '../../crypto/reveal'
 import { loadAccountAddress } from '../../crypto/accountStore'
 import FaucetClaimPanel from './FaucetClaimPanel'
-import { sendConfidential, tariToMicrotari, maxStealthSend, MAX_FEE, type SendOutcome } from '../../crypto/confidentialSend'
+import { prepareConfidentialSend, tariToMicrotari, maxStealthSend, MAX_FEE, type PreparedConfidentialSend, type SendOutcome } from '../../crypto/confidentialSend'
+import { reachableTotal } from '../../crypto/stealthUtxos'
 import {
   MIN_PUBLIC_SEND_MICROTARI, assertValidRecipient, maxPublicSend, preparePublicSend,
   type PreparedPublicSend,
@@ -56,7 +58,7 @@ import { reconcile } from '../../crypto/reconcile'
 import { loadEpoch } from '../../crypto/journalStore'
 import { loadLedger } from '../../crypto/utxoLedger'
 import { plainError } from './v2/plainError'
-import { resolveSendPath } from './v2/sendPath'
+import { resolveSendPath, type PreparedFor } from './v2/sendPath'
 import { settleVerdict, journalOutcomeFor, type SettleStartedBy } from './v2/settleVerdict'
 import { GenerationGuard } from './v2/generation'
 import { firstSeenLabel, toInput, TICKER } from './v2/format'
@@ -278,8 +280,16 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
    * Defaults to private — the wallet's primary balance, and the one with nothing to disclose.
    */
   const [sendSource, setSendSource] = useState<SendSource>('private')
-  /** A priced, built public send, held between review and confirm. Null on the private path. */
-  const [sendPrepared, setSendPrepared] = useState<PreparedPublicSend | null>(null)
+  /**
+   * A priced, built send, held between review and confirm — TAGGED with the balance it spends, so
+   * confirm can refuse one priced for the other (see v2/sendPath). Both sources price before review.
+   */
+  const [sendPrepared, setSendPrepared] = useState<PreparedFor<PreparedPublicSend, PreparedConfidentialSend> | null>(null)
+  /**
+   * MAX on the private balance: send everything reachable, the EXACT fee out of it, no change.
+   * The amount that arrives is only known once priced, so review shows it from the envelope.
+   */
+  const [sendAll, setSendAll] = useState(false)
   /**
    * The exact µtTARI MAX asked for, when MAX was used — the M2 lesson, applied to Send.
    *
@@ -490,6 +500,12 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
       return null
     }
 
+    // SEND ALL is checked when it is priced: its amount is whatever the fee leaves, so there is no
+    // typed figure to hold against a ceiling here.
+    if (sendAll) {
+      return reachableTotal(outputValues) > MAX_FEE ? null : 'You have no private funds to send yet.'
+    }
+
     // Against the REACHABLE ceiling, not the balance. A stealth send spends up to
     // MAX_STEALTH_INPUTS outputs, so a balance spread across more than that — or across dust the
     // selector cannot reach — is not all sendable in one payment. Saying so here beats an
@@ -505,10 +521,9 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
   /**
    * Review.
    *
-   * The two sources reach it differently, and the difference is honest rather than incidental. A
-   * PUBLIC send has a prepare/submit split, so it is priced here by dry run and the review shows an
-   * EXACT fee. A PRIVATE send has no such split — confidentialSend dry-runs inside submission — so
-   * its review can only show a ceiling. Neither is dressed up as the other.
+   * Both sources are priced here by dry run, and the review shows the EXACT fee — the one the
+   * transaction pays, since the margin is never refunded. Confirm then submits the very envelope
+   * that was priced.
    */
   async function handleReview() {
     const err = validateSendForm()
@@ -519,19 +534,26 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
     setSendValidationError('')
     setSendPrepared(null)
 
-    if (sendSource !== 'public') { setSendStep('review'); return }
-
     // Priced in place: review renders with a spinner on the fee row until this resolves.
     const token = sendGen.current.begin()
     setSendStep('review')
     setSendProgress('')
     try {
       if (!wallet || !address) return
-      const prepared = await preparePublicSend(wallet, address, parseOotleAddress, {
-        recipient: sendRecipient.trim(),
-        amountMicrotari: sendExact ?? tariToMicrotari(parseFloat(sendAmount)),
-        onProgress: setSendProgress,
-      })
+      const amountMicrotari = sendExact ?? tariToMicrotari(parseFloat(sendAmount))
+      const prepared: PreparedFor<PreparedPublicSend, PreparedConfidentialSend> = sendSource === 'public'
+        ? { source: 'public', p: await preparePublicSend(wallet, address, parseOotleAddress, {
+            recipient: sendRecipient.trim(),
+            amountMicrotari,
+            onProgress: setSendProgress,
+          }) }
+        : { source: 'private', p: await prepareConfidentialSend(wallet, address, {
+            recipient: sendRecipient.trim(),
+            amountMicrotari,
+            sendAll,
+            memo: sendNote || undefined,
+            onProgress: setSendProgress,
+          }) }
       if (sendGen.current.isStale(token)) return
       setSendPrepared(prepared)
     } catch (e) {
@@ -548,7 +570,7 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
     setSendStep('form'); setSendValidationError(''); setSendProgress('')
     setSendTxId(''); setSendError(''); setSendFee(null); setSendOutcome(null)
     if (sendTxId) acknowledgeSettle(sendTxId)
-    setSendPrepared(null); setSendExact(null); setSendLagging(false)
+    setSendPrepared(null); setSendExact(null); setSendAll(false); setSendLagging(false)
     // `sendSource` is deliberately NOT reset — it is the user's standing preference for this
     // session, and silently flipping it back after every payment would be its own surprise.
   }
@@ -743,8 +765,9 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
   }
 
   async function handleConfirmSend() {
-    if (!wallet || !address) return
-    const amountMicrotari = sendExact ?? tariToMicrotari(parseFloat(sendAmount))
+    if (!wallet || !address || !sendPrepared) return
+    // What arrives, from the priced envelope — on send-all it is not what the field showed.
+    const amountMicrotari = sendPrepared.p.recipientAmount
     setSendStep('sending')
     setSendProgress('Connecting…')
     setSendTxId('')
@@ -759,7 +782,7 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
     const journalId = beginEntry(address, {
       kind: 'send',
       amountMicrotari,
-      feeMicrotari: null,               // not known until the receipt comes back
+      feeMicrotari: sendPrepared.p.feeMicrotari,   // priced at review; the receipt confirms it
       from: sendSource === 'public' ? 'public' : 'private',
       to: 'external',
       counterparty: { kind: 'address', value: sendRecipient },   // FULL address, never truncated
@@ -785,14 +808,7 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
         setSendStep('error')
         return
       }
-      const result = path.kind === 'public'
-        ? await path.prepared.submit(setSendProgress)
-        : await sendConfidential(wallet, address, {
-            recipient: sendRecipient,
-            amountMicrotari,
-            memo: sendNote || undefined,
-            onProgress: setSendProgress,
-          })
+      const result = await path.prepared.submit(setSendProgress)
       setSendTxId(result.txId)
       setSendFee(result.feeMicrotari ?? null)
       setSendOutcome(result.outcome)
@@ -982,9 +998,10 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
 
   // ── Send: what each source can spend ──
   //
-  // The ceilings differ because the fee comes from different places. A private send reserves the
-  // MAX_FEE ceiling out of the same balance; a public send withdraws `amount + fee` from the vault,
-  // which is what maxPublicSend accounts for.
+  // The ceilings differ because the fee comes from different places. A typed private send reserves
+  // the MAX_FEE ceiling out of the same balance while it is priced (MAX is send-all instead, and
+  // pays only the exact fee); a public send withdraws `amount + fee` from the vault, which is what
+  // maxPublicSend accounts for.
   const sendAvailable = sendSource === 'public' ? revealedAmount : balance
   const publicSendCeiling = maxPublicSend(revealedAmount)
   const privateSendCeiling = maxStealthSend(outputValues)
@@ -1115,16 +1132,14 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
   const sendView: SendView =
     sendStep === 'review' ? {
       step: 'review', recipient: sendRecipient, source: sendSource,
-      amountMicrotari: sendPrepared?.recipientAmount ?? sendAmountMicro,
+      amountMicrotari: sendPrepared?.p.recipientAmount ?? sendAmountMicro,
       note: sendNote,
-      // PUBLIC prices itself before review, so this is an exact measured fee. PRIVATE cannot —
-      // sendConfidential dry-runs inside submission — so it can only offer a ceiling, and says so.
-      ...(sendSource === 'public'
-        ? { feeMicrotari: sendPrepared?.feeMicrotari ?? null }
-        : { feeMicrotari: MAX_FEE, feeIsCeiling: true }),
+      // EXACT, on both sources: priced by dry run before review, and what the transaction pays.
+      feeMicrotari: sendPrepared?.p.feeMicrotari ?? null,
+      sendAll: sendSource === 'private' && sendAll,
     }
     : sendStep === 'sending' ? {
-      step: 'sending', source: sendSource, recipient: sendRecipient, amountMicrotari: sendAmountMicro,
+      step: 'sending', source: sendSource, recipient: sendRecipient, amountMicrotari: sendPrepared?.p.recipientAmount ?? sendAmountMicro,
       progress: sendProgress || 'Building the payment and broadcasting. Don’t close this window.',
     }
     // Its OWN step now, not a success card shown early (M9 F6). The payment is finished either
@@ -1132,14 +1147,14 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
     // nothing about that left the user comparing a "Sent" with a stale figure.
     : sendStep === 'settling' ? {
       step: 'settling', recipient: sendRecipient,
-      amountMicrotari: sendAmountMicro,
-      feeMicrotari: sendFee ?? (sendSource === 'public' ? (sendPrepared?.feeMicrotari ?? MAX_FEE) : MAX_FEE),
+      amountMicrotari: sendPrepared?.p.recipientAmount ?? sendAmountMicro,
+      feeMicrotari: sendFee ?? sendPrepared?.p.feeMicrotari ?? 0n,
       txId: sendTxId,
     }
     : sendStep === 'success' ? {
       step: 'success', recipient: sendRecipient,
-      amountMicrotari: sendAmountMicro,
-      feeMicrotari: sendFee ?? (sendSource === 'public' ? (sendPrepared?.feeMicrotari ?? MAX_FEE) : MAX_FEE),
+      amountMicrotari: sendPrepared?.p.recipientAmount ?? sendAmountMicro,
+      feeMicrotari: sendFee ?? sendPrepared?.p.feeMicrotari ?? 0n,
       txId: sendTxId,
       // A passed deadline is still a success — the payment committed, only the index is behind.
       lagged: sendLagging,
@@ -1154,7 +1169,10 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
       step: 'form', recipient: sendRecipient, amount: sendAmount, note: sendNote,
       source: sendSource, canChooseSource,
       available: sendAvailable,
-      availabilityNote: sendSource === 'private' && privateFiguresIncomplete ? incompleteAvailableNote() : undefined,
+      availabilityNote: sendSource === 'private' && privateFiguresIncomplete ? incompleteAvailableNote()
+        // The one case where the figure in the field is not what arrives: say so before review.
+        : sendSource === 'private' && sendAll ? 'Max sends everything. The fee comes out of it, and the review shows exactly what arrives.'
+        : undefined,
       canReview: !!sendRecipient && !!sendAmount,
       error: sendValidationError || undefined,
     }
@@ -1244,13 +1262,23 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
       overviewNotice={<FaucetClaimPanel />}
       send={{
         view: sendView, hidden: balanceHidden,
-        onSource: s => { setSendSource(s); setSendExact(null); setSendValidationError('') },
+        onSource: s => { setSendSource(s); setSendExact(null); setSendAll(false); setSendValidationError('') },
         onRecipient: v => { setSendRecipient(v); setSendValidationError('') },
-        onAmount: v => { setSendAmount(v); setSendExact(null); setSendValidationError('') },
+        onAmount: v => { setSendAmount(v); setSendExact(null); setSendAll(false); setSendValidationError('') },
         onNote: setSendNote,
         // EXACT BIGINT per source. The string is only what the user sees; the precise figure
-        // rides in sendExact so nothing round-trips through a lossy formatter.
-        onMax: () => { setSendExact(sendCeiling); setSendAmount(toInput(sendCeiling)); setSendValidationError('') },
+        // rides in sendExact so nothing round-trips through a lossy formatter. PRIVATE MAX is
+        // send-all: the field shows everything reachable, and review shows what arrives once the
+        // exact fee has come out of it.
+        onMax: () => {
+          if (sendSource === 'private') {
+            const all = reachableTotal(outputValues)
+            setSendAll(true); setSendExact(null); setSendAmount(toInput(all))
+          } else {
+            setSendAll(false); setSendExact(sendCeiling); setSendAmount(toInput(sendCeiling))
+          }
+          setSendValidationError('')
+        },
         onReview: () => void handleReview(),
         // Back out of review: whatever is being priced must not come back and re-arm it.
         onBack: () => { sendGen.current.cancel(); setSendPrepared(null); setSendStep('form') },

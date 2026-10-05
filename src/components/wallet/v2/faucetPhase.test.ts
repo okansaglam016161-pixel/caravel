@@ -5,7 +5,7 @@
 // hidden by the status changing underneath it.
 
 import { describe, expect, it } from 'vitest'
-import { faucetPhase, isHidden, type FaucetPhaseInputs } from './faucetPhase'
+import { faucetAddedMessage, faucetPhase, isHidden, type FaucetPhaseInputs } from './faucetPhase'
 
 /** A resting, unlocked wallet whose faucet is open. Specs override the one field they are about. */
 const at = (over: Partial<FaucetPhaseInputs> = {}): FaucetPhaseInputs => ({
@@ -61,5 +61,25 @@ describe('a claim in flight outranks the status', () => {
 
   it('and outranks a lock too — a result is reported, not withdrawn', () => {
     expect(faucetPhase(at({ claim: 'done', unlocked: false }))).toBe('done')
+  })
+})
+
+describe('faucetAddedMessage — the claim\'s own amount, never the balance change', () => {
+  it('reports what the claim paid in', () => {
+    // A 1,000 claim at a 10,245 µtTARI fee lands 999.989755.
+    expect(faucetAddedMessage(999_989_755n)).toMatch(/^Added 999\.99 TARI\./)
+  })
+
+  it('a payment landing in the same window does not inflate it', () => {
+    // The balance rose by 1,000.99 (claim + a 1 TARI payment); the claim itself was 999.99.
+    const claim = 999_989_755n
+    const balanceRise = claim + 1_000_000n
+    expect(faucetAddedMessage(claim)).toContain('999.99')
+    expect(faucetAddedMessage(claim)).not.toContain('1,000.99')
+    expect(faucetAddedMessage(claim)).not.toContain(String(balanceRise))
+  })
+
+  it('with no amount, says only that it arrived', () => {
+    expect(faucetAddedMessage(null)).toMatch(/^Tokens received\./)
   })
 })

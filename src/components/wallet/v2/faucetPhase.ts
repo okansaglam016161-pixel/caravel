@@ -25,6 +25,7 @@
 
 import type { FaucetPhase } from './panels'
 import type { FaucetStatus } from '../../../crypto/faucetStatus'
+import { fmt2, TICKER } from './format'
 
 /** What the claim's own state machine is doing, independent of the faucet's status. */
 export type ClaimState = 'idle' | 'claiming' | 'verifying' | 'done' | 'lagging' | 'error'
@@ -68,4 +69,18 @@ export function faucetPhase({ claim, status, unlocked }: FaucetPhaseInputs): Fau
  */
 export function isHidden(phase: FaucetPhase): boolean {
   return phase === 'claimed' || phase === 'locked' || phase === 'unknown'
+}
+
+/**
+ * The line a confirmed claim shows: what THE CLAIM paid this wallet, never the balance change.
+ *
+ * The settle loop measures how far the private balance rose, and other money can land in the same
+ * window — a claim and a 1 TARI payment arriving together rose by 1,000.99 and the card said
+ * "Added 1,000.99". The claim's own figure is its output: the payout less the fee, known exactly
+ * from the transaction that created it. Null — an amount nobody read — says only that it arrived.
+ */
+export function faucetAddedMessage(claimedMicrotari: bigint | null): string {
+  return claimedMicrotari === null
+    ? 'Tokens received. You can now send them, make them public, or register a name.'
+    : `Added ${fmt2(claimedMicrotari)} ${TICKER}. You can now send it, make it public, or register a name.`
 }

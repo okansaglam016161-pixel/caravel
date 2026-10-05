@@ -27,9 +27,8 @@ import { QuoteChanged, isFeeShortRejection } from '../../crypto/quote'
 import { beginEntry, settleEntry } from '../../crypto/journalStore'
 import { settleVerdict, journalOutcomeFor, type SettleStartedBy } from './v2/settleVerdict'
 import { FaucetBanner, FaucetPanel } from './v2/panels'
-import { faucetPhase, isHidden, type ClaimState } from './v2/faucetPhase'
+import { faucetAddedMessage, faucetPhase, isHidden, type ClaimState } from './v2/faucetPhase'
 import { plainError } from './v2/plainError'
-import { fmt2, TICKER } from './v2/format'
 
 const shortTx = (t: string | null) => (t ? `${t.slice(0, 8)}…${t.slice(-6)}` : '')
 
@@ -79,6 +78,8 @@ export default function FaucetClaimPanel() {
   const [pricing, setPricing] = useState<'idle' | 'pricing' | 'failed'>('idle')
   const priceGen = useRef(0)
   const lastTx = useRef<string | null>(null)
+  /** What the claim itself paid in (its output: payout − fee) — the figure "Added" reports. */
+  const claimed = useRef<bigint | null>(null)
   // How the watch began, and the row it must correct. Both refs: the effect reads them, nothing
   // renders them. See settleVerdict.ts.
   const startedBy = useRef<SettleStartedBy>('Commit')
@@ -125,10 +126,9 @@ export default function FaucetClaimPanel() {
     const verdict = settleVerdict(startedBy.current, settle.status)
     if (verdict.kind === 'confirmed' && !verdict.lagged) {
       setPhase('done')
-      // The delta is measured by the loop, from the two readings it actually compared.
-      setMsg(settle.delta === null
-        ? 'Tokens received. You can now send them, make them public, or register a name.'
-        : `Added ${fmt2(settle.delta)} ${TICKER}. You can now send it, make it public, or register a name.`)
+      // THE CLAIM'S OWN AMOUNT, not the loop's delta: the balance can rise by more than the claim
+      // when other money lands in the same window. See faucetAddedMessage.
+      setMsg(faucetAddedMessage(claimed.current))
     } else if (verdict.kind === 'confirmed') {
       // Lagged, but the claim DID commit — the receipt said so. 'lagging' spins and promises the
       // funds will arrive, which is only sayable on this branch.
@@ -254,6 +254,8 @@ export default function FaucetClaimPanel() {
       selfOutputIds: r.outcome === 'Commit' ? r.selfOutputIds ?? null : null,
     })
     lastTx.current = r.txId
+    // Only a claim that can still land has an amount to report; a reject never reaches "done".
+    claimed.current = r.outcome === 'Reject' ? null : r.amount
     // ── ONLY A REJECT IS AN ANSWER ────────────────────────────────────────────
     //
     // A Timeout means the poll gave up against the indexer's lag; the balance watch below is what

@@ -1,17 +1,27 @@
 ONS client — vendored build provenance
 ======================================
 source repo   : ootle-name-service (github.com/okansaglam016161-pixel/ootle-name-service)
-source commit : def323d731f577da2f7ab9870c85b0a8859ea7ce
-              : (def323d, branch: fees-exact, from main efd753a; client/ last changed in def323d)
+source commit : 56f8c878a84a1f8d57730682043d4bcc0c470fc6
+              : (56f8c87, branch: sdk-0.8, from main c64c3f5; client/ last changed in 56f8c87)
 built from    : client/src → client/dist  (npm run build = tsc -p client/tsconfig.json)
-vendored at   : 2026-10-05
+vendored at   : 2026-10-07
 tree state    : clean (dist matches the commit above exactly — diff -rq, excluding this file)
-src digest    : 77effd4402651416dd0a96205ab7e8a159f1411bc11041d63e06363122636994
+src digest    : 7c418821fa3360afe5755d7a143f2a9786d3a1876eb51ee39d05a93336418dbc
                 (shasum -a 256 client/src/*.ts | sort | shasum -a 256)
 
 NO LOCAL PATCHES. Everything Caravel needs is in the upstream source.
 
-This build adds exact fees before signing (fees-exact):
+This build moves to SDK 0.8 (sdk-0.8; Ootle 0.45 / @tari-project/ootle 0.8, ootle-wasm 0.45):
+  - package.json      : peer deps @tari-project/ootle* ^0.8.0, ootle-wasm ^0.45.0. The 0.8 SDK dist
+                        is byte-identical to 0.7 apart from the pins and ootle-indexer's typed
+                        HttpError, whose message keeps the "HTTP <status>: …" form retry.ts reads.
+  - browser-writer.ts : one comment path (caravel-app/ → caravel/); no code change. The dist
+                        differs from the def323d build only in that line and its source map.
+  - ootle-sdk.d.ts    : unchanged; the source was also type-checked against the real SDK 0.8.0
+                        (stub excluded) with no errors.
+  - tests             : npm test — 14, unchanged.
+
+Carried forward from the fees-exact build (def323d) — exact fees before signing:
   - browser-writer.ts : prepareRegisterWithNostr(name, npub, budgetFor?) → PreparedOnsWrite. The fee
                         input is chosen ONCE, dry-run to learn the cost, and the REAL transaction is
                         built and sealed at the caller's budget; submit() sends that envelope, once

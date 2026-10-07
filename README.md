@@ -41,8 +41,8 @@ Service and start talking with a simple handle.
 
 * **UI:** React 19, Vite 8, TypeScript 6.0 (linted with oxlint)
 * **Network:** Ootle 0.45 (protocol V1) on esmeralda testnet
-* **Tari / Ootle:** `@tari-project/ootle` SDK 0.7 (with `-indexer` and `-secret-key-wallet`),
-  with confidential-transfer crypto in WebAssembly (`@tari-project/ootle-wasm` 0.43)
+* **Tari / Ootle:** `@tari-project/ootle` SDK 0.8 (with `-indexer` and `-secret-key-wallet`),
+  with confidential-transfer crypto in WebAssembly (`@tari-project/ootle-wasm` 0.45)
 * **Crypto:** `@scure/bip39`, `@scure/bip32`, `@noble/curves`
 * **Messaging:** `nostr-tools` 2.x
 * **Misc:** `qrcode.react`

@@ -40,7 +40,7 @@ Service and start talking with a simple handle.
 ## Tech stack
 
 * **UI:** React 19, Vite 8, TypeScript 6.0 (linted with oxlint)
-* **Network:** Ootle 0.43 on esmeralda testnet
+* **Network:** Ootle 0.45 (protocol V1) on esmeralda testnet
 * **Tari / Ootle:** `@tari-project/ootle` SDK 0.7 (with `-indexer` and `-secret-key-wallet`),
   with confidential-transfer crypto in WebAssembly (`@tari-project/ootle-wasm` 0.43)
 * **Crypto:** `@scure/bip39`, `@scure/bip32`, `@noble/curves`
@@ -75,7 +75,7 @@ client is vendored as a pre-built dist under `vendor/ons/`, built from the
 
 ## Contracts
 
-Both are published on Ootle 0.42, running on 0.43 (re-verified live on 0.43).
+Both are published on Ootle 0.42, running on 0.45 (re-verified live on 0.45).
 
 | | address (esmeralda) |
 |---|---|
@@ -111,7 +111,7 @@ docs/             Derivation and known-issues documentation
 
 ## Status & security
 
-* **Testnet only** — runs on Ootle 0.43 on esmeralda testnet. Amounts are shown as TARI
+* **Testnet only** — runs on Ootle 0.45 (protocol V1) on esmeralda testnet. Amounts are shown as TARI
   (tTARI on-chain).
 * **Self-custodial** — keys never leave your device. Your recovery phrase is the only way
   to recover your wallet; lose it and both funds and messages are gone.

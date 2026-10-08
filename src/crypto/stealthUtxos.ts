@@ -13,6 +13,8 @@
 //                mask we cannot recover is not spendable no matter how much it is worth.
 //   nonce      — the sender's public nonce, which the one-time spend-key signature is derived
 //                against. A UTXO with no readable nonce cannot be authorized, so it is dropped.
+//   spendKey   — the one-time public key the output's `auth` names: the key a spend of it signs with.
+//                Read, not derived, and optional; the private send names it as its fee receiver.
 //
 // UNREADABLE IS DROPPED, NOT ZEROED. Anything that fails to decrypt is somebody else's output and
 // is skipped silently — that is the overwhelming majority of the set and not an error. What IS
@@ -34,6 +36,8 @@ export interface OwnedUtxo {
   nonce: Uint8Array
   value: bigint
   mask: Mask
+  /** The output's one-time spend public key (`auth.Key`), when the substate carries one. */
+  spendKey?: Uint8Array
 }
 
 export function fromHex(h: string): Uint8Array {
@@ -102,14 +106,17 @@ export async function scanOwnedUtxos(
       substateId,
     )
     if (decrypted !== null) {
-      const output = (utxoBody as { output?: { output?: { public_nonce?: string } } })?.output?.output
+      const outer = (utxoBody as { output?: { output?: { public_nonce?: string }; auth?: { Key?: string } } })?.output
+      const output = outer?.output
       if (!output?.public_nonce) continue
+      const spendKeyHex = outer?.auth?.Key
       owned.push({
         substateId,
         commitment: fromHex(commitmentHex),
         nonce: fromHex(output.public_nonce),
         value: decrypted.value,
         mask: decrypted.mask,
+        ...(typeof spendKeyHex === 'string' && /^[0-9a-f]{64}$/i.test(spendKeyHex) ? { spendKey: fromHex(spendKeyHex) } : {}),
       })
     }
   }

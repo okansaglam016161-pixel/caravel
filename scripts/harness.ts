@@ -35,7 +35,7 @@
 //                         instructions, and stop one step short of submitting — which is where
 //                         most of the interesting failures live anyway.
 
-import { deriveIdentity, detectScheme, type DerivationScheme } from '../src/crypto/derivation'
+import { deriveIdentity, detectScheme, type DerivationScheme, type PurposeKeys } from '../src/crypto/derivation'
 import { recoverAccountAddress } from '../src/crypto/accountRecovery'
 import { loadAccountAddress, saveAccountAddress } from '../src/crypto/accountStore'
 import { scanWallet } from '../src/crypto/walletScanner'
@@ -65,7 +65,7 @@ import {
   advanceSettle, settleAction, type PendingSettle, type SettleEvidence,
 } from '../src/context/settle'
 import { setStoreKey } from '../src/crypto/sessionKey'
-import { ons, estimateOnsRegistration } from '../src/crypto/ons'
+import { ons, estimateOnsRegistration, checkOnsAvailable } from '../src/crypto/ons'
 import { createWalletSeed } from 'tari-cipherseed'
 import { writeFileSync } from 'node:fs'
 import path from 'node:path'
@@ -369,6 +369,8 @@ function printInstructions(build: RecordedBuild | undefined): void {
 
 interface Harnessed {
   wallet: SecretKeyWallet
+  /** The faucet and names keys, from the same derivation the app runs (derivation.PurposeKeys). */
+  purposeKeys: PurposeKeys
   address: string
   ownerPkHex: string
   viewSecret: Uint8Array
@@ -405,7 +407,7 @@ async function identity(): Promise<Harnessed> {
   }
   const scheme: DerivationScheme = override ?? (detected === 'ambiguous' || detected === 'invalid' ? 'cipherseed' : detected)
 
-  const { wallet, nostr, storeKey } = await deriveIdentity(phrase, scheme)
+  const { wallet, nostr, storeKey, purposeKeys } = await deriveIdentity(phrase, scheme)
   // EXACTLY WHAT UNLOCK DOES (WalletContext: `setStoreKey(identity.storeKey)`). Every per-identity
   // store — the journal, the first-seen ledger, and now the spend record — is sealed under this
   // key, so without it loadExcludedIds would read as empty and the harness would silently test the
@@ -419,6 +421,8 @@ async function identity(): Promise<Harnessed> {
   field('scheme', scheme + (override ? '  (from CARAVEL_TEST_SCHEME)' : detected === 'ambiguous' ? '  (phrase is valid under BOTH — default taken; set CARAVEL_TEST_SCHEME to override)' : `  (detected)`))
   field('address', address)
   field('owner pubkey', ownerPkHex)
+  field('faucet pubkey', hex(await purposeKeys.faucet.getPublicKey()))
+  field('names pubkey', hex(await purposeKeys.names.getPublicKey()))
   field('npub', nostr.npub)
   // The secret itself is never printed. Its LENGTH and the agreement between the two accessors are
   // worth stating: walletScanner is given `getViewOnlySecret()` by the app and stealthUtxos calls
@@ -429,7 +433,7 @@ async function identity(): Promise<Harnessed> {
   field('view secret', `${viewSecret.length} bytes (not printed) · getViewOnlySecret ≡ getViewSecret: ${agree ? 'yes' : 'NO — THE TWO SCANS USE DIFFERENT KEYS'}`)
   field('resource', RESOURCE_HEX)
 
-  return { wallet, address, ownerPkHex, viewSecret, npub: nostr.npub, scheme }
+  return { wallet, purposeKeys, address, ownerPkHex, viewSecret, npub: nostr.npub, scheme }
 }
 
 /**
@@ -1077,13 +1081,16 @@ async function cmdProveSpend(h: Harnessed): Promise<void> {
  */
 async function cmdFaucetStatus(h: Harnessed): Promise<void> {
   rule('faucet-status  (crypto/faucetStatus + crypto/faucet.prepareClaim)  ·  READ-ONLY, nothing is submitted')
+  const faucetPkHex = hex(await h.purposeKeys.faucet.getPublicKey())
   field('faucet', FAUCET_COMPONENT_ADDRESS)
-  field('receipt id', faucetReceiptId(h.ownerPkHex))
+  field('receipt id', `${faucetReceiptId(faucetPkHex)}  (faucet key)`)
+  field('legacy id', `${faucetReceiptId(h.ownerPkHex)}  (owner key — claims made before the faucet key)`)
 
   const mark = net.length
-  const [component, vault, receipt] = await Promise.all([
+  const [component, vault, receipt, legacyReceipt] = await Promise.all([
     pointRead(`/substates/${FAUCET_COMPONENT_ADDRESS}`),
     pointRead(`/substates/${FAUCET_VAULT_ADDRESS}`),
+    pointRead(`/substates/${faucetReceiptId(faucetPkHex)}`),
     pointRead(`/substates/${faucetReceiptId(h.ownerPkHex)}`),
   ])
   const state = component.body === null ? null : decodeFaucetState(component.body)
@@ -1091,13 +1098,15 @@ async function cmdFaucetStatus(h: Harnessed): Promise<void> {
   field('claim amount', state ? amt(state.claimAmount) : '(unreadable)')
   field('paused', state ? String(state.paused) : '(unreadable)')
   field('faucet balance', available === null ? '(unreadable)' : amt(available))
-  field('receipt', !receipt.answered ? '(no indexer answered)' : receipt.body === null ? 'not found on any indexer — not claimed' : 'FOUND — this key has claimed')
-  const status = faucetStatusFrom(component, vault, receipt)
+  const said = (r: typeof receipt) => !r.answered ? '(no indexer answered)' : r.body === null ? 'not found on any indexer' : 'FOUND — this key has claimed'
+  field('receipt', `${said(receipt)}  (faucet key)`)
+  field('legacy receipt', `${said(legacyReceipt)}  (owner key)`)
+  const status = faucetStatusFrom(component, vault, [receipt, legacyReceipt])
   field('status', status.kind === 'unknown' ? `unknown — ${status.reason}` : status.kind)
 
   rule('claim dry run  (prepareClaim — simulation only)')
   try {
-    const prepared = await prepareClaim(h.wallet, h.address, stage)
+    const prepared = await prepareClaim(h.wallet, h.address, h.purposeKeys.faucet, stage)
     field('verdict', 'Accept')
     field('dry-run cost', amt(prepared.dryRunCost))
     field('fee', amt(prepared.fee) + `   [dry-run cost ${prepared.dryRunCost}; margin ${prepared.fee - prepared.dryRunCost}]`)
@@ -1129,14 +1138,14 @@ async function cmdFaucetClaim(h: Harnessed, yes: boolean): Promise<void> {
     let who = h
     let pc: PreparedClaim
     try {
-      pc = await prepareClaim(who.wallet, who.address, stage)
+      pc = await prepareClaim(who.wallet, who.address, who.purposeKeys.faucet, stage)
     } catch (e) {
       if (!(e instanceof FaucetClaimRefused)) throw e
       field('this wallet', `${e.refusal} — pricing a throwaway wallet instead (in memory only, never funded, never written)`)
       const { mnemonic } = await createWalletSeed()
       const id = await deriveIdentity(mnemonic, 'cipherseed')
-      who = { ...h, wallet: id.wallet, address: await id.wallet.getAddress() }
-      pc = await prepareClaim(who.wallet, who.address, stage)
+      who = { ...h, wallet: id.wallet, purposeKeys: id.purposeKeys, address: await id.wallet.getAddress() }
+      pc = await prepareClaim(who.wallet, who.address, who.purposeKeys.faucet, stage)
     }
     field('banner', `You receive ${describeMicrotari(pc.privateAmount)} (${describeMicrotari(pc.claimAmount)} − ${describeMicrotari(pc.fee)} fee)`)
     field('dry-run cost', `${pc.dryRunCost} µtTARI  → fee ${pc.fee} (margin ${pc.fee - pc.dryRunCost})`)
@@ -1147,7 +1156,7 @@ async function cmdFaucetClaim(h: Harnessed, yes: boolean): Promise<void> {
   }
 
   const mark = net.length
-  const result = await claimFaucet(h.wallet, h.address, stage)
+  const result = await claimFaucet(h.wallet, h.address, h.purposeKeys.faucet, stage)
   field('tx id', result.txId)
   field('outcome', result.outcome)
   if (result.reason) console.log(`\n  ${result.reason}\n`)
@@ -1162,7 +1171,7 @@ async function cmdFaucetClaim(h: Harnessed, yes: boolean): Promise<void> {
 /** A brand-new wallet for `faucet-claim --fresh`. Its phrase goes to a 600 file, never to stdout. */
 async function freshIdentity(): Promise<Harnessed> {
   const { mnemonic } = await createWalletSeed()
-  const { wallet, nostr, storeKey } = await deriveIdentity(mnemonic, 'cipherseed')
+  const { wallet, nostr, storeKey, purposeKeys } = await deriveIdentity(mnemonic, 'cipherseed')
   setStoreKey(storeKey)
   const address = await wallet.getAddress()
   const file = path.resolve(`harness-fresh-wallet-${address.slice(-12)}.txt`)
@@ -1170,8 +1179,10 @@ async function freshIdentity(): Promise<Harnessed> {
   rule('identity  (FRESH — generated for this run)')
   field('address', address)
   field('phrase', `written to ${file} (mode 600, not printed). Keep it — this wallet is about to be funded.`)
+  field('owner pubkey', hex(await wallet.getPublicKey()))
+  field('faucet pubkey', hex(await purposeKeys.faucet.getPublicKey()))
   return {
-    wallet, address, ownerPkHex: hex(await wallet.getPublicKey()), viewSecret: await wallet.getViewSecret(),
+    wallet, purposeKeys, address, ownerPkHex: hex(await wallet.getPublicKey()), viewSecret: await wallet.getViewSecret(),
     npub: nostr.npub, scheme: 'cipherseed',
   }
 }
@@ -1916,6 +1927,55 @@ async function cmdProveReceiveScan(h: Harnessed, targetId?: string): Promise<voi
 }
 
 
+// ── register-name ────────────────────────────────────────────────────────────
+
+/**
+ * WRITE with --yes. Register an @name for this wallet, through the app's own path: the same
+ * estimateOnsRegistration the CNS screen calls, its confirm check, and its prepared submit. Owned by
+ * the wallet's NAMES key. Without --yes it is priced and confirm-checked (dry runs) and stops.
+ */
+async function cmdRegisterName(h: Harnessed, name: string | undefined, yes: boolean): Promise<void> {
+  if (!name) throw new Error('register-name needs a name.')
+  rule(`register-name  (crypto/ons.estimateOnsRegistration → prepared.submit)  ·  @${name}`)
+  console.log(yes
+    ? '  \u26a0  WRITE COMMAND, --yes GIVEN. This WILL register the name and spend a real fee.'
+    : '  Add --yes to register for real. Without it the registration is PRICED and CHECKED (dry runs), never sent.')
+  field('owner', `${hex(await h.purposeKeys.names.getPublicKey())}  (names key)`)
+  const avail = await checkOnsAvailable(name)
+  field('available', avail.ok ? String(avail.available) : `(unreadable — ${avail.error})`)
+
+  const est = await estimateOnsRegistration(h.wallet, h.address, name, h.npub, h.purposeKeys.names)
+  if (!est.ok || !est.prepared) {
+    field('estimate', `FAILED — ${est.errorKind}: ${est.error}`)
+    process.exitCode = 1
+    return
+  }
+  const prepared = est.prepared
+  field('fee', `${amt(prepared.feeMicroTari)}   [what the confirm screen shows: the whole revealed budget]`)
+  field('fee input', prepared.feeInputId)
+  await prepared.confirm()
+  field('confirm check', 'PASSES — quote fresh, fee coin unspent, final transaction accepted at this fee')
+  if (!yes) {
+    prepared.release()
+    console.log('\n  STOPPED BEFORE SUBMIT. Nothing was sent.')
+    return
+  }
+
+  const mark = net.length
+  const r = await prepared.submit()
+  field('outcome', r.outcome ?? '(none)')
+  field('tx id', r.txId ?? '(none)')
+  if (r.error) console.log(`\n  ${r.error}\n`)
+  if (r.fee !== undefined) {
+    field('quoted', amt(prepared.feeMicroTari))
+    field('charged', amt(r.fee))
+    field('shown − charged', `${prepared.feeMicroTari - r.fee} µtTARI   ${prepared.feeMicroTari === r.fee ? '✓ shown fee = charged fee' : '✗ MISMATCH'}`)
+  }
+  printNet(mark)
+  if (!r.ok) process.exitCode = 1
+}
+
+
 // ── prove-cns-fee ────────────────────────────────────────────────────────────
 
 /**
@@ -1971,7 +2031,7 @@ async function cmdProveCnsFee(h: Harnessed): Promise<void> {
 
   // ── The writer as ons.ts now drives it ──
   rule('3 · estimateOnsRegistration — the writer fed Caravel\'s owned set')
-  const now = await estimateOnsRegistration(h.wallet, h.address, name, h.npub)
+  const now = await estimateOnsRegistration(h.wallet, h.address, name, h.npub, h.purposeKeys.names)
   field('result', now.ok ? `ok — budget ${now.feeMicroTari} µtTARI (dry-run estimate + the shared margin, feeProbe.withFeeMargin)` : `${now.errorKind}: ${now.error}`)
   if (owned.length > 0) {
     check('the fee input is found and the estimate succeeds', now.ok && (now.feeMicroTari ?? 0n) > 0n, now.ok ? `${now.feeMicroTari} µtTARI` : String(now.errorKind))
@@ -1995,7 +2055,7 @@ async function cmdProveCnsFee(h: Harnessed): Promise<void> {
     provider.stopWatcher?.()
   }
   field('private outputs', `${otherOwned.length}`)
-  const empty = await estimateOnsRegistration(other.wallet, otherAddr, name, other.nostr.npub)
+  const empty = await estimateOnsRegistration(other.wallet, otherAddr, name, other.nostr.npub, other.purposeKeys.names)
   field('result', empty.ok ? 'ok?!' : `${empty.errorKind}: ${empty.error}`)
   check('gets "no-private" (→ "make some funds private first")', otherOwned.length === 0 && empty.errorKind === 'no-private', String(empty.errorKind))
 
@@ -2156,6 +2216,8 @@ READ-ONLY — safe to run freely, costs nothing:
                               and releases what it locked.
 
 WRITE — MOVES REAL TESTNET FUNDS. Builds and prices without --yes; submits with it:
+  register-name <name>        Register @name, owned by this wallet's names key, through the CNS
+                              screen's own estimate → confirm → submit. Priced and checked without --yes.
   faucet-claim [--fresh]      Claim from Caravel's faucet (once per key, ever) — the way to get a
                               wallet into a state prove-spend can work against. --fresh claims for
                               a NEW wallet; its phrase is written to a 600 file, never printed.
@@ -2243,6 +2305,9 @@ export async function main(argv: string[]): Promise<void> {
         break
       case 'prove-cns-fee':
         await cmdProveCnsFee(h)
+        break
+      case 'register-name':
+        await cmdRegisterName(h, args[1], yes)
         break
       case 'prove-receive-scan':
         await cmdProveReceiveScan(h, args[1])

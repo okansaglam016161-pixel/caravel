@@ -118,6 +118,18 @@ describe('input selection', () => {
     const owned = await scanOwnedUtxos(crypto, VIEW, { excluded: new Set([id(A), id(B)]) })
     expect(owned).toEqual([])
   })
+
+  // The private send names an input's one-time spend key as its fee receiver, so the scan carries
+  // it — read from the output's `auth`, never invented. Absent or malformed means absent.
+  it('carries each output’s one-time spend key from its auth, and nothing when there is none', async () => {
+    const KEY = '7a'.repeat(32)
+    globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({ utxos: [
+      [A, { output: { output: { public_nonce: 'dd' }, auth: { Key: KEY } } }],
+      [B, { output: { output: { public_nonce: 'dd' }, auth: { Key: 'not-hex' } } }],
+    ] }), { status: 200 })) as typeof fetch
+    const owned = await scanOwnedUtxos(crypto, VIEW)
+    expect(owned.map(u => u.spendKey && Array.from(u.spendKey, b => b.toString(16).padStart(2, '0')).join(''))).toEqual([KEY, undefined])
+  })
 })
 
 describe('the two agree', () => {

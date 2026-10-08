@@ -97,6 +97,31 @@ This vector is from the NIP-06 spec. Caravel's derivation matches it exactly, pr
 
 ---
 
+## Purpose keys: faucet and names
+
+**Code:** `src/crypto/derivation.ts`, function `purposeKeysFromSeedMaterial`
+
+Two more Ristretto255 keys, each with one job, so the wallet's owner key never does that job on-chain:
+
+| Key | Job | Domain (version 1) | Label |
+|-----|-----|--------------------|-------|
+| faucet | claims the testnet faucet (the claim names it, signs with it, and its receipt is keyed by it) | `com.caravel.faucet` | `faucet_key` |
+| names | owns @names registered from this wallet (a name's owner is public in the registry) | `com.caravel.names` | `names_key` |
+
+```
+seed material (CipherSeed entropy, or the BIP-39 seed — the same input as the store key)
+  → DomainSeparatedHasher(domain, 1, label, 64 bytes)
+  → reduce mod L → 32-byte little-endian scalar
+  → SecretKeyWallet.fromSecretKey(scalar, Esmeralda)
+```
+
+Neither is a spending key. Both come back from the phrase on restore. Names registered before the names key
+existed stay under the owner key, and the faucet treats a receipt for either key as "already claimed".
+
+**Regression anchors (Caravel test mnemonics, public keys):** pinned in `derivation.test.ts`, "purpose keys".
+
+---
+
 ## Independence of the two derivations
 
 The Tari and Nostr keys share only the 64-byte BIP-39 seed as input. From there, they are fully independent:

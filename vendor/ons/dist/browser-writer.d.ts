@@ -1,4 +1,4 @@
-import { type Mask } from "@tari-project/ootle";
+import { type Signer, type Mask } from "@tari-project/ootle";
 import type { SecretKeyWallet } from "@tari-project/ootle-secret-key-wallet";
 import type { OnsConfig, WriteResult } from "./types.js";
 /** A self-custodial browser signer: the user's own secret-key wallet + its owner address. */
@@ -7,6 +7,15 @@ export interface BrowserSigner {
     wallet: SecretKeyWallet;
     /** The wallet's owner address (`otl_esm_…`), the change destination. */
     senderAddress: string;
+    /**
+     * The key that owns the names this writer registers, and signs its writes. A name's owner is the
+     * transaction's first signer, recorded publicly in the registry — so a wallet that keeps a separate
+     * key for its names (rather than its account's owner key) passes it here. It is also the receiver
+     * of the revealed fee. To edit a name, pass the key that owns it.
+     *
+     * Defaults to `wallet`, which is how every write signed before this option existed.
+     */
+    nameOwner?: Signer;
     /** Indexer base URL. Defaults to the esmeralda public indexer. */
     indexerUrl?: string;
     /**

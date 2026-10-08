@@ -115,39 +115,54 @@ describe('faucetStatusFrom — the order is claimed > paused > empty > open', ()
   const open = [found(componentBody()), found(vaultBody('100000000000'))] as const
 
   it('open: not claimed, not paused, at least one claim left', () => {
-    expect(faucetStatusFrom(...open, notFound))
+    expect(faucetStatusFrom(...open, [notFound]))
       .toEqual({ kind: 'open', claimAmount: 1_000_000_000n, available: 100_000_000_000n })
   })
 
   it('claimed outranks everything, including a paused or empty faucet', () => {
     const receipt = found({ substate: { NonFungible: null } })
-    expect(faucetStatusFrom(...open, receipt)).toEqual({ kind: 'claimed' })
-    expect(faucetStatusFrom(found(componentBody({ paused: true })), found(vaultBody('0')), receipt)).toEqual({ kind: 'claimed' })
+    expect(faucetStatusFrom(...open, [receipt])).toEqual({ kind: 'claimed' })
+    expect(faucetStatusFrom(found(componentBody({ paused: true })), found(vaultBody('0')), [receipt])).toEqual({ kind: 'claimed' })
     // The receipt alone decides it: a faucet that cannot be read changes nothing.
-    expect(faucetStatusFrom(unreachable, unreachable, receipt)).toEqual({ kind: 'claimed' })
+    expect(faucetStatusFrom(unreachable, unreachable, [receipt])).toEqual({ kind: 'claimed' })
   })
 
   it('paused outranks empty', () => {
-    expect(faucetStatusFrom(found(componentBody({ paused: true })), found(vaultBody('0')), notFound))
+    expect(faucetStatusFrom(found(componentBody({ paused: true })), found(vaultBody('0')), [notFound]))
       .toEqual({ kind: 'paused', claimAmount: 1_000_000_000n })
   })
 
   it('empty means less than one whole claim — the same test claim() makes', () => {
-    expect(faucetStatusFrom(found(componentBody()), found(vaultBody('999999999')), notFound))
+    expect(faucetStatusFrom(found(componentBody()), found(vaultBody('999999999')), [notFound]))
       .toEqual({ kind: 'empty', claimAmount: 1_000_000_000n, available: 999_999_999n })
-    expect(faucetStatusFrom(found(componentBody()), found(vaultBody('1000000000')), notFound).kind).toBe('open')
+    expect(faucetStatusFrom(found(componentBody()), found(vaultBody('1000000000')), [notFound]).kind).toBe('open')
   })
 
   it('unknown when the receipt cannot be read — it never guesses "not claimed"', () => {
-    expect(faucetStatusFrom(...open, unreachable).kind).toBe('unknown')
+    expect(faucetStatusFrom(...open, [unreachable]).kind).toBe('unknown')
+  })
+
+  it('two keys: a receipt for EITHER is claimed — a wallet that claimed with its owner key is not offered a second claim', () => {
+    const receipt = found({ substate: { NonFungible: null } })
+    expect(faucetStatusFrom(...open, [notFound, receipt])).toEqual({ kind: 'claimed' })
+    expect(faucetStatusFrom(...open, [receipt, notFound])).toEqual({ kind: 'claimed' })
+    // One key unreadable does not hide the other's receipt…
+    expect(faucetStatusFrom(...open, [unreachable, receipt])).toEqual({ kind: 'claimed' })
+    // …but "not claimed" needs every key to have answered.
+    expect(faucetStatusFrom(...open, [notFound, unreachable]).kind).toBe('unknown')
+    expect(faucetStatusFrom(...open, [notFound, notFound]).kind).toBe('open')
+  })
+
+  it('no keys at all is unknown, never open', () => {
+    expect(faucetStatusFrom(...open, []).kind).toBe('unknown')
   })
 
   it('unknown when the faucet or its vault cannot be read or decoded', () => {
-    expect(faucetStatusFrom(unreachable, found(vaultBody('1')), notFound).kind).toBe('unknown')
-    expect(faucetStatusFrom(notFound, found(vaultBody('1')), notFound).kind).toBe('unknown')
-    expect(faucetStatusFrom(found({}), found(vaultBody('1')), notFound).kind).toBe('unknown')
-    expect(faucetStatusFrom(found(componentBody()), unreachable, notFound).kind).toBe('unknown')
-    expect(faucetStatusFrom(found(componentBody()), found({}), notFound).kind).toBe('unknown')
+    expect(faucetStatusFrom(unreachable, found(vaultBody('1')), [notFound]).kind).toBe('unknown')
+    expect(faucetStatusFrom(notFound, found(vaultBody('1')), [notFound]).kind).toBe('unknown')
+    expect(faucetStatusFrom(found({}), found(vaultBody('1')), [notFound]).kind).toBe('unknown')
+    expect(faucetStatusFrom(found(componentBody()), unreachable, [notFound]).kind).toBe('unknown')
+    expect(faucetStatusFrom(found(componentBody()), found({}), [notFound]).kind).toBe('unknown')
   })
 })
 
@@ -164,7 +179,7 @@ describe('readFaucetStatus', () => {
       [`/substates/${FAUCET_VAULT_ADDRESS}`]: found(vaultBody('100000000000')),
       [`/substates/${faucetReceiptId(PK)}`]: notFound,
     })
-    expect((await readFaucetStatus(WALLET, PK, read)).kind).toBe('open')
+    expect((await readFaucetStatus(WALLET, [PK], read)).kind).toBe('open')
     expect(asked.sort()).toEqual([
       `/substates/${FAUCET_COMPONENT_ADDRESS}`,
       `/substates/${FAUCET_VAULT_ADDRESS}`,
@@ -173,13 +188,26 @@ describe('readFaucetStatus', () => {
     expect(loadFaucetClaimed(WALLET)).toBe(false)
   })
 
+  it('reads every key’s receipt — the faucet key and the owner key — and either one is a claim', async () => {
+    const LEGACY = 'b'.repeat(64)
+    const { read, asked } = reader({
+      [`/substates/${FAUCET_COMPONENT_ADDRESS}`]: found(componentBody()),
+      [`/substates/${FAUCET_VAULT_ADDRESS}`]: found(vaultBody('100000000000')),
+      [`/substates/${faucetReceiptId(PK)}`]: notFound,
+      [`/substates/${faucetReceiptId(LEGACY)}`]: found({ substate: {} }),
+    })
+    expect((await readFaucetStatus(WALLET, [PK, LEGACY], read)).kind).toBe('claimed')
+    expect(asked).toContain(`/substates/${faucetReceiptId(PK)}`)
+    expect(asked).toContain(`/substates/${faucetReceiptId(LEGACY)}`)
+  })
+
   it('records a receipt found on chain, and answers from the record afterwards without asking', async () => {
     const first = reader({ [`/substates/${faucetReceiptId(PK)}`]: found({ substate: {} }) })
-    expect((await readFaucetStatus(WALLET, PK, first.read)).kind).toBe('claimed')
+    expect((await readFaucetStatus(WALLET, [PK], first.read)).kind).toBe('claimed')
     expect(loadFaucetClaimed(WALLET)).toBe(true)
 
     const second = reader({})
-    expect((await readFaucetStatus(WALLET, PK, second.read)).kind).toBe('claimed')
+    expect((await readFaucetStatus(WALLET, [PK], second.read)).kind).toBe('claimed')
     expect(second.asked).toEqual([])
   })
 })

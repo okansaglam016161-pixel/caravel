@@ -21,5 +21,11 @@ export declare class OnsReader {
      * device for the same owner. Returns `[]` if the owner holds no names. Sorted by name.
      */
     namesForOwner(ownerKeyHex: string): Promise<NameRecord[]>;
+    /**
+     * Every name owned by ANY of these keys, from one registry read, sorted by name. For a wallet that
+     * owns names under more than one key (e.g. its account key and a separate names key). Each
+     * record's `owner` says which key holds it — the key that must sign an edit.
+     */
+    namesForOwners(ownerKeyHexes: readonly string[]): Promise<NameRecord[]>;
 }
 //# sourceMappingURL=reader.d.ts.map

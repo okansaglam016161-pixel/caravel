@@ -1,5 +1,5 @@
 /**
- * Browser-side claim from Caravel's own testnet faucet, self-signed by the wallet's in-browser key.
+ * Browser-side claim from Caravel's own testnet faucet, signed by the wallet's FAUCET key.
  * Same pipeline as confidentialSend.ts: build → signTransaction → sealTransaction → indexer submit.
  * No daemon.
  *
@@ -10,10 +10,10 @@
  *
  * Everything runs in the FEE phase, in this order:
  *
- *     faucet.claim(ownerPk)                         → 'payout'      (a bucket of claim_amount)
+ *     faucet.claim(faucetPk)                        → 'payout'      (a bucket of claim_amount)
  *     StealthTransfer(revealed input: 'payout')     → 'fee_bucket'
  *         private output  claim_amount − fee  → this wallet's own address
- *         revealed output fee                 → receiver = ownerPk
+ *         revealed output fee                 → receiver = faucetPk
  *     PayFeeFromBucket('fee_bucket')
  *
  * The payout covers the fee, so a wallet with a zero balance can claim. There is no CreateAccount:
@@ -26,9 +26,14 @@
  * ── WHO MAY CLAIM ────────────────────────────────────────────────────────────
  *
  * `claim(claimer)` requires the transaction to be signed by `claimer`, and mints-and-burns a receipt
- * NFT whose id is `claimer`, so each key claims once, ever. The wallet signs with its owner key and
- * names that same key, which is also the receiver of the fee slice — since Ootle 0.42 the engine only
- * creates that bucket if the receiver's badge is in the transaction's auth scope.
+ * NFT whose id is `claimer`, so each key claims once, ever. The claim is signed by the wallet's
+ * faucet key (derivation.PurposeKeys) and names that same key, which is also the receiver of the fee
+ * slice — since Ootle 0.42 the engine only creates that bucket if the receiver's badge is in the
+ * transaction's auth scope. It is the ONLY signer: the owner key would tie the claim, and the private
+ * coin it pays out, to the wallet's public account.
+ *
+ * Wallets that claimed before the faucet key existed claimed with the owner key. That receipt still
+ * counts — readFaucetStatus is given both keys — so no wallet gets a second claim.
  */
 
 import { substateStillAbsent, submitOnce } from './submitGuard'
@@ -143,8 +148,9 @@ function toHexStr(bytes: Uint8Array): string {
 }
 
 /**
- * Claim testnet tTARI into `ownerAddress`, self-signed by `wallet`. Returns once the claim tx has a
- * final on-chain decision — the caller must still rescan to see the balance land.
+ * Claim testnet tTARI into `ownerAddress`, signed by `faucetKey`; `wallet` is consulted only for the
+ * owner key a pre-faucet-key claim was made with. Returns once the claim tx has a final on-chain
+ * decision — the caller must still rescan to see the balance land.
  *
  * Throws FaucetClaimRefused if the faucet would refuse (already claimed, paused, empty), found
  * either by the status read or by the pricing dry run — in both cases before anything is
@@ -153,9 +159,10 @@ function toHexStr(bytes: Uint8Array): string {
 export async function claimFaucet(
   wallet: SecretKeyWallet,
   ownerAddress: string,
+  faucetKey: SecretKeyWallet,
   onProgress?: (msg: string) => void,
 ): Promise<ClaimResult> {
-  const prepared = await prepareClaim(wallet, ownerAddress, onProgress)
+  const prepared = await prepareClaim(wallet, ownerAddress, faucetKey, onProgress)
   return prepared.submit()
 }
 
@@ -193,17 +200,19 @@ export interface PreparedClaim {
 export async function prepareClaim(
   wallet: SecretKeyWallet,
   ownerAddress: string,
+  faucetKey: SecretKeyWallet,
   onProgress?: (msg: string) => void,
 ): Promise<PreparedClaim> {
   const log = (m: string) => onProgress?.(m)
 
-  const ownerPk = await wallet.getPublicKey()
-  const ownerPkHex = toHexStr(ownerPk)
+  // The claimer: named by the claim, the only signer, and the fee slice's receiver.
+  const claimerPk = await faucetKey.getPublicKey()
+  const claimerPkHex = toHexStr(claimerPk)
 
   // The claim amount is read live: the faucet's admin can change it, and the statement below has to
   // balance against the bucket claim() returns to the µtTARI.
   log('Checking the faucet…')
-  const status = await readFaucetStatus(ownerAddress, ownerPkHex)
+  const status = await readFaucetStatus(ownerAddress, [claimerPkHex, toHexStr(await wallet.getPublicKey())])
   if (status.kind === 'claimed') throw new FaucetClaimRefused('already-claimed')
   if (status.kind === 'paused') throw new FaucetClaimRefused('paused')
   if (status.kind === 'empty') throw new FaucetClaimRefused('empty')
@@ -225,15 +234,15 @@ export async function prepareClaim(
     const privateAmount = claimAmount - feeMicrotari
     const { statement: outputsStatement, outputMask } = await crypto.generateOutputsStatement(
       [createOutput({ destination: ownerAddress, amount: privateAmount, resourceAddress: TARI_RESOURCE_ADDRESS })],
-      { amount: feeMicrotari, receiver: ownerPk },
+      { amount: feeMicrotari, receiver: claimerPk },
     )
     const inputsStatement = await crypto.buildInputsStatement([], claimAmount)
     const balanceProof = await signBalanceProof(crypto, Mask.zero(), outputMask, inputsStatement, outputsStatement)
     const statement = new StealthTransferStatement(inputsStatement, outputsStatement, balanceProof)
 
-    const unsigned = buildClaim(maxEpoch, ownerPkHex, statement).buildUnsignedTransaction()
+    const unsigned = buildClaim(maxEpoch, claimerPkHex, statement).buildUnsignedTransaction()
     // `dry_run` must ride INSIDE the sealed envelope — the dry-run endpoint refuses anything else.
-    const signed = await signTransaction([wallet], dryRun ? { ...unsigned, dry_run: true } : unsigned)
+    const signed = await signTransaction([faucetKey], dryRun ? { ...unsigned, dry_run: true } : unsigned)
     return { envelope: sealTransaction(signed), privateAmount, selfOutputIds: readOutputSubstateIds(outputsStatement) ?? undefined }
   }
 
@@ -262,7 +271,7 @@ export async function prepareClaim(
   const real = await buildEnvelope(fee, false)
   const preparedAt = Date.now()
   const simulate = async () => simulateFee(INDEXER_URL, (await buildEnvelope(fee, true)).envelope, { fee })
-  const check = confirmer({ preparedAt, simulate, inputs: { landed: substateStillAbsent(faucetReceiptId(ownerPkHex)) } })
+  const check = confirmer({ preparedAt, simulate, inputs: { landed: substateStillAbsent(faucetReceiptId(claimerPkHex)) } })
 
   async function submit(onSubmitProgress?: (msg: string) => void): Promise<ClaimResult> {
     const log = (m: string) => (onSubmitProgress ?? onProgress)?.(m)
@@ -272,7 +281,7 @@ export async function prepareClaim(
     log('Submitting…')
     // A claim creates this key's receipt, so while every indexer says it is absent the claim has not landed.
     const sub = await submitOnce(() => provider.submitTransaction(real.envelope), {
-      landed: substateStillAbsent(faucetReceiptId(ownerPkHex)),
+      landed: substateStillAbsent(faucetReceiptId(claimerPkHex)),
       onBusyRetry: () => log(RETRYING_MESSAGE),
     })
     const txId = sub.transaction_id as string
@@ -298,11 +307,11 @@ export async function prepareClaim(
  * The instruction recipe, lifted out so the pricing build and the real build are provably the same
  * transaction shape, differing only in the statement (which carries the fee). Exported for tests.
  */
-export function buildClaim(maxEpoch: number, ownerPkHex: string, statement: StealthTransferStatement) {
+export function buildClaim(maxEpoch: number, claimerPkHex: string, statement: StealthTransferStatement) {
   return new TransactionBuilder(Network.Esmeralda, maxEpoch)
     .withFeeInstructionsBuilder((b) =>
       b
-        .callMethod({ componentAddress: FAUCET_COMPONENT_ADDRESS, methodName: 'claim' }, [publicKeyLiteral(hexToBytes(ownerPkHex))])
+        .callMethod({ componentAddress: FAUCET_COMPONENT_ADDRESS, methodName: 'claim' }, [publicKeyLiteral(hexToBytes(claimerPkHex))])
         .saveVar('payout')
         .addInstruction(
           stealthTransferInstruction(

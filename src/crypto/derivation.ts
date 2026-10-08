@@ -53,6 +53,27 @@ export interface WalletIdentity {
    * — to arrive at the same bytes. See storeKeyFromSeedMaterial.
    */
   storeKey: Uint8Array
+  /**
+   * Keys this wallet signs with where its OWNER key would otherwise appear — see PURPOSE KEYS below.
+   * Derived alongside the store key from the same seed material, so a restored phrase gets them back.
+   */
+  purposeKeys: PurposeKeys
+}
+
+/**
+ * Seed-derived keys for one job each, so the chain never sees the wallet's owner key doing that job.
+ *
+ *   faucet   claims the testnet faucet. The claim names a key and is signed by it, and its receipt is
+ *            keyed by it — so with the owner key, the receipt would tie this wallet's account to the
+ *            claim and to the private coin it pays out.
+ *   names    owns @names. A name records its owner key publicly (the ONS registry), so naming the
+ *            owner key would tie a public name to the account.
+ *
+ * Neither is a spending key: their only authority is the faucet claim and the names they own.
+ */
+export interface PurposeKeys {
+  faucet: SecretKeyWallet
+  names: SecretKeyWallet
 }
 
 /**
@@ -120,6 +141,26 @@ const STORE_DOMAIN_VERSION = 1
 const STORE_LABEL = 'store_key'
 /** 32 bytes — the key width storeCrypto's XChaCha20-Poly1305 takes. */
 const STORE_KEY_BYTES = 32
+
+/**
+ * Caravel's own hashing domains for the PURPOSE KEYS (see PurposeKeys).
+ *
+ * FROZEN, like the two above. A changed string, version, label or width derives a different key from
+ * the same phrase: the faucet would be offered again to a wallet that has claimed (to a new key the
+ * receipt check does not know), and every name registered under the old names key would stop showing
+ * as this wallet's. Pinned by golden vectors in derivation.test.ts — do not update them.
+ *
+ * 64 bytes so the reduction mod the group order is uniform, exactly as tari-cipherseed derives the
+ * account's own keys (scalarFromWideBytes there).
+ */
+const FAUCET_DOMAIN = 'com.caravel.faucet'
+const NAMES_DOMAIN = 'com.caravel.names'
+const PURPOSE_DOMAIN_VERSION = 1
+const FAUCET_LABEL = 'faucet_key'
+const NAMES_LABEL = 'names_key'
+const PURPOSE_WIDE_BYTES = 64
+/** Ristretto255 group order. A secret key is a scalar in [0, L). */
+const GROUP_ORDER = (1n << 252n) + 27742317777372353535851937790883648493n
 
 // ── Scheme resolution: for a wallet we already stored ────────────────────────
 
@@ -248,6 +289,7 @@ async function deriveFromCipherSeed(phrase: string): Promise<WalletIdentity> {
     nostr: await nostrFromCipherSeedEntropy(seed.entropy),
     // Free: `seed.entropy` is already here, and the hash is Blake2b over 16 bytes.
     storeKey: storeKeyFromSeedMaterial(seed.entropy),
+    purposeKeys: purposeKeysFromSeedMaterial(seed.entropy),
   }
 }
 
@@ -260,6 +302,7 @@ async function deriveFromBip39(phrase: string): Promise<WalletIdentity> {
     nostr: deriveNostrKeyFromSeed(seed),
     // The same 64-byte seed, hashed under Caravel's store domain — never used as a key directly.
     storeKey: storeKeyFromSeedMaterial(seed),
+    purposeKeys: purposeKeysFromSeedMaterial(seed),
   }
 }
 
@@ -325,6 +368,33 @@ export function storeKeyFromSeedMaterial(material: Uint8Array): Uint8Array {
   return new DomainSeparatedHasher(STORE_DOMAIN, STORE_DOMAIN_VERSION, STORE_LABEL, STORE_KEY_BYTES)
     .chain(material)
     .finalize()
+}
+
+/**
+ * Seed material → the purpose keys. The same material, fed the same way, as storeKeyFromSeedMaterial:
+ * CipherSeed entropy or the BIP-39 seed, each as its format produces it.
+ */
+export function purposeKeysFromSeedMaterial(material: Uint8Array): PurposeKeys {
+  return {
+    faucet: SecretKeyWallet.fromSecretKey(purposeSecret(FAUCET_DOMAIN, FAUCET_LABEL, material), Network.Esmeralda),
+    names: SecretKeyWallet.fromSecretKey(purposeSecret(NAMES_DOMAIN, NAMES_LABEL, material), Network.Esmeralda),
+  }
+}
+
+/** One domain-separated wide hash, reduced mod the group order to a canonical 32-byte LE scalar. */
+function purposeSecret(domain: string, label: string, material: Uint8Array): Uint8Array {
+  const wide = new DomainSeparatedHasher(domain, PURPOSE_DOMAIN_VERSION, label, PURPOSE_WIDE_BYTES)
+    .chain(material)
+    .finalize()
+  let n = 0n
+  for (let i = wide.length - 1; i >= 0; i--) n = (n << 8n) | BigInt(wide[i])
+  n %= GROUP_ORDER
+  const out = new Uint8Array(32)
+  for (let i = 0; i < 32; i++) {
+    out[i] = Number(n & 0xffn)
+    n >>= 8n
+  }
+  return out
 }
 
 /**

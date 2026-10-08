@@ -164,7 +164,7 @@ export default function CnsCommitView({ name, onCancel, onDone, onTryAnother, on
   /** Switch to the Wallet service so "Check Activity" goes somewhere. */
   onOpenWallet: () => void
 }) {
-  const { wallet, address, nostrNpub } = useWallet()
+  const { wallet, purposeKeys, address, nostrNpub } = useWallet()
   const [state, setState] = useState<Commit>({ kind: 'estimating' })
 
   /**
@@ -192,7 +192,7 @@ export default function CnsCommitView({ name, onCancel, onDone, onTryAnother, on
   useEffect(() => () => hold(null), [])
 
   const estimate = useCallback(async (notice?: string) => {
-    if (!wallet || !address || !nostrNpub) {
+    if (!wallet || !purposeKeys || !address || !nostrNpub) {
       setState({ kind: 'estimate-failed', errorKind: 'unreachable', error: 'This wallet is locked.' })
       return
     }
@@ -200,7 +200,7 @@ export default function CnsCommitView({ name, onCancel, onDone, onTryAnother, on
     // A previous quote's fee coin goes back before this one selects — otherwise it would skip it.
     hold(null)
     setState({ kind: 'estimating' })
-    const r = await estimateOnsRegistration(wallet, address, name, nostrNpub)
+    const r = await estimateOnsRegistration(wallet, address, name, nostrNpub, purposeKeys.names)
     if (gen.current !== mine) { r.prepared?.release(); return }
     if (!r.ok || r.feeMicroTari === undefined || !r.prepared) {
       setState({ kind: 'estimate-failed', errorKind: r.errorKind ?? 'unreachable', error: r.error ?? 'Could not work out the fee.' })
@@ -208,7 +208,7 @@ export default function CnsCommitView({ name, onCancel, onDone, onTryAnother, on
     }
     hold(r.prepared)
     setState({ kind: 'confirm', budget: r.feeMicroTari, prepared: r.prepared, notice })
-  }, [wallet, address, nostrNpub, name])
+  }, [wallet, purposeKeys, address, nostrNpub, name])
 
   useEffect(() => { void estimate() }, [estimate])
 

@@ -37,13 +37,20 @@ function walletBroken(message = 'view key not set'): SecretKeyWallet {
   return { getPublicKey: async () => { throw new Error(message) } } as unknown as SecretKeyWallet
 }
 
+// The wallet's names key (derivation.PurposeKeys.names): 0x20, 0x21, … 0x3f.
+const NAMES_KEY = new Uint8Array(Array.from({ length: 32 }, (_, i) => i + 32))
+const NAMES_HEX = Array.from(NAMES_KEY, b => b.toString(16).padStart(2, '0')).join('')
+function namesOk(): SecretKeyWallet {
+  return { getPublicKey: async () => NAMES_KEY } as unknown as SecretKeyWallet
+}
+
 function record(name: string): NameRecord {
   return { name, owner: KEY_HEX, records: { nostr: `npub1${name}` } }
 }
 
 /** Stub the reader's owner→names lookup. Returns the spy so call arguments can be asserted. */
 function stubNames(result: NameRecord[] | Error) {
-  return vi.spyOn(ons, 'namesForOwner').mockImplementation(async () => {
+  return vi.spyOn(ons, 'namesForOwners').mockImplementation(async () => {
     if (result instanceof Error) throw result
     return result
   })
@@ -55,7 +62,7 @@ describe('ownedOnsNames — the resolved answers', () => {
   it('returns EVERY name, not the first one', async () => {
     stubNames([record('alpha'), record('beta'), record('gamma')])
 
-    const r = await ownedOnsNames(walletOk())
+    const r = await ownedOnsNames(walletOk(), namesOk())
 
     expect(r.ok).toBe(true)
     expect(r.names?.map(n => n.name)).toEqual(['alpha', 'beta', 'gamma'])
@@ -66,7 +73,7 @@ describe('ownedOnsNames — the resolved answers', () => {
     // that could disagree; the spec pins that it forwards whatever the reader gave it.
     stubNames([record('zeta'), record('alpha')])
 
-    const r = await ownedOnsNames(walletOk())
+    const r = await ownedOnsNames(walletOk(), namesOk())
 
     expect(r.names?.map(n => n.name)).toEqual(['zeta', 'alpha'])
   })
@@ -74,7 +81,7 @@ describe('ownedOnsNames — the resolved answers', () => {
   it('returns the single name for a wallet that owns one', async () => {
     stubNames([record('okz')])
 
-    const r = await ownedOnsNames(walletOk())
+    const r = await ownedOnsNames(walletOk(), namesOk())
 
     expect(r.ok).toBe(true)
     expect(r.names).toHaveLength(1)
@@ -84,7 +91,7 @@ describe('ownedOnsNames — the resolved answers', () => {
   it('owns-none is ok:true with an empty array — a real answer about the chain', async () => {
     stubNames([])
 
-    const r = await ownedOnsNames(walletOk())
+    const r = await ownedOnsNames(walletOk(), namesOk())
 
     expect(r.ok).toBe(true)
     expect(r.names).toEqual([])
@@ -94,12 +101,12 @@ describe('ownedOnsNames — the resolved answers', () => {
     expect(r.names).not.toBeUndefined()
   })
 
-  it('derives the owner key as lowercase hex and asks the reader for exactly that', async () => {
+  it('asks the reader for the names key AND the owner key, as lowercase hex — names under either are this wallet’s', async () => {
     const spy = stubNames([])
 
-    await ownedOnsNames(walletOk())
+    await ownedOnsNames(walletOk(), namesOk())
 
-    expect(spy).toHaveBeenCalledWith(KEY_HEX)
+    expect(spy).toHaveBeenCalledWith([NAMES_HEX, KEY_HEX])
     expect(KEY_HEX).toBe('000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f')
   })
 })
@@ -108,7 +115,7 @@ describe('ownedOnsNames — the failures, and that they stay apart', () => {
   it('an unreachable registry is ok:false with errorKind "unreachable"', async () => {
     stubNames(new Error('ONS indexer request failed: fetch failed'))
 
-    const r = await ownedOnsNames(walletOk())
+    const r = await ownedOnsNames(walletOk(), namesOk())
 
     expect(r.ok).toBe(false)
     expect(r.errorKind).toBe('unreachable')
@@ -118,7 +125,7 @@ describe('ownedOnsNames — the failures, and that they stay apart', () => {
   it('a wallet that cannot produce its key is "no-identity", NOT "unreachable"', async () => {
     const spy = stubNames([])
 
-    const r = await ownedOnsNames(walletBroken())
+    const r = await ownedOnsNames(walletBroken(), namesOk())
 
     expect(r.ok).toBe(false)
     expect(r.errorKind).toBe('no-identity')
@@ -130,8 +137,8 @@ describe('ownedOnsNames — the failures, and that they stay apart', () => {
 
   it('a failure never carries names — there is no [] to mistake for "you own none"', async () => {
     stubNames(new Error('ONS indexer HTTP 503'))
-    const unreachable = await ownedOnsNames(walletOk())
-    const noIdentity = await ownedOnsNames(walletBroken())
+    const unreachable = await ownedOnsNames(walletOk(), namesOk())
+    const noIdentity = await ownedOnsNames(walletBroken(), namesOk())
 
     for (const r of [unreachable, noIdentity]) {
       expect(r.ok).toBe(false)
@@ -142,7 +149,7 @@ describe('ownedOnsNames — the failures, and that they stay apart', () => {
   it('falls back to its own sentence when the throw carries no message', async () => {
     stubNames(new Error(''))
 
-    const r = await ownedOnsNames(walletOk())
+    const r = await ownedOnsNames(walletOk(), namesOk())
 
     expect(r.errorKind).toBe('unreachable')
     expect(r.error).toBe('Could not reach the name registry — try again.')
@@ -156,7 +163,7 @@ describe('ownedOnsNames — no registration date is invented', () => {
     // device's clock, which is not when the name was registered.
     stubNames([record('okz')])
 
-    const r = await ownedOnsNames(walletOk())
+    const r = await ownedOnsNames(walletOk(), namesOk())
 
     expect(Object.keys(r).sort()).toEqual(['names', 'ok'])
     expect(Object.keys(r.names![0]).sort()).toEqual(['name', 'owner', 'records'])
@@ -271,6 +278,7 @@ describe('validateOnsName — the contract\'s rules, in the product\'s words', (
 const WALLET = { getPublicKey: async () => new Uint8Array(32) } as unknown as SecretKeyWallet
 const ADDR = 'otl_esm_1test'
 const NPUB = 'npub1test'
+const NAMES = namesOk()
 
 /** Stub the browser writer. `estimate` and `submit` are whatever the test needs them to do. */
 function stubWriter(impl: { estimate?: () => Promise<{ feeMicroTari: bigint }>; submit?: () => Promise<{ transactionId: string; fee: bigint }> }) {
@@ -297,7 +305,7 @@ describe('estimateOnsRegistration — three problems, three instructions', () =>
   it('a wallet with no private outputs is "no-private"', async () => {
     stubWriter({ estimate: throwing('No confidential UTXOs found — this wallet needs a balance to pay the fee.') })
 
-    const r = await estimateOnsRegistration(WALLET, ADDR, 'okz', NPUB)
+    const r = await estimateOnsRegistration(WALLET, ADDR, 'okz', NPUB, NAMES)
 
     expect(r.ok).toBe(false)
     expect(r.errorKind).toBe('no-private')
@@ -307,7 +315,7 @@ describe('estimateOnsRegistration — three problems, three instructions', () =>
   it('a balance the fee cannot be paid from in one piece is "fragmented"', async () => {
     stubWriter({ estimate: throwing("Can't fund the fee from one UTXO: need more than 1500 µtTARI in a single UTXO, but the largest is 900 µtTARI.") })
 
-    const r = await estimateOnsRegistration(WALLET, ADDR, 'okz', NPUB)
+    const r = await estimateOnsRegistration(WALLET, ADDR, 'okz', NPUB, NAMES)
 
     expect(r.errorKind).toBe('fragmented')
     // A DIFFERENT PROBLEM FROM AN EMPTY WALLET: there is money, it is just in the wrong shape.
@@ -317,13 +325,13 @@ describe('estimateOnsRegistration — three problems, three instructions', () =>
   it('a network failure is "unreachable"', async () => {
     stubWriter({ estimate: throwing('UTXO scan HTTP 503') })
 
-    expect((await estimateOnsRegistration(WALLET, ADDR, 'okz', NPUB)).errorKind).toBe('unreachable')
+    expect((await estimateOnsRegistration(WALLET, ADDR, 'okz', NPUB, NAMES)).errorKind).toBe('unreachable')
   })
 
   it('an unrecognised message falls to "unreachable", never to a claim about the wallet', async () => {
     stubWriter({ estimate: throwing('something nobody has written a branch for yet') })
 
-    const r = await estimateOnsRegistration(WALLET, ADDR, 'okz', NPUB)
+    const r = await estimateOnsRegistration(WALLET, ADDR, 'okz', NPUB, NAMES)
 
     expect(r.errorKind).toBe('unreachable')
     // The raw message survives — nothing is swallowed just because it was not recognised.
@@ -333,7 +341,7 @@ describe('estimateOnsRegistration — three problems, three instructions', () =>
   it('a name that fails policy never reaches the network at all', async () => {
     const spy = stubWriter({})
 
-    const r = await estimateOnsRegistration(WALLET, ADDR, 'Okz 61', NPUB)
+    const r = await estimateOnsRegistration(WALLET, ADDR, 'Okz 61', NPUB, NAMES)
 
     expect(r.errorKind).toBe('policy')
     expect(spy).not.toHaveBeenCalled()
@@ -344,7 +352,7 @@ describe('registerOnsName — the outcome, not the sentence', () => {
   it('a true on-chain Accept is the only "accepted"', async () => {
     stubWriter({ submit: async () => ({ transactionId: 'a41c9f27b3', fee: 1_500n }) })
 
-    const r = await registerOnsName(WALLET, ADDR, 'okz', NPUB, 1_500n)
+    const r = await registerOnsName(WALLET, ADDR, 'okz', NPUB, 1_500n, NAMES)
 
     expect(r.ok).toBe(true)
     expect(r.outcome).toBe('accepted')
@@ -355,7 +363,7 @@ describe('registerOnsName — the outcome, not the sentence', () => {
   it('a fee-committed rejection is "fee-burned", and keeps its tx reference', async () => {
     stubWriter({ submit: throwing('ONS register+set_record was rejected on-chain: the fee was too low, so no name was registered — but the fee was still spent (tx a41c9f27b3).') })
 
-    const r = await registerOnsName(WALLET, ADDR, 'okz', NPUB, 1_500n)
+    const r = await registerOnsName(WALLET, ADDR, 'okz', NPUB, 1_500n, NAMES)
 
     expect(r.ok).toBe(false)
     expect(r.outcome).toBe('fee-burned')
@@ -367,7 +375,7 @@ describe('registerOnsName — the outcome, not the sentence', () => {
   it('a plain on-chain reject is also "fee-burned" — execution ran, and the fee runs first', async () => {
     stubWriter({ submit: throwing('ONS register+set_record was rejected on-chain (tx a41c9f27b3): {"Reject":"…"}. If a name was just taken by someone else, it may already be registered.') })
 
-    const r = await registerOnsName(WALLET, ADDR, 'okz', NPUB, 1_500n)
+    const r = await registerOnsName(WALLET, ADDR, 'okz', NPUB, 1_500n, NAMES)
 
     expect(r.outcome).toBe('fee-burned')
     expect(r.txId).toBe('a41c9f27b3')
@@ -376,7 +384,7 @@ describe('registerOnsName — the outcome, not the sentence', () => {
   it('a timeout is "timed-out" — pending, and never a failure', async () => {
     stubWriter({ submit: throwing('ONS register+set_record did not confirm in time (tx a41c9f27b3). Check Activity before retrying.') })
 
-    const r = await registerOnsName(WALLET, ADDR, 'okz', NPUB, 1_500n)
+    const r = await registerOnsName(WALLET, ADDR, 'okz', NPUB, 1_500n, NAMES)
 
     expect(r.outcome).toBe('timed-out')
     expect(r.outcome).not.toBe('fee-burned')
@@ -388,17 +396,17 @@ describe('registerOnsName — the outcome, not the sentence', () => {
 
     // The submission may well have landed. Calling that a failure is the lie this whole feature
     // exists to remove, so the unrecognised case defaults to pending.
-    expect((await registerOnsName(WALLET, ADDR, 'okz', NPUB, 1_500n)).outcome).toBe('timed-out')
+    expect((await registerOnsName(WALLET, ADDR, 'okz', NPUB, 1_500n, NAMES)).outcome).toBe('timed-out')
   })
 
   it('a busy indexer that never let it through is "not-submitted" — nothing was sent', async () => {
     stubWriter({ submit: throwing(NETWORK_BUSY_MESSAGE) })
-    expect((await registerOnsName(WALLET, ADDR, 'okz', NPUB, 1_500n)).outcome).toBe('not-submitted')
+    expect((await registerOnsName(WALLET, ADDR, 'okz', NPUB, 1_500n, NAMES)).outcome).toBe('not-submitted')
   })
 
   it('a busy refusal that MAY have landed stays "timed-out" — never called not-sent', async () => {
     stubWriter({ submit: throwing(new SubmitMaybeLandedError().message) })
-    expect((await registerOnsName(WALLET, ADDR, 'okz', NPUB, 1_500n)).outcome).toBe('timed-out')
+    expect((await registerOnsName(WALLET, ADDR, 'okz', NPUB, 1_500n, NAMES)).outcome).toBe('timed-out')
   })
 
   it('the vendored ONS client and Caravel say "busy" in the same words', () => {
@@ -410,7 +418,7 @@ describe('registerOnsName — the outcome, not the sentence', () => {
   it('a policy refusal is "not-submitted" — nothing was sent and no fee moved', async () => {
     const spy = stubWriter({})
 
-    const r = await registerOnsName(WALLET, ADDR, 'Okz 61', NPUB, 1_500n)
+    const r = await registerOnsName(WALLET, ADDR, 'Okz 61', NPUB, 1_500n, NAMES)
 
     expect(r.outcome).toBe('not-submitted')
     expect(r.txId).toBeUndefined()
@@ -425,7 +433,7 @@ describe('the fee margin — the one shared rule (feeProbe.withFeeMargin)', () =
   // the drift it really fears is caught at confirm by re-simulating at the exact fee.
   const budgetFor = async (realFee: bigint) => {
     stubWriter({ estimate: async () => ({ feeMicroTari: realFee }) })
-    const r = await estimateOnsRegistration(WALLET, ADDR, 'okz', NPUB)
+    const r = await estimateOnsRegistration(WALLET, ADDR, 'okz', NPUB, NAMES)
     return r.feeMicroTari!
   }
 
@@ -501,8 +509,10 @@ describe('the fee input comes from Caravel, and is locked like any other spend',
 
   it('the estimate hands the writer Caravel\'s owned-output source — the old scan is bypassed', async () => {
     const seen = writerThatSubmits(async () => ({ transactionId: 'tx9', fee: 1n }))
-    await estimateOnsRegistration(WALLET, ADDR, 'okz', NPUB)
+    await estimateOnsRegistration(WALLET, ADDR, 'okz', NPUB, NAMES)
     expect(typeof seen[0]!.ownedUtxos).toBe('function')
+    // The name is owned by the names key, not the wallet's owner key.
+    expect(seen[0]!.nameOwner).toBe(NAMES)
     // The estimate PREPARES the transaction its confirm will send, so it carries the lock hook —
     // but preparing submits nothing, so nothing may be locked yet.
     expect(typeof seen[0]!.onSubmitted).toBe('function')
@@ -522,7 +532,7 @@ describe('the fee input comes from Caravel, and is locked like any other spend',
   it('the prepared registration submits what was priced, and its fee coin is locked then spent', async () => {
     feeCoinReads(200)
     writerThatSubmits(async () => ({ transactionId: 'tx9', fee: 1_200n }))
-    const est = await estimateOnsRegistration(WALLET, ADDR, 'okz', NPUB)
+    const est = await estimateOnsRegistration(WALLET, ADDR, 'okz', NPUB, NAMES)
     expect(est.prepared!.feeMicroTari).toBe(withFeeMargin(1_000n))
     expect(est.feeMicroTari).toBe(est.prepared!.feeMicroTari)
     const r = await est.prepared!.submit()
@@ -535,7 +545,7 @@ describe('the fee input comes from Caravel, and is locked like any other spend',
     feeCoinReads(404)
     const submitted = vi.fn(async () => ({ transactionId: 'tx9', fee: 1_200n }))
     writerThatSubmits(submitted)
-    const est = await estimateOnsRegistration(WALLET, ADDR, 'okz', NPUB)
+    const est = await estimateOnsRegistration(WALLET, ADDR, 'okz', NPUB, NAMES)
     const { loadReservedIds } = await import('./coinReservations')
     expect(loadReservedIds(ADDR).has(FEE_COIN)).toBe(true)
     await expect(est.prepared!.confirm()).rejects.toMatchObject({ name: 'QuoteChanged', reason: 'inputs-gone' })
@@ -547,48 +557,48 @@ describe('the fee input comes from Caravel, and is locked like any other spend',
 
   it('the submit hands it the same source, and a lock hook', async () => {
     const seen = writerThatSubmits(async () => ({ transactionId: 'tx9', fee: 1n }))
-    await registerOnsName(WALLET, ADDR, 'okz', NPUB, 1_500n)
+    await registerOnsName(WALLET, ADDR, 'okz', NPUB, 1_500n, NAMES)
     expect(typeof seen[0]!.ownedUtxos).toBe('function')
     expect(typeof seen[0]!.onSubmitted).toBe('function')
   })
 
   it('Accept: the fee coin is spent', async () => {
     writerThatSubmits(async () => ({ transactionId: 'tx9', fee: 1n }))
-    await registerOnsName(WALLET, ADDR, 'okz', NPUB, 1_500n)
+    await registerOnsName(WALLET, ADDR, 'okz', NPUB, 1_500n, NAMES)
     expect(await statusOf(FEE_COIN)).toBe('spent')
   })
 
   // The fee input is in the FEE instructions, which are exactly what a fee-only commit commits.
   it('fee-only commit: the fee coin is ALSO spent — it was consumed', async () => {
     writerThatSubmits(throwing('ONS register+set_record was rejected on-chain: the fee was too low, so no name was registered — but the fee was still spent (tx tx9).'))
-    await registerOnsName(WALLET, ADDR, 'okz', NPUB, 1_500n)
+    await registerOnsName(WALLET, ADDR, 'okz', NPUB, 1_500n, NAMES)
     expect(await statusOf(FEE_COIN)).toBe('spent')
   })
 
   it('a timeout keeps the lock — not a verdict; the sweep resolves it', async () => {
     writerThatSubmits(throwing('ONS register+set_record did not confirm in time (tx tx9). Check Activity before retrying.'))
-    await registerOnsName(WALLET, ADDR, 'okz', NPUB, 1_500n)
+    await registerOnsName(WALLET, ADDR, 'okz', NPUB, 1_500n, NAMES)
     expect(await statusOf(FEE_COIN)).toBe('locked')
   })
 
   it('a plain reject keeps the lock too — a sentence is not evidence enough to hand a coin back', async () => {
     writerThatSubmits(throwing('ONS register+set_record was rejected on-chain (tx tx9): {"Reject":"…"}.'))
-    await registerOnsName(WALLET, ADDR, 'okz', NPUB, 1_500n)
+    await registerOnsName(WALLET, ADDR, 'okz', NPUB, 1_500n, NAMES)
     expect(await statusOf(FEE_COIN)).toBe('locked')
   })
 
   it('a failure before submission locks nothing', async () => {
     stubWriter({ submit: throwing('socket hang up') })
-    await registerOnsName(WALLET, ADDR, 'okz', NPUB, 1_500n)
+    await registerOnsName(WALLET, ADDR, 'okz', NPUB, 1_500n, NAMES)
     expect(await statusOf(FEE_COIN)).toBeUndefined()
   })
 
   it('no private outputs at all is "no-private"; none because some are locked is "private-settling"', async () => {
     stubWriter({ estimate: throwing('No confidential UTXOs found — this wallet needs a balance to pay the fee.') })
-    expect((await estimateOnsRegistration(WALLET, ADDR, 'okz', NPUB)).errorKind).toBe('no-private')
+    expect((await estimateOnsRegistration(WALLET, ADDR, 'okz', NPUB, NAMES)).errorKind).toBe('no-private')
 
     const { markLocked } = await import('./spentOutputs')
     markLocked(ADDR, ['utxo_0101_inflight'], 'txA')
-    expect((await estimateOnsRegistration(WALLET, ADDR, 'okz', NPUB)).errorKind).toBe('private-settling')
+    expect((await estimateOnsRegistration(WALLET, ADDR, 'okz', NPUB, NAMES)).errorKind).toBe('private-settling')
   })
 })

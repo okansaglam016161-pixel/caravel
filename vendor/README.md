@@ -60,5 +60,6 @@ procedure. Resolved by the `tari-cipherseed` alias in `vite.config.ts`, `tsconfi
 `createOnsClient` from it. Vendored until the client is published to npm, then switch to the package.
 
 Provenance — source commit, build, digest, and what each build changed — is in
-[`ons/dist/VENDOR_INFO`](ons/dist/VENDOR_INFO). The current build is ootle-name-service `56f8c87`
-(branch `sdk-0.8`): SDK 0.8 / ootle-wasm 0.45 peers, on top of exact fees and the busy-indexer retry.
+[`ons/dist/VENDOR_INFO`](ons/dist/VENDOR_INFO). The current build is ootle-name-service `5d3d65d`
+(branch `privacy-ids`): a separate owner key for names (`nameOwner`, `namesForOwners`), on top of SDK 0.8
+peers, exact fees and the busy-indexer retry.

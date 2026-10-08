@@ -12,6 +12,7 @@ import { clearStoreKey, setStoreKey } from '../crypto/sessionKey'
 import { hasLegacyStoreKey, migrateStoreKey } from '../crypto/storeKeyMigration'
 import {
   type DerivationScheme,
+  type PurposeKeys,
   type WalletIdentity,
   deriveIdentity,
   resolveScheme,
@@ -163,6 +164,11 @@ export interface ReactResult {
 export interface WalletCtx {
   walletExists: boolean
   wallet: SecretKeyWallet | null
+  /**
+   * The wallet's faucet and names keys (derivation.PurposeKeys). Present exactly when `wallet` is:
+   * set with the identity, cleared on lock.
+   */
+  purposeKeys: PurposeKeys | null
   address: string | null
   nostrNpub: string | null
   /** x-only secp256k1 pubkey hex (32 bytes). Stored alongside nostrNpub for callers that
@@ -317,6 +323,7 @@ export function useWallet(): WalletCtx {
 
 export function WalletProvider({ children }: { children: ReactNode }) {
   const [wallet, setWallet] = useState<SecretKeyWallet | null>(null)
+  const [purposeKeys, setPurposeKeys] = useState<PurposeKeys | null>(null)
   const [address, setAddress] = useState<string | null>(null)
   const [nostrNpub, setNostrNpub] = useState<string | null>(null)
   const [nostrPubkeyHex, setNostrPubkeyHex] = useState<string | null>(null)
@@ -736,6 +743,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   // established; from here on they are identical, so they share this.
   const adoptIdentity = useCallback(async (identity: WalletIdentity) => {
     const { wallet: w, nostr } = identity
+    setPurposeKeys(identity.purposeKeys)
     nostrSecretKeyRef.current = nostr.privateKeyHex
     setNostrNpub(nostr.npub)
     setNostrPubkeyHex(nostr.publicKeyHex)
@@ -865,6 +873,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     revealedGenRef.current++
     setRevealed(REVEALED_IDLE)
     setWallet(null)
+    setPurposeKeys(null)
     setAddress(null)
     setTxHistory([])
     setNostrNpub(null)
@@ -1400,7 +1409,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
   return (
     <Ctx.Provider value={{
-      walletExists, wallet, address, nostrNpub, nostrPubkeyHex, scan, held, revealed, txHistory,
+      walletExists, wallet, purposeKeys, address, nostrNpub, nostrPubkeyHex, scan, held, revealed, txHistory,
       settles, isSettling, settleLagged, beginSettle, acknowledgeSettle,
       messagingStatus, messages, historyUnreadable,
       createRecoveryPhrase, createWallet, unlock, restore, lock, getMnemonic, rescan, recordSent,

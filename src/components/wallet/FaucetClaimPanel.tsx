@@ -14,6 +14,7 @@
 
 import { useEffect, useState, useRef } from 'react'
 import { useWallet } from '../../context/WalletContext'
+import type { SecretKeyWallet } from '@tari-project/ootle-secret-key-wallet'
 import {
   prepareClaim,
   claimRefusalMessage,
@@ -40,6 +41,11 @@ function toHexStr(bytes: Uint8Array): string {
   return s
 }
 
+/** Every key this wallet may have claimed with: the faucet key, and the owner key of older claims. */
+async function claimantKeys(wallet: SecretKeyWallet, faucetKey: SecretKeyWallet): Promise<string[]> {
+  return [toHexStr(await faucetKey.getPublicKey()), toHexStr(await wallet.getPublicKey())]
+}
+
 // ── DISMISSAL IS PER WALLET ───────────────────────────────────────────────────
 //
 // The ✕ on the open banner is "not for this wallet", so the address is the key. A dismissed faucet
@@ -62,7 +68,7 @@ function readDismissed(address: string | null): boolean {
 
 
 export default function FaucetClaimPanel() {
-  const { wallet, address, scan, rescan, settles, beginSettle, acknowledgeSettle } = useWallet()
+  const { wallet, purposeKeys, address, scan, rescan, settles, beginSettle, acknowledgeSettle } = useWallet()
   const balance = scan.balance
   const [p, setPhase] = useState<ClaimState>('idle')
   const [msg, setMsg] = useState<string | null>(null)
@@ -103,19 +109,18 @@ export default function FaucetClaimPanel() {
   // `unknown`, which also renders nothing — the faucet does not offer a claim on a guess.
   useEffect(() => {
     setStatus(null)
-    if (!wallet || !address) return
+    if (!wallet || !purposeKeys || !address) return
     let live = true
     void (async () => {
       try {
-        const pk = toHexStr(await wallet.getPublicKey())
-        const s = await readFaucetStatus(address, pk)
+        const s = await readFaucetStatus(address, await claimantKeys(wallet, purposeKeys.faucet))
         if (live) setStatus(s)
       } catch (e) {
         if (live) setStatus({ kind: 'unknown', reason: (e as Error).message })
       }
     })()
     return () => { live = false }
-  }, [wallet, address])
+  }, [wallet, purposeKeys, address])
 
   // ── Reacting to the settle the CONTEXT is running ──────────────────────────
   //
@@ -153,12 +158,12 @@ export default function FaucetClaimPanel() {
    * paused, empty) becomes the wallet's status, exactly as a refused claim would.
    */
   async function priceClaim() {
-    if (!wallet || !address) return
+    if (!wallet || !purposeKeys || !address) return
     const gen = ++priceGen.current
     setPrepared(null)
     setPricing('pricing')
     try {
-      const pc = await prepareClaim(wallet, address)
+      const pc = await prepareClaim(wallet, address, purposeKeys.faucet)
       if (gen !== priceGen.current) return
       setPrepared(pc)
       setPricing('idle')
@@ -170,7 +175,7 @@ export default function FaucetClaimPanel() {
       if (e instanceof FaucetClaimRefused) {
         if (e.refusal === 'already-claimed') { setStatus({ kind: 'claimed' }); return }
         try {
-          const s2 = await readFaucetStatus(address, toHexStr(await wallet.getPublicKey()))
+          const s2 = await readFaucetStatus(address, await claimantKeys(wallet, purposeKeys.faucet))
           if (gen === priceGen.current) setStatus(s2)
         } catch { /* keep 'failed' — the banner offers a retry */ }
       }

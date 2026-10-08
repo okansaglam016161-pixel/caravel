@@ -298,19 +298,25 @@ function caravelFeeSource(wallet: SecretKeyWallet, senderAddress: string): Pick<
  * dry run, nothing spent. Returns the fee (cost + the shared margin, feeProbe.withFeeMargin), which
  * is exactly what is charged and what the confirm screen shows, and `prepared`, whose `submit`
  * sends the very transaction that was priced.
+ *
+ * THE NAME IS OWNED BY `namesKey`, the wallet's names key (derivation.PurposeKeys) — it signs first,
+ * which makes it the registry's recorded owner, and receives the revealed fee. The wallet's owner
+ * key does not appear: a name is public, and naming the owner key would tie it to the account.
+ * `wallet` still pays — the fee input is one of its private coins, spent by its one-time key.
  */
 export async function estimateOnsRegistration(
   wallet: SecretKeyWallet,
   senderAddress: string,
   name: string,
   ownNpub: string,
+  namesKey: SecretKeyWallet,
 ): Promise<OnsEstimateResult> {
   const policy = validateOnsName(name)
   if (policy) return { ok: false, errorKind: 'policy', error: policy }
   const lock = feeInputLock(senderAddress)
   try {
     const writer = await ons.withBrowserSigner({
-      wallet, senderAddress, ...caravelFeeSource(wallet, senderAddress), onSubmitted: lock.onSubmitted,
+      wallet, senderAddress, nameOwner: namesKey, ...caravelFeeSource(wallet, senderAddress), onSubmitted: lock.onSubmitted,
     })
     const prepared = await writer.prepareRegisterWithNostr(name, ownNpub, withFeeMargin)
     const preparedAt = Date.now()
@@ -404,7 +410,8 @@ async function settleRegistration(
  * atomic on-chain transaction (client-signed, fee paid from a confidential UTXO), revealing exactly
  * `feeBudget`. The ONE-SHOT form, for a caller with a budget already in hand; the confirm screen
  * submits {@link estimateOnsRegistration}'s `prepared` instead, so what it sends is what it priced.
- * On-chain uniqueness is the final authority; a name free at preview can still be taken.
+ * On-chain uniqueness is the final authority; a name free at preview can still be taken. Owned by
+ * `namesKey`, as estimateOnsRegistration's are.
  */
 export async function registerOnsName(
   wallet: SecretKeyWallet,
@@ -412,6 +419,7 @@ export async function registerOnsName(
   name: string,
   ownNpub: string,
   feeBudget: bigint,
+  namesKey: SecretKeyWallet,
 ): Promise<OnsRegisterResult> {
   const policy = validateOnsName(name)
   // REFUSED BEFORE ANYTHING WAS SENT. No transaction exists, no fee moved, and a screen must be able
@@ -422,7 +430,7 @@ export async function registerOnsName(
   const lock = feeInputLock(senderAddress)
   return settleRegistration(lock, async () => {
     const writer = await ons.withBrowserSigner({
-      wallet, senderAddress, ...caravelFeeSource(wallet, senderAddress), onSubmitted: lock.onSubmitted,
+      wallet, senderAddress, nameOwner: namesKey, ...caravelFeeSource(wallet, senderAddress), onSubmitted: lock.onSubmitted,
     })
     return writer.submitRegisterWithNostr(name, ownNpub, feeBudget)
   })
@@ -499,9 +507,11 @@ function bytesToHex(bytes: Uint8Array): string {
 }
 
 /**
- * The @names this wallet owns. Derives the owner key (the wallet's Ristretto public key, the same
- * identity recorded on-chain as a name's owner) and filters the registry by it — keyless, on-chain,
- * and identical on any device for the same wallet.
+ * The @names this wallet owns, under EITHER of its keys: the names key every registration now uses,
+ * and the owner key names registered before it existed were recorded under. Both are derived from the
+ * phrase, and the registry is filtered by them in one read — keyless, on-chain, and identical on any
+ * device for the same wallet. Each record's `owner` says which key holds it, which is the key an
+ * edit of that name must sign with.
  *
  * ALL FOUR OUTCOMES ARE DISTINCT, and that is the whole point of this function's shape:
  *
@@ -520,12 +530,12 @@ function bytesToHex(bytes: Uint8Array): string {
  * a chain's" (journal.ts) — so it is not a registration date. The field is ABSENT rather than null,
  * so nothing downstream can quietly fill it and call it one.
  */
-export async function ownedOnsNames(wallet: SecretKeyWallet): Promise<OwnedNamesResult> {
+export async function ownedOnsNames(wallet: SecretKeyWallet, namesKey: SecretKeyWallet): Promise<OwnedNamesResult> {
   // TWO TRY BLOCKS, NOT ONE. A single catch around both calls is what let a wallet failure return
   // the registry's sentence and a registry failure return the wallet's. The split is the fix.
-  let ownerHex: string
+  let ownerHexes: string[]
   try {
-    ownerHex = bytesToHex(await wallet.getPublicKey())
+    ownerHexes = [bytesToHex(await namesKey.getPublicKey()), bytesToHex(await wallet.getPublicKey())]
   } catch (e) {
     return {
       ok: false,
@@ -535,7 +545,7 @@ export async function ownedOnsNames(wallet: SecretKeyWallet): Promise<OwnedNames
   }
 
   try {
-    return { ok: true, names: await ons.namesForOwner(ownerHex) }
+    return { ok: true, names: await ons.namesForOwners(ownerHexes) }
   } catch (e) {
     return {
       ok: false,

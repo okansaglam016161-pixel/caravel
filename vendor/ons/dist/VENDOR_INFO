@@ -1,17 +1,27 @@
 ONS client — vendored build provenance
 ======================================
 source repo   : ootle-name-service (github.com/okansaglam016161-pixel/ootle-name-service)
-source commit : 56f8c878a84a1f8d57730682043d4bcc0c470fc6
-              : (56f8c87, branch: sdk-0.8, from main c64c3f5; client/ last changed in 56f8c87)
+source commit : 5d3d65d (branch: privacy-ids, from main 56f8c87; client/ last changed in 5d3d65d)
 built from    : client/src → client/dist  (npm run build = tsc -p client/tsconfig.json)
-vendored at   : 2026-10-07
+vendored at   : 2026-10-08
 tree state    : clean (dist matches the commit above exactly — diff -rq, excluding this file)
-src digest    : 7c418821fa3360afe5755d7a143f2a9786d3a1876eb51ee39d05a93336418dbc
+src digest    : 9301a9aa8bb233094a7b419c43bb59212bf6dd45a631740e643733033ca19e7f
                 (shasum -a 256 client/src/*.ts | sort | shasum -a 256)
 
 NO LOCAL PATCHES. Everything Caravel needs is in the upstream source.
 
-This build moves to SDK 0.8 (sdk-0.8; Ootle 0.45 / @tari-project/ootle 0.8, ootle-wasm 0.45):
+This build adds a separate owner key for names (privacy-ids):
+  - browser-writer.ts : BrowserSigner.nameOwner? — the key that owns what the writer registers and
+                        signs its writes. It signs FIRST (a name's owner is the transaction's first
+                        signer; the seal signer is not authorized) and receives the revealed fee.
+                        Omitted, the writer signs with `wallet` as before.
+  - reader.ts         : namesForOwners(keys) — every name held by any of the keys, one registry
+                        read, sorted; namesForOwner is its one-key case.
+  - ootle-sdk.d.ts    : OotleWallet declared as implementing Signer, as the real SDK class does. The
+                        source also type-checks against the real SDK 0.8.0 (stub excluded), 0 errors.
+  - tests             : npm test — 18 (4 new, reader.test.ts); excluded from this dist.
+
+Carried forward from the SDK 0.8 build (56f8c87):
   - package.json      : peer deps @tari-project/ootle* ^0.8.0, ootle-wasm ^0.45.0. The 0.8 SDK dist
                         is byte-identical to 0.7 apart from the pins and ootle-indexer's typed
                         HttpError, whose message keeps the "HTTP <status>: …" form retry.ts reads.

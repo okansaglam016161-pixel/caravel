@@ -24,7 +24,6 @@
 import { inputsStillUnspent, submitOnce } from './submitGuard'
 import { RETRYING_MESSAGE } from './indexerRetry'
 import {
-  OotleWallet,
   Network,
   TARI_RESOURCE_ADDRESS,
   StealthInput,
@@ -208,10 +207,6 @@ export async function prepareConfidentialSend(
 
   const crypto = new WasmStealthCrypto(Network.Esmeralda)
   const viewSecret = await wallet.getViewSecret()
-  // The fee leaves the statement as a revealed output, and since Ootle 0.42 that bucket is only
-  // created for a receiver whose badge is in the auth scope: the sender's owner key, which signs
-  // this transaction through `ootleWallet` below. (Not StaticSigner — its getPublicKey is zeros.)
-  const ownerPk = await wallet.getPublicKey()
 
   log('Scanning for your UTXOs…')
   // EXCLUDING WHAT WE HAVE ALREADY SPENT. `/utxos` keeps listing a spent output until the indexer
@@ -240,6 +235,20 @@ export async function prepareConfidentialSend(
   log(`Spending ${describeMicrotari(selection.total)} TARI from ${selection.inputs.length} payment${selection.inputs.length === 1 ? '' : 's'} you’ve received`)
 
   const spentInputIds = selection.inputs.map(u => u.substateId)
+
+  // ── WHO THE FEE IS REVEALED TO, AND WHO SIGNS ────────────────────────────────
+  //
+  // The fee leaves the statement as a revealed output, and since Ootle 0.42 its bucket is only
+  // created for a receiver whose badge is in the transaction's auth scope — any signer's. Every
+  // input already signs with its own ONE-TIME spend key (the signatures below), so the receiver is
+  // the first input's one-time key, and those signatures are the only ones the transaction carries.
+  // The wallet's owner key neither signs nor receives: it would tie a purely private payment to the
+  // wallet's public account. (walletd reaches the same end with a fresh throwaway key; reusing a key
+  // already in the transaction adds no new one and no extra signature.)
+  const firstKey = selection.inputs.find(u => u.spendKey)?.spendKey
+  if (!firstKey) throw new Error('Could not read the spend key of the funds being sent. Refresh your balance and try again.')
+  const feeReceiver: Uint8Array = firstKey
+  const feeReceiverHex = toHex(feeReceiver)
 
   /** What the recipient gets at a given fee. Fixed for a typed amount; the remainder on send-all. */
   const amountAt = (feeMicrotari: bigint) => sendAll ? selection.total - feeMicrotari : params.amountMicrotari
@@ -276,7 +285,7 @@ export async function prepareConfidentialSend(
       split.changeAmount > 0n
         ? [recipientOutput, createOutput({ destination: senderAddress, amount: split.changeAmount, resourceAddress: TARI_RESOURCE_ADDRESS })]
         : [recipientOutput],
-      { amount: feeMicrotari, receiver: ownerPk },
+      { amount: feeMicrotari, receiver: feeReceiver },
     )
 
     // Recipient's output is specs[0]; read its on-wire Pedersen commitment from the outputs
@@ -325,14 +334,15 @@ export async function prepareConfidentialSend(
     for (const u of selection.inputs) {
       oneTimeSigs.push(await wallet.addStealthSignature(unsignedJson, u.nonce, sealKP.public_key, { crypto }))
     }
-
-    const ootleWallet = new OotleWallet()
-      .registerKeyProvider(senderAddress, wallet)
-      .setDefaultSigner(senderAddress)
+    // The receiver named above must be one of these signers, or the fee bucket is never created and
+    // the chain rejects the payment. Checked here, before anything is sent.
+    if (!oneTimeSigs.some(sig => String(sig.public_key).toLowerCase() === feeReceiverHex)) {
+      throw new Error('The fee receiver is not among this payment’s signers. Nothing was sent.')
+    }
 
     // `dry_run` must ride INSIDE the sealed envelope — the dry-run endpoint refuses anything else.
     const toSign  = dryRun ? { ...unsignedTx, dry_run: true } : unsignedTx
-    const signed  = await signTransaction([ootleWallet, new StaticSigner(oneTimeSigs)], toSign, sealKP)
+    const signed  = await signTransaction([new StaticSigner(oneTimeSigs)], toSign, sealKP)
     return { envelope: sealTransaction(signed), split, recipientUtxoId, selfOutputIds }
   }
 
@@ -575,6 +585,12 @@ export function describeMicrotari(microtari: bigint): string {
   const whole = microtari / MICROTARI_PER_TARI
   const frac = (microtari % MICROTARI_PER_TARI).toString().padStart(6, '0')
   return `${whole}.${frac}`
+}
+
+function toHex(bytes: Uint8Array): string {
+  let s = ''
+  for (const b of bytes) s += b.toString(16).padStart(2, '0')
+  return s
 }
 
 export function tariToMicrotari(tari: number): bigint {

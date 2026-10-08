@@ -4,7 +4,14 @@
 //
 //   /substates/<faucet component>   paused flag and claim amount (the component's own state)
 //   /substates/<faucet vault>       what is left to give out
-//   /substates/<this key's receipt> whether this wallet has already claimed
+//   /substates/<each key's receipt> whether this wallet has already claimed
+//
+// ── TWO KEYS CAN HOLD THIS WALLET'S CLAIM ────────────────────────────────────
+//
+// Claims are made with the wallet's faucet key (derivation.PurposeKeys). Wallets that claimed before
+// that were claimed with the OWNER key, and the template keys its receipt by whichever key claimed —
+// so a receipt for either one means this wallet has had its claim. Checking only the new key would
+// offer a second claim to every wallet that already took one.
 //
 // The claim RECEIPT is the only thing that decides whether the claim is offered. A balance never
 // does: a wallet funded by a payment has never claimed, and a wallet that claimed and spent it all
@@ -40,7 +47,7 @@ import { TARI_RESOURCE_ADDRESS } from '@tari-project/ootle'
 export type FaucetStatus =
   /** The reads could not establish the status. Show nothing. */
   | { kind: 'unknown'; reason: string }
-  /** This wallet's key has claimed. Final. */
+  /** One of this wallet's keys has claimed. Final. */
   | { kind: 'claimed' }
   /** The admin has paused claims. */
   | { kind: 'paused'; claimAmount: bigint }
@@ -98,15 +105,17 @@ export function decodeFaucetVault(body: unknown): bigint | null {
 }
 
 /**
- * Combine the three reads into a status. Pure — the network half is readFaucetStatus.
+ * Combine the reads into a status. Pure — the network half is readFaucetStatus.
  *
- * `receipt` is the point read of this key's receipt: answered with a body means it exists (the key
- * has claimed); answered with no body means every indexer said not-found; not answered means
- * nothing could be established.
+ * `receipts` are the point reads of each key's receipt: answered with a body means it exists (that
+ * key has claimed); answered with no body means every indexer said not-found; not answered means
+ * nothing could be established. ANY existing receipt is a claim. An unanswered one is decisive only
+ * when no other receipt exists — "not claimed" needs every key to have answered.
  */
-export function faucetStatusFrom(component: PointRead, vault: PointRead, receipt: PointRead): FaucetStatus {
-  if (!receipt.answered) return { kind: 'unknown', reason: 'could not read this wallet’s claim receipt' }
-  if (receipt.body !== null) return { kind: 'claimed' }
+export function faucetStatusFrom(component: PointRead, vault: PointRead, receipts: readonly PointRead[]): FaucetStatus {
+  if (receipts.length === 0) return { kind: 'unknown', reason: 'no claim receipt to read' }
+  if (receipts.some(r => r.answered && r.body !== null)) return { kind: 'claimed' }
+  if (receipts.some(r => !r.answered)) return { kind: 'unknown', reason: 'could not read this wallet’s claim receipt' }
 
   if (!component.answered || component.body === null) return { kind: 'unknown', reason: 'could not read the faucet' }
   const state = decodeFaucetState(component.body)
@@ -122,7 +131,8 @@ export function faucetStatusFrom(component: PointRead, vault: PointRead, receipt
 }
 
 /**
- * Read the faucet's status for the wallet whose owner public key is `ownerPkHex`.
+ * Read the faucet's status for a wallet, given every key it may have claimed with — its faucet key
+ * and its owner key (see TWO KEYS above).
  *
  * A wallet already recorded as claimed (markFaucetClaimed) is answered without a request. The
  * record is only ever written from something the chain said, so it is a cache of a chain fact, not
@@ -130,16 +140,16 @@ export function faucetStatusFrom(component: PointRead, vault: PointRead, receipt
  */
 export async function readFaucetStatus(
   walletAddress: string,
-  ownerPkHex: string,
+  claimantPkHexes: readonly string[],
   read: (path: string) => Promise<PointRead> = pointRead,
 ): Promise<FaucetStatus> {
   if (loadFaucetClaimed(walletAddress)) return { kind: 'claimed' }
-  const [component, vault, receipt] = await Promise.all([
+  const [component, vault, ...receipts] = await Promise.all([
     read(`/substates/${FAUCET_COMPONENT_ADDRESS}`),
     read(`/substates/${FAUCET_VAULT_ADDRESS}`),
-    read(`/substates/${faucetReceiptId(ownerPkHex)}`),
+    ...claimantPkHexes.map(pk => read(`/substates/${faucetReceiptId(pk)}`)),
   ])
-  const status = faucetStatusFrom(component, vault, receipt)
+  const status = faucetStatusFrom(component, vault, receipts)
   if (status.kind === 'claimed') markFaucetClaimed(walletAddress)
   return status
 }

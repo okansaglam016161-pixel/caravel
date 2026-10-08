@@ -395,6 +395,43 @@ describe('store key derivation', () => {
 // the same bytes. These tests bind the two together, so the frozen vectors above pin the path the
 // app runs and not merely the one the tests run.
 
+describe('purpose keys (faucet, names)', () => {
+  // ── FROZEN VECTORS ────────────────────────────────────────────────────────
+  //
+  // These pin "com.caravel.faucet" / "com.caravel.names", version 1, the labels "faucet_key" /
+  // "names_key", the 64-byte wide hash, the reduction, and which seed material each scheme feeds in.
+  // A drift re-offers the faucet to wallets that have claimed and drops every name registered under
+  // the old names key from "Your @names". IF ONE FAILS, THE DERIVATION DRIFTED — DO NOT UPDATE IT.
+  const pk = async (w: { getPublicKey(): Promise<Uint8Array> }) => hex(await w.getPublicKey())
+
+  it('derives the pinned faucet and names keys for a known CipherSeed phrase', async () => {
+    const id = await deriveIdentity(CIPHERSEED, 'cipherseed')
+    expect(await pk(id.purposeKeys.faucet)).toBe('d8b42f09bff009739447dce08d3e5dc03e0e30a6a5ab8cd3122a264d06209f09')
+    expect(await pk(id.purposeKeys.names)).toBe('cc00ca65eee6052c2ecfe9349c8e8ebb1e392903ccda9bafc338574d7d59e116')
+  }, 30_000)
+
+  it('derives the pinned faucet and names keys for a known legacy BIP-39 phrase', async () => {
+    const id = await deriveIdentity(BIP39, 'bip39')
+    expect(await pk(id.purposeKeys.faucet)).toBe('d419c32e437d0d4fc256eabe9ed1c2c777395fcb9fafaafef73e3a67c6df6557')
+    expect(await pk(id.purposeKeys.names)).toBe('0248e04b6dd8e7eaea309fa906098623b3196f1692fc797f5029c669680b6430')
+  }, 30_000)
+
+  it('are three different keys: owner, faucet, names — and none is the Nostr key', async () => {
+    for (const [phrase, scheme] of [[CIPHERSEED, 'cipherseed'], [BIP39, 'bip39']] as const) {
+      const id = await deriveIdentity(phrase, scheme)
+      const keys = [await pk(id.wallet), await pk(id.purposeKeys.faucet), await pk(id.purposeKeys.names), id.nostr.publicKeyHex]
+      expect(new Set(keys).size).toBe(4)
+    }
+  }, 30_000)
+
+  it('come back the same from the same phrase — a restore recovers them', async () => {
+    const a = await deriveIdentity(CIPHERSEED, 'cipherseed')
+    const b = await deriveIdentity(`  ${CIPHERSEED.toUpperCase()}\n`, 'cipherseed')
+    expect(await pk(b.purposeKeys.faucet)).toBe(await pk(a.purposeKeys.faucet))
+    expect(await pk(b.purposeKeys.names)).toBe(await pk(a.purposeKeys.names))
+  }, 30_000)
+})
+
 describe('deriveIdentity hands back the store key', () => {
   it('agrees with the standalone derivation, on both schemes', async () => {
     const cs = await deriveIdentity(CIPHERSEED, 'cipherseed')

@@ -42,7 +42,7 @@ export type OwnedNamesState =
   | { kind: 'unreachable'; errorKind: OnsOwnedErrorKind; error: string }
 
 export function useOwnedNames(): { state: OwnedNamesState; retry: () => void } {
-  const { wallet } = useWallet()
+  const { wallet, purposeKeys } = useWallet()
   const [nonce, setNonce] = useState(0)
   const [state, setState] = useState<OwnedNamesState>({ kind: 'checking' })
 
@@ -51,7 +51,7 @@ export function useOwnedNames(): { state: OwnedNamesState; retry: () => void } {
     // registry, so this is not an answer about the chain and must not be rendered as one. It is the
     // same shape of not-knowing as a failed read, carrying the identity reason rather than the
     // network one.
-    if (!wallet) {
+    if (!wallet || !purposeKeys) {
       setState({ kind: 'unreachable', errorKind: 'no-identity', error: 'This wallet is locked.' })
       return
     }
@@ -59,7 +59,7 @@ export function useOwnedNames(): { state: OwnedNamesState; retry: () => void } {
     let cancelled = false
     if (nonce > 0) setState({ kind: 'checking' })  // manual retry resets the visible state
 
-    ownedOnsNames(wallet).then(r => {
+    ownedOnsNames(wallet, purposeKeys.names).then(r => {
       if (cancelled) return
       if (!r.ok) {
         setState({
@@ -78,7 +78,7 @@ export function useOwnedNames(): { state: OwnedNamesState; retry: () => void } {
     // a slow first read landing after "Try again" writes to nothing instead of flashing its stale
     // result over the new one.
     return () => { cancelled = true }
-  }, [wallet, nonce])
+  }, [wallet, purposeKeys, nonce])
 
   return { state, retry: () => setNonce(n => n + 1) }
 }

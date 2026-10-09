@@ -20,7 +20,8 @@ import { loadAddressSent, markAddressSent, clearAddressSent, type AddressSentMap
 import { prepareConfidentialSend, tariToMicrotari, MAX_FEE, type PreparedConfidentialSend } from '../../crypto/confidentialSend'
 import { FEE_SHORT_MESSAGE, QuoteChanged, isFeeShortRejection } from '../../crypto/quote'
 import { createActionLock, guarded } from '../../crypto/actionLock'
-import { dedupePaymentMessages, receivedPaymentVisible } from '../../messaging/paymentDedupe'
+import { dedupePaymentMessages, disputedUtxos, isOwnOutputClaim, ownOutputIds, receivedPaymentVisible } from '../../messaging/paymentDedupe'
+import { useJournal } from '../../hooks/useJournal'
 import { beginEntry, settleEntry } from '../../crypto/journalStore'
 import { resolveOnsNameToHex, toOnsName, type OnsResolveErrorKind } from '../../crypto/ons'
 import { ConnectionIndicator, RelayHealthPanel } from './ConnectionStatus'
@@ -341,14 +342,17 @@ function SentPaymentCard({ message, lid, flashed }: { message: CaravelMessage; l
   return <PaymentCard sent state={state} timestamp={message.timestamp} plaintext={message.plaintext} lid={lid} flashed={flashed} />
 }
 
-function ReceivedPaymentCard({ message, lid, flashed }: { message: CaravelMessage; lid?: string; flashed?: boolean }) {
+function ReceivedPaymentCard({ message, lid, flashed, disputed }: { message: CaravelMessage; lid?: string; flashed?: boolean; disputed?: boolean }) {
   const { state: res, retry } = usePaymentResolution(message.payment!.utxoId)
   // ONLY A PAYMENT THAT LANDED GETS A CARD — see messaging/paymentDedupe. While the output is being
   // checked, and when it is not on chain (never landed) or not ours, nothing is drawn; it appears
   // the moment the chain confirms it.
   if (!receivedPaymentVisible(res)) return null
   let state: PayCardState
-  if (res.kind === 'resolved') {
+  if (res.kind === 'resolved' && disputed) {
+    // Another contact claims this same output — the card credits nobody (messaging/paymentDedupe).
+    state = { dir: 'RECEIVED', amount: microToTari(res.amountMicrotari), tone: 'dim', status: 'Another contact claims this same payment, so the sender can’t be confirmed.' }
+  } else if (res.kind === 'resolved') {
     state = { dir: 'RECEIVED', amount: microToTari(res.amountMicrotari), pill: true }        // R1
   } else if (res.kind === 'retrying') {
     state = { dir: 'RECEIVED', tone: 'dim', spin: true, status: 'Reaching the indexer…' }    // R4
@@ -360,10 +364,10 @@ function ReceivedPaymentCard({ message, lid, flashed }: { message: CaravelMessag
   return <PaymentCard sent={false} state={state} timestamp={message.timestamp} plaintext={message.plaintext} lid={lid} flashed={flashed} />
 }
 
-function PaymentMessageCard({ message, lid, flashed }: { message: CaravelMessage; lid?: string; flashed?: boolean }) {
+function PaymentMessageCard({ message, lid, flashed, disputed }: { message: CaravelMessage; lid?: string; flashed?: boolean; disputed?: boolean }) {
   return message.direction === 'sent'
     ? <SentPaymentCard message={message} lid={lid} flashed={flashed} />
-    : <ReceivedPaymentCard message={message} lid={lid} flashed={flashed} />
+    : <ReceivedPaymentCard message={message} lid={lid} flashed={flashed} disputed={disputed} />
 }
 
 // ── Component ────────────────────────────────────────────────────────────────────
@@ -374,6 +378,11 @@ export default function ChatApp({ onOpenWallet }: {
   onOpenWallet: () => void
 }) {
   const { wallet, address, scan, messages, historyUnreadable, nostrPubkeyHex, messagingStatus, contacts, acceptContact, contactAddresses, setManualTariAddress, createMessagingProvider, recordSentMessage, deleteConversation, editMessage, reactMessage, getRelayStates, reconnectAll, groups, createGroup, acceptGroup, declineGroup, leaveGroup, reinviteGroup, balanceHidden } = useWallet()
+  // Payment claims this wallet must not credit — see messaging/paymentDedupe: claims on our own
+  // outputs (our change) get no card, and an output two contacts claim credits neither.
+  const journal = useJournal(address)
+  const ownOutputs = useMemo(() => ownOutputIds(journal), [journal])
+  const disputedClaims = useMemo(() => disputedUtxos(messages), [messages])
   // Logo has no theme awareness of its own — `onLight` is a manual prop. Both marks in this view
   // sit on surfaces that are now light in the light theme, so the white mark would vanish.
   const { theme } = useTheme()
@@ -2183,7 +2192,8 @@ export default function ChatApp({ onOpenWallet }: {
                 render in a separate map after this one, which pinned a failed send to the bottom of
                 the thread forever — see mergeThreadItems. */}
             {/* One card per payment however many times it was announced — see paymentDedupe. */}
-            {mergeThreadItems(dedupePaymentMessages(selectedConvo.messages), pendingForPeer).map((item, i, items) => {
+            {/* And no card for a claim on one of our own outputs (our change is never a payment to us). */}
+            {mergeThreadItems(dedupePaymentMessages(selectedConvo.messages).filter(m => !isOwnOutputClaim(m, ownOutputs)), pendingForPeer).map((item, i, items) => {
               // DAY DIVIDERS. Inserted at render time by comparing neighbours — nothing is written into
               // the merged list, so mergeThreadItems and the ThreadItem union are untouched. The
               // Fragment carries the key; the inner element's own key is then unused and harmless.
@@ -2204,7 +2214,7 @@ export default function ChatApp({ onOpenWallet }: {
                   )
                 }
                 const m = item.message
-                if (m.payment) return <PaymentMessageCard key={m.id} message={m} lid={m.logicalId} flashed={!!m.logicalId && flashedId === m.logicalId} />
+                if (m.payment) return <PaymentMessageCard key={m.id} message={m} lid={m.logicalId} flashed={!!m.logicalId && flashedId === m.logicalId} disputed={m.direction === 'received' && disputedClaims.has(m.payment.utxoId)} />
                 /* Encrypted image (images M4): resolves itself — cache first, then the host. */
                 if (m.media) return <MediaMessageCard key={m.id} message={m} lid={m.logicalId} flashed={!!m.logicalId && flashedId === m.logicalId} />
                 const flight = flightFor(m, editFlights)

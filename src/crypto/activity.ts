@@ -13,7 +13,7 @@
 // journal's recorded self-outputs is a later phase; until then, every INFLOW here still comes from
 // a message-linked ref and nowhere else.
 
-import { dedupePaymentMessages } from '../messaging/paymentDedupe'
+import { dedupePaymentMessages, disputedUtxos, isOwnOutputClaim, ownOutputIds } from '../messaging/paymentDedupe'
 import { sortKey, type CaravelMessage } from '../messaging/types'
 import type { SentEntry } from './txHistory'
 import type { JournalEntry, JournalOutcome } from './journal'
@@ -291,7 +291,11 @@ export function buildActivity(
   }
 
   // Message-linked payments: chat sends (outflows) and received payments (inflows). ONE row per
-  // payment however many messages announced it — see messaging/paymentDedupe.
+  // payment however many messages announced it — see messaging/paymentDedupe. A claim on one of our
+  // own outputs is no payment at all, and an output two senders claim is one row naming neither.
+  const own = ownOutputIds(journal)
+  const disputed = disputedUtxos(messages)
+  const disputedShown = new Set<string>()
   for (const m of dedupePaymentMessages(messages)) {
     if (!m.payment?.utxoId) continue
     if (m.direction === 'sent') {
@@ -315,6 +319,23 @@ export function buildActivity(
         txId,
       })
     } else {
+      if (isOwnOutputClaim(m, own)) continue
+      if (disputed.has(m.payment.utxoId)) {
+        // Earliest claim's slot, nobody's name, once.
+        if (disputedShown.has(m.payment.utxoId)) continue
+        disputedShown.add(m.payment.utxoId)
+        rows.push({
+          kind: 'received',
+          id: m.id,
+          counterparty: 'Received',
+          counterpartyValue: null,
+          note: 'More than one contact claims this payment, so the sender can’t be confirmed',
+          timestamp: sortKey(m),
+          utxoId: m.payment.utxoId,
+          source: 'chat-ref',
+        })
+        continue
+      }
       rows.push({
         kind: 'received',
         id: m.id,

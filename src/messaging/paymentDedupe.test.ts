@@ -4,7 +4,10 @@
 import { describe, expect, it } from 'vitest'
 import { buildActivity } from '../crypto/activity'
 import type { ResolveState } from '../hooks/usePaymentResolution'
-import { dedupePaymentMessages, paymentKey, receivedPaymentVisible } from './paymentDedupe'
+import {
+  dedupePaymentMessages, disputedUtxos, isOwnOutputClaim, ownOutputIds, paymentKey, receivedPaymentVisible,
+} from './paymentDedupe'
+import { draftToEntry } from '../crypto/journal'
 import type { CaravelMessage } from './types'
 
 const SENDER = 'cc'.repeat(32)
@@ -110,9 +113,10 @@ describe('a stranger cannot hide a real payment or take its credit', () => {
     expect(kept).toContain('alice')
   })
 
-  it('Alice’s Activity row survives with Alice as the sender', () => {
+  it('the payment still shows once in Activity — but credits neither Alice nor Mallory', () => {
     const rows = buildActivity([], [], [mallory, alice]).filter(r => r.kind === 'received')
-    expect(rows.some(r => r.kind === 'received' && r.counterpartyValue === ALICE)).toBe(true)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ counterparty: 'Received', counterpartyValue: null, utxoId: 'utxo_real' })
   })
 
   it('repeats from the SAME sender still collapse to one', () => {
@@ -132,5 +136,68 @@ describe('paymentKey / dedupe boundaries', () => {
     const text = { ...received(0, 'u'), payment: undefined } as CaravelMessage
     const list = [text, text]
     expect(dedupePaymentMessages(list)).toHaveLength(2)
+  })
+})
+
+describe('a payee claims our change', () => {
+  // We paid someone; our send returned change utxo_our_change. The payee (or anyone) then messages
+  // us naming that change as "their payment to us".
+  const ourSend = {
+    ...draftToEntry({
+      kind: 'chat-payment', amountMicrotari: 500_000_000n, feeMicrotari: 15_194n, from: 'private', to: 'external',
+      counterparty: null, note: null, source: 'local-journal',
+      selfOutputIds: ['utxo_our_change'], spentInputIds: ['utxo_spent'],
+    }, 1_000),
+    outcome: 'committed' as const, txId: 'tx_ours',
+  }
+  const claim = received(1, 'utxo_our_change')
+
+  it('→ it is recognised as a claim on our own output', () => {
+    expect(isOwnOutputClaim(claim, ownOutputIds([ourSend]))).toBe(true)
+  })
+
+  it('→ no card: the thread drops it', () => {
+    const own = ownOutputIds([ourSend])
+    const shown = dedupePaymentMessages([claim]).filter(m => !isOwnOutputClaim(m, own))
+    expect(shown).toHaveLength(0)
+  })
+
+  it('→ no Activity row', () => {
+    expect(buildActivity([ourSend], [], [claim]).filter(r => r.kind === 'received')).toHaveLength(0)
+  })
+
+  it('a claim on an output that is NOT ours is unaffected', () => {
+    const real = received(2, 'utxo_theirs')
+    expect(isOwnOutputClaim(real, ownOutputIds([ourSend]))).toBe(false)
+    expect(buildActivity([ourSend], [], [real]).filter(r => r.kind === 'received')).toHaveLength(1)
+  })
+
+  it('our own SENT announcement naming our change is not a claim', () => {
+    const mine = sent(3, 'utxo_our_change', 'tx_ours')
+    expect(isOwnOutputClaim(mine, ownOutputIds([ourSend]))).toBe(false)
+  })
+})
+
+describe('two senders claim the same output', () => {
+  const A = 'a1'.repeat(32), B = 'b2'.repeat(32)
+  const fromA = received(1, 'utxo_contested', { id: 'a', senderPubkeyHex: A })
+  const fromB = received(2, 'utxo_contested', { id: 'b', senderPubkeyHex: B })
+  const againA = received(3, 'utxo_contested', { id: 'a2', senderPubkeyHex: A })
+
+  it('→ the output is disputed', () => {
+    expect([...disputedUtxos([fromA, fromB])]).toEqual(['utxo_contested'])
+    expect(disputedUtxos([fromA, againA]).size).toBe(0)          // one sender twice is not a dispute
+  })
+
+  it('→ ONE Activity row, naming no sender', () => {
+    const rows = buildActivity([], [], [fromA, fromB, againA]).filter(r => r.kind === 'received')
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ counterparty: 'Received', counterpartyValue: null, id: 'a' })
+  })
+
+  it('a single sender’s payment still names them', () => {
+    const rows = buildActivity([], [], [fromA, againA]).filter(r => r.kind === 'received')
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ counterpartyValue: A })
   })
 })

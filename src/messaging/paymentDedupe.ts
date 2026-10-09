@@ -21,6 +21,21 @@
 // check runs nothing is drawn, and a payment that cannot be checked because the network is down
 // keeps its card with a retry — unknown is not the same as absent.
 
+// ── WHO A PAYMENT IS FROM CANNOT BE PROVEN ────────────────────────────────────────
+//
+// A payment message is a CLAIM: "the output utxo_… is my payment to you". Nothing on chain ties a
+// confidential output to its sender, so anyone can message a claim naming any output this wallet
+// owns. Two rules keep a false claim from taking credit:
+//
+//   OUR OWN OUTPUTS ARE NEVER A RECEIVED PAYMENT. Change from our own sends (and every other output
+//   the journal records this wallet creating) is ours by construction. A message claiming one —
+//   say a payee naming our change — gets no card and no Activity row.
+//
+//   AN OUTPUT CLAIMED BY TWO SENDERS NAMES NEITHER. It is still money that arrived, so Activity shows
+//   it once, without a sender; each claimant's chat card says the sender cannot be confirmed instead
+//   of crediting them. (Hiding the cards would let a false claim hide the real sender's card.)
+
+import type { JournalEntry } from '../crypto/journal'
 import type { ResolveState } from '../hooks/usePaymentResolution'
 import { compareMessages, type CaravelMessage } from './types'
 
@@ -70,4 +85,29 @@ export function receivedPaymentVisible(state: ResolveState): boolean {
     case 'retrying': return state.reason === 'network_error'
     case 'failed': return state.reason === 'spent' || state.reason === 'network_error'
   }
+}
+
+/** Every output the journal records this wallet creating — its own change, by construction. */
+export function ownOutputIds(journal: readonly Pick<JournalEntry, 'selfOutputIds'>[]): Set<string> {
+  const ids = new Set<string>()
+  for (const e of journal) for (const id of e.selfOutputIds ?? []) ids.add(id)
+  return ids
+}
+
+/** A RECEIVED payment message that claims one of our own outputs as a payment to us. */
+export function isOwnOutputClaim(m: Pick<CaravelMessage, 'direction' | 'payment'>, own: ReadonlySet<string>): boolean {
+  return m.direction === 'received' && !!m.payment?.utxoId && own.has(m.payment.utxoId)
+}
+
+/** Outputs that more than one sender claims as their payment to us. */
+export function disputedUtxos(messages: readonly Pick<CaravelMessage, 'direction' | 'payment' | 'senderPubkeyHex'>[]): Set<string> {
+  const senders = new Map<string, Set<string>>()
+  for (const m of messages) {
+    const utxo = m.direction === 'received' ? m.payment?.utxoId : undefined
+    if (!utxo) continue
+    const set = senders.get(utxo) ?? new Set<string>()
+    set.add(m.senderPubkeyHex)
+    senders.set(utxo, set)
+  }
+  return new Set([...senders].filter(([, s]) => s.size > 1).map(([u]) => u))
 }

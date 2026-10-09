@@ -10,7 +10,7 @@ import {
   accountVaultIds, burnFinalizedAt, classifyBurn, currentEpoch, listDeposits, readBurnWallet,
   type BurnClassification, type BurnWalletReading,
 } from '../crypto/burnWallet'
-import { buildBurnRows, depositsComplete, type BurnRow } from '../components/burn/burnModel'
+import { buildBurnRows, burnSettled, depositsComplete, type BurnRow } from '../components/burn/burnModel'
 import { useJournal } from './useJournal'
 
 /** The hero's state. A figure is only ever a VERIFIED one; see crypto/burnWallet. */
@@ -47,8 +47,9 @@ export function useBurnWallet(address: string | null, active: boolean) {
   const journalRef = useRef(journal)
   journalRef.current = journal
 
-  const refresh = useCallback(async (): Promise<BurnWalletReading | null> => {
-    if (running.current) return lastVerified.current
+  /** Re-read the total and the list. Resolves with what this read saw (rows null if the list failed). */
+  const refresh = useCallback(async (): Promise<{ reading: BurnWalletReading | null; rows: BurnRow[] | null }> => {
+    if (running.current) return { reading: lastVerified.current, rows: null }
     running.current = true
     setRefreshing(true)
     try {
@@ -65,6 +66,7 @@ export function useBurnWallet(address: string | null, active: boolean) {
         setHero({ status: 'unreachable' })
       }
 
+      let rows: BurnRow[] | null = null
       try {
         const deposits = await listDeposits()
         const shown = deposits.slice(0, ROWS_SHOWN)
@@ -81,7 +83,7 @@ export function useBurnWallet(address: string | null, active: boolean) {
           account ? accountVaultIds(account) : Promise.resolve(new Set<string>()),
           currentEpoch(),
         ])
-        const rows = buildBurnRows(shown, classes, { ownVaults, journalled, finalizedAt: finalized, currentEpoch: epoch, now: Date.now() })
+        rows = buildBurnRows(shown, classes, { ownVaults, journalled, finalizedAt: finalized, currentEpoch: epoch, now: Date.now() })
         setList({
           status: 'ready', rows, total: deposits.length,
           complete: depositsComplete(deposits, verifiedTotal ?? lastVerified.current?.totalDeposited ?? null),
@@ -89,7 +91,7 @@ export function useBurnWallet(address: string | null, active: boolean) {
       } catch {
         setList(l => (l.status === 'ready' ? l : { status: 'error' }))
       }
-      return read.kind === 'verified' ? read.reading : null
+      return { reading: read.kind === 'verified' ? read.reading : null, rows }
     } finally {
       running.current = false
       setRefreshing(false)
@@ -104,14 +106,14 @@ export function useBurnWallet(address: string | null, active: boolean) {
   }, [active, refresh])
 
   /**
-   * A burn of `amount` just committed: keep reading until the verified total includes it. The
-   * baseline is the figure from before the burn; anything at or above baseline + amount is it.
+   * A burn of `amount` (transaction `txId`) just committed: keep reading until the verified total
+   * includes it AND its row is classified — see burnSettled. Bounded by WATCH_FOR_MS.
    */
-  const watchFor = useCallback((baseline: bigint | null, amount: bigint) => {
+  const watchFor = useCallback((baseline: bigint | null, amount: bigint, txId: string) => {
     const deadline = Date.now() + WATCH_FOR_MS
     const tick = async () => {
-      const reading = await refresh()
-      if (reading && baseline !== null && reading.totalDeposited >= baseline + amount) return
+      const { reading, rows } = await refresh()
+      if (burnSettled(reading?.totalDeposited ?? null, baseline, amount, rows, txId)) return
       if (Date.now() < deadline) setTimeout(() => { void tick() }, WATCH_EVERY_MS)
     }
     void tick()

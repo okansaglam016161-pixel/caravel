@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { BurnClassification } from '../../crypto/burnWallet'
 import { EPOCH_MS_APPROX } from '../../crypto/burnWallet'
 import {
-  SUPPLY_REFERENCE, buildBurnRows, burnTimeLabel, burnTitle, compactSupply, depositsComplete, formatSupplyPercent, parseTariInput,
+  SUPPLY_REFERENCE, buildBurnRows, burnSettled, burnTimeLabel, burnTitle, compactSupply, depositsComplete, formatSupplyPercent, parseTariInput,
   type RowContext,
 } from './burnModel'
 
@@ -141,5 +141,26 @@ describe('untrusted, enormous figures', () => {
     const huge = formatSupplyPercent(10n ** 40n)
     expect(huge).not.toMatch(/e/i)
     expect(huge).toMatch(/^[\d,]+$/)
+  })
+})
+
+describe('burnSettled — a fresh burn is watched until its row is classified', () => {
+  const row = (source: 'public' | 'private' | 'unknown') =>
+    buildBurnRows([{ txId: 'mine', amount: 100_000n }], new Map([['mine', { source, withdrawVaults: [], epoch: 1 }]]), ctx())
+
+  it('the total including it is not enough while its receipt is still unread', () => {
+    expect(burnSettled(1_100_000n, 1_000_000n, 100_000n, row('unknown'), 'mine')).toBe(false)
+  })
+
+  it('settled once the total includes it and its row is classified', () => {
+    expect(burnSettled(1_100_000n, 1_000_000n, 100_000n, row('public'), 'mine')).toBe(true)
+    expect(burnSettled(1_100_000n, 1_000_000n, 100_000n, row('private'), 'mine')).toBe(true)
+  })
+
+  it('not settled before the total includes it, without a list, or without its row', () => {
+    expect(burnSettled(1_050_000n, 1_000_000n, 100_000n, row('public'), 'mine')).toBe(false)
+    expect(burnSettled(1_100_000n, 1_000_000n, 100_000n, null, 'mine')).toBe(false)
+    expect(burnSettled(1_100_000n, 1_000_000n, 100_000n, row('public'), 'other')).toBe(false)
+    expect(burnSettled(null, 1_000_000n, 100_000n, row('public'), 'mine')).toBe(false)
   })
 })

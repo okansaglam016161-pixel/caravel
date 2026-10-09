@@ -52,7 +52,7 @@ export default function BurnPage({ active }: { active: boolean }) {
       {sheetOpen && (
         <BurnSheet
           onClose={() => setSheetOpen(false)}
-          onBurned={amount => watchFor(baseline, amount)}
+          onBurned={(amount, txId) => watchFor(baseline, amount, txId)}
         />
       )}
     </div>

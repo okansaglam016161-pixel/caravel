@@ -175,6 +175,19 @@ export function formatSupplyPercent(burnedMicrotari: bigint, supplyTari: bigint 
   return out.replace(/0+$/, '').replace(/\.$/, '')
 }
 
+/**
+ * Has a burn just made reached the page in full? Its deposit is in the verified total AND its row is
+ * listed with a classification. The receipt that classifies it can trail the total by tens of
+ * seconds (measured: over 30 s on 2026-10-09), so watching the total alone left a fresh burn's row
+ * reading a bare "Burn" until the next manual refresh.
+ */
+export function burnSettled(
+  verifiedTotal: bigint | null, baseline: bigint | null, amount: bigint, rows: readonly BurnRow[] | null, txId: string,
+): boolean {
+  if (verifiedTotal === null || baseline === null || verifiedTotal < baseline + amount) return false
+  return !!rows?.some(r => r.txId === txId && r.source !== 'unknown')
+}
+
 export function shortTx(txId: string): string {
   return txId.length > 14 ? `${txId.slice(0, 4)}…${txId.slice(-6)}` : txId
 }

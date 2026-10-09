@@ -34,8 +34,8 @@ const WARNING = 'This can’t be undone. Burned TARI is locked forever.'
 
 export default function BurnSheet({ onClose, onBurned }: {
   onClose: () => void
-  /** A burn committed (or was broadcast and may still land): `amount` is on its way into the burn wallet. */
-  onBurned: (amount: bigint) => void
+  /** A burn committed (or was broadcast and may still land): `amount`, in transaction `txId`. */
+  onBurned: (amount: bigint, txId: string) => void
 }) {
   const { wallet, address, scan, revealed, rescan, beginSettle, acknowledgeSettle } = useWallet()
 
@@ -73,7 +73,7 @@ export default function BurnSheet({ onClose, onBurned }: {
       show: v => setView(v),
       // Through the ref: `review` reads this render's amount and source, not the first render's.
       reprice: notice => { setLocked(false); void reviewRef.current(notice) },
-      onBurned: (amount, txId) => { settledTx.current = txId; latest.current.onBurned(amount) },
+      onBurned: (amount, txId) => { settledTx.current = txId; latest.current.onBurned(amount, txId) },
     })
   }
 

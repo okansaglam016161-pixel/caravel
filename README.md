@@ -22,6 +22,11 @@ encrypted over Nostr and gift-wrapped so relays can't read them or see who sent 
 payments built right into the chat. Register an on-chain `@name` through Caravel Name
 Service and start talking with a simple handle.
 
+**Burn.** Lock TARI away for good in the
+[Caravel Burn Wallet](https://github.com/okansaglam016161-pixel/caravel-burn-wallet), a contract
+with no owner and no way out. Burn from your private or public balance and watch the verified
+running total. Every burn is listed as public or private, and never with an address.
+
 ## Features
 
 * **End-to-end encrypted messaging** — Nostr gift-wrapped direct messages (NIP-44
@@ -34,6 +39,9 @@ Service and start talking with a simple handle.
 * **Self-custodial browser wallet** — keys created and held on your device; no server, no
   custody.
 * **Contact requests** — accept or decline incoming requests before a conversation begins.
+* **Burn** — send TARI to the ownerless Caravel Burn Wallet from either balance at the exact fee;
+  a private burn is signed only by one-time keys, so it is not tied to your account. The total is
+  shown only from verified reads.
 * **Testnet faucet** — 1,000 tTARI per claim, one claim per wallet key across all apps, paid
   out privately; a zero-balance wallet can claim because the fee comes out of the claim.
 
@@ -75,12 +83,14 @@ client is vendored as a pre-built dist under `vendor/ons/`, built from the
 
 ## Contracts
 
-Both are published on Ootle 0.42, running on 0.45 (re-verified live on 0.45).
+The name service and faucet are published on Ootle 0.42, running on 0.45 (re-verified live on
+0.45). The burn wallet is published on 0.45.
 
 | | address (esmeralda) |
 |---|---|
 | Caravel Name Service registry (the [Ootle Name Service](https://github.com/okansaglam016161-pixel/ootle-name-service) contract) | `component_0109d5287493affc06ec8902fcbf85bd2362832580feeac2a70cba7e5ac6da4d` |
 | [Caravel Faucet](https://github.com/okansaglam016161-pixel/caravel-faucet) | `component_568f84a0cc7ccfe49116ee86d072f02b99e246a4750e680a8cbfcd2b7862f37b` |
+| [Caravel Burn Wallet](https://github.com/okansaglam016161-pixel/caravel-burn-wallet) | `component_2e91fb78b73440dd114bdbb887d256d760fa3be3276d7b833f4ab1b23d796029` |
 
 The faucet is funded with 598,000 tTARI.
 
@@ -90,12 +100,13 @@ The faucet is funded with 598,000 tTARI.
 src/
   components/
     landing/      Public marketing landing page
-    shell/        App shell — service navigation (wallet, chat)
+    shell/        App shell — service navigation (wallet, chat, burn)
+    burn/         Burn page — verified total, burns list, the Burn TARI sheet
     chat/         Chat shell — conversations, thread view, compose, payments, @names
     wallet/       Create / unlock / restore, wallet modal, faucet, profile
     primitives/   Shared UI kit (tokens, Logo, buttons, inputs, …)
   context/        WalletContext — wallet + scan + messaging state
-  crypto/         Key derivation, UTXO scan, confidential send, ONS, faucet, Nostr crypto
+  crypto/         Key derivation, UTXO scan, confidential send, burn, ONS, faucet, Nostr crypto
   hooks/          React hooks over the crypto and storage modules
   messaging/      Nostr provider + per-identity local stores
   config/         Relay configuration

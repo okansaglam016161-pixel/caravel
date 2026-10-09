@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import type { BurnClassification } from '../../crypto/burnWallet'
 import { EPOCH_MS_APPROX } from '../../crypto/burnWallet'
-import { buildBurnRows, burnTimeLabel, burnTitle, depositsComplete, parseTariInput, type RowContext } from './burnModel'
+import {
+  SUPPLY_REFERENCE, buildBurnRows, burnTimeLabel, burnTitle, compactSupply, depositsComplete, formatSupplyPercent, parseTariInput,
+  type RowContext,
+} from './burnModel'
 
 describe('parseTariInput — exact, no float', () => {
   it('parses whole and fractional TARI to µtTARI exactly', () => {
@@ -96,5 +99,31 @@ describe('burnTimeLabel', () => {
     expect(burnTimeLabel(now - 5 * 3_600_000, false, now)).toBe('About 5 hours ago')
     expect(burnTimeLabel(now - 3 * 86_400_000, false, now)).toBe('About 3 days ago')
     expect(burnTimeLabel(null, false, now)).toBe('Time unknown')
+  })
+})
+
+describe('formatSupplyPercent — share of the 21B reference, two significant figures', () => {
+  const TARI = 1_000_000n
+  it('the live total today: 1,000.2 tTARI is 0.0000048%', () => {
+    expect(formatSupplyPercent(1_000_200_000n)).toBe('0.0000048')
+  })
+
+  it('never reads as zero, however small, and never in scientific notation', () => {
+    expect(formatSupplyPercent(1n)).toBe('0.0000000000000048')   // 1 µtTARI
+    expect(formatSupplyPercent(100_000n)).toBe('0.00000000048')     // 0.1 TARI
+    expect(formatSupplyPercent(0n)).toBe('0')
+  })
+
+  it('rounds half-up to two significant figures and trims trailing zeros', () => {
+    expect(formatSupplyPercent(21_000_000n * TARI)).toBe('0.1')        // exactly 0.10
+    expect(formatSupplyPercent(98_700_000n * TARI)).toBe('0.47')       // 0.47
+    expect(formatSupplyPercent(209_895_000n * TARI)).toBe('1')         // 0.9995 → 1.0
+    expect(formatSupplyPercent(2_583_000_000n * TARI)).toBe('12')      // 12.3
+    expect(formatSupplyPercent(SUPPLY_REFERENCE * TARI)).toBe('100')
+  })
+
+  it('names the reference short', () => {
+    expect(compactSupply()).toBe('21B')
+    expect(compactSupply(1_500_000n)).toBe('1.5M')
   })
 })

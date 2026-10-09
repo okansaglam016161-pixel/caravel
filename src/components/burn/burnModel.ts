@@ -117,6 +117,59 @@ export function depositsComplete(deposits: readonly BurnDeposit[], verifiedTotal
   return deposits.reduce((sum, d) => sum + d.amount, 0n) === verifiedTotal
 }
 
+/**
+ * The supply a burn is measured against, in TARI.
+ *
+ * AN ADVERTISING REFERENCE FOR TESTNET, NOT A HARD CAP. Tari has tail emission, so supply keeps
+ * growing past this figure and "% of supply" has no fixed denominator. Revisit before mainnet:
+ * either the circulating supply at the time, or a different framing altogether.
+ */
+export const SUPPLY_REFERENCE = 21_000_000_000n
+
+/** "21B" for 21,000,000,000 — the reference, short. */
+export function compactSupply(tari: bigint = SUPPLY_REFERENCE): string {
+  for (const [unit, size] of [['T', 10n ** 12n], ['B', 10n ** 9n], ['M', 10n ** 6n]] as const) {
+    if (tari >= size && tari % (size / 10n) === 0n) {
+      const whole = tari / size
+      const tenth = (tari % size) / (size / 10n)
+      return `${whole}${tenth ? `.${tenth}` : ''}${unit}`
+    }
+  }
+  return tari.toLocaleString('en-US')
+}
+
+/**
+ * What share of the reference supply `burnedMicrotari` is, as a percentage string WITHOUT the "%".
+ *
+ * Two significant figures, rounded half-up, however small — "0.0000048", "0.47", "12" — so a real
+ * burn never reads as 0, and never in scientific notation. Exact bigint arithmetic throughout:
+ * the figure is a quotient of two integers, and there is no float in it to round.
+ */
+export function formatSupplyPercent(burnedMicrotari: bigint, supplyTari: bigint = SUPPLY_REFERENCE): string {
+  if (burnedMicrotari <= 0n) return '0'
+  // percent = burned × 100 / (supply × 10⁶)
+  const num = burnedMicrotari * 100n
+  const den = supplyTari * MICRO
+
+  // Find s with num/den × 10^s in [10, 100): two digits before the point.
+  let s = 0
+  const scaled = (k: number): [bigint, bigint] => (k >= 0 ? [num * 10n ** BigInt(k), den] : [num, den * 10n ** BigInt(-k)])
+  for (;;) {
+    const [n, d] = scaled(s)
+    if (n < d * 10n) { s++; continue }
+    if (n >= d * 100n) { s--; continue }
+    break
+  }
+  const [n, d] = scaled(s)
+  let q = (2n * n + d) / (2n * d)      // round half-up to an integer in [10, 100]
+  if (q === 100n) { q = 10n; s-- }      // 99.5… rounded up a digit
+
+  if (s <= 0) return (q * 10n ** BigInt(-s)).toLocaleString('en-US')
+  const digits = q.toString().padStart(s + 1, '0')
+  const out = `${digits.slice(0, digits.length - s)}.${digits.slice(digits.length - s)}`
+  return out.replace(/0+$/, '').replace(/\.$/, '')
+}
+
 export function shortTx(txId: string): string {
   return txId.length > 14 ? `${txId.slice(0, 4)}…${txId.slice(-6)}` : txId
 }

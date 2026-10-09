@@ -17,7 +17,7 @@ import { Flame, Refresh, Spinner } from '../wallet/v2/icons'
 import { Body, HeaderIcon, ModalShell, RootHeader } from '../wallet/v2/primitives'
 import { C, MONO, PAGE_MAX_WIDTH } from '../wallet/v2/tokens'
 import BurnSheet from './BurnSheet'
-import { burnTimeLabel, burnTitle, shortTx, type BurnRow } from './burnModel'
+import { burnTimeLabel, burnTitle, compactSupply, formatSupplyPercent, shortTx, type BurnRow } from './burnModel'
 
 export default function BurnPage({ active }: { active: boolean }) {
   const { address } = useWallet()
@@ -126,6 +126,12 @@ function Hero({ hero, refreshing, onBurn, onRetry }: { hero: HeroState; refreshi
               marginTop: 30, lineHeight: 1, color: dim ? 'var(--vault-label)' : C.bright,
             }}>{reading ? fmtBurned(reading.balance) : '—'}</div>
             <div style={{ fontFamily: MONO, fontSize: 13, color: 'var(--vault-label)', marginTop: 12 }}>tTARI burned forever</div>
+            {/* Of the VERIFIED total only — the same reading as the figure, dimmed with it. */}
+            {reading && (
+              <div style={{ fontFamily: MONO, fontSize: 11.5, color: 'var(--vault-label)', marginTop: 6, opacity: dim ? 0.6 : 0.8 }}>
+                {formatSupplyPercent(reading.balance)}% of {compactSupply()} supply
+              </div>
+            )}
             {updating && (
               <span style={{
                 display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 10px', borderRadius: 999, marginTop: 26,

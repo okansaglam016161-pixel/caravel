@@ -60,7 +60,7 @@ import { extractAccountAddress } from './accountAddress'
 import { loadAccountAddress, saveAccountAddress } from './accountStore'
 import { resolveAccountInputs } from './substates'
 import { nextMaxEpoch } from './epoch'
-import { dryRunFee, simulateFee, withFeeMargin, type FeeSimulation } from './feeProbe'
+import { dryRunFee, priceAtBudget, simulateAtShownFee, simulateFee, type FeeSimulation } from './feeProbe'
 import { readOutputSubstateIds } from './outputIds'
 import { awaitFinality } from './finality'
 import { INDEXER_URL } from './indexerConfig'
@@ -363,32 +363,22 @@ export async function prepareConceal(
   }
 
   log('Estimating network fee\u2026')
-  const probe = await buildEnvelope(CONCEAL_FEE_RESERVE, true)
-  let cost = await dryRunFee(INDEXER_URL, probe.envelope, { onBusyRetry: () => log(RETRYING_MESSAGE) })
-  // MAX MOVES `balance − budget`, and its budget is the cost itself — so the amount priced above
-  // (balance − reserve) is not the amount it will move. Price that exact shape once more, so the
-  // budget it carries is measured against the transaction it is.
-  if (all && cost < amountMicrotari) {
-    const again = await dryRunFee(INDEXER_URL, (await buildEnvelope(cost, true)).envelope, { onBusyRetry: () => log(RETRYING_MESSAGE) })
-    if (again > cost) cost = again
-  }
-  // A cost above the reservation was never simulated with the vault holding enough for it.
-  if (cost > CONCEAL_FEE_RESERVE) {
-    throw new Error(
-      `The network fee (${cost} µtTARI) exceeds the ${CONCEAL_FEE_RESERVE} µtTARI this transaction reserved for it. ` +
-      `Fees have risen — try again in a moment.`,
-    )
-  }
-  if (all && cost >= amountMicrotari) {
-    throw new Error(`The network fee (${cost} \u00b5tTARI) exceeds the amount being made private. Try a larger amount.`)
-  }
-  // THE FEE SHOWN IS THE COST. The budget `pay_fee` offers is the cost plus a small buffer that the
-  // engine refunds — or, on MAX, exactly the cost, since the vault holds nothing beyond it (a cost
-  // that rose is then a free reject, and the user is asked again). A typed amount left the whole
+  // THE FEE SHOWN IS THE COST AT THE REAL BUDGET — see feeProbe.priceAtBudget. The budget `pay_fee`
+  // offers is the cost plus a small buffer the engine refunds — or, on MAX, exactly the cost, since
+  // the vault holds nothing beyond it. Either way the cost is measured AT that budget: the budget
+  // moves the vault's post-fee balance, and with it the storage cost. On MAX the amount moved is
+  // `balance − budget`, so this also prices the exact shape MAX sends. A typed amount left the whole
   // reserve in the vault (maxConcealTyped), so the buffer always fits.
-  const fee = cost
-  const buffered = withFeeMargin(cost)
-  const budget = all ? cost : buffered < CONCEAL_FEE_RESERVE ? buffered : CONCEAL_FEE_RESERVE
+  const priced = await priceAtBudget(
+    async budget => dryRunFee(INDEXER_URL, (await buildEnvelope(budget, true)).envelope, { onBusyRetry: () => log(RETRYING_MESSAGE) }),
+    { reserve: CONCEAL_FEE_RESERVE, margin: !all },
+  )
+  const fee = priced.fee
+  const cost = priced.probeCost
+  const budget = priced.budget
+  if (all && fee >= amountMicrotari) {
+    throw new Error(`The network fee (${fee} \u00b5tTARI) exceeds the amount being made private. Try a larger amount.`)
+  }
 
   log('Building\u2026')
   const real = await buildEnvelope(budget, false)
@@ -398,7 +388,12 @@ export async function prepareConceal(
   // THE VAULT VERSIONS THE REAL BUILD PINNED. A vault that moves before confirm (a receive, another
   // tab's move) makes the pinned transaction stale, so the confirm check refuses it and re-prices.
   const vaultsAsBuilt = await versionsUnchanged(declaredInputs.filter(id => id.startsWith('vault_')))
-  const check = confirmer({ preparedAt, simulate: () => simulate(budget), inputs: { landed: vaultsAsBuilt } })
+  // Held to the FEE SHOWN: a final transaction that would cost anything else re-prices first.
+  const check = confirmer({
+    preparedAt,
+    simulate: async () => simulateAtShownFee(INDEXER_URL, (await buildEnvelope(budget, true)).envelope, { budget, shownFee: fee }),
+    inputs: { landed: vaultsAsBuilt },
+  })
 
   return {
     feeMicrotari: fee,

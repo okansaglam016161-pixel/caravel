@@ -84,7 +84,8 @@ export async function confirmQuote(q: Quote, now = Date.now()): Promise<void> {
 
   const sim = await q.simulate()
   if (!sim.accepted) {
-    throw new QuoteChanged(sim.kind === 'underpaid' ? 'fee-risen' : 'rejected', sim.reason)
+    // 'fee-changed': the refundable-budget paths hold the final cost to the fee SHOWN (feeProbe).
+    throw new QuoteChanged(sim.kind === 'underpaid' || sim.kind === 'fee-changed' ? 'fee-risen' : 'rejected', sim.reason)
   }
 }
 

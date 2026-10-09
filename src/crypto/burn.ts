@@ -67,7 +67,7 @@ import { MAX_FEE, assertStealthSendSplit, planStealthSend, probeFeeFor } from '.
 import { loadAccountAddress } from './accountStore'
 import { loadSelectionExcludedIds, newReservationToken, releaseCoins, reserveCoins } from './coinReservations'
 import { nextMaxEpoch } from './epoch'
-import { dryRunFee, exactFee, simulateFee, withFeeMargin, type FeeSimulation } from './feeProbe'
+import { dryRunFee, exactFee, priceAtBudget, simulateAtShownFee, simulateFee, type FeeSimulation } from './feeProbe'
 import { awaitFinality } from './finality'
 import { INDEXER_URL } from './indexerConfig'
 import { RETRYING_MESSAGE } from './indexerRetry'
@@ -182,20 +182,24 @@ export async function preparePublicBurn(
   }
 
   log('Estimating network fee…')
-  const cost = await dryRunFee(INDEXER_URL, await buildEnvelope(PUBLIC_SEND_FEE_RESERVE, true), { onBusyRetry: () => log(RETRYING_MESSAGE) })
-  if (cost > PUBLIC_SEND_FEE_RESERVE) {
-    throw new Error(`The network fee (${cost} µtTARI) exceeds the ${PUBLIC_SEND_FEE_RESERVE} µtTARI reserved for it. Fees have risen — try again.`)
-  }
-  const fee = cost
-  const buffered = withFeeMargin(cost)
-  const budget = buffered < PUBLIC_SEND_FEE_RESERVE ? buffered : PUBLIC_SEND_FEE_RESERVE
+  // The fee shown is the cost MEASURED AT THE REAL BUDGET (feeProbe.priceAtBudget): a small public
+  // balance crosses a storage-size boundary between the 50,000 probe budget and the real one.
+  const { fee, budget } = await priceAtBudget(
+    async feeBudget => dryRunFee(INDEXER_URL, await buildEnvelope(feeBudget, true), { onBusyRetry: () => log(RETRYING_MESSAGE) }),
+    { reserve: PUBLIC_SEND_FEE_RESERVE },
+  )
 
   log('Building…')
   const real = await buildEnvelope(budget, false)
   const preparedAt = Date.now()
   const simulate = async (feeBudget: bigint = budget) => simulateFee(INDEXER_URL, await buildEnvelope(feeBudget, true), { fee: feeBudget })
   const vaults = declaredInputs.filter(id => id.startsWith('vault_'))
-  const check = confirmer({ preparedAt, simulate: () => simulate(budget), inputs: { landed: await versionsUnchanged(vaults) } })
+  // Held to the FEE SHOWN: a final transaction that would cost anything else re-prices first.
+  const check = confirmer({
+    preparedAt,
+    simulate: async () => simulateAtShownFee(INDEXER_URL, await buildEnvelope(budget, true), { budget, shownFee: fee }),
+    inputs: { landed: await versionsUnchanged(vaults) },
+  })
 
   return {
     source: 'public',

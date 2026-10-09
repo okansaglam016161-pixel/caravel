@@ -62,7 +62,7 @@ import { extractAccountAddress } from './accountAddress'
 import { loadAccountAddress, saveAccountAddress } from './accountStore'
 import { resolveAccountInputs } from './substates'
 import { nextMaxEpoch } from './epoch'
-import { dryRunFee, simulateFee, withFeeMargin, type FeeSimulation } from './feeProbe'
+import { dryRunFee, priceAtBudget, simulateAtShownFee, simulateFee, type FeeSimulation } from './feeProbe'
 import { awaitFinality } from './finality'
 import { INDEXER_URL } from './indexerConfig'
 
@@ -390,27 +390,22 @@ export async function preparePublicSend(
   }
 
   log('Estimating network fee…')
-  const probe = await buildEnvelope(PUBLIC_SEND_FEE_RESERVE, true)
-  const cost = await dryRunFee(INDEXER_URL, probe.envelope, { onBusyRetry: () => log(RETRYING_MESSAGE) })
-  // THE FEE SHOWN IS THE COST. `pay_fee` offers the cost plus a small buffer that the engine
-  // refunds, capped by the reserve the amount left in the vault (maxPublicSend).
-  const fee = cost
-  const buffered = withFeeMargin(cost)
-  const budget = buffered < PUBLIC_SEND_FEE_RESERVE ? buffered : PUBLIC_SEND_FEE_RESERVE
-
+  // THE FEE SHOWN IS THE COST AT THE REAL BUDGET — see feeProbe.priceAtBudget. `pay_fee` offers the
+  // cost plus a small buffer the engine refunds, capped by the reserve the amount left in the vault
+  // (maxPublicSend); the cost is measured at that very budget, because the budget moves it.
+  //
   // ── THE PROBE→REAL FEE GUARD ──
   //
-  // This path's OUTPUT COUNT is invariant — one stealth output, always — so it cannot suffer the
-  // shape divergence that rejected a MAX send. What it can suffer is a withdraw larger than the one
-  // simulated: the vault gives up `amount + fee`, so a fee above the reservation asks the vault
-  // for more than the dry run ever tried, and if the balance does not stretch it fails on-chain
-  // AFTER the user has confirmed. Refused here, where nothing has been sent.
-  if (fee > PUBLIC_SEND_FEE_RESERVE) {
-    throw new Error(
-      `The network fee (${fee} µtTARI) exceeds the ${PUBLIC_SEND_FEE_RESERVE} µtTARI this payment reserved for it. ` +
-      `Fees have risen — try again, or send a smaller amount.`,
-    )
-  }
+  // A cost above the reservation asks the vault for more than the dry run ever tried, and if the
+  // balance does not stretch it fails on-chain AFTER the user has confirmed. priceAtBudget refuses
+  // it here, where nothing has been sent.
+  const priced = await priceAtBudget(
+    async budget => dryRunFee(INDEXER_URL, (await buildEnvelope(budget, true)).envelope, { onBusyRetry: () => log(RETRYING_MESSAGE) }),
+    { reserve: PUBLIC_SEND_FEE_RESERVE },
+  )
+  const fee = priced.fee
+  const cost = priced.probeCost
+  const budget = priced.budget
 
   log('Building…')
   const real = await buildEnvelope(budget, false)
@@ -420,7 +415,12 @@ export async function preparePublicSend(
   // THE VAULT VERSIONS THE REAL BUILD PINNED. A vault that moves before confirm (a receive, another
   // tab's move) makes the pinned transaction stale, so the confirm check refuses it and re-prices.
   const vaultsAsBuilt = await versionsUnchanged(declaredInputs.filter(id => id.startsWith('vault_')))
-  const check = confirmer({ preparedAt, simulate: () => simulate(budget), inputs: { landed: vaultsAsBuilt } })
+  // Held to the FEE SHOWN: a final transaction that would cost anything else re-prices first.
+  const check = confirmer({
+    preparedAt,
+    simulate: async () => simulateAtShownFee(INDEXER_URL, (await buildEnvelope(budget, true)).envelope, { budget, shownFee: fee }),
+    inputs: { landed: vaultsAsBuilt },
+  })
 
   return {
     feeMicrotari: fee,

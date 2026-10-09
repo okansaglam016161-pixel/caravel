@@ -143,7 +143,7 @@ interface DryRunResponse {
  */
 export type FeeSimulation =
   | { accepted: true; cost: bigint }
-  | { accepted: false; kind: 'reject' | 'fee-only' | 'unrecognised' | 'underpaid'; reason: string; message: string }
+  | { accepted: false; kind: 'reject' | 'fee-only' | 'unrecognised' | 'underpaid' | 'fee-changed'; reason: string; message: string }
 
 /**
  * Ask the network what `envelope` would actually cost, in µtTARI.
@@ -317,4 +317,84 @@ function measuredCost(
     if (sum > 0n) return sum
   }
   return null
+}
+
+// ── REFUNDABLE-BUDGET PATHS: PRICE AT THE BUDGET THAT WILL BE PAID ───────────────
+//
+// Public burn, public send and make private pay with the account's REFUNDABLE `pay_fee(budget)`:
+// the engine takes the cost and returns the rest. The probe that prices them used to offer a fixed
+// 50,000 µtTARI reserve, and the real transaction offers far less (cost + margin). That difference
+// is not neutral: STORAGE prices the account vault's post-fee balance by its ENCODED SIZE, and an
+// integer crosses a CBOR size boundary at 65,536 µtTARI. Measured live on 2026-10-09 (a stranger
+// wallet's public burn, 315d911d…): vault 200,000 − 100,000 burned − 50,000 probe budget = 50,000
+// (3 bytes) priced 2,400; the real budget of 2,600 left 97,400 (5 bytes) and was charged 2,402.
+// The fee shown was 2 µtTARI below the fee paid. A large public balance never crosses the boundary,
+// which is why it only showed on a small one.
+//
+// So the cost shown is the cost MEASURED AT THE REAL BUDGET, and the confirm check compares the
+// final transaction's cost against that shown figure — any difference re-prices before sending.
+
+export interface BudgetPrice {
+  /** The cost measured at `budget` — the fee to show, and the fee that will be charged. */
+  fee: bigint
+  /** What `pay_fee` offers. At least `fee`; the engine refunds the difference. */
+  budget: bigint
+  /** What the reserve-funded probe measured. Kept for diagnostics; never shown. */
+  probeCost: bigint
+}
+
+/**
+ * Price a refundable-budget transaction at the budget it will actually offer.
+ *
+ * `measure(budget)` dry-runs the transaction paying `budget` and returns the cost the network
+ * requires. Probe at the reserve (so execution completes), pick the budget from that, then measure
+ * AT that budget — repeating, a few times at most, until the budget covers the cost it produces.
+ * `margin: false` makes the budget the cost itself (MAX, where the vault holds nothing more).
+ */
+export async function priceAtBudget(
+  measure: (budget: bigint) => Promise<bigint>,
+  { reserve, margin = true }: { reserve: bigint; margin?: boolean },
+): Promise<BudgetPrice> {
+  const tooHigh = (cost: bigint) => new Error(
+    `The network fee (${cost} µtTARI) exceeds the ${reserve} µtTARI reserved for it. Fees have risen — try again in a moment.`,
+  )
+  const budgetFor = (cost: bigint) => {
+    if (!margin) return cost
+    const buffered = withFeeMargin(cost)
+    return buffered < reserve ? buffered : reserve
+  }
+  const probeCost = await measure(reserve)
+  if (probeCost > reserve) throw tooHigh(probeCost)
+  let budget = budgetFor(probeCost)
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const cost = await measure(budget)
+    if (cost > reserve) throw tooHigh(cost)
+    if (cost <= budget) return { fee: cost, budget, probeCost }
+    budget = budgetFor(cost)
+  }
+  throw new Error('The network fee kept changing while it was being priced. Nothing was sent — try again.')
+}
+
+/**
+ * The confirm-time verdict for a refundable-budget transaction: the final transaction, paying
+ * `budget`, must cost EXACTLY the fee shown. More or less, it is `fee-changed` — the quote is re-priced
+ * and the user asked again, rather than charged a figure they were not shown.
+ */
+export function compareToShownFee(sim: FeeSimulation, shownFee: bigint): FeeSimulation {
+  if (!sim.accepted || sim.cost === shownFee) return sim
+  return {
+    accepted: false,
+    kind: 'fee-changed',
+    reason: `Required fees ${sim.cost} but ${shownFee} quoted`,
+    message: `The network fee is now ${sim.cost} µtTARI, not the ${shownFee} µtTARI quoted.`,
+  }
+}
+
+/** Dry-run the final transaction's twin at its budget, and hold it to the fee shown. */
+export async function simulateAtShownFee(
+  indexerUrl: string,
+  envelope: unknown,
+  { budget, shownFee, onBusyRetry }: { budget: bigint; shownFee: bigint; onBusyRetry?: () => void },
+): Promise<FeeSimulation> {
+  return compareToShownFee(await simulateFee(indexerUrl, envelope, { fee: budget, onBusyRetry }), shownFee)
 }

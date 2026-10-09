@@ -11,7 +11,10 @@
 // recipient's vault declared.
 
 import { describe, expect, it, afterEach, vi } from 'vitest'
-import { dryRunFee, simulateFee, withFeeMargin, FEE_MARGIN_FLOOR, FEE_MARGIN_PERCENT } from './feeProbe'
+import {
+  compareToShownFee, dryRunFee, priceAtBudget, simulateFee, withFeeMargin, FEE_MARGIN_FLOOR, FEE_MARGIN_PERCENT,
+} from './feeProbe'
+import { QuoteChanged, confirmQuote } from './quote'
 import { NETWORK_BUSY_MESSAGE, retryTiming } from './indexerRetry'
 
 const URL = 'https://indexer.test'
@@ -278,5 +281,84 @@ describe('a busy indexer is waited out, not reported', () => {
     retryTiming.sleep = async () => {}
     scriptedFetch([503, 503, 503, 503])
     await expect(dryRunFee(URL, {})).rejects.toThrow(NETWORK_BUSY_MESSAGE)
+  })
+})
+
+// ── Refundable-budget paths: the fee shown is the cost at the REAL budget ─────────────────────────
+//
+// A model of the live case (2026-10-09, stranger wallet public burn 315d911d…): storage prices the
+// account vault's post-fee balance by its CBOR-encoded size, which grows by two bytes at 65,536
+// µtTARI. A public balance of 200,000, burning 100,000: the 50,000 probe budget leaves the vault at
+// 50,000 (3 bytes) and prices 2,400; the real ~2,600 budget leaves 97,400 (5 bytes) and costs 2,402.
+
+/**
+ * The model, calibrated to the two measured figures: 2,400 while the vault's post-fee balance fits
+ * a 3-byte CBOR integer (below 65,536 µtTARI), 2,402 once it needs 5.
+ */
+const costAt = (budget: bigint, balance: bigint, amount = 100_000n) =>
+  balance - amount - budget < 65_536n ? 2_400n : 2_402n
+
+describe('priceAtBudget — the small-public-balance under-quote', () => {
+  const measured = (budget: bigint) => costAt(budget, 200_000n)
+
+  it('the old way — price at the 50,000 probe budget — shows 2,400 for a burn that is charged 2,402', async () => {
+    expect(await measured(50_000n)).toBe(2_400n)                          // what used to be shown
+    expect(await measured(withFeeMargin(2_400n))).toBe(2_402n)            // what the real budget is charged
+  })
+
+  it('the fee shown is the cost measured at the budget actually offered: 2,402', async () => {
+    const budgets: bigint[] = []
+    const priced = await priceAtBudget(async b => { budgets.push(b); return measured(b) }, { reserve: 50_000n })
+    expect(priced.probeCost).toBe(2_400n)
+    expect(priced.budget).toBe(withFeeMargin(2_400n))
+    expect(priced.fee).toBe(2_402n)
+    expect(priced.fee <= priced.budget).toBe(true)
+    expect(budgets).toEqual([50_000n, withFeeMargin(2_400n)])
+  })
+
+  it('a large public balance never crosses the boundary: probe and real agree', async () => {
+    const big = (budget: bigint) => costAt(budget, 997_000_000n)
+    const priced = await priceAtBudget(async b => big(b), { reserve: 50_000n })
+    expect(priced.fee).toBe(priced.probeCost)
+  })
+
+  it('re-measures when the cost at the chosen budget is above it', async () => {
+    // A budget-sensitive cost that outgrows the first budget once: the second round settles it.
+    let calls = 0
+    const priced = await priceAtBudget(async b => { calls++; return b === 50_000n ? 1_000n : b === 1_000n ? 1_300n : 1_250n }, { reserve: 50_000n, margin: false })
+    expect(priced).toEqual({ fee: 1_250n, budget: 1_300n, probeCost: 1_000n })
+    expect(calls).toBe(3)
+  })
+
+  it('MAX (no margin): the budget is the cost itself', async () => {
+    const priced = await priceAtBudget(async () => 9_650n, { reserve: 50_000n, margin: false })
+    expect(priced).toEqual({ fee: 9_650n, budget: 9_650n, probeCost: 9_650n })
+  })
+
+  it('refuses a cost above the reserve, and one that will not settle', async () => {
+    await expect(priceAtBudget(async () => 60_000n, { reserve: 50_000n })).rejects.toThrow(/exceeds the 50000/)
+    let n = 1_000n
+    await expect(priceAtBudget(async () => (n += 1_000n), { reserve: 50_000n, margin: false })).rejects.toThrow(/kept changing/)
+  })
+})
+
+describe('compareToShownFee — the confirm check holds the cost to the fee SHOWN', () => {
+  it('passes only an exact match', () => {
+    expect(compareToShownFee({ accepted: true, cost: 2_402n }, 2_402n)).toEqual({ accepted: true, cost: 2_402n })
+  })
+
+  it('a higher OR lower cost is fee-changed, and confirm re-prices instead of sending', async () => {
+    for (const cost of [2_404n, 2_400n]) {
+      const sim = compareToShownFee({ accepted: true, cost }, 2_402n)
+      expect(sim).toMatchObject({ accepted: false, kind: 'fee-changed' })
+      const err = await confirmQuote({ preparedAt: Date.now(), simulate: async () => sim }).catch(e => e)
+      expect(err).toBeInstanceOf(QuoteChanged)
+      expect((err as QuoteChanged).reason).toBe('fee-risen')
+    }
+  })
+
+  it('leaves a rejection as it is', () => {
+    const rejected = { accepted: false as const, kind: 'reject' as const, reason: 'x', message: 'y' }
+    expect(compareToShownFee(rejected, 2_402n)).toBe(rejected)
   })
 })

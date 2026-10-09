@@ -33,7 +33,7 @@ import { fmt6, MASK_SHORT, TICKER } from '../wallet/v2/format'
 // The wallet's own sentence for "this figure came off a truncated scan". Shared, not retyped: its
 // note says there is one wording precisely so the two surfaces cannot drift apart on the claim.
 import { incompleteAvailableNote } from '../wallet/v2/total'
-import { avatarFor, initialsFor, truncNpub, bubbleTime, compactTime, dayLabel, isNewDay, mergeThreadItems, replyChipDetail, threadContentKey, MONO } from './chatDisplay'
+import { avatarFor, conversationPreview, initialsFor, truncNpub, bubbleTime, compactTime, dayLabel, isNewDay, mergeThreadItems, replyChipDetail, threadContentKey, MONO } from './chatDisplay'
 import Avatar from './Avatar'
 import MessageBubble from './MessageBubble'
 import QuotedPreview from './QuotedPreview'
@@ -2008,7 +2008,7 @@ export default function ChatApp({ onOpenWallet }: {
                   const nick = nicknames[c.peerHex]
                   const lm = c.lastMessage
                   const isPay = !!lm?.payment
-                  const preview = !lm ? '' : isPay ? 'Payment sent' : lm.direction === 'sent' ? `You: ${lm.plaintext}` : lm.plaintext
+                  const preview = conversationPreview(lm)
                   return (
                     <div key={c.peerHex} onClick={() => { setSelectedPeer(c.peerHex); setSelectedGroupId(null) }} className="cv-conv" style={{ ...CONV_ROW, background: active ? 'var(--accent-wash)' : 'transparent' }}>
                       {/* A person's avatar is a CIRCLE and a group's is a rounded tile — the shape

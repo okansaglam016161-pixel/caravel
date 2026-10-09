@@ -6,7 +6,7 @@
 // React — needs a real browser and is covered by the two-browser test instead.
 
 import { describe, expect, it } from 'vitest'
-import { isNewDay, mediaBoxSize, mediaFilename, mergeThreadItems, readableSize, threadContentKey, type ThreadItem } from './chatDisplay'
+import { conversationPreview, isNewDay, mediaBoxSize, mediaFilename, mergeThreadItems, readableSize, threadContentKey, type ThreadItem } from './chatDisplay'
 
 const MAX_W = 320
 const MAX_H = 400
@@ -301,5 +301,20 @@ describe('isNewDay — the day-divider boundary', () => {
     const a = at(2026, 2, 4, 23, 58)
     const b = at(2026, 2, 5, 0, 2)
     expect(isNewDay(a, b)).toBe(isNewDay(b, a))
+  })
+})
+
+describe('conversationPreview — a payment reads by direction', () => {
+  const pay = { payment: { utxoId: 'utxo_1' }, plaintext: '💸 Payment' }
+  it('the side that paid sees "Payment sent"', () => {
+    expect(conversationPreview({ ...pay, direction: 'sent' })).toBe('Payment sent')
+  })
+  it('the side that was paid sees "Payment received"', () => {
+    expect(conversationPreview({ ...pay, direction: 'received' })).toBe('Payment received')
+  })
+  it('text is unchanged: "You: " for ours, as-is for theirs, empty with no message', () => {
+    expect(conversationPreview({ direction: 'sent', plaintext: 'hi' })).toBe('You: hi')
+    expect(conversationPreview({ direction: 'received', plaintext: 'hey' })).toBe('hey')
+    expect(conversationPreview(null)).toBe('')
   })
 })

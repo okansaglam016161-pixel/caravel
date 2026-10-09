@@ -16,6 +16,19 @@ export const MONO = "'IBM Plex Mono', monospace"
 // the hover reveal is in index.css, keyed off .cv-msg-actionrow.
 export const ACTION_BTN: CSSProperties = { display: 'flex', alignItems: 'center', justifyContent: 'center', width: 26, height: 26, flexShrink: 0, padding: 0, borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface-raised)', color: 'var(--text-muted)', cursor: 'pointer' }
 
+/**
+ * The one-line preview under a conversation in the chat list, from its last message.
+ *
+ * A payment reads by DIRECTION: "Payment sent" on the side that paid, "Payment received" on the side
+ * that was paid. It used to say "Payment sent" on both, so the recipient's list told them they had
+ * paid. Text keeps its "You: " prefix for our own messages.
+ */
+export function conversationPreview(lm: Pick<CaravelMessage, 'direction' | 'payment' | 'plaintext'> | null | undefined): string {
+  if (!lm) return ''
+  if (lm.payment) return lm.direction === 'sent' ? 'Payment sent' : 'Payment received'
+  return lm.direction === 'sent' ? `You: ${lm.plaintext}` : lm.plaintext
+}
+
 // npub1abcdefg…wxyz — never throws (blank/invalid hex falls back to raw prefix).
 export function truncNpub(peerHex: string): string {
   try {

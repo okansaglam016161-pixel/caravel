@@ -13,7 +13,7 @@ import { explorerSubstateUrl, explorerTxUrl } from '../../crypto/explorer'
 import { useBurnWallet, type HeroState, type ListState } from '../../hooks/useBurnWallet'
 import ThemeToggle from '../primitives/ThemeToggle'
 import { TICKER, fmt6 } from '../wallet/v2/format'
-import { Check, Flame, Refresh, Spinner } from '../wallet/v2/icons'
+import { Flame, Refresh, Spinner } from '../wallet/v2/icons'
 import { Body, HeaderIcon, ModalShell, RootHeader } from '../wallet/v2/primitives'
 import { C, MONO, PAGE_MAX_WIDTH } from '../wallet/v2/tokens'
 import BurnSheet from './BurnSheet'
@@ -21,11 +21,10 @@ import { burnTimeLabel, burnTitle, shortTx, type BurnRow } from './burnModel'
 
 export default function BurnPage({ active }: { active: boolean }) {
   const { address } = useWallet()
-  const { hero, list, refresh, watchFor } = useBurnWallet(address, active)
+  const { hero, list, refreshing, refresh, watchFor } = useBurnWallet(address, active)
   const [sheetOpen, setSheetOpen] = useState(false)
   const [tab, setTab] = useState<'recent' | 'mine'>('recent')
 
-  const refreshing = hero.status === 'loading' || (hero.status === 'verified' && hero.refreshing)
   const baseline = hero.status === 'verified' ? hero.reading.totalDeposited
     : hero.status === 'updating' ? hero.last?.totalDeposited ?? null : null
 
@@ -43,7 +42,7 @@ export default function BurnPage({ active }: { active: boolean }) {
             <ThemeToggle size={30} />
           </>} />
           <Body gap={14} pageGap={12} chrome="page">
-            <Hero hero={hero} onBurn={() => setSheetOpen(true)} onRetry={() => { void refresh() }} />
+            <Hero hero={hero} refreshing={refreshing} onBurn={() => setSheetOpen(true)} onRetry={() => { void refresh() }} />
             <LottoTeaser />
             <BurnList list={list} tab={tab} onTab={setTab} />
           </Body>
@@ -64,10 +63,12 @@ export default function BurnPage({ active }: { active: boolean }) {
 
 /**
  * The verified total, on the wallet hero's dark ground. Four states, per the design: loading,
- * verified (with "Updating…" while a refresh runs), updating (nothing verified on the latest read —
- * the last verified figure, dimmed), and unreachable.
+ * verified, updating (nothing verified on the latest read — the last verified figure, dimmed), and
+ * unreachable. A verified figure carries NO badge: every figure shown here is verified, so a badge
+ * would only restate the rule. What is marked is the exception — "Updating…", while a refresh runs
+ * or while no verified reading has answered, so an unconfirmed figure never reads as final.
  */
-function Hero({ hero, onBurn, onRetry }: { hero: HeroState; onBurn: () => void; onRetry: () => void }) {
+function Hero({ hero, refreshing, onBurn, onRetry }: { hero: HeroState; refreshing: boolean; onBurn: () => void; onRetry: () => void }) {
   return (
     <div data-theme="dark" style={{
       position: 'relative', overflow: 'hidden',
@@ -117,7 +118,7 @@ function Hero({ hero, onBurn, onRetry }: { hero: HeroState; onBurn: () => void; 
       {(hero.status === 'verified' || hero.status === 'updating') && (() => {
         const reading = hero.status === 'verified' ? hero.reading : hero.last
         const dim = hero.status === 'updating'
-        const updating = hero.status === 'updating' || hero.refreshing
+        const updating = hero.status === 'updating' || refreshing
         return (
           <>
             <div style={{
@@ -125,20 +126,12 @@ function Hero({ hero, onBurn, onRetry }: { hero: HeroState; onBurn: () => void; 
               marginTop: 30, lineHeight: 1, color: dim ? 'var(--vault-label)' : C.bright,
             }}>{reading ? fmtBurned(reading.balance) : '—'}</div>
             <div style={{ fontFamily: MONO, fontSize: 13, color: 'var(--vault-label)', marginTop: 12 }}>tTARI burned forever</div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 26 }}>
-              {hero.status === 'verified' && !hero.refreshing && (
-                <span style={{
-                  display: 'inline-flex', alignItems: 'center', gap: 5, padding: '4px 10px', borderRadius: 999,
-                  background: 'rgba(var(--positive-rgb),0.14)', color: 'var(--positive)', fontSize: 11.5, fontWeight: 600,
-                }}><Check size={10} color="currentColor" />Verified</span>
-              )}
-              {updating && (
-                <span style={{
-                  display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 10px', borderRadius: 999,
-                  background: 'rgba(255,255,255,0.08)', color: 'var(--vault-label)', fontSize: 11.5, fontWeight: 600,
-                }}><Spinner size={10} />Updating…</span>
-              )}
-            </div>
+            {updating && (
+              <span style={{
+                display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 10px', borderRadius: 999, marginTop: 26,
+                background: 'rgba(255,255,255,0.08)', color: 'var(--vault-label)', fontSize: 11.5, fontWeight: 600,
+              }}><Spinner size={10} />Updating…</span>
+            )}
             {dim && (
               <div style={{ fontSize: 11.5, color: 'var(--vault-label)', marginTop: 8 }}>
                 {reading ? 'Last verified figure. Checking the chain.' : 'Waiting for a verified reading.'}

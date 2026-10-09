@@ -109,10 +109,13 @@ const ICON: Record<Service, React.ReactNode> = {
       <path d="M21 11.5a8.5 8.5 0 1 0-16.9 1.6L3 20l3.8-1.1A8.5 8.5 0 0 0 21 11.5z" />
     </svg>
   ),
-  // The flame the Burn page and every burn row wear. (The dice is the Lotto's, when it has a page.)
+  // The Burn page's flame, redrawn to the rail's measure: the page's path fills only a 10×15 corner
+  // of the grid (y 2–17), so beside the wallet and the bubble it read small and high. Scaled 1.2×
+  // about the centre it spans 12×18 (y 3–21), like the other two; same stroke, caps and joins.
+  // (The dice is the Lotto's, when it has a page.)
   burn: (
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M12 2c1 4 5 5.5 5 10a5 5 0 0 1-10 0c0-2 1-3.5 2-4.5 0 2 1 3 2 3 0-3 .5-6 1-8.5z" />
+      <path d="M12 3c1.2 4.8 6 6.6 6 12a6 6 0 0 1-12 0c0-2.4 1.2-4.2 2.4-5.4 0 2.4 1.2 3.6 2.4 3.6 0-3.6.6-7.2 1.2-10.2z" />
     </svg>
   ),
 }

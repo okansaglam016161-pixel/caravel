@@ -16,7 +16,7 @@ import { useJournal } from './useJournal'
 /** The hero's state. A figure is only ever a VERIFIED one; see crypto/burnWallet. */
 export type HeroState =
   | { status: 'loading' }
-  | { status: 'verified'; reading: BurnWalletReading; refreshing: boolean }
+  | { status: 'verified'; reading: BurnWalletReading }
   /** Nothing verified on the latest read. `last` is the last verified figure, if there was one. */
   | { status: 'updating'; last: BurnWalletReading | null }
   | { status: 'unreachable' }
@@ -36,6 +36,11 @@ export function useBurnWallet(address: string | null, active: boolean) {
   const journal = useJournal(address)
   const [hero, setHero] = useState<HeroState>({ status: 'loading' })
   const [list, setList] = useState<ListState>({ status: 'loading' })
+  /**
+   * One flag for the WHOLE refresh — the total and the list (both tabs read the same list) — as
+   * the wallet's Refresh stays busy until both of its reads settle. The header spins on it.
+   */
+  const [refreshing, setRefreshing] = useState(false)
   const lastVerified = useRef<BurnWalletReading | null>(null)
   const loadedOnce = useRef(false)
   const running = useRef(false)
@@ -45,16 +50,15 @@ export function useBurnWallet(address: string | null, active: boolean) {
   const refresh = useCallback(async (): Promise<BurnWalletReading | null> => {
     if (running.current) return lastVerified.current
     running.current = true
+    setRefreshing(true)
     try {
-      const last = lastVerified.current
-      setHero(h => (h.status === 'verified' ? { ...h, refreshing: true } : last ? { status: 'updating', last } : h))
 
       const read = await readBurnWallet()
       let verifiedTotal: bigint | null = null
       if (read.kind === 'verified') {
         lastVerified.current = read.reading
         verifiedTotal = read.reading.totalDeposited
-        setHero({ status: 'verified', reading: read.reading, refreshing: false })
+        setHero({ status: 'verified', reading: read.reading })
       } else if (read.kind === 'unverified') {
         setHero({ status: 'updating', last: lastVerified.current })
       } else {
@@ -88,6 +92,7 @@ export function useBurnWallet(address: string | null, active: boolean) {
       return read.kind === 'verified' ? read.reading : null
     } finally {
       running.current = false
+      setRefreshing(false)
     }
   }, [address])
 
@@ -112,5 +117,5 @@ export function useBurnWallet(address: string | null, active: boolean) {
     void tick()
   }, [refresh])
 
-  return { hero, list, refresh, watchFor, lastVerified: lastVerified.current }
+  return { hero, list, refreshing, refresh, watchFor }
 }

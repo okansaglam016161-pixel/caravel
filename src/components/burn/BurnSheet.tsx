@@ -11,9 +11,7 @@ import { MIN_BURN_MICROTARI, preparePrivateBurn, preparePublicBurn, type BurnSou
 import { maxStealthSend } from '../../crypto/confidentialSend'
 import { explorerTxUrl } from '../../crypto/explorer'
 import { beginEntry, settleEntry } from '../../crypto/journalStore'
-import type { JournalOutcome } from '../../crypto/journal'
 import { maxPublicSend } from '../../crypto/publicSend'
-import { FEE_SHORT_MESSAGE, QuoteChanged, isFeeShortRejection } from '../../crypto/quote'
 import Callout from '../primitives/Callout'
 import { TICKER, fmt6, toInput } from '../wallet/v2/format'
 import { GenerationGuard } from '../wallet/v2/generation'
@@ -24,24 +22,13 @@ import {
 import { plainError } from '../wallet/v2/plainError'
 import { Sheet } from '../wallet/v2/primitives'
 import { C, MONO } from '../wallet/v2/tokens'
+import { createBurnConfirm, type BurnProgress } from './burnConfirm'
 import { parseTariInput } from './burnModel'
-
-/** How long the settle loop waits for the paying balance to fall — the send flow's figure. */
-const SETTLE_MS = 150_000
-
-const JOURNAL_OUTCOME: Record<'Commit' | 'Reject' | 'Timeout', JournalOutcome> = {
-  Commit: 'committed',
-  Reject: 'rejected',
-  Timeout: 'timeout',
-}
 
 type Step =
   | { step: 'form'; error?: string }
   | { step: 'review'; amount: bigint; prepared: PreparedBurn | null; notice?: string }
-  | { step: 'burning'; amount: bigint; progress: string }
-  | { step: 'success'; amount: bigint; fee: bigint; txId: string }
-  | { step: 'unconfirmed'; amount: bigint; txId: string }
-  | { step: 'error'; message: string }
+  | BurnProgress
 
 const WARNING = 'This can’t be undone. Burned TARI is locked forever.'
 
@@ -64,6 +51,31 @@ export default function BurnSheet({ onClose, onBurned }: {
   const [view, setView] = useState<Step>({ step: 'form' })
   const gen = useRef(new GenerationGuard())
   const settledTx = useRef<string | null>(null)
+  /** "Burn forever" is locked from the first click — see burnConfirm. Drawn disabled while set. */
+  const [locked, setLocked] = useState(false)
+
+  // The guarded confirm sequence, created ONCE so its lock survives re-renders. It reads the latest
+  // wallet state through this ref rather than the render it was created in.
+  const latest = useRef({ address, scan, revealed, rescan, beginSettle, onBurned })
+  latest.current = { address, scan, revealed, rescan, beginSettle, onBurned }
+  const gate = useRef<ReturnType<typeof createBurnConfirm> | null>(null)
+  if (gate.current === null) {
+    gate.current = createBurnConfirm({
+      get address() { return latest.current.address ?? '' },
+      beginEntry,
+      settleEntry,
+      beginSettle: e => latest.current.beginSettle(e),
+      rescan: () => latest.current.rescan(),
+      balancesBefore: () => ({
+        private: latest.current.scan.balance,
+        public: latest.current.revealed.status === 'done' ? latest.current.revealed.amount : null,
+      }),
+      show: v => setView(v),
+      // Through the ref: `review` reads this render's amount and source, not the first render's.
+      reprice: notice => { setLocked(false); void reviewRef.current(notice) },
+      onBurned: (amount, txId) => { settledTx.current = txId; latest.current.onBurned(amount) },
+    })
+  }
 
   const available = source === 'private' ? privateAvail : publicAvail
 
@@ -103,74 +115,19 @@ export default function BurnSheet({ onClose, onBurned }: {
     }
   }
 
-  async function confirm() {
+  const reviewRef = useRef(review)
+  reviewRef.current = review
+
+  function confirm() {
     if (view.step !== 'review' || !view.prepared || !address) return
-    const prepared = view.prepared
-    const burnAmount = prepared.amountMicrotari
-    setView({ step: 'burning', amount: burnAmount, progress: 'Checking the fee…' })
+    setLocked(true)
+    void gate.current!.confirm(view.prepared)
+  }
 
-    try {
-      await prepared.confirm()
-    } catch (e) {
-      if (e instanceof QuoteChanged) { void review(e.message); return }
-      prepared.release()
-      setView({ step: 'error', message: plainError(e instanceof Error ? e.message : String(e)) })
-      return
-    }
-
-    // Written before anything is sent, so a throw or a closed tab still leaves a record.
-    const journalId = beginEntry(address, {
-      kind: 'burn',
-      amountMicrotari: burnAmount,
-      feeMicrotari: prepared.feeMicrotari,
-      from: prepared.source,
-      to: 'external',
-      counterparty: null,
-      note: null,
-      source: 'local-journal',
-      selfOutputIds: null,
-      spentInputIds: null,
-    }).entry.id
-
-    // Baselines before submitting — see WalletModal.handleConfirmMove.
-    const privateBefore = scan.balance
-    const publicBefore = revealed.status === 'done' ? revealed.amount : null
-
-    try {
-      const result = await prepared.submit(progress => setView({ step: 'burning', amount: burnAmount, progress }))
-      settleEntry(address, journalId, {
-        outcome: JOURNAL_OUTCOME[result.outcome],
-        txId: result.txId,
-        feeMicrotari: result.feeMicrotari,
-        selfOutputIds: result.selfOutputIds,
-        spentInputIds: result.spentInputIds,
-      })
-      if (result.outcome === 'Commit' || result.outcome === 'Timeout') {
-        settledTx.current = result.txId
-        beginSettle({
-          txId: result.txId,
-          kind: 'send',
-          deadlineAt: Date.now() + SETTLE_MS,
-          expectOutputs: result.selfOutputIds,
-          watches: [prepared.source === 'public'
-            ? { side: 'public', direction: 'fall', before: publicBefore }
-            : { side: 'private', direction: 'fall', before: privateBefore }],
-        })
-        rescan()
-        onBurned(burnAmount)
-        setView(result.outcome === 'Commit'
-          ? { step: 'success', amount: burnAmount, fee: result.feeMicrotari, txId: result.txId }
-          : { step: 'unconfirmed', amount: burnAmount, txId: result.txId })
-      } else {
-        // A fee that rose as it was sent is a free reject: price it again and ask.
-        if (isFeeShortRejection(result.reason)) { void review(FEE_SHORT_MESSAGE); return }
-        setView({ step: 'error', message: plainError(result.reason ?? 'The network rejected this burn. Nothing was burned.') })
-      }
-    } catch (e) {
-      // Attempted, outcome unknown — never recorded as a failure we did not see.
-      settleEntry(address, journalId, { outcome: 'pending' })
-      setView({ step: 'error', message: plainError(e instanceof Error ? e.message : String(e)) })
-    }
+  function tryAgain() {
+    gate.current!.reset()
+    setLocked(false)
+    setView({ step: 'form' })
   }
 
   const dismissable = view.step !== 'burning'
@@ -235,8 +192,10 @@ export default function BurnSheet({ onClose, onBurned }: {
             <div role="status" style={{ fontSize: 12.5, color: 'var(--warn)', marginTop: 12, textAlign: 'center', lineHeight: 1.5 }}>{view.notice}</div>
           )}
           <Warning />
-          <ActionButton tone={view.prepared === null ? 'disabled' : 'primary'} onClick={() => { void confirm() }} mt={20}>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}><Flame size={13} color="currentColor" width={2} />Burn forever</span>
+          <ActionButton tone={view.prepared === null || locked ? 'disabled' : 'primary'} onClick={locked ? undefined : confirm} mt={20}>
+            {locked
+              ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}><Spinner size={12} color="currentColor" />Burning…</span>
+              : <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}><Flame size={13} color="currentColor" width={2} />Burn forever</span>}
           </ActionButton>
           <ActionButton tone="quiet" mt={8} onClick={() => {
             gen.current.cancel()
@@ -292,7 +251,7 @@ export default function BurnSheet({ onClose, onBurned }: {
           sub="The network’s own words are below."
         >
           <div style={{ marginTop: 18, textAlign: 'left' }}><VerbatimBox>{view.message}</VerbatimBox></div>
-          <ActionButton tone="primary" onClick={() => setView({ step: 'form' })} mt={16}>Try again</ActionButton>
+          <ActionButton tone="primary" onClick={tryAgain} mt={16}>Try again</ActionButton>
           <span role="button" tabIndex={0} onClick={close} onKeyDown={e => e.key === 'Enter' && close()}
             style={{ display: 'block', marginTop: 12, fontSize: 12.5, fontWeight: 500, color: C.mutedDim, cursor: 'pointer', userSelect: 'none' }}
           >Close</span>

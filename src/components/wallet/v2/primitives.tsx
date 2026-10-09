@@ -137,13 +137,13 @@ export function Sheet({ title, onClose, dismissable = true, bare = false, childr
  * the container already supplies the margin and there is no card edge for a border to describe. In
  * the MODAL it stays the bordered bar that separates it from the scrolling body.
  */
-export function RootHeader({ chip, right, chrome = 'modal' }: { chip?: string; right: ReactNode; chrome?: Chrome }) {
+export function RootHeader({ title = 'Wallet', chip, right, chrome = 'modal' }: { title?: string; chip?: string; right: ReactNode; chrome?: Chrome }) {
   const page = chrome === 'page'
   return (
     <div style={page
       ? { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '0 0 4px', flexShrink: 0 }
       : headerBase}>
-      <span style={{ fontSize: page ? 22 : 20, fontWeight: 600, letterSpacing: '-0.015em', color: C.primary }}>Wallet</span>
+      <span style={{ fontSize: page ? 22 : 20, fontWeight: 600, letterSpacing: '-0.015em', color: C.primary }}>{title}</span>
       {/* ── THE TOP-RIGHT CLUSTER ──
           The network chip joins the view controls rather than sitting beside the title. Both halves
           of the header now have one job each: the left names the screen, the right holds everything

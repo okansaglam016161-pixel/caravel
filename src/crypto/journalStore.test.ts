@@ -11,7 +11,7 @@ import {
   beginEntry, ensureEpoch, journalSnapshot, loadEpoch, loadJournal, markDegraded, recordCoverage,
   settleEntry, subscribeJournal,
 } from './journalStore'
-import { OUTPUT_CREATING_ACTIONS, journalCovers, type JournalDraft } from './journal'
+import { OUTPUT_CREATING_ACTIONS, journalCovers, needsCoverageDeclaration, type JournalDraft } from './journal'
 import { clearStoreKey, setStoreKey } from './sessionKey'
 import { seal } from './storeCrypto'
 
@@ -327,6 +327,21 @@ describe('recordCoverage — the writer stage D will call', () => {
   it('is per wallet', () => {
     recordCoverage(ADDR, OUTPUT_CREATING_ACTIONS, 5_000)
     expect(loadEpoch(OTHER)).toBeNull()
+  })
+
+  it('an action added after completion is declared again, and the original stamp holds', () => {
+    // An epoch stamped complete before 'burn' existed.
+    const stale = { covers: OUTPUT_CREATING_ACTIONS.filter(a => a !== 'burn'), coverageCompleteAt: 5_000 }
+    expect(needsCoverageDeclaration(stale)).toBe(true)
+    expect(needsCoverageDeclaration({ covers: [...OUTPUT_CREATING_ACTIONS], coverageCompleteAt: 5_000 })).toBe(false)
+    expect(needsCoverageDeclaration({ covers: [...OUTPUT_CREATING_ACTIONS], coverageCompleteAt: null })).toBe(true)
+    expect(needsCoverageDeclaration(null)).toBe(true)
+
+    // Re-declaring keeps the first stamp — the threshold never moves forward.
+    recordCoverage(ADDR, OUTPUT_CREATING_ACTIONS, 5_000)
+    const healed = recordCoverage(ADDR, OUTPUT_CREATING_ACTIONS, 9_000)
+    expect(healed.coverageCompleteAt).toBe(5_000)
+    expect(needsCoverageDeclaration(healed)).toBe(false)
   })
 })
 

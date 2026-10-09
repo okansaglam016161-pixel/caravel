@@ -495,7 +495,7 @@ function SendInput({ value, onChange, placeholder, mono, ariaLabel, invalid }: {
  * funded the caller uses it silently and this never renders. EXPLICIT EITHER WAY: nothing here ever
  * falls back to the other balance on its own, and the review screen restates which one was used.
  */
-function SourceToggle({ source, onSource }: { source: SendSource; onSource: (s: SendSource) => void }) {
+export function SourceToggle({ source, onSource }: { source: SendSource; onSource: (s: SendSource) => void }) {
   const opt = (kind: SendSource, label: string, Icon: typeof Shield) => {
     const on = kind === source
     return (
@@ -683,8 +683,11 @@ export function Emblem({ tone, children }: { tone: 'positive' | 'accent' | 'dang
   )
 }
 
-/** A monospace receipt line — the fee actually paid, and the transaction it was paid on. */
-function Receipt({ fee, txId, onCopy }: { fee: bigint; txId: string; onCopy: () => void }) {
+/**
+ * A monospace receipt line — the fee actually paid, and the transaction it was paid on. `viewUrl`
+ * adds a link to the transaction in the explorer.
+ */
+export function Receipt({ fee, txId, onCopy, viewUrl }: { fee: bigint; txId: string; onCopy: () => void; viewUrl?: string }) {
   const short = txId.length > 14 ? `${txId.slice(0, 6)}…${txId.slice(-6)}` : txId
   return (
     <div style={{
@@ -698,6 +701,11 @@ function Receipt({ fee, txId, onCopy }: { fee: bigint; txId: string; onCopy: () 
         aria-label="Copy transaction id"
         style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer' }}
       >tx {short}<Copy size={11} color="currentColor" /></span>
+      {viewUrl && <>
+        <span aria-hidden="true">·</span>
+        <a href={viewUrl} target="_blank" rel="noreferrer"
+          style={{ fontFamily: 'inherit', fontWeight: 600, color: 'var(--accent-ink)', textDecoration: 'none' }}>View ↗</a>
+      </>}
     </div>
   )
 }
@@ -1088,6 +1096,8 @@ export interface ActivityRowView {
   amountMicrotari: bigint | null
   /** Full address/npub, for hover. The title line is abbreviated; this is not. */
   titleAttr?: string
+  /** A glyph in place of the direction arrow — a burn's flame. The tile keeps its direction's colours. */
+  glyph?: 'flame'
 }
 
 /**
@@ -1180,13 +1190,15 @@ const TILE: Record<ActivityRowView['direction'], { bg: string; ink: string; bord
 }
 
 /** The glyph in the row's tile. Direction only — the pill carries state. */
-function RowGlyph({ direction }: { direction: ActivityRowView['direction'] }) {
+function RowGlyph({ direction, glyph }: { direction: ActivityRowView['direction']; glyph?: ActivityRowView['glyph'] }) {
   const t = TILE[direction]
   const icon =
     // TWO ARROWS, NOT ONE. The in/out arrows say value crossed the wallet's boundary; a swap moves
     // it between two balances inside. Reusing either would say the wrong thing before a single
     // word is read.
-    direction === 'internal'
+    glyph === 'flame'
+      ? <path d="M12 2c1 4 5 5.5 5 10a5 5 0 0 1-10 0c0-2 1-3.5 2-4.5 0 2 1 3 2 3 0-3 .5-6 1-8.5z" />
+    : direction === 'internal'
       ? <><path d="M4 7h13M14 4l3 3-3 3" /><path d="M20 17H7M10 14l-3 3 3 3" /></>
     : direction === 'in'
       ? <><path d="M17 7L7 17" /><path d="M15 17H7V9" /></>
@@ -1243,7 +1255,7 @@ export function ActivityRowShell({ row, hidden }: { row: ActivityRowView; hidden
       display: 'flex', alignItems: 'center', gap: 12,
       padding: '11px 13px', borderRadius: 9,
     }}>
-      <RowGlyph direction={row.direction} />
+      <RowGlyph direction={row.direction} glyph={row.glyph} />
       <div style={{ flex: 1, minWidth: 0 }}>
         {/* THE PILL SITS BESIDE THE TITLE, not out by the amount. V3 moved it here and it reads
             better for the reason it exists: it qualifies what this row IS, so it belongs with the

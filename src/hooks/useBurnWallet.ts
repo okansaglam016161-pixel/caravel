@@ -1,0 +1,116 @@
+// The Burn page's view of the chain: the verified total and the list of burns.
+//
+// Loads when the page is first shown and on Refresh; a burn just made is watched until the verified
+// total reflects it. Hidden panes stay mounted (see AppShell), so nothing here polls while the page
+// is out of sight.
+
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { loadAccountAddress } from '../crypto/accountStore'
+import {
+  accountVaultIds, burnFinalizedAt, classifyBurn, currentEpoch, listDeposits, readBurnWallet,
+  type BurnClassification, type BurnWalletReading,
+} from '../crypto/burnWallet'
+import { buildBurnRows, depositsComplete, type BurnRow } from '../components/burn/burnModel'
+import { useJournal } from './useJournal'
+
+/** The hero's state. A figure is only ever a VERIFIED one; see crypto/burnWallet. */
+export type HeroState =
+  | { status: 'loading' }
+  | { status: 'verified'; reading: BurnWalletReading; refreshing: boolean }
+  /** Nothing verified on the latest read. `last` is the last verified figure, if there was one. */
+  | { status: 'updating'; last: BurnWalletReading | null }
+  | { status: 'unreachable' }
+
+export type ListState =
+  | { status: 'loading' }
+  | { status: 'ready'; rows: BurnRow[]; complete: boolean; total: number }
+  | { status: 'error' }
+
+/** Rows enriched per refresh — classification and times are a request each, so the list is capped. */
+const ROWS_SHOWN = 50
+/** After a burn: how often, and for how long, to re-read until the total shows it. */
+const WATCH_EVERY_MS = 4_000
+const WATCH_FOR_MS = 120_000
+
+export function useBurnWallet(address: string | null, active: boolean) {
+  const journal = useJournal(address)
+  const [hero, setHero] = useState<HeroState>({ status: 'loading' })
+  const [list, setList] = useState<ListState>({ status: 'loading' })
+  const lastVerified = useRef<BurnWalletReading | null>(null)
+  const loadedOnce = useRef(false)
+  const running = useRef(false)
+  const journalRef = useRef(journal)
+  journalRef.current = journal
+
+  const refresh = useCallback(async (): Promise<BurnWalletReading | null> => {
+    if (running.current) return lastVerified.current
+    running.current = true
+    try {
+      const last = lastVerified.current
+      setHero(h => (h.status === 'verified' ? { ...h, refreshing: true } : last ? { status: 'updating', last } : h))
+
+      const read = await readBurnWallet()
+      let verifiedTotal: bigint | null = null
+      if (read.kind === 'verified') {
+        lastVerified.current = read.reading
+        verifiedTotal = read.reading.totalDeposited
+        setHero({ status: 'verified', reading: read.reading, refreshing: false })
+      } else if (read.kind === 'unverified') {
+        setHero({ status: 'updating', last: lastVerified.current })
+      } else {
+        setHero({ status: 'unreachable' })
+      }
+
+      try {
+        const deposits = await listDeposits()
+        const shown = deposits.slice(0, ROWS_SHOWN)
+        const account = address ? loadAccountAddress(address) : null
+        const journalled = new Map<string, number>()
+        for (const e of journalRef.current) {
+          if (e.kind === 'burn' && e.txId) journalled.set(e.txId, e.timestamp)
+        }
+        const [classes, finalized, ownVaults, epoch] = await Promise.all([
+          Promise.all(shown.map(async d => [d.txId, await classifyBurn(d.txId)] as const))
+            .then(pairs => new Map<string, BurnClassification>(pairs)),
+          Promise.all(shown.filter(d => !journalled.has(d.txId)).map(async d => [d.txId, await burnFinalizedAt(d.txId)] as const))
+            .then(pairs => new Map<string, number | null>(pairs)),
+          account ? accountVaultIds(account) : Promise.resolve(new Set<string>()),
+          currentEpoch(),
+        ])
+        const rows = buildBurnRows(shown, classes, { ownVaults, journalled, finalizedAt: finalized, currentEpoch: epoch, now: Date.now() })
+        setList({
+          status: 'ready', rows, total: deposits.length,
+          complete: depositsComplete(deposits, verifiedTotal ?? lastVerified.current?.totalDeposited ?? null),
+        })
+      } catch {
+        setList(l => (l.status === 'ready' ? l : { status: 'error' }))
+      }
+      return read.kind === 'verified' ? read.reading : null
+    } finally {
+      running.current = false
+    }
+  }, [address])
+
+  // First load: the first time the page is actually on screen.
+  useEffect(() => {
+    if (!active || loadedOnce.current) return
+    loadedOnce.current = true
+    void refresh()
+  }, [active, refresh])
+
+  /**
+   * A burn of `amount` just committed: keep reading until the verified total includes it. The
+   * baseline is the figure from before the burn; anything at or above baseline + amount is it.
+   */
+  const watchFor = useCallback((baseline: bigint | null, amount: bigint) => {
+    const deadline = Date.now() + WATCH_FOR_MS
+    const tick = async () => {
+      const reading = await refresh()
+      if (reading && baseline !== null && reading.totalDeposited >= baseline + amount) return
+      if (Date.now() < deadline) setTimeout(() => { void tick() }, WATCH_EVERY_MS)
+    }
+    void tick()
+  }, [refresh])
+
+  return { hero, list, refresh, watchFor, lastVerified: lastVerified.current }
+}

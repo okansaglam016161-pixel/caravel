@@ -23,6 +23,7 @@
 //   abstraction. The hidden subtree keeps its state and its effects, and pays no layout or paint.
 
 import { useState } from 'react'
+import BurnPage from '../burn/BurnPage'
 import ChatApp from '../chat/ChatApp'
 import ProfilePanel from '../wallet/ProfilePanel'
 import WalletPage from '../wallet/WalletPage'
@@ -53,6 +54,8 @@ export default function AppShell() {
           follows the app theme like every other service — and so does the wallet modal inside it,
           which used to inherit the pin. */}
       <Pane show={service === 'chat'}><ChatApp onOpenWallet={() => setService('wallet')} /></Pane>
+      {/* Its own section. `active` lets it load the chain only once it is first shown. */}
+      <Pane show={service === 'burn'}><BurnPage active={service === 'burn'} /></Pane>
 
       {profileOpen && (
         <ProfilePanel onClose={() => setProfileOpen(false)} />

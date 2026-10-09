@@ -96,6 +96,22 @@ export type ActivityRow =
       source: ActivitySource
       txId: string | null
     }
+  /**
+   * TARI locked in the Caravel Burn Wallet. Value left this wallet for good, so it is an outflow —
+   * with its own kind because "sent to" names a recipient, and a burn has none.
+   */
+  | {
+      kind: 'burn'
+      id: string
+      /** Which balance it was burned from. */
+      from: 'private' | 'public'
+      timestamp: number
+      amountMicrotari: bigint | null
+      feeMicrotari: bigint | null
+      outcome: ActivityOutcome
+      source: ActivitySource
+      txId: string | null
+    }
   | {
       kind: 'faucet'
       id: string
@@ -187,6 +203,8 @@ function fromJournal(e: JournalEntry): ActivityRow | null {
     // not a wallet money-movement the user would look for in Activity.
     case 'ons-register':
       return null
+    case 'burn':
+      return { kind: 'burn', ...common, from: e.from === 'public' ? 'public' : 'private' }
   }
 }
 

@@ -51,6 +51,10 @@ import { prepareReveal, MIN_REVEAL_MICROTARI, maxRevealable } from '../src/crypt
 import { prepareConfidentialSend, sendConfidential, describeMicrotari, maxStealthSend, MAX_FEE } from '../src/crypto/confidentialSend'
 import { claimFaucet, prepareClaim, FaucetClaimRefused, type PreparedClaim } from '../src/crypto/faucet'
 import { preparePublicSend } from '../src/crypto/publicSend'
+import { preparePrivateBurn, preparePublicBurn, type BurnSource } from '../src/crypto/burn'
+import {
+  BURN_WALLET_COMPONENT, accountVaultIds, classifyBurn, listDeposits, readBurnWallet,
+} from '../src/crypto/burnWallet'
 import { parseOotleAddress } from '@tari-project/ootle-wasm'
 import { FAUCET_COMPONENT_ADDRESS, FAUCET_VAULT_ADDRESS, faucetReceiptId } from '../src/crypto/faucetConfig'
 import { decodeFaucetState, decodeFaucetVault, faucetStatusFrom } from '../src/crypto/faucetStatus'
@@ -914,6 +918,91 @@ async function cmdSendPublic(h: Harnessed, dest: string, amount: bigint, yes: bo
   const result = await prepared.submit(stage)
   printSettlement(markSubmit, performance.now() - t0, result.outcome)
   await printSubmitted(result.txId, prepared.feeMicrotari, result.outcome, result.reason)
+  printNet(markSubmit)
+}
+
+/**
+ * WRITE. A burn into the Caravel Burn Wallet, from the public balance or from private funds.
+ *
+ * Without --yes: build, price, and the confirm check, then stop. With it: submit, then check what
+ * the burn page relies on — the fee shown is the fee charged, the receipt classifies as the source
+ * it came from, the owner key appears nowhere in a private burn, the burn shows up in the list,
+ * and the verified total moved by exactly the amount.
+ */
+async function cmdBurn(h: Harnessed, source: BurnSource, amount: bigint, yes: boolean): Promise<void> {
+  writeBanner(`burn ${source}  (crypto/burn.prepare${source === 'public' ? 'Public' : 'Private'}Burn)`, amount, yes)
+  const account = await primeAccount(h)
+  if (source === 'public' && !account) console.log('\n  ▶ No account address. preparePublicBurn refuses before building — see below.')
+
+  rule('burn wallet before')
+  const before = await readBurnWallet()
+  field('read', before.kind === 'verified' ? `${amt(before.reading.balance)}   [verified]` : before.kind)
+
+  rule('build + price')
+  const mark = net.length
+  const prepared = source === 'public'
+    ? await preparePublicBurn(h.wallet, h.address, { amountMicrotari: amount, onProgress: stage })
+    : await preparePrivateBurn(h.wallet, h.address, { amountMicrotari: amount, onProgress: stage })
+  field('burns', amt(prepared.amountMicrotari) + '   [exactly what was asked for]')
+  field('fee', amt(prepared.feeMicrotari) + '   [the exact cost — what the UI shows]')
+  printDryRun(mark)
+  printNet(mark)
+
+  if (!yes) {
+    rule('confirm check  (crypto/quote — what Confirm runs before anything is sent)')
+    await prepared.confirm()
+    field('confirm check', 'PASSES — fresh, inputs unchanged, final transaction accepted at the exact fee')
+    prepared.release()
+    console.log('\n  STOPPED BEFORE SUBMIT. Nothing was sent. Re-run with --yes to submit.')
+    return
+  }
+
+  rule('submit')
+  const markSubmit = net.length
+  const t0 = performance.now()
+  const result = await prepared.submit(stage)
+  printSettlement(markSubmit, performance.now() - t0, result.outcome)
+  await printSubmitted(result.txId, prepared.feeMicrotari, result.outcome, result.reason)
+  field('self outputs', result.selfOutputIds ? JSON.stringify(result.selfOutputIds) : 'null')
+  field('spent inputs', JSON.stringify(result.spentInputIds))
+  if (result.outcome !== 'Commit') return
+
+  rule('who appears in it')
+  const tx = await (await fetch(`${INDEXER}/transactions/${result.txId}`)).text()
+  const ownerSeen = tx.toLowerCase().includes(h.ownerPkHex.toLowerCase())
+  const accountSeen = account !== null && tx.includes(account)
+  field('owner key in tx', ownerSeen ? 'YES' + (source === 'private' ? '   ◀ PRIVACY FAILURE' : '   [expected: a public burn is account-tied]') : 'no' + (source === 'private' ? '   ✓ the owner key appears nowhere' : ''))
+  field('account in tx', accountSeen ? 'YES' + (source === 'private' ? '   ◀ PRIVACY FAILURE' : '') : 'no')
+
+  rule('receipt classification  (crypto/burnWallet.classifyBurn)')
+  let cls = await classifyBurn(result.txId)
+  for (let i = 0; i < 10 && cls.source === 'unknown'; i++) {
+    await new Promise(r => setTimeout(r, 3000))
+    cls = await classifyBurn(result.txId)
+  }
+  const mine = source === 'public' && account ? await accountVaultIds(account) : new Set<string>()
+  field('classified as', cls.source + (cls.source === source ? '   ✓ matches how it was made' : '   ◀ MISMATCH'))
+  field('withdraw vaults', JSON.stringify(cls.withdrawVaults))
+  if (source === 'public') field('burned by you', cls.withdrawVaults.some(v => mine.has(v)) ? 'yes   ✓ an own account vault' : 'no   ◀')
+  field('epoch', String(cls.epoch))
+
+  rule('burns list and verified total')
+  let after = await readBurnWallet()
+  let listed = (await listDeposits()).find(d => d.txId === result.txId)
+  for (let i = 0; i < 20 && (!listed || after.kind !== 'verified' || before.kind !== 'verified' || after.reading.balance === before.reading.balance); i++) {
+    await new Promise(r => setTimeout(r, 3000))
+    after = await readBurnWallet()
+    listed = (await listDeposits()).find(d => d.txId === result.txId)
+  }
+  field('in the list', listed ? `yes, ${amt(listed.amount)}` + (listed.amount === amount ? '   ✓ the amount burned' : '   ◀ MISMATCH') : 'not yet  ◀')
+  if (after.kind === 'verified' && before.kind === 'verified') {
+    const delta = after.reading.balance - before.reading.balance
+    field('total after', `${amt(after.reading.balance)}   [verified]`)
+    field('moved by', amt(delta) + (delta === amount ? '   ✓ exactly the amount burned' : '   (other burns may have landed too)'))
+  } else {
+    field('total after', after.kind)
+  }
+  field('component', BURN_WALLET_COMPONENT)
   printNet(markSubmit)
 }
 
@@ -2227,6 +2316,11 @@ WRITE — MOVES REAL TESTNET FUNDS. Builds and prices without --yes; submits wit
   send-public <ootle-address> <amount>
                               publicSend: account vault → the recipient's private balance. The fee
                               is paid from the vault and refunded down to the exact cost.
+  burn <public|private> <amount>
+                              Burn into the Caravel Burn Wallet (crypto/burn). Public spends the
+                              account vault; private spends stealth outputs, signed only by their
+                              one-time keys. With --yes it also checks the receipt's classification,
+                              owner-key absence, the burns list and the verified total.
   send <ootle-address> <amount|all> [memo]
                               prepareConfidentialSend → submit. 'all' is MAX: everything reachable,
                               the exact fee out of it, no change. Builds and prices without --yes.
@@ -2324,6 +2418,10 @@ export async function main(argv: string[]): Promise<void> {
       case 'prove-settle':
         if (!args[1] || !args[2]) throw new Error('prove-settle needs a recipient address and an amount.')
         await cmdProveSettle(h, args[1], parseAmount(args[2]), yes)
+        break
+      case 'burn':
+        if ((args[1] !== 'public' && args[1] !== 'private') || !args[2]) throw new Error('burn needs public|private and an amount.')
+        await cmdBurn(h, args[1], parseAmount(args[2]), yes)
         break
       case 'send-public':
         if (!args[1] || !args[2]) throw new Error('send-public needs a recipient address and an amount.')

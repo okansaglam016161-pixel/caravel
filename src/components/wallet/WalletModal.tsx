@@ -211,12 +211,22 @@ function UnattributedReceiveRowV2({ row, hidden }: {
   }} />
 }
 
+/** A burn into the Caravel Burn Wallet — gone for good, so an outflow, with the flame for a glyph. */
+function BurnRowV2({ row, hidden }: { row: Extract<ActivityRow, { kind: 'burn' }>; hidden: boolean }) {
+  return <ActivityRowShell hidden={hidden} row={{
+    id: row.id, direction: 'out', glyph: 'flame', title: 'Burned',
+    note: row.from === 'private' ? 'From private funds · Caravel Burn Wallet' : 'From public funds · Caravel Burn Wallet',
+    status: STATUS_FOR[row.outcome], amountMicrotari: row.amountMicrotari,
+  }} />
+}
+
 /** One row, whichever kind it is. */
 function ActivityRowFor({ row, hidden }: { row: ActivityRow; hidden: boolean }) {
   switch (row.kind) {
     case 'sent': return <SentRowV2 row={row} hidden={hidden} />
     case 'swap': return <SwapRowV2 row={row} hidden={hidden} />
     case 'faucet': return <FaucetRowV2 row={row} hidden={hidden} />
+    case 'burn': return <BurnRowV2 row={row} hidden={hidden} />
     case 'received': return <ReceivedRowV2 row={row} hidden={hidden} />
     case 'received-unattributed': return <UnattributedReceiveRowV2 row={row} hidden={hidden} />
   }

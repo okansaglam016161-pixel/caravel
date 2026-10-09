@@ -90,13 +90,13 @@ import LogoTile from '../primitives/LogoTile'
 // NOTHING NEEDS A FALLBACK. AppShell defaults to 'wallet' and always did, and this union is only
 // ever compared by equality, never switched on exhaustively. The two tables under it are
 // Record<Service, …>, so adding a member here is a type error until both are filled in.
-const SERVICES = ['wallet', 'chat'] as const
+const SERVICES = ['wallet', 'chat', 'burn'] as const
 
 /** Type-only export: keeps this file a component module, which is what fast refresh wants. */
 export type Service = (typeof SERVICES)[number]
 
 /** The tooltip text, and the accessible name. Both, from one string — see the header note. */
-const LABEL: Record<Service, string> = { wallet: 'Wallet', chat: 'Chat' }
+const LABEL: Record<Service, string> = { wallet: 'Wallet', chat: 'Chat', burn: 'Burn' }
 
 const ICON: Record<Service, React.ReactNode> = {
   wallet: (
@@ -107,6 +107,12 @@ const ICON: Record<Service, React.ReactNode> = {
   chat: (
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
       <path d="M21 11.5a8.5 8.5 0 1 0-16.9 1.6L3 20l3.8-1.1A8.5 8.5 0 0 0 21 11.5z" />
+    </svg>
+  ),
+  // The flame the Burn page and every burn row wear. (The dice is the Lotto's, when it has a page.)
+  burn: (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 2c1 4 5 5.5 5 10a5 5 0 0 1-10 0c0-2 1-3.5 2-4.5 0 2 1 3 2 3 0-3 .5-6 1-8.5z" />
     </svg>
   ),
 }

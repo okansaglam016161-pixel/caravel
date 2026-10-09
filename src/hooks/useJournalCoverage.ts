@@ -21,7 +21,7 @@
 // correct balance, a fabricated one destroys trust in the ledger.
 
 import { useEffect } from 'react'
-import { OUTPUT_CREATING_ACTIONS } from '../crypto/journal'
+import { OUTPUT_CREATING_ACTIONS, needsCoverageDeclaration } from '../crypto/journal'
 import { loadEpoch, recordCoverage } from '../crypto/journalStore'
 import { captureBaseline, loadLedger } from '../crypto/utxoLedger'
 import type { ScanState } from '../context/WalletContext'
@@ -32,10 +32,10 @@ export function useJournalCoverage(walletAddress: string | null, scan: ScanState
   // 1 · Declare coverage. Idempotent: recordCoverage unions the set and never moves
   //     `coverageCompleteAt` once stamped, so running on every unlock changes nothing after the
   //     first — and a re-run cannot slide the threshold forward and re-admit UTXOs.
+  //     An action added to the set later is declared too — see needsCoverageDeclaration.
   useEffect(() => {
     if (!walletAddress) return
-    const epoch = loadEpoch(walletAddress)
-    if (epoch?.coverageCompleteAt !== null && epoch !== null) return
+    if (!needsCoverageDeclaration(loadEpoch(walletAddress))) return
     recordCoverage(walletAddress, OUTPUT_CREATING_ACTIONS)
   }, [walletAddress])
 

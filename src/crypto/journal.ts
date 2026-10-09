@@ -33,7 +33,7 @@
  */
 export type JournalKind =
   | 'send' | 'receive' | 'make-private' | 'make-public' | 'faucet'
-  | 'chat-payment' | 'ons-register'
+  | 'chat-payment' | 'ons-register' | 'burn'
 
 /**
  * How it ended.
@@ -166,9 +166,28 @@ export const OUTPUT_CREATING_ACTIONS = [
   'chat-payment',
   /** An @name registration. Spends one UTXO and returns exactly one change output to us. */
   'ons-register',
+  /**
+   * A burn into the Caravel Burn Wallet. The private path returns change to us; the public one
+   * creates nothing for us. Added after coverage first shipped, which useJournalCoverage handles:
+   * no burn existed before this was recorded, so the original threshold still holds.
+   */
+  'burn',
 ] as const
 
 export type OutputCreatingAction = (typeof OUTPUT_CREATING_ACTIONS)[number]
+
+/**
+ * Should coverage be (re-)declared for this epoch?
+ *
+ * Yes when there is none, when it never completed, AND when it completed against an older set —
+ * an action added to OUTPUT_CREATING_ACTIONS after the stamp (as 'burn' was). Re-declaring keeps
+ * the original threshold (recordCoverage never moves it), which is truthful: the new action could
+ * not happen before the code that records it shipped. Without this, every existing wallet's epoch
+ * would stay incomplete for good and classification would be off for all of them.
+ */
+export function needsCoverageDeclaration(epoch: Pick<JournalEpoch, 'covers' | 'coverageCompleteAt'> | null): boolean {
+  return epoch === null || epoch.coverageCompleteAt === null || !coverageComplete(epoch.covers)
+}
 
 /** Does this set name every way an owned output can come into existence? */
 export function coverageComplete(covers: readonly OutputCreatingAction[]): boolean {

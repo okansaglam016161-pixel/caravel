@@ -23,6 +23,8 @@ export function parseTariInput(input: string): bigint | null {
 
 /** One row of the burns list. No addresses: who burned is never shown, only how. */
 export interface BurnRow {
+  /** Unique per row. One transaction can deposit more than once, so the tx id alone is not. */
+  key: string
   txId: string
   amount: bigint
   source: 'public' | 'private' | 'unknown'
@@ -51,7 +53,10 @@ export function buildBurnRows(
   classes: ReadonlyMap<string, BurnClassification>,
   ctx: RowContext,
 ): BurnRow[] {
+  const seen = new Map<string, number>()
   return deposits.map(d => {
+    const nth = seen.get(d.txId) ?? 0
+    seen.set(d.txId, nth + 1)
     const c = classes.get(d.txId)
     const source = c?.source ?? 'unknown'
     const mine = ctx.journalled.get(d.txId)
@@ -64,7 +69,7 @@ export function buildBurnRows(
       at = ctx.now - Math.max(0, ctx.currentEpoch - c.epoch) * EPOCH_MS_APPROX
       exact = false
     }
-    return { txId: d.txId, amount: d.amount, source, byYou, at, exact }
+    return { key: `${d.txId}:${nth}`, txId: d.txId, amount: d.amount, source, byYou, at, exact }
   })
 }
 

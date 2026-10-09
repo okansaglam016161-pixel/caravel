@@ -224,7 +224,7 @@ function BurnList({ list, tab, onTab }: { list: ListState; tab: 'recent' | 'mine
             The burns couldn’t be read right now. Refresh to try again.
           </div>
         )}
-        {list.status === 'ready' && rows.map(r => <BurnRowView key={r.txId} row={r} />)}
+        {list.status === 'ready' && rows.map(r => <BurnRowView key={r.key} row={r} />)}
         {list.status === 'ready' && rows.length === 0 && (
           <div style={{ padding: '28px 16px', textAlign: 'center', fontSize: 12.5, color: C.mutedDim }}>
             {tab === 'mine' ? 'No burns from you yet. Yours will appear here once verified on chain.' : 'No burns yet.'}

@@ -127,3 +127,19 @@ describe('formatSupplyPercent — share of the 21B reference, two significant fi
     expect(compactSupply(1_500_000n)).toBe('1.5M')
   })
 })
+
+describe('one transaction depositing twice', () => {
+  it('gives two rows with distinct keys', () => {
+    const rows = buildBurnRows([{ txId: 'tx', amount: 2n }, { txId: 'tx', amount: 3n }], new Map(), ctx())
+    expect(rows.map(r => r.amount)).toEqual([2n, 3n])
+    expect(new Set(rows.map(r => r.key)).size).toBe(2)
+  })
+})
+
+describe('untrusted, enormous figures', () => {
+  it('formatSupplyPercent never falls into scientific notation, however large', () => {
+    const huge = formatSupplyPercent(10n ** 40n)
+    expect(huge).not.toMatch(/e/i)
+    expect(huge).toMatch(/^[\d,]+$/)
+  })
+})

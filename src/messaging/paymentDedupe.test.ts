@@ -98,6 +98,29 @@ describe('receivedPaymentVisible — only a payment that landed is shown', () =>
   })
 })
 
+describe('a stranger cannot hide a real payment or take its credit', () => {
+  const ALICE = 'aa'.repeat(32)
+  const MALLORY = 'ee'.repeat(32)
+  // Alice really paid. Mallory names the same output in a message BACKDATED before Alice's.
+  const alice = received(5, 'utxo_real', { id: 'alice', senderPubkeyHex: ALICE, timestamp: 5_000 })
+  const mallory = received(1, 'utxo_real', { id: 'mallory', senderPubkeyHex: MALLORY, timestamp: 1 })
+
+  it('the real sender’s message is never merged away by another sender’s claim', () => {
+    const kept = dedupePaymentMessages([alice, mallory]).map(m => m.id)
+    expect(kept).toContain('alice')
+  })
+
+  it('Alice’s Activity row survives with Alice as the sender', () => {
+    const rows = buildActivity([], [], [mallory, alice]).filter(r => r.kind === 'received')
+    expect(rows.some(r => r.kind === 'received' && r.counterpartyValue === ALICE)).toBe(true)
+  })
+
+  it('repeats from the SAME sender still collapse to one', () => {
+    const again = received(9, 'utxo_real', { id: 'alice2', senderPubkeyHex: ALICE, timestamp: 9_000 })
+    expect(dedupePaymentMessages([alice, again]).map(m => m.id)).toEqual(['alice'])
+  })
+})
+
 describe('paymentKey / dedupe boundaries', () => {
   it('the same output sent and received are different payments (a payment to yourself)', () => {
     const both = [sent(0, 'utxo_x', 'tx'), received(1, 'utxo_x')]

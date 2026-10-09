@@ -5,8 +5,14 @@
 // crypto/actionLock) submitted one transaction and announced it once per press, and old clients will
 // keep doing so. Every one of those messages names the same output, so every card resolved the same
 // amount and Activity showed "+500" once per message. They are one payment, and render once: the
-// EARLIEST message per (direction, UTXO) wins, and the rest are dropped from the thread and from
+// EARLIEST message per (direction, counterparty, UTXO) wins, and the rest are dropped from the thread and from
 // Activity alike.
+//
+// ONLY FROM THE SAME COUNTERPARTY. A message's send time is the sender's claim and is not clamped in
+// the past, so "earliest wins" across senders would let anyone hide a real payment's row and take
+// its credit: name your output in a message backdated before the real one, and theirs would be the
+// one kept. Honest repeats come from one sender, so the key carries who the payment is with — a
+// stranger's claim on the same output can never displace the real sender's card or row.
 //
 // AND ONLY A PAYMENT THAT LANDED IS SHOWN. A message can name an output that never came to exist —
 // an attempt that failed, from an older client that announced before confirming. The UTXO id is
@@ -18,10 +24,15 @@
 import type { ResolveState } from '../hooks/usePaymentResolution'
 import { compareMessages, type CaravelMessage } from './types'
 
-/** The identity of a payment within a message list: which way it went, and the output it names. */
-export function paymentKey(m: Pick<CaravelMessage, 'direction' | 'payment'>): string | null {
+/**
+ * The identity of a payment within a message list: which way it went, who it is with, and the
+ * output it names.
+ */
+export function paymentKey(m: Pick<CaravelMessage, 'direction' | 'payment' | 'senderPubkeyHex' | 'recipientPubkeyHex'>): string | null {
   const utxo = m.payment?.utxoId
-  return utxo ? `${m.direction}:${utxo}` : null
+  if (!utxo) return null
+  const counterparty = m.direction === 'received' ? m.senderPubkeyHex : m.recipientPubkeyHex
+  return `${m.direction}:${counterparty ?? ''}:${utxo}`
 }
 
 /**

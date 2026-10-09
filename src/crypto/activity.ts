@@ -13,6 +13,7 @@
 // journal's recorded self-outputs is a later phase; until then, every INFLOW here still comes from
 // a message-linked ref and nowhere else.
 
+import { dedupePaymentMessages } from '../messaging/paymentDedupe'
 import { sortKey, type CaravelMessage } from '../messaging/types'
 import type { SentEntry } from './txHistory'
 import type { JournalEntry, JournalOutcome } from './journal'
@@ -289,8 +290,9 @@ export function buildActivity(
     })
   }
 
-  // Message-linked payments: chat sends (outflows) and received payments (inflows).
-  for (const m of messages) {
+  // Message-linked payments: chat sends (outflows) and received payments (inflows). ONE row per
+  // payment however many messages announced it — see messaging/paymentDedupe.
+  for (const m of dedupePaymentMessages(messages)) {
     if (!m.payment?.utxoId) continue
     if (m.direction === 'sent') {
       const txId = m.localPayment?.txId ?? null

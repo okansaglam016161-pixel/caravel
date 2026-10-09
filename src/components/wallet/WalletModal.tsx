@@ -41,6 +41,8 @@ import { parseOotleAddress } from '@tari-project/ootle-wasm'
 import { buildActivity, type ActivityOutcome, type ActivityRow } from '../../crypto/activity'
 import { beginEntry, settleEntry } from '../../crypto/journalStore'
 import type { JournalOutcome } from '../../crypto/journal'
+import { createActionLock, guarded } from '../../crypto/actionLock'
+import { receivedPaymentVisible } from '../../messaging/paymentDedupe'
 import { usePaymentResolution } from '../../hooks/usePaymentResolution'
 import WalletModalV2, { type MoveView, type Resulting, type WalletTab } from './v2/WalletModalV2'
 import { computeTotal, incompleteAvailableNote } from './v2/total'
@@ -163,6 +165,8 @@ function FaucetRowV2({ row, hidden }: { row: Extract<ActivityRow, { kind: 'fauce
  */
 function ReceivedRowV2({ row, hidden }: { row: Extract<ActivityRow, { kind: 'received' }>; hidden: boolean }) {
   const { state } = usePaymentResolution(row.utxoId)
+  // Only a payment that landed gets a row — the same rule as its chat card (messaging/paymentDedupe).
+  if (!receivedPaymentVisible(state)) return null
   const status: ActivityStatus =
     state.kind === 'resolved' ? 'received'
     : state.kind === 'loading' || state.kind === 'retrying' ? 'checking'
@@ -665,6 +669,10 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
     }
   }
 
+  // ONE RUN PER PRESS SEQUENCE — crypto/actionLock: taken synchronously, released when it settles.
+  const moveLock = useRef(createActionLock())
+  const confirmMove = guarded(moveLock.current, handleConfirmMove)
+
   async function handleConfirmMove() {
     if (!movePrepared || !address) return
     setMoveStep('moving')
@@ -820,6 +828,10 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
       setMoveStep('error')
     }
   }
+
+  // ONE RUN PER PRESS SEQUENCE — crypto/actionLock: taken synchronously, released when it settles.
+  const sendLock = useRef(createActionLock())
+  const confirmSend = guarded(sendLock.current, handleConfirmSend)
 
   async function handleConfirmSend() {
     if (!wallet || !address || !sendPrepared) return
@@ -1316,7 +1328,7 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
         setMoveAll(moveDir === 'conceal'); setMoveExact(max); setMoveAmount(toInput(max)); setMoveError('')
       }}
       onReview={() => void handlePrepareMove()}
-      onConfirm={() => void handleConfirmMove()}
+      onConfirm={() => void confirmMove()}
       onDone={resetMove}
       onRetryMove={() => { setMoveStep('form'); setMoveError('') }}
       onCopyTx={t => { navigator.clipboard.writeText(t).catch(() => {}) }}
@@ -1368,7 +1380,7 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
         onReview: () => void handleReview(),
         // Back out of review: whatever is being priced must not come back and re-arm it.
         onBack: () => { sendGen.current.cancel(); sendPrepared?.p.release(); setSendPrepared(null); setSendNotice(null); setSendStep('form') },
-        onConfirm: () => void handleConfirmSend(),
+        onConfirm: () => void confirmSend(),
         onDone: resetSend,
         onRetry: resetSend,
         onCopyTx: t => { navigator.clipboard.writeText(t).catch(() => {}) },

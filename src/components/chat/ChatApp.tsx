@@ -19,6 +19,8 @@ import { loadNicknames, setNickname, MAX_NICKNAME_LEN, type NicknameMap } from '
 import { loadAddressSent, markAddressSent, clearAddressSent, type AddressSentMap } from '../../messaging/addressSentStore'
 import { prepareConfidentialSend, tariToMicrotari, MAX_FEE, type PreparedConfidentialSend } from '../../crypto/confidentialSend'
 import { FEE_SHORT_MESSAGE, QuoteChanged, isFeeShortRejection } from '../../crypto/quote'
+import { createActionLock, guarded } from '../../crypto/actionLock'
+import { dedupePaymentMessages, receivedPaymentVisible } from '../../messaging/paymentDedupe'
 import { beginEntry, settleEntry } from '../../crypto/journalStore'
 import { resolveOnsNameToHex, toOnsName, type OnsResolveErrorKind } from '../../crypto/ons'
 import { ConnectionIndicator, RelayHealthPanel } from './ConnectionStatus'
@@ -341,27 +343,17 @@ function SentPaymentCard({ message, lid, flashed }: { message: CaravelMessage; l
 
 function ReceivedPaymentCard({ message, lid, flashed }: { message: CaravelMessage; lid?: string; flashed?: boolean }) {
   const { state: res, retry } = usePaymentResolution(message.payment!.utxoId)
-  // Same branches, same order, same predicates as before — only what they PRODUCE has changed.
+  // ONLY A PAYMENT THAT LANDED GETS A CARD — see messaging/paymentDedupe. While the output is being
+  // checked, and when it is not on chain (never landed) or not ours, nothing is drawn; it appears
+  // the moment the chain confirms it.
+  if (!receivedPaymentVisible(res)) return null
   let state: PayCardState
   if (res.kind === 'resolved') {
     state = { dir: 'RECEIVED', amount: microToTari(res.amountMicrotari), pill: true }        // R1
-  } else if (res.kind === 'loading') {
-    state = { dir: 'RECEIVED', tone: 'dim', spin: true, status: 'Resolving amount…' }        // R2
-  } else if (res.kind === 'retrying' && res.reason === 'not_found') {
-    // NO SPINNER, deliberately. The payment arrived; only the index is behind, and a spinner would
-    // make a settled fact look like a request in doubt.
-    state = { dir: 'RECEIVED', tone: 'dim', status: 'Waiting for the payment to be indexed. It will appear on its own.' }  // R3
   } else if (res.kind === 'retrying') {
     state = { dir: 'RECEIVED', tone: 'dim', spin: true, status: 'Reaching the indexer…' }    // R4
-  } else if (res.reason === 'spent') {
+  } else if (res.kind === 'failed' && res.reason === 'spent') {
     state = { dir: 'RECEIVED', tone: 'dim', status: 'Payment output has been spent.' }       // R5
-  } else if (res.reason === 'unreadable') {
-    state = { dir: 'RECEIVED', tone: 'dim', status: 'Not addressed to this wallet.' }        // R6
-  } else if (res.reason === 'not_found') {
-    // HONEST 404. The resolver cannot tell "spent" from "not yet indexed" at this status — its own
-    // comment says so — and the old copy ("No matching output on chain") picked one and sounded
-    // certain about it. This says what we actually know.
-    state = { dir: 'RECEIVED', tone: 'danger', retry, status: 'Could not verify this payment. It may have been spent, or not yet indexed.' }  // R7
   } else {
     state = { dir: 'RECEIVED', tone: 'danger', retry, status: 'Could not reach the network.' }  // R8
   }
@@ -1323,7 +1315,13 @@ export default function ChatApp({ onOpenWallet }: {
   // Runs only after the user confirms. Sequencing (decided): pre-flight connection check → submit
   // the payment priced on the confirm card → only on Commit send the message carrying the recipient
   // UTXO id.
-  async function submitPayment() {
+  // ONE RUN PER PRESS SEQUENCE — crypto/actionLock: taken synchronously, released when it settles.
+  // The confirm card's Send stays on screen through the confirm check's round trip; pressing it
+  // again used to submit the same payment again and announce it once per press.
+  const payLock = useRef(createActionLock())
+  const submitPayment = guarded(payLock.current, submitPaymentNow)
+
+  async function submitPaymentNow() {
     if (!selectedConvo) return
     const prepared = payPrepared
     // The card's Send is disabled until this exists; refusing here keeps it a rule, not UI state.
@@ -2184,7 +2182,8 @@ export default function ChatApp({ onOpenWallet }: {
             {/* Real messages and provisional bubbles in ONE chronological pass. Pending rows used to
                 render in a separate map after this one, which pinned a failed send to the bottom of
                 the thread forever — see mergeThreadItems. */}
-            {mergeThreadItems(selectedConvo.messages, pendingForPeer).map((item, i, items) => {
+            {/* One card per payment however many times it was announced — see paymentDedupe. */}
+            {mergeThreadItems(dedupePaymentMessages(selectedConvo.messages), pendingForPeer).map((item, i, items) => {
               // DAY DIVIDERS. Inserted at render time by comparing neighbours — nothing is written into
               // the merged list, so mergeThreadItems and the ThreadItem union are untouched. The
               // Fragment carries the key; the inner element's own key is then unused and harmless.
@@ -2495,7 +2494,13 @@ export default function ChatApp({ onOpenWallet }: {
 
                   <div style={{ display: 'flex', gap: 8 }}>
                     <button onClick={closeConfirm} style={{ ...PAY_BTN, flex: 1, border: '1px solid var(--border-strong)', background: 'transparent', color: 'var(--text-body-dim)' }}>Cancel</button>
-                    <button onClick={payPrepared ? submitPayment : undefined} disabled={!payPrepared} className={payPrepared ? 'cv-btn-primary' : undefined} style={{ ...PAY_BTN, flex: 1, border: payPrepared ? 'none' : '1px solid var(--border)', background: payPrepared ? 'var(--accent-400)' : 'var(--surface-inset)', color: payPrepared ? 'var(--ink-on-accent)' : 'var(--text-disabled)', cursor: payPrepared ? 'pointer' : 'default' }}>Send payment</button>
+                    {/* Live only with a priced payment and nothing in flight; "Sending…" from the first press. */}
+                    {(() => {
+                      const live = !!payPrepared && !payBusy
+                      return (
+                        <button onClick={live ? () => { void submitPayment() } : undefined} disabled={!live} className={live ? 'cv-btn-primary' : undefined} style={{ ...PAY_BTN, flex: 1, border: live ? 'none' : '1px solid var(--border)', background: live ? 'var(--accent-400)' : 'var(--surface-inset)', color: live ? 'var(--ink-on-accent)' : 'var(--text-disabled)', cursor: live ? 'pointer' : 'default' }}>{payBusy ? 'Sending…' : 'Send payment'}</button>
+                      )
+                    })()}
                   </div>
                 </div>
               )}

@@ -25,6 +25,7 @@ import {
 } from '../../crypto/faucet'
 import { readFaucetStatus, type FaucetStatus } from '../../crypto/faucetStatus'
 import { QuoteChanged, isFeeShortRejection } from '../../crypto/quote'
+import { createActionLock, guarded } from '../../crypto/actionLock'
 import { beginEntry, settleEntry } from '../../crypto/journalStore'
 import { settleVerdict, journalOutcomeFor, type SettleStartedBy } from './v2/settleVerdict'
 import { FaucetBanner, FaucetPanel } from './v2/panels'
@@ -182,7 +183,11 @@ export default function FaucetClaimPanel() {
     }
   }
 
-  async function claim() {
+  // ONE RUN PER PRESS SEQUENCE — crypto/actionLock: taken synchronously, released when it settles.
+  const claimLock = useRef(createActionLock())
+  const claim = guarded(claimLock.current, claimNow)
+
+  async function claimNow() {
     if (!wallet || !address || !prepared) return
     const pc = prepared
 

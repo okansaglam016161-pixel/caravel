@@ -28,7 +28,10 @@ export type ResolveState =
   | { kind: 'failed'; reason: 'not_found' | 'network_error' | 'spent' | 'unreadable' }
 
 // Three bounded auto-retries after the first attempt, for transient failures only. No polling.
-const RESOLVE_BACKOFFS_MS = [2_000, 4_000, 8_000]
+// ~2 minutes in all. A received payment's card is only drawn once its output is confirmed (see
+// messaging/paymentDedupe), so "not indexed yet" must be waited out past the indexer's 60–90 s lag
+// rather than given up on at 14 s — a real payment must not vanish because the index was slow.
+const RESOLVE_BACKOFFS_MS = [2_000, 4_000, 8_000, 15_000, 30_000, 60_000]
 
 // Lazily resolve a received payment's amount. Cache-first (persisted successes), then a single
 // fetch with bounded backoff for transient failures (not_found = indexer lag, network_error).

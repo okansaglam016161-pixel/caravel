@@ -36,6 +36,7 @@ import {
   checkOnsAvailable, estimateOnsRegistration, type OnsPreparedRegistration,
   type OnsEstimateErrorKind,
 } from '../../crypto/ons'
+import { createActionLock, guarded } from '../../crypto/actionLock'
 import { beginEntry, markDegraded, settleEntry } from '../../crypto/journalStore'
 import { fetchCreatedUtxoIds } from '../../crypto/txOutputs'
 import { fmt6, TICKER } from '../wallet/v2/format'
@@ -217,7 +218,11 @@ export default function CnsCommitView({ name, onCancel, onDone, onTryAnother, on
     onCancel()
   }
 
-  async function submit(prepared: OnsPreparedRegistration) {
+  // ONE RUN PER PRESS SEQUENCE — crypto/actionLock: taken synchronously, released when it settles.
+  const submitLock = useRef(createActionLock())
+  const submit = guarded(submitLock.current, submitNow)
+
+  async function submitNow(prepared: OnsPreparedRegistration) {
     if (!wallet || !address || !nostrNpub) return
     const budget = prepared.feeMicroTari
     // Stamped like the estimate. NOTE WHAT IS NOT GUARDED: everything below writes to the JOURNAL

@@ -48,9 +48,9 @@ running total. Every burn is listed as public or private, and never with an addr
 ## Tech stack
 
 * **UI:** React 19, Vite 8, TypeScript 6.0 (linted with oxlint)
-* **Network:** Ootle 0.45 (protocol V1) on esmeralda testnet
-* **Tari / Ootle:** `@tari-project/ootle` SDK 0.8 (with `-indexer` and `-secret-key-wallet`),
-  with confidential-transfer crypto in WebAssembly (`@tari-project/ootle-wasm` 0.45)
+* **Network:** Ootle 0.46 on esmeralda testnet (protocol V2 from epoch 12220)
+* **Tari / Ootle:** `@tari-project/ootle` SDK 0.9 (with `-indexer` and `-secret-key-wallet`),
+  with confidential-transfer crypto in WebAssembly (`@tari-project/ootle-wasm` 0.46)
 * **Crypto:** `@scure/bip39`, `@scure/bip32`, `@noble/curves`
 * **Messaging:** `nostr-tools` 2.x
 * **Misc:** `qrcode.react`
@@ -83,8 +83,8 @@ client is vendored as a pre-built dist under `vendor/ons/`, built from the
 
 ## Contracts
 
-The name service and faucet are published on Ootle 0.42, running on 0.45 (re-verified live on
-0.45). The burn wallet is published on 0.45.
+The name service and faucet are published on Ootle 0.42 and the burn wallet on 0.45; all three run
+on 0.46 (reads and dry runs re-verified on 0.46).
 
 | | address (esmeralda) |
 |---|---|
@@ -122,7 +122,7 @@ docs/             Derivation and known-issues documentation
 
 ## Status & security
 
-* **Testnet only** — runs on Ootle 0.45 (protocol V1) on esmeralda testnet. Amounts are shown as TARI
+* **Testnet only** — runs on Ootle 0.46 on esmeralda testnet. Amounts are shown as TARI
   (tTARI on-chain).
 * **Self-custodial** — keys never leave your device. Your recovery phrase is the only way
   to recover your wallet; lose it and both funds and messages are gone.

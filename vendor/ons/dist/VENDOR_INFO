@@ -1,16 +1,26 @@
 ONS client — vendored build provenance
 ======================================
 source repo   : ootle-name-service (github.com/okansaglam016161-pixel/ootle-name-service)
-source commit : 5d3d65d (branch: privacy-ids, from main 56f8c87; client/ last changed in 5d3d65d)
+source commit : 109e923 (branch: sdk-0.9, from main 5d3d65d; client/ last changed in 109e923)
 built from    : client/src → client/dist  (npm run build = tsc -p client/tsconfig.json)
-vendored at   : 2026-10-08
+vendored at   : 2026-10-13
 tree state    : clean (dist matches the commit above exactly — diff -rq, excluding this file)
 src digest    : 9301a9aa8bb233094a7b419c43bb59212bf6dd45a631740e643733033ca19e7f
                 (shasum -a 256 client/src/*.ts | sort | shasum -a 256)
 
 NO LOCAL PATCHES. Everything Caravel needs is in the upstream source.
 
-This build adds a separate owner key for names (privacy-ids):
+This build moves the peer deps to SDK 0.9 / ootle-wasm 0.46 (sdk-0.9, 109e923):
+  - package.json      : peer deps @tari-project/ootle* ^0.9.0, ootle-wasm ^0.46.0. SDK 0.9 is a
+                        dependency bump only (ootle-ts-bindings 1.58, ootle-wasm 0.46); its source
+                        is unchanged from 0.8.
+  - client/src        : unchanged (same src digest as 5d3d65d), so this dist is byte-identical to
+                        the previous vendored build; only this file changes.
+  - ootle-sdk.d.ts    : unchanged; the source also type-checks against the real SDK 0.9.0
+                        (stub excluded) with 0 errors.
+  - tests             : npm test — 18, unchanged.
+
+Carried forward from the privacy-ids build (5d3d65d) — a separate owner key for names:
   - browser-writer.ts : BrowserSigner.nameOwner? — the key that owns what the writer registers and
                         signs its writes. It signs FIRST (a name's owner is the transaction's first
                         signer; the seal signer is not authorized) and receives the revealed fee.

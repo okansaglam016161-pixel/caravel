@@ -41,20 +41,28 @@ export interface RowContext {
   ownVaults: ReadonlySet<string>
   /** Burns this device journalled, by transaction id, with when they were made. */
   journalled: ReadonlyMap<string, number>
-  /** When each transaction finalised, while the indexer still has its body. */
-  finalizedAt: ReadonlyMap<string, number | null>
+  /** When each transaction was made (its `created_at`), while the indexer still has its body. */
+  createdAt: ReadonlyMap<string, number | null>
   currentEpoch: number | null
   now: number
 }
 
-/** Deposits (newest first) and their receipts → rows. */
+/**
+ * Deposits and their receipts → rows, NEWEST FIRST by each row's time.
+ *
+ * The time is this device's own record of the burn, else the transaction's `created_at`, else an
+ * estimate from the epoch it committed in. The list is sorted here rather than trusted in the
+ * indexer's order: that order is the order the indexer stored the events, which after a resync is
+ * not the order they happened in. Rows with no time at all go last. Ties break by transaction id,
+ * and one transaction's deposits keep their order (the sort is stable), so a refresh never shuffles.
+ */
 export function buildBurnRows(
   deposits: readonly BurnDeposit[],
   classes: ReadonlyMap<string, BurnClassification>,
   ctx: RowContext,
 ): BurnRow[] {
   const seen = new Map<string, number>()
-  return deposits.map(d => {
+  const rows = deposits.map(d => {
     const nth = seen.get(d.txId) ?? 0
     seen.set(d.txId, nth + 1)
     const c = classes.get(d.txId)
@@ -62,8 +70,8 @@ export function buildBurnRows(
     const mine = ctx.journalled.get(d.txId)
     const byYou = mine !== undefined
       || (source === 'public' && (c?.withdrawVaults ?? []).some(v => ctx.ownVaults.has(v)))
-    const finalized = ctx.finalizedAt.get(d.txId) ?? null
-    let at: number | null = mine ?? finalized
+    const created = ctx.createdAt.get(d.txId) ?? null
+    let at: number | null = mine ?? created
     let exact = at !== null
     if (at === null && c?.epoch != null && ctx.currentEpoch !== null) {
       at = ctx.now - Math.max(0, ctx.currentEpoch - c.epoch) * EPOCH_MS_APPROX
@@ -71,6 +79,16 @@ export function buildBurnRows(
     }
     return { key: `${d.txId}:${nth}`, txId: d.txId, amount: d.amount, source, byYou, at, exact }
   })
+  return rows.sort(newestFirst)
+}
+
+function newestFirst(a: BurnRow, b: BurnRow): number {
+  if (a.at !== b.at) {
+    if (a.at === null) return 1
+    if (b.at === null) return -1
+    return b.at - a.at
+  }
+  return a.txId < b.txId ? -1 : a.txId > b.txId ? 1 : 0
 }
 
 /** The row's title — the only thing it says about who burned. */

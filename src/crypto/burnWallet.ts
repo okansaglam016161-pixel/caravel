@@ -213,7 +213,7 @@ export async function listDeposits(): Promise<BurnDeposit[]> {
 
 // Receipts are immutable once a transaction commits, so each is fetched once per session.
 const receiptCache = new Map<string, BurnClassification>()
-const finalizedCache = new Map<string, number | null>()
+const createdCache = new Map<string, number | null>()
 
 /** Classify one burn. A receipt that cannot be read yet is `unknown` and is NOT cached. */
 export async function classifyBurn(txId: string): Promise<BurnClassification> {
@@ -226,14 +226,23 @@ export async function classifyBurn(txId: string): Promise<BurnClassification> {
 }
 
 /**
- * When the transaction finalised, in epoch-ms — while the indexer still holds its body. Null once
- * the body has been pruned (or if it never had it); the caller then estimates from the epoch.
+ * When the transaction was made, in epoch-ms, from the indexer's `transaction.created_at`. Null
+ * when the body is gone or the field is not a time; the caller then estimates from the epoch.
+ *
+ * NOT `summary.finalized_at`: that is when THIS indexer stored the transaction. After a resync it
+ * jumps to the resync — on 2026-10-14 both public indexers put the previous evening's burns at
+ * 05:25 and 05:29 the next morning, each a different time — while `created_at` kept the evening.
  */
-export async function burnFinalizedAt(txId: string): Promise<number | null> {
-  if (finalizedCache.has(txId)) return finalizedCache.get(txId)!
+export function parseTxCreatedAt(body: unknown): number | null {
+  return parseIndexerTime((body as { transaction?: { created_at?: unknown } } | null)?.transaction?.created_at)
+}
+
+/** {@link parseTxCreatedAt} for one transaction, read once per session while the indexer has it. */
+export async function burnCreatedAt(txId: string): Promise<number | null> {
+  if (createdCache.has(txId)) return createdCache.get(txId)!
   const read = await pointRead(`/transactions/${txId}`)
-  const at = parseIndexerTime((read.body as { transaction?: { summary?: { finalized_at?: unknown } } } | null)?.transaction?.summary?.finalized_at)
-  if (read.answered) finalizedCache.set(txId, at)
+  const at = parseTxCreatedAt(read.body)
+  if (read.answered) createdCache.set(txId, at)
   return at
 }
 

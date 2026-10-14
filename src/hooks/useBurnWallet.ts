@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { loadAccountAddress } from '../crypto/accountStore'
 import {
-  accountVaultIds, burnFinalizedAt, classifyBurn, currentEpoch, listDeposits, readBurnWallet,
+  accountVaultIds, burnCreatedAt, classifyBurn, currentEpoch, listDeposits, readBurnWallet,
   type BurnClassification, type BurnWalletReading,
 } from '../crypto/burnWallet'
 import { buildBurnRows, burnSettled, depositsComplete, type BurnRow } from '../components/burn/burnModel'
@@ -75,15 +75,15 @@ export function useBurnWallet(address: string | null, active: boolean) {
         for (const e of journalRef.current) {
           if (e.kind === 'burn' && e.txId) journalled.set(e.txId, e.timestamp)
         }
-        const [classes, finalized, ownVaults, epoch] = await Promise.all([
+        const [classes, created, ownVaults, epoch] = await Promise.all([
           Promise.all(shown.map(async d => [d.txId, await classifyBurn(d.txId)] as const))
             .then(pairs => new Map<string, BurnClassification>(pairs)),
-          Promise.all(shown.filter(d => !journalled.has(d.txId)).map(async d => [d.txId, await burnFinalizedAt(d.txId)] as const))
+          Promise.all(shown.filter(d => !journalled.has(d.txId)).map(async d => [d.txId, await burnCreatedAt(d.txId)] as const))
             .then(pairs => new Map<string, number | null>(pairs)),
           account ? accountVaultIds(account) : Promise.resolve(new Set<string>()),
           currentEpoch(),
         ])
-        rows = buildBurnRows(shown, classes, { ownVaults, journalled, finalizedAt: finalized, currentEpoch: epoch, now: Date.now() })
+        rows = buildBurnRows(shown, classes, { ownVaults, journalled, createdAt: created, currentEpoch: epoch, now: Date.now() })
         setList({
           status: 'ready', rows, total: deposits.length,
           complete: depositsComplete(deposits, verifiedTotal ?? lastVerified.current?.totalDeposited ?? null),

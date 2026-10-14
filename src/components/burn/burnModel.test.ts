@@ -29,7 +29,7 @@ const cls = (source: BurnClassification['source'], withdrawVaults: string[] = []
 const ctx = (over: Partial<RowContext> = {}): RowContext => ({
   ownVaults: new Set(['vault_mine']),
   journalled: new Map(),
-  finalizedAt: new Map(),
+  createdAt: new Map(),
   currentEpoch: 104,
   now: 1_000_000_000_000,
   ...over,
@@ -51,24 +51,66 @@ describe('buildBurnRows', () => {
 
   it('a public burn is yours when it came from your account’s vault; a private one only when journalled here', () => {
     const rows = buildBurnRows(deposits, classes, ctx({ journalled: new Map([['privMine', 5]]) }))
-    expect(rows.map(r => [r.txId, r.source, r.byYou])).toEqual([
-      ['pubMine', 'public', true],
-      ['pubOther', 'public', false],
-      ['privMine', 'private', true],
-      ['privOther', 'private', false],
+    const by = Object.fromEntries(rows.map(r => [r.txId, r]))
+    expect(['pubMine', 'pubOther', 'privMine', 'privOther'].map(t => [by[t].source, by[t].byYou, burnTitle(by[t])])).toEqual([
+      ['public', true, 'Burned by you'],
+      ['public', false, 'Public burn'],
+      ['private', true, 'Burned by you'],
+      ['private', false, 'Private burn'],
     ])
-    expect(rows.map(burnTitle)).toEqual(['Burned by you', 'Public burn', 'Burned by you', 'Private burn'])
   })
 
-  it('times: the journal first, then the indexer’s finalized_at, then an estimate from the epoch', () => {
+  it('times: the journal first, then the transaction’s created_at, then an estimate from the epoch', () => {
     const rows = buildBurnRows(deposits, classes, ctx({
       journalled: new Map([['privMine', 42]]),
-      finalizedAt: new Map([['pubOther', 77], ['pubMine', null]]),
+      createdAt: new Map([['pubOther', 77], ['pubMine', null], ['privMine', 99]]),
     }))
     const by = Object.fromEntries(rows.map(r => [r.txId, r]))
     expect([by.privMine.at, by.privMine.exact]).toEqual([42, true])
     expect([by.pubOther.at, by.pubOther.exact]).toEqual([77, true])
     expect([by.pubMine.at, by.pubMine.exact]).toEqual([1_000_000_000_000 - 4 * EPOCH_MS_APPROX, false])
+  })
+
+  it('sorts newest first by that time, whatever order the indexer listed them in', () => {
+    // The 2026-10-14 resync: the indexer listed cccbb79e (19:42) above 64d022bb (20:35).
+    const t = (h: number, m: number) => Date.UTC(2026, 9, 13, h, m)
+    const rows = buildBurnRows(
+      [
+        { txId: 'cccbb79e', amount: 1n },
+        { txId: '64d022bb', amount: 2n },
+        { txId: 'old', amount: 3n },
+        { txId: '5d8eceb8', amount: 4n },
+        { txId: 'mine', amount: 5n },
+      ],
+      new Map([['old', cls('private', [], 90)]]),
+      ctx({
+        now: t(23, 0),
+        currentEpoch: 104,
+        journalled: new Map([['mine', t(21, 0)]]),
+        createdAt: new Map([['cccbb79e', t(19, 42)], ['64d022bb', t(20, 35)], ['5d8eceb8', t(19, 34)], ['mine', t(5, 0)]]),
+      }),
+    )
+    // The journal's 21:00 beats the indexer's 05:00 for this device's own burn; the epoch estimate
+    // (14 epochs back, about 15:04) sorts among the exact times.
+    expect(rows.map(r => r.txId)).toEqual(['mine', '64d022bb', 'cccbb79e', '5d8eceb8', 'old'])
+  })
+
+  it('breaks ties by transaction id, puts rows with no time last, and keeps one transaction’s deposits in order', () => {
+    const rows = buildBurnRows(
+      [
+        { txId: 'none2', amount: 1n },
+        { txId: 'b', amount: 2n },
+        { txId: 'none1', amount: 3n },
+        { txId: 'a', amount: 4n },
+        { txId: 'b', amount: 5n },
+      ],
+      new Map(),
+      ctx({ createdAt: new Map([['a', 10], ['b', 10]]) }),
+    )
+    expect(rows.map(r => [r.txId, r.amount])).toEqual([['a', 4n], ['b', 2n], ['b', 5n], ['none1', 3n], ['none2', 1n]])
+    // And the same answer from any input order.
+    const again = buildBurnRows([...rows].reverse().map(r => ({ txId: r.txId, amount: r.amount })), new Map(), ctx({ createdAt: new Map([['a', 10], ['b', 10]]) }))
+    expect(again.map(r => r.txId)).toEqual(['a', 'b', 'b', 'none1', 'none2'])
   })
 
   it('an unreadable receipt is a plain "Burn", never a guess', () => {

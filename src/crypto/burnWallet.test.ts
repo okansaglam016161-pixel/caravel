@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest'
 import {
   BURN_WALLET_COMPONENT, BURN_WALLET_TEMPLATE, BURN_WALLET_VAULT,
   classifyBurnReceipt, estimateEpochTime, EPOCH_MS_APPROX, parseBurnComponent, parseBurnVault,
-  parseDepositEvents, parseIndexerTime,
+  parseDepositEvents, parseIndexerTime, parseTxCreatedAt,
 } from './burnWallet'
 
 const TARI = 'resource_0101010101010101010101010101010101010101010101010101010101010101'
@@ -137,6 +137,15 @@ describe('times', () => {
     expect(parseIndexerTime('2026-10-09 12:01:55.0')).toBe(Date.UTC(2026, 9, 9, 12, 1, 55))
     expect(parseIndexerTime(null)).toBeNull()
     expect(parseIndexerTime('yesterday')).toBeNull()
+  })
+
+  it('takes a burn’s time from created_at, never from finalized_at (the indexer’s storage time)', () => {
+    // cccbb79e as indexer-a served it after the 2026-10-14 resync.
+    const body = { transaction: { created_at: '2026-10-13 19:42:19.0', summary: { finalized_at: '2026-10-14 05:25:04.0' } } }
+    expect(parseTxCreatedAt(body)).toBe(Date.UTC(2026, 9, 13, 19, 42, 19))
+    expect(parseTxCreatedAt({ transaction: { summary: { finalized_at: '2026-10-14 05:25:04.0' } } })).toBeNull()
+    expect(parseTxCreatedAt(null)).toBeNull()
+    expect(parseTxCreatedAt({})).toBeNull()
   })
 
   it('estimates from the epoch, never into the future', () => {

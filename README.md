@@ -84,7 +84,7 @@ client is vendored as a pre-built dist under `vendor/ons/`, built from the
 ## Contracts
 
 The name service and faucet are published on Ootle 0.42 and the burn wallet on 0.45; all three run
-on 0.46 (reads and dry runs re-verified on 0.46).
+on 0.46 (re-verified live on 0.46).
 
 | | address (esmeralda) |
 |---|---|

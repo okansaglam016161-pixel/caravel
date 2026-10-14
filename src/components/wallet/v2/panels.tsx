@@ -1094,6 +1094,12 @@ export interface ActivityRowView {
   status: ActivityStatus
   /** null when the amount is not known here — another device's send, or still being checked. */
   amountMicrotari: bigint | null
+  /**
+   * A ready-made amount string that OVERRIDES the TARI formatting — for a non-TARI figure like a
+   * cUSD claim ("+10,000 cUSD"). The caller includes any sign. When set, the row is treated as a
+   * known, signed amount for colour; `amountMicrotari` is ignored for display.
+   */
+  amountText?: string
   /** Full address/npub, for hover. The title line is abbreviated; this is not. */
   titleAttr?: string
   /** A glyph in place of the direction arrow — a burn's flame. The tile keeps its direction's colours. */
@@ -1231,6 +1237,8 @@ export function ActivityRowShell({ row, hidden }: { row: ActivityRowView; hidden
   // rather than repeating the status pill back at the reader.
   const amount = () => {
     if (hidden) return '••••'
+    // A non-TARI figure (cUSD) arrives pre-formatted with its own sign — see amountText.
+    if (row.amountText) return row.amountText
     if (row.amountMicrotari === null) return '—'
     // NO SIGN ON AN INTERNAL MOVE. The figure is what moved between the user's own balances, not a
     // change in what they hold — that changed only by the fee. `st.signed` still governs the other
@@ -1243,6 +1251,7 @@ export function ActivityRowShell({ row, hidden }: { row: ActivityRowView; hidden
 
   const amountColor =
     hidden ? C.bodyDim
+    : row.amountText ? (row.direction === 'in' ? 'var(--positive)' : C.primary)
     : row.amountMicrotari === null ? C.mutedDim
     : !st.signed ? C.mutedDim
     // Neutral ink too: green reads as "you gained", and a swap is not a gain.

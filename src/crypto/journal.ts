@@ -34,6 +34,11 @@
 export type JournalKind =
   | 'send' | 'receive' | 'make-private' | 'make-public' | 'faucet'
   | 'chat-payment' | 'ons-register' | 'burn'
+  // A cUSD faucet claim (T3a). Its `amountMicrotari`/`feeMicrotari` are the TARI side (the fee paid
+  // from the wallet's own tTARI), and `selfOutputIds`/`spentInputIds` are TARI — the tTARI change
+  // and the fee coins. The cUSD amount lives in crypto/cusdStore, never here, because every
+  // downstream reader treats a journal output id as TARI.
+  | 'cusd-faucet'
 
 /**
  * How it ended.

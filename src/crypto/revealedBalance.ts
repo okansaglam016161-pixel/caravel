@@ -139,6 +139,11 @@ export async function readRevealedBalance(
   provider: Provider,
   accountAddress: string | null,
   resolveVaultIds: VaultIdResolver = getVaultIdsForAccount,
+  /**
+   * Which resource to total. TARI by default — every existing caller. The cUSD read passes cUSD;
+   * an account keys one vault per resource, and decodeRevealedAmount skips every other one.
+   */
+  resourceAddress: string = TARI_RESOURCE_ADDRESS,
 ): Promise<bigint> {
   if (!accountAddress) return 0n
 
@@ -168,7 +173,7 @@ export async function readRevealedBalance(
   for (const vaultId of vaultIds) {
     // A busy indexer is asked again (reads are safe to retry); every other failure throws as before.
     const res = await withBusyRetry(() => provider.getSubstate(vaultId), { attempts: SDK_READ_ATTEMPTS })
-    const amount = decodeRevealedAmount(res?.substate as SubstateValue | undefined, TARI_RESOURCE_ADDRESS)
+    const amount = decodeRevealedAmount(res?.substate as SubstateValue | undefined, resourceAddress)
     if (amount !== null) total += amount
   }
   return total

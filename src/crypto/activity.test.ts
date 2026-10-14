@@ -52,6 +52,20 @@ describe('the journalled kinds reach the list', () => {
     expect(kinds(rows)).toEqual(['sent', 'swap', 'swap', 'faucet'])
   })
 
+  it('renders a cUSD faucet claim with its cUSD amount from the claims map', () => {
+    const [row] = buildActivity(
+      [journalled({ id: 'cu', kind: 'cusd-faucet', timestamp: 9, txId: 'tx_cusd', amountMicrotari: null })],
+      [], [], [],
+      new Map([['cu', 10_000_000_000n]]),
+    )
+    expect(row).toMatchObject({ kind: 'cusd-faucet', cusdUnits: 10_000_000_000n, txId: 'tx_cusd' })
+  })
+
+  it('a cUSD claim with no claims-map entry has null units (restore on another device)', () => {
+    const [row] = buildActivity([journalled({ id: 'cu', kind: 'cusd-faucet', amountMicrotari: null })], [], [])
+    expect(row).toMatchObject({ kind: 'cusd-faucet', cusdUnits: null })
+  })
+
   it('renders a burn as its own outflow kind, with the balance it came from', () => {
     const [priv] = buildActivity([journalled({ kind: 'burn', from: 'private', counterparty: null, note: null, txId: 'tx_burn' })], [], [])
     const [pub] = buildActivity([journalled({ kind: 'burn', from: 'public', counterparty: null, note: null })], [], [])

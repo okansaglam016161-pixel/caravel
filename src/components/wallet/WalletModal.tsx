@@ -31,6 +31,7 @@ import { MIN_CONCEAL_MICROTARI, maxConcealTyped, prepareConceal, type PreparedCo
 import { MIN_REVEAL_MICROTARI, maxRevealable, prepareReveal, type PreparedReveal } from '../../crypto/reveal'
 import { loadAccountAddress } from '../../crypto/accountStore'
 import FaucetClaimPanel from './FaucetClaimPanel'
+import CusdFaucetClaimPanel from './CusdFaucetClaimPanel'
 import { prepareConfidentialSend, tariToMicrotari, maxStealthSend, MAX_FEE, type PreparedConfidentialSend, type SendOutcome } from '../../crypto/confidentialSend'
 import { reachableTotal } from '../../crypto/stealthUtxos'
 import {
@@ -51,6 +52,8 @@ import type { EntryProps } from './v2/move'
 import type { Dir } from './v2/moveCopy'
 import { ActivityRowShell, type ActivityStatus, type SendSource, type SendView } from './v2/panels'
 import { useJournal } from '../../hooks/useJournal'
+import { useCusdClaims } from '../../hooks/useCusdClaims'
+import { CUSD_ASSET, formatUnits } from '../../crypto/assets'
 import { useUtxoLedger } from '../../hooks/useUtxoLedger'
 import { useJournalCoverage } from '../../hooks/useJournalCoverage'
 import { useSpentOutputs } from '../../hooks/useSpentOutputs'
@@ -159,6 +162,17 @@ function FaucetRowV2({ row, hidden }: { row: Extract<ActivityRow, { kind: 'fauce
   }} />
 }
 
+/** A cUSD faucet claim (T3a). A real cUSD inflow — its own ticker, formatted as cUSD, not TARI. */
+function CusdFaucetRowV2({ row, hidden }: { row: Extract<ActivityRow, { kind: 'cusd-faucet' }>; hidden: boolean }) {
+  return <ActivityRowShell hidden={hidden} row={{
+    id: row.id, direction: 'in', title: 'Received', note: 'cUSD faucet claim',
+    status: row.outcome === 'committed' ? 'received' : STATUS_FOR[row.outcome],
+    amountMicrotari: null,
+    // The figure is cUSD, so it is formatted here and passed as text — the shell formats TARI.
+    amountText: row.cusdUnits === null ? undefined : `+${formatUnits(row.cusdUnits, CUSD_ASSET.decimals)} ${CUSD_ASSET.ticker}`,
+  }} />
+}
+
 /**
  * An inflow. Its amount is resolved lazily and cache-first — which is why this is a component
  * rather than a mapped object: the hook is per row, exactly as it was before.
@@ -230,6 +244,7 @@ function ActivityRowFor({ row, hidden }: { row: ActivityRow; hidden: boolean }) 
     case 'sent': return <SentRowV2 row={row} hidden={hidden} />
     case 'swap': return <SwapRowV2 row={row} hidden={hidden} />
     case 'faucet': return <FaucetRowV2 row={row} hidden={hidden} />
+    case 'cusd-faucet': return <CusdFaucetRowV2 row={row} hidden={hidden} />
     case 'burn': return <BurnRowV2 row={row} hidden={hidden} />
     case 'received': return <ReceivedRowV2 row={row} hidden={hidden} />
     case 'received-unattributed': return <UnattributedReceiveRowV2 row={row} hidden={hidden} />
@@ -247,7 +262,7 @@ type Chrome = 'modal' | 'page'
 
 export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: () => void; chrome?: Chrome }) {
   const {
-    wallet, address, scan, revealed, rescan, txHistory, messages, recordSent,
+    wallet, address, scan, revealed, cusd, rescan, txHistory, messages, recordSent,
     balanceHidden, setBalanceHidden,
     settles, isSettling, settleLagged, beginSettle, acknowledgeSettle,
   } = useWallet()
@@ -1292,7 +1307,14 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
 
   // Live, without a reload: the journal is written straight to localStorage by the send, move and
   // faucet paths, and useJournal subscribes to it. See hooks/useJournal.
-  const activity = buildActivity(journal, txHistory, messages, reconciled)
+  // The cUSD claim amounts come from their own store (crypto/cusdStore), keyed by journal id — the
+  // journal holds only the TARI side of a cUSD claim. See hooks/useCusdClaims.
+  const cusdClaims = useCusdClaims(address)
+  const cusdUnitsByJournal = useMemo(
+    () => new Map(cusdClaims.map(c => [c.journalId, c.units] as const)),
+    [cusdClaims],
+  )
+  const activity = buildActivity(journal, txHistory, messages, reconciled, cusdUnitsByJournal)
 
   const body = (
     <WalletModalV2
@@ -1300,6 +1322,8 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
       privateBalance={privateBalance}
       publicBalance={publicBalance}
       total={total}
+      // cUSD (T3a): display only. null while a scan runs or an owned output is unverified — shows `···`.
+      cusdUnits={cusd.status === 'done' ? cusd.units : null}
       hidden={balanceHidden}
       networkChip="ESMERALDA TESTNET"
       refreshing={refreshing}
@@ -1357,7 +1381,7 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
       // is funded or the prompt has been dismissed. The @name card left the overview, then left the
       // wallet: names are a property of the identity you message with, so CNS lives in chat, opened
       // by the [@] on the conversation list's search row.
-      overviewNotice={<FaucetClaimPanel />}
+      overviewNotice={<><FaucetClaimPanel /><CusdFaucetClaimPanel /></>}
       send={{
         view: sendView, hidden: balanceHidden,
         onSource: s => { setSendSource(s); setSendExact(null); setSendAll(false); setSendValidationError('') },

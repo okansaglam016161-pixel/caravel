@@ -37,6 +37,7 @@ import { loadContacts, setContactState, removeContact, type ContactMap } from '.
 import { loadTariAddresses, setTariAddress, type TariAddressMap } from '../messaging/tariAddressStore'
 import { recoverAccountAddress } from '../crypto/accountRecovery'
 import { fetchRevealedBalance } from '../crypto/revealedBalance'
+import { scanCusd, cusdTotal, type CusdBalances } from '../crypto/cusdScan'
 import {
   advanceAll, anySettling, acknowledged, isAccountedFor, withSettle,
   type PendingSettle, type SettleEvidence, type SideBalances,
@@ -136,6 +137,27 @@ export interface RevealedState {
 
 const REVEALED_IDLE: RevealedState = { status: 'idle', amount: null, generation: 0 }
 
+// ── cUSD balance state (T3a) ───────────────────────────────────────────────────
+//
+// A SECOND asset, read the same way and on the same triggers as the TARI scan, but kept entirely
+// separate: TARI's balance and spend paths are 41 sites of hardwired resource, and folding a second
+// currency into ScanState would couple them. The hero and every TARI figure are untouched — this is
+// a parallel read whose only consumer is the Assets list and the cUSD faucet panel. See crypto/cusdScan.
+//
+// `null` balance is "not established" (a scan still running, or any owned output the chain would not
+// verify) and renders as `···`, never a figure that might be short — the same honesty rule the TARI
+// hero follows. Private and public are summed only when both are established (cusdScan.cusdTotal).
+export interface CusdState {
+  status: 'idle' | 'scanning' | 'done' | 'error'
+  /** The whole position (private + public), or null while either half is unestablished. */
+  units: bigint | null
+  balances: CusdBalances | null
+  error: string
+  generation: number
+}
+
+const CUSD_IDLE: CusdState = { status: 'idle', units: null, balances: null, error: '', generation: 0 }
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 // The outcome of editMessage (M4). Widened from a bare boolean when group editing landed: a group
@@ -189,6 +211,8 @@ export interface WalletCtx {
   held: HeldSummary
   /** The REVEALED (public) balance — read-only in M1. Independent of `scan`; see RevealedState. */
   revealed: RevealedState
+  /** The wallet's cUSD position (T3a) — private + public. Display-only; independent of `scan`. */
+  cusd: CusdState
   txHistory: SentEntry[]
   /**
    * Committed transactions whose effect has not shown up in the balances yet.
@@ -330,6 +354,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const [walletExists, setWalletExists] = useState(() => hasStoredWallet())
   const [scan, setScan] = useState<ScanState>(SCAN_IDLE)
   const [revealed, setRevealed] = useState<RevealedState>(REVEALED_IDLE)
+  const [cusd, setCusd] = useState<CusdState>(CUSD_IDLE)
+  const cusdAbortRef = useRef<AbortController | null>(null)
   // Generation counter, the revealed-read equivalent of scanAbortRef: a read that resolves after a
   // lock or a newer read must not write its result into state.
   const revealedGenRef = useRef(0)
@@ -478,6 +504,29 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       })
   }, [])
 
+  /**
+   * Scan cUSD — private outputs and the public account vault — alongside the TARI scan, on the same
+   * generation, entirely independently. It never blocks or fails the TARI balance: a thrown cUSD
+   * scan sets `error` and leaves every TARI figure untouched. See crypto/cusdScan.
+   */
+  const startCusdScan = useCallback((w: SecretKeyWallet, walletAddress: string, generation: number) => {
+    cusdAbortRef.current?.abort()
+    const ctrl = new AbortController()
+    cusdAbortRef.current = ctrl
+    const viewSecret = w.getViewOnlySecret()
+    if (!viewSecret) return
+    setCusd(prev => ({ ...CUSD_IDLE, status: 'scanning', generation: prev.generation }))
+    scanCusd(viewSecret, walletAddress, ctrl.signal)
+      .then(balances => {
+        if (ctrl.signal.aborted) return
+        setCusd({ status: 'done', units: cusdTotal(balances), balances, error: '', generation })
+      })
+      .catch((err: unknown) => {
+        if (ctrl.signal.aborted) return
+        setCusd({ ...CUSD_IDLE, status: 'error', error: err instanceof Error ? err.message : String(err) })
+      })
+  }, [])
+
   // Materialize a wallet object + resolve its address into state, then auto-scan
   const materialize = useCallback(async (w: SecretKeyWallet) => {
     const addr = await w.getAddress()
@@ -508,8 +557,13 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     // short-circuits without touching the network when an address is already known, so this is a
     // no-op for every wallet after its first unlock. It cannot fail the read: recovery resolving to
     // null simply leaves the balance at 0, which is what it would have been anyway.
-    void recoverAccountAddress(w, addr).finally(() => startRevealedRead(addr, generation))
-  }, [startScan, startRevealedRead])
+    // Both the revealed TARI read and the cUSD public read need the account address, so both wait
+    // on the same recovery.
+    void recoverAccountAddress(w, addr).finally(() => {
+      startRevealedRead(addr, generation)
+      startCusdScan(w, addr, generation)
+    })
+  }, [startScan, startRevealedRead, startCusdScan])
 
   // Async now: CipherSeed encipherment runs Argon2d before the words exist. Callers show a busy
   // state over it — the phrase-reveal screen cannot render until this resolves.
@@ -872,6 +926,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     // Bump the generation so an in-flight read cannot land on the locked (or next) identity.
     revealedGenRef.current++
     setRevealed(REVEALED_IDLE)
+    cusdAbortRef.current?.abort()
+    setCusd(CUSD_IDLE)
     setWallet(null)
     setPurposeKeys(null)
     setAddress(null)
@@ -898,8 +954,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       const generation = ++readGenRef.current
       startScan(wallet, address, generation)
       startRevealedRead(address, generation)
+      startCusdScan(wallet, address, generation)
     }
-  }, [wallet, address, startScan, startRevealedRead])
+  }, [wallet, address, startScan, startRevealedRead, startCusdScan])
 
   // ══ SETTLE — one list, one loop ═════════════════════════════════════════════
   //
@@ -1409,7 +1466,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
   return (
     <Ctx.Provider value={{
-      walletExists, wallet, purposeKeys, address, nostrNpub, nostrPubkeyHex, scan, held, revealed, txHistory,
+      walletExists, wallet, purposeKeys, address, nostrNpub, nostrPubkeyHex, scan, held, revealed, cusd, txHistory,
       settles, isSettling, settleLagged, beginSettle, acknowledgeSettle,
       messagingStatus, messages, historyUnreadable,
       createRecoveryPhrase, createWallet, unlock, restore, lock, getMnemonic, rescan, recordSent,

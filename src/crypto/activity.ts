@@ -113,6 +113,23 @@ export type ActivityRow =
       source: ActivitySource
       txId: string | null
     }
+  /**
+   * A cUSD faucet claim (T3a). A real inflow of cUSD, so it reads as good news — but the figure is
+   * cUSD, not TARI, so it carries its OWN units and the renderer formats them as cUSD. `feeMicrotari`
+   * is still the TARI fee the claim paid. The claimed amount comes from crypto/cusdStore, keyed by
+   * the journal entry; `null` when that record is absent (a restore on another device).
+   */
+  | {
+      kind: 'cusd-faucet'
+      id: string
+      timestamp: number
+      /** cUSD base units claimed, or null if unknown here. */
+      cusdUnits: bigint | null
+      feeMicrotari: bigint | null
+      outcome: ActivityOutcome
+      source: ActivitySource
+      txId: string | null
+    }
   | {
       kind: 'faucet'
       id: string
@@ -159,8 +176,9 @@ const LEGACY_OUTCOME: Record<'Commit' | 'Reject' | 'Timeout', JournalOutcome> = 
   Timeout: 'timeout',
 }
 
-/** One journalled action, projected into a row. Returns null for kinds the list does not show. */
-function fromJournal(e: JournalEntry): ActivityRow | null {
+/** One journalled action, projected into a row. Returns null for kinds the list does not show.
+ *  `cusdUnits` maps a cUSD-claim journal id to its claimed amount (crypto/cusdStore). */
+function fromJournal(e: JournalEntry, cusdUnits: ReadonlyMap<string, bigint>): ActivityRow | null {
   const common = {
     id: e.id,
     timestamp: e.timestamp,
@@ -189,6 +207,13 @@ function fromJournal(e: JournalEntry): ActivityRow | null {
       return { kind: 'swap', ...common, to: 'public' }
     case 'faucet':
       return { kind: 'faucet', ...common }
+    case 'cusd-faucet':
+      return {
+        kind: 'cusd-faucet', id: e.id, timestamp: e.timestamp,
+        cusdUnits: cusdUnits.get(e.id) ?? null,
+        feeMicrotari: e.feeMicrotari, outcome: e.outcome as ActivityOutcome,
+        source: 'local-journal', txId: e.txId,
+      }
     // NOT PRODUCED FROM THE JOURNAL. A reconciled receive is DERIVED — recomputed from the current
     // scan, journal, ledger and epoch on every render — rather than written down, because a stored
     // one would go stale the moment its UTXO is spent or a guard changes. It reaches the list via
@@ -239,13 +264,15 @@ export function buildActivity(
    * receive has no txId to dedupe on anyway; it is a UTXO, not a transaction we made.
    */
   reconciled: readonly ReconciledReceive[] = [],
+  /** cUSD claimed per journal id — see crypto/cusdStore. Empty is fine; those rows show `···`. */
+  cusdUnits: ReadonlyMap<string, bigint> = new Map(),
 ): ActivityRow[] {
   const rows: ActivityRow[] = []
   const claimedTxIds = new Set<string>()
 
   // FIRST, so it wins every collision below.
   for (const e of journal) {
-    const row = fromJournal(e)
+    const row = fromJournal(e, cusdUnits)
     // ORDER MATTERS: a kind that renders nothing claims nothing either. A `chat-payment` entry is
     // recorded only so its change output can be subtracted later, and it names the same txId the
     // chat message does — so claiming it here would silently delete the chat row that legitimately

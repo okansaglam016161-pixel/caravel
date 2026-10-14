@@ -20,7 +20,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SecretKeyWallet } from '@tari-project/ootle-secret-key-wallet'
 import { checkOnsAvailable, estimateOnsRegistration, ons, ownedOnsNames, registerOnsName, type NameRecord } from './ons'
 import { NETWORK_BUSY_MESSAGE } from './indexerRetry'
-import { withFeeMargin } from './feeProbe'
+import { ONS_FEE_BUFFER, onsRegistrationBudget } from './feeProbe'
 import { NETWORK_BUSY_MESSAGE as ONS_BUSY, SubmitMaybeLandedError } from '@ootle/name-service'
 
 // A 32-byte key whose hex is easy to assert against: 0x00, 0x01, … 0x1f.
@@ -426,27 +426,28 @@ describe('registerOnsName — the outcome, not the sentence', () => {
   })
 })
 
-describe('the fee margin — the one shared rule (feeProbe.withFeeMargin)', () => {
-  // CNS used to carry its own 10%, justified by a "measured 2.7% drift". That figure is the send
-  // path's 2026-08-20 note — dry run 16 580, actual 16 138 — i.e. the dry run OVER-estimating by
-  // 2.7%, the safe direction. Registration now pays the same margin as every other action, and
-  // the drift it really fears is caught at confirm by re-simulating at the exact fee.
+describe('the @name budget: cost + a flat 200 µtTARI (feeProbe.ONS_FEE_BUFFER)', () => {
+  // Registration cannot pay its exact cost: a short fee there commits the fee intent alone, so the
+  // fee is charged and nothing is registered. The buffer covers the registry growing between the
+  // confirm check and execution; anything bigger is re-quoted at confirm (see below).
   const budgetFor = async (realFee: bigint) => {
     stubWriter({ estimate: async () => ({ feeMicroTari: realFee }) })
     const r = await estimateOnsRegistration(WALLET, ADDR, 'okz', NPUB, NAMES)
     return r.feeMicroTari!
   }
 
-  it('is exactly withFeeMargin, at every scale', async () => {
-    for (const fee of [1n, 500n, 1_400n, 10_000n, 10_761n, 100_000n]) {
-      expect(await budgetFor(fee)).toBe(withFeeMargin(fee))
+  it('is the cost plus 200 µtTARI, flat, at every scale', async () => {
+    expect(ONS_FEE_BUFFER).toBe(200n)
+    for (const fee of [1n, 500n, 1_400n, 10_000n, 12_555n, 100_000n]) {
+      expect(await budgetFor(fee)).toBe(fee + 200n)
+      expect(await budgetFor(fee)).toBe(onsRegistrationBudget(fee))
     }
   })
 
-  it('2% above the floor, 200 µtTARI below it', async () => {
-    expect(await budgetFor(10_761n)).toBe(10_976n)   // the live @livetest1 cost: 2% = 215 clears the floor
-    expect(await budgetFor(20_000n)).toBe(20_400n)   // 2% = 400 clears the floor
-    expect(await budgetFor(1_400n)).toBe(1_600n)     // 2% = 28 → floor 200
+  it('no longer scales with the fee: a 2% margin would have charged more above 10 000 µtTARI', async () => {
+    expect(await budgetFor(12_555n)).toBe(12_755n)   // was 12 806 (2% = 251)
+    expect(await budgetFor(20_000n)).toBe(20_200n)   // was 20 400
+    expect(await budgetFor(1_400n)).toBe(1_600n)     // unchanged: the old floor was 200 too
   })
 })
 
@@ -533,7 +534,7 @@ describe('the fee input comes from Caravel, and is locked like any other spend',
     feeCoinReads(200)
     writerThatSubmits(async () => ({ transactionId: 'tx9', fee: 1_200n }))
     const est = await estimateOnsRegistration(WALLET, ADDR, 'okz', NPUB, NAMES)
-    expect(est.prepared!.feeMicroTari).toBe(withFeeMargin(1_000n))
+    expect(est.prepared!.feeMicroTari).toBe(1_200n)
     expect(est.feeMicroTari).toBe(est.prepared!.feeMicroTari)
     const r = await est.prepared!.submit()
     expect(r).toMatchObject({ ok: true, outcome: 'accepted', txId: 'tx9' })
@@ -552,6 +553,70 @@ describe('the fee input comes from Caravel, and is locked like any other spend',
     expect(submitted).not.toHaveBeenCalled()
     est.prepared!.release()
     expect(loadReservedIds(ADDR).has(FEE_COIN)).toBe(false)
+    vi.unstubAllGlobals()
+  })
+
+  /**
+   * A writer whose cost MOVES, like the real registry: `cost()` is read at pricing and again by every
+   * simulate, which (as the real writer does) refuses a requirement above the budget it was built at.
+   */
+  function writerWithMovingCost(cost: () => bigint, submitted: () => Promise<{ transactionId: string; fee: bigint }>) {
+    vi.spyOn(ons, 'withBrowserSigner').mockImplementation(async (signer: Signer) => ({
+      prepareRegisterWithNostr: async (_n: string, _k: string, budgetFor: (c: bigint) => bigint) => {
+        const required = cost()
+        const budget = budgetFor(required)
+        return {
+          feeMicroTari: budget, requiredFee: required, feeInputId: FEE_COIN,
+          simulate: async () => {
+            const need = cost()
+            return need > budget
+              ? { accepted: false, requiredFee: need, reason: `Required fees ${need} but ${budget} paid` }
+              : { accepted: true, requiredFee: need }
+          },
+          submit: async () => {
+            signer.onSubmitted?.('tx9', [FEE_COIN])
+            return submitted()
+          },
+        }
+      },
+    } as unknown as Awaited<ReturnType<typeof ons.withBrowserSigner>>))
+  }
+
+  it('a cost that rose WITHIN the buffer still confirms and sends at the budget shown', async () => {
+    feeCoinReads(200)
+    let cost = 12_555n
+    const submitted = vi.fn(async () => ({ transactionId: 'tx9', fee: 12_755n }))
+    writerWithMovingCost(() => cost, submitted)
+    const est = await estimateOnsRegistration(WALLET, ADDR, 'okz', NPUB, NAMES)
+    expect(est.feeMicroTari).toBe(12_755n)
+    cost = 12_755n                                    // another name registered: +200, all of the buffer
+    await est.prepared!.confirm()
+    const r = await est.prepared!.submit()
+    expect(r).toMatchObject({ ok: true, outcome: 'accepted', fee: 12_755n })
+    expect(r.fee).toBe(est.feeMicroTari)              // shown = charged
+    expect(submitted).toHaveBeenCalledTimes(1)
+    vi.unstubAllGlobals()
+  })
+
+  it('a cost that rose PAST the buffer is re-quoted at confirm, nothing sent, and the new price is the new cost + 200', async () => {
+    feeCoinReads(200)
+    let cost = 12_555n
+    const submitted = vi.fn(async () => ({ transactionId: 'tx9', fee: 0n }))
+    writerWithMovingCost(() => cost, submitted)
+    const first = await estimateOnsRegistration(WALLET, ADDR, 'okz', NPUB, NAMES)
+    expect(first.feeMicroTari).toBe(12_755n)
+    cost = 12_756n                                    // one µtTARI past the buffer
+    await expect(first.prepared!.confirm()).rejects.toMatchObject({ name: 'QuoteChanged', reason: 'fee-risen' })
+    // A submit without a fresh confirm runs the same check, and refuses the same way.
+    await expect(first.prepared!.submit()).rejects.toMatchObject({ name: 'QuoteChanged', reason: 'fee-risen' })
+    expect(submitted).not.toHaveBeenCalled()
+    first.prepared!.release()
+
+    // What the confirm screen does on QuoteChanged: price again and ask. The new figure is exact too.
+    const again = await estimateOnsRegistration(WALLET, ADDR, 'okz', NPUB, NAMES)
+    expect(again.feeMicroTari).toBe(12_956n)
+    expect(again.prepared!.feeMicroTari).toBe(again.feeMicroTari)
+    again.prepared!.release()
     vi.unstubAllGlobals()
   })
 

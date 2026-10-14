@@ -11,7 +11,7 @@ import { createOnsClient, type BrowserSigner, type NameRecord } from '@ootle/nam
 import type { SecretKeyWallet } from '@tari-project/ootle-secret-key-wallet'
 import { Network, WasmStealthCrypto } from '@tari-project/ootle'
 import { scanOwnedUtxos } from './stealthUtxos'
-import { withFeeMargin } from './feeProbe'
+import { onsRegistrationBudget } from './feeProbe'
 import { loadSelectionExcludedIds, newReservationToken, releaseCoins, reserveCoins } from './coinReservations'
 import { confirmer } from './quote'
 import { loadSpentOutputs, markLocked, promoteToSpent } from './spentOutputs'
@@ -236,9 +236,9 @@ export interface OnsEstimateResult {
   ok: boolean
   /** Present iff `ok`: the priced, built registration the confirm screen submits. */
   prepared?: OnsPreparedRegistration
-  /** The µtTARI budget to reveal for the fee — the estimated network cost plus the shared margin (feeProbe.withFeeMargin). This
-   *  is the amount the user actually pays (the whole revealed budget is consumed; overcharge is not
-   *  refunded), so it's what we show on the confirm gate. */
+  /** The µtTARI budget to reveal for the fee: the measured network cost plus the flat @name buffer
+   *  (feeProbe.onsRegistrationBudget). This is the amount the user actually pays (the whole revealed
+   *  budget is consumed; overcharge is not refunded), so it's what we show on the confirm gate. */
   feeMicroTari?: bigint
   error?: string
   /** Present iff `!ok`. Lets each problem render its own instruction instead of one generic card. */
@@ -295,7 +295,7 @@ function caravelFeeSource(wallet: SecretKeyWallet, senderAddress: string): Pick<
 
 /**
  * Price AND build the registration of `name` + its nostr record, WITHOUT committing anything — a
- * dry run, nothing spent. Returns the fee (cost + the shared margin, feeProbe.withFeeMargin), which
+ * dry run, nothing spent. Returns the fee (cost + the flat buffer, feeProbe.onsRegistrationBudget), which
  * is exactly what is charged and what the confirm screen shows, and `prepared`, whose `submit`
  * sends the very transaction that was priced.
  *
@@ -318,7 +318,7 @@ export async function estimateOnsRegistration(
     const writer = await ons.withBrowserSigner({
       wallet, senderAddress, nameOwner: namesKey, ...caravelFeeSource(wallet, senderAddress), onSubmitted: lock.onSubmitted,
     })
-    const prepared = await writer.prepareRegisterWithNostr(name, ownNpub, withFeeMargin)
+    const prepared = await writer.prepareRegisterWithNostr(name, ownNpub, onsRegistrationBudget)
     const preparedAt = Date.now()
     const check = confirmer({
       preparedAt,

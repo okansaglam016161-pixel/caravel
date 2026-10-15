@@ -90,7 +90,7 @@ import LogoTile from '../primitives/LogoTile'
 // NOTHING NEEDS A FALLBACK. AppShell defaults to 'wallet' and always did, and this union is only
 // ever compared by equality, never switched on exhaustively. The two tables under it are
 // Record<Service, …>, so adding a member here is a type error until both are filled in.
-const SERVICES = ['wallet', 'chat', 'burn', 'trade'] as const
+const SERVICES = ['wallet', 'chat', 'trade', 'burn'] as const
 
 /** Type-only export: keeps this file a component module, which is what fast refresh wants. */
 export type Service = (typeof SERVICES)[number]

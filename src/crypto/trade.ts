@@ -23,17 +23,15 @@
 //
 // ── THE FEE SHOWN IS THE FEE CHARGED ─────────────────────────────────────────
 //
-// A private fee is a revealed bucket spent WHOLE, so it must equal the cost exactly: probe at a reserve,
-// then re-price at the fee itself until the cost it produces is the fee it pays (an amount's CBOR size
-// can move the cost). A public fee is priced at the budget it will really offer (feeProbe.priceAtBudget).
-// Then the final transaction is dry-run at that exact fee on EVERY indexer, and again at confirm time
-// (crypto/quote), held to the fee shown (feeProbe.compareToShownFee) — any difference re-prices and asks
+// A private fee is a revealed bucket spent WHOLE, ahead of trade calls that run in the MAIN intent — so a
+// cost that rose before execution would not be a free reject: the engine would commit the fee intent
+// alone and the trade would not happen. So it pays the measured cost plus the flat buffer @names pay
+// (feeProbe.MAIN_INTENT_FEE_BUFFER, one constant), re-measured at that budget; the whole budget is the
+// fee, shown and charged. A public fee is priced at the budget it will really offer
+// (feeProbe.priceAtBudget), whose refunded margin does the same job. Then the final transaction is
+// dry-run at that budget on EVERY indexer, and again at confirm time (crypto/quote): a public cost must
+// equal the fee shown, a private one must fit the budget — a rise past the buffer re-quotes and asks
 // again rather than charging a figure nobody was shown.
-//
-// THE RESIDUAL RISK, stated: the trade calls run in the MAIN intent, so a cost that rose in the seconds
-// between that last check and execution would not be a free reject — the engine would commit the fee
-// intent alone (the @name registration has the same shape; see feeProbe.ONS_FEE_BUFFER). Every trade
-// cost measured on the live contracts was stable across builds; the confirm check is what holds it.
 //
 // ── PRIVACY ──────────────────────────────────────────────────────────────────
 //
@@ -56,7 +54,7 @@ import { feesPaid } from './conceal'
 import { accountVaultIds, verifiedRead } from './cusdScan'
 import { cancelKeyFor } from './derivation'
 import { nextMaxEpoch } from './epoch'
-import { compareToShownFee, dryRunFee, priceAtBudget, simulateFee, type FeeSimulation } from './feeProbe'
+import { compareToShownFee, dryRunFee, mainIntentBudget, priceAtBudget, simulateFee, type FeeSimulation } from './feeProbe'
 import { awaitFinality } from './finality'
 import { INDEXER_URL, INDEXER_URLS } from './indexerConfig'
 import { RETRYING_MESSAGE } from './indexerRetry'
@@ -64,7 +62,7 @@ import { readOutputSubstateIds } from './outputIds'
 import { readFinalizedVerdict } from './txResult'
 import { PUBLIC_SEND_FEE_RESERVE } from './publicSend'
 import { confirmer } from './quote'
-import { markLocked, promoteToSpent, release } from './spentOutputs'
+import { markLocked, settleLocks } from './spentOutputs'
 import { encodeStatement } from './statementCbor'
 import { StaticSigner, type OwnedUtxo } from './stealthUtxos'
 import { inputsStillUnspent, submitOnce, versionsUnchanged, type LandedCheck } from './submitGuard'
@@ -397,26 +395,35 @@ async function prepare(t: Trader, plan: Plan, onProgress?: (m: string) => void):
     // the main intent after the fee.
     ({ fee, budget } = await priceAtBudget(measure, { reserve: TRADE_PUBLIC_FEE_RESERVE }))
   } else {
-    // A revealed bucket spent whole: re-price at the fee until it pays exactly what it costs.
-    fee = await measure(TRADE_FEE_PROBE_MICROTARI)
-    if (fee > TRADE_FEE_PROBE_MICROTARI) throw new TradeRefused(`The network fee (${fee} µtTARI) is above the ${TRADE_FEE_PROBE_MICROTARI} µtTARI this trade reserves. Try again later.`)
-    let stable = false
-    for (let i = 0; i < 4 && !stable; i++) {
-      const again = await measure(fee)
-      if (again === fee) stable = true
-      else fee = again
+    // A revealed bucket spent WHOLE, before an action in the MAIN intent: the measured cost plus the
+    // flat MAIN_INTENT_FEE_BUFFER @names use, re-measured AT that budget until it covers its own cost
+    // (an amount's CBOR size can move the cost). The whole budget is the fee — shown, and charged —
+    // and the buffer is what keeps a cost that rises a little before execution from taking the fee
+    // and leaving the trade undone (feeProbe.MAIN_INTENT_FEE_BUFFER).
+    budget = mainIntentBudget(await measure(TRADE_FEE_PROBE_MICROTARI))
+    let covered = false
+    for (let i = 0; i < 4 && !covered; i++) {
+      const cost = await measure(budget)
+      if (cost <= budget) covered = true
+      else budget = mainIntentBudget(cost)
     }
-    if (!stable) throw new TradeRefused('The network fee kept changing while it was being priced. Nothing was sent — try again.')
-    budget = fee
+    if (!covered) throw new TradeRefused('The network fee kept changing while it was being priced. Nothing was sent — try again.')
+    if (budget > TRADE_FEE_PROBE_MICROTARI) throw new TradeRefused(`The network fee (${budget} µtTARI) is above the ${TRADE_FEE_PROBE_MICROTARI} µtTARI this trade reserves. Try again later.`)
+    fee = budget
   }
 
-  // The final transaction, and a dry-run twin at exactly that fee on EVERY indexer.
+  // What the final transaction's twin must show to be sent at this price. PUBLIC: cost exactly the fee
+  // shown (the budget is refunded down to the cost). PRIVATE: cost no more than the budget — a cost that
+  // rose past the buffer is `underpaid` and re-quoted at confirm; within it, the budget is still the fee.
+  const hold = (sim: FeeSimulation) => (plan.feeMode === 'public' ? compareToShownFee(sim, fee) : sim)
+
+  // The final transaction, and a dry-run twin at exactly that budget on EVERY indexer.
   log('Checking the trade at that exact fee…')
   const real = await plan.build(budget)
   const twin = async () => finish(t, await plan.build(budget), true, maxEpoch)
-  const simulate = async () => compareToShownFee(await simulateFee(INDEXER_URL, await twin(), { fee: budget, onBusyRetry: () => log(RETRYING_MESSAGE) }), fee)
+  const simulate = async () => hold(await simulateFee(INDEXER_URL, await twin(), { fee: budget, onBusyRetry: () => log(RETRYING_MESSAGE) }))
   for (const url of INDEXER_URLS) {
-    const sim = compareToShownFee(await simulateFee(url, await twin(), { fee: budget }), fee)
+    const sim = hold(await simulateFee(url, await twin(), { fee: budget }))
     if (!sim.accepted) throw new TradeRefused(sim.message)
   }
   const envelope = await finish(t, real, false, maxEpoch)
@@ -451,11 +458,9 @@ async function prepare(t: Trader, plan: Plan, onProgress?: (m: string) => void):
       const { outcome, reason, body } = await awaitFinality(provider, txId)
       provider.stopWatcher?.()
       // A FEE-ONLY COMMIT (AcceptFeeRejectRest) spent the fee intent's coins even though the trade did
-      // not happen — so they stay spent, unlike a clean reject. Every tTARI coin a trade declares is a
-      // fee coin (a tTARI escrow or payment is the fee's chained change), so all of them are promoted.
+      // not happen: they stay spent, settled coin by coin from the fee diff (spentOutputs.settleLocks).
       const feeOnly = outcome === 'Reject' && readFinalizedVerdict(body)?.kind === 'fee-only'
-      if (outcome === 'Commit' || feeOnly) promoteToSpent(t.address, txId)
-      else if (outcome === 'Reject') release(t.address, txId)
+      settleLocks(t.address, txId, outcome, body)
       if (outcome !== 'Timeout') releaseCusdCoins(t.address, txId)
       let orderId: string | null = null
       if (outcome === 'Commit' && plan.details.action === 'place') {

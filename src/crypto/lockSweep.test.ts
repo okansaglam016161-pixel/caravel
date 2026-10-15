@@ -10,7 +10,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { setStoreKey } from './sessionKey'
 import {
   __resetSpentSessionForTests, loadExcludedIds, loadSpentOutputs, markLocked, promoteToSpent,
-  resolveLockAction,
+  resolveLockAction, settleLocks,
 } from './spentOutputs'
 import { STALE_LOCK_MS, sweepLocks, type CoinState } from './lockSweep'
 
@@ -40,7 +40,11 @@ const finalized = (result: unknown, decision = 'Commit') => ({
 })
 const ACCEPT = finalized({ Accept: {} })
 const REJECT = finalized({ Reject: { ExecutionFailure: 'Input substate utxo_… is down' } })
-const FEE_ONLY = finalized({ AcceptFeeRejectRest: [{}, { SubstateNotFound: 'vault_6a6de7ab' }] })
+// The fee diff took down the fee coin A (and the account vault the fee bucket came from), not B.
+const FEE_ONLY = finalized({ AcceptFeeRejectRest: [
+  { up_substates: [], down_substates: [[A, 0], ['vault_6a6de7ab', 4]], fee_withdrawals: [] },
+  { SubstateNotFound: 'vault_6a6de7ab' },
+] })
 const UNDECIDED = { result: { Finalized: { final_decision: '' } } }
 const UNREADABLE = finalized({ SomethingNewAndUnknown: {} })
 
@@ -59,9 +63,14 @@ describe('resolveLockAction', () => {
     expect(resolveLockAction({ kind: 'reject', reason: 'nope' })).toBe('release')
   })
 
-  // The fee committed and the body did not, so the inputs were never consumed.
-  it('AcceptFeeRejectRest gives them back too', () => {
-    expect(resolveLockAction({ kind: 'fee-only', reason: 'nope' })).toBe('release')
+  // The fee committed and the body did not: what the FEE INTENT spent is spent, the rest is not.
+  it('AcceptFeeRejectRest settles coin by coin from its fee diff — never a blanket release', () => {
+    expect(resolveLockAction({ kind: 'fee-only', reason: 'nope', consumed: [A] })).toBe('settle')
+  })
+
+  // Without the diff nobody can say which coins the fee intent took, so nothing is decided.
+  it('AcceptFeeRejectRest with an unreadable diff KEEPS the lock', () => {
+    expect(resolveLockAction({ kind: 'fee-only', reason: 'nope', consumed: null })).toBe('keep')
   })
 
   it('no verdict yet keeps the lock', () => {
@@ -99,10 +108,40 @@ describe('sweeping', () => {
     expect(loadExcludedIds(ADDR).size).toBe(0)
   })
 
-  it('releases on a fee-only commit', async () => {
-    markLocked(ADDR, [A], TX, 1_000)
-    await sweepLocks(ADDR, { fetchResult: async () => FEE_ONLY, now: 2_000 })
-    expect(loadExcludedIds(ADDR).size).toBe(0)
+  // THE BUG THIS PINS: a timed-out transaction whose fee committed and whose body was rejected. Its
+  // fee coin (A, spent in the fee intent) is gone; its main-intent coin (B) was never touched. The
+  // sweep used to release both, putting a spent coin back into the balance and into coin selection.
+  it('a timed-out fee-only commit: the fee coin STAYS SPENT, the untouched coin comes back', async () => {
+    markLocked(ADDR, [A, B], TX, 1_000)
+    const r = await sweepLocks(ADDR, { fetchResult: async () => FEE_ONLY, now: 2_000 })
+    expect(r.resolved).toBe(1)
+    expect(r.steps[0]!.action).toBe('settle')
+    expect(loadSpentOutputs(ADDR).records[A]!.status).toBe('spent')
+    expect(loadSpentOutputs(ADDR).records[B]).toBeUndefined()
+    // Balance exact: exactly the consumed coin is held out of it.
+    expect(loadExcludedIds(ADDR)).toEqual(new Set([A]))
+  })
+
+  it('a fee-only commit whose diff cannot be read keeps every lock; the coin probe settles each later', async () => {
+    markLocked(ADDR, [A, B], TX, 1_000)
+    const noDiff = finalized({ AcceptFeeRejectRest: [{}, { SubstateNotFound: 'x' }] })
+    const early = await sweepLocks(ADDR, { fetchResult: async () => noDiff, now: 2_000 })
+    expect(early.steps[0]!.action).toBe('keep')
+    expect(loadExcludedIds(ADDR)).toEqual(new Set([A, B]))
+    // Once stale, the coins answer for themselves — a MIXED answer is exactly a fee-only commit.
+    const probeCoin = async (id: string): Promise<CoinState> => (id === A ? 'gone' : 'live')
+    const late = await sweepLocks(ADDR, { fetchResult: async () => noDiff, probeCoin, now: 1_000 + STALE_LOCK_MS })
+    expect(late.steps[0]).toMatchObject({ action: 'settle', via: 'substate', affected: 2 })
+    expect(loadSpentOutputs(ADDR).records[A]!.status).toBe('spent')
+    expect(loadExcludedIds(ADDR)).toEqual(new Set([A]))
+  })
+
+  it('a mixed probe with any coin unanswered still keeps the lock', async () => {
+    markLocked(ADDR, [A, B], TX, 1_000)
+    const probeCoin = async (id: string): Promise<CoinState> => (id === A ? 'gone' : 'unknown')
+    const r = await sweepLocks(ADDR, { fetchResult: async () => null, probeCoin, now: 1_000 + STALE_LOCK_MS })
+    expect(r.steps[0]!.action).toBe('keep')
+    expect(loadExcludedIds(ADDR)).toEqual(new Set([A, B]))
   })
 
   it('keeps an undecided transaction locked, and counts the attempt', async () => {
@@ -187,17 +226,19 @@ describe('the substate fallback', () => {
     expect(loadSpentOutputs(ADDR).records[A]!.status).toBe('spent')
   })
 
-  // A transaction consumes all of its inputs or none of them, so a mixed answer is not a reading
-  // we understand — and an unreadable one must never move money on a screen.
-  it('keeps the lock on a mixed answer', async () => {
+  // A mixed answer is NOT unreadable: it is what a fee-only commit leaves behind (the fee intent
+  // consumed its coin; the rejected main intent consumed nothing). Each coin is settled by what the
+  // chain says about IT — releasing B's partner A as well would hand back a spent coin.
+  it('settles a mixed answer coin by coin: the gone coin stays spent, the live one comes back', async () => {
     markLocked(ADDR, [A, B], TX, 0)
     const r = await sweepLocks(ADDR, {
       fetchResult: pruned,
       probeCoin: async (id) => (id === A ? 'live' : 'gone'),
       now: AGED,
     })
-    expect(r.steps[0]!.action).toBe('keep')
-    expect(loadExcludedIds(ADDR)).toEqual(new Set([A, B]))
+    expect(r.steps[0]).toMatchObject({ action: 'settle', via: 'substate' })
+    expect(loadSpentOutputs(ADDR).records[B]!.status).toBe('spent')
+    expect(loadExcludedIds(ADDR)).toEqual(new Set([B]))
   })
 
   it('keeps the lock when even one coin cannot be read', async () => {
@@ -219,5 +260,25 @@ describe('the substate fallback', () => {
     expect(probeCoin).not.toHaveBeenCalled()
     expect(r.steps[0]!.via).toBe('result')
     expect(r.steps[0]!.action).toBe('promote')
+  })
+})
+
+describe('settleLocks — the rule every submit path applies once its transaction is decided', () => {
+  it('Commit spends, a plain Reject releases (a tx that never landed gives its coins back), Timeout keeps', () => {
+    markLocked(ADDR, [A], TX, 1_000)
+    expect(settleLocks(ADDR, TX, 'Timeout', null)).toBe('keep')
+    expect(loadExcludedIds(ADDR)).toEqual(new Set([A]))
+    expect(settleLocks(ADDR, TX, 'Reject', REJECT)).toBe('release')
+    expect(loadExcludedIds(ADDR).size).toBe(0)
+    markLocked(ADDR, [B], TX2, 1_000)
+    expect(settleLocks(ADDR, TX2, 'Commit', ACCEPT)).toBe('promote')
+    expect(loadSpentOutputs(ADDR).records[B]!.status).toBe('spent')
+  })
+
+  it('a Reject that was really a fee-only commit keeps the fee coin spent and releases the rest', () => {
+    markLocked(ADDR, [A, B], TX, 1_000)
+    expect(settleLocks(ADDR, TX, 'Reject', FEE_ONLY)).toBe('settle')
+    expect(loadSpentOutputs(ADDR).records[A]!.status).toBe('spent')
+    expect(loadExcludedIds(ADDR)).toEqual(new Set([A]))
   })
 })

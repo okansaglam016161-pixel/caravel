@@ -24,7 +24,7 @@
 // receipt read or by the pricing dry run's "Duplicate NFT token id".
 
 import { inputsStillUnspent, substateStillAbsent, submitOnce } from './submitGuard'
-import { markLocked, promoteToSpent, release } from './spentOutputs'
+import { markLocked, settleLocks } from './spentOutputs'
 import { RETRYING_MESSAGE } from './indexerRetry'
 import {
   TransactionBuilder, WasmStealthCrypto, Network, Mask, TARI_RESOURCE_ADDRESS,
@@ -44,7 +44,6 @@ import { awaitFinality } from './finality'
 import { dryRunFee, exactFee, simulateFee, type FeeSimulation } from './feeProbe'
 import { INDEXER_URL } from './indexerConfig'
 import { readOutputSubstateIds } from './outputIds'
-import { readFinalizedVerdict } from './txResult'
 import { confirmer } from './quote'
 import { StaticSigner, scanOwnedUtxos, selectStealthInputs } from './stealthUtxos'
 import { verifiedRead } from './cusdScan'
@@ -269,10 +268,8 @@ export async function prepareCusdClaim(
     const { outcome, reason, body } = await awaitFinality(provider, txId)
     provider.stopWatcher?.()
     // The claim runs in the MAIN intent, so a Reject can still have committed the fee intent
-    // (AcceptFeeRejectRest): the fee coin was spent then, and stays spent rather than being released.
-    const feeOnly = outcome === 'Reject' && readFinalizedVerdict(body)?.kind === 'fee-only'
-    if (outcome === 'Commit' || feeOnly) promoteToSpent(ownerAddress, txId)
-    else if (outcome === 'Reject') release(ownerAddress, txId)
+    // (AcceptFeeRejectRest): its fee coin was spent then and stays spent (spentOutputs.settleLocks).
+    settleLocks(ownerAddress, txId, outcome, body)
     return {
       txId, outcome, reason, units: CUSD_CLAIM_UNITS, feeMicrotari: feesPaid(body) ?? fee,
       cusdOutputIds: real.cusdOutputIds, tariChangeOutputIds: real.tariChangeOutputIds, spentInputIds,

@@ -42,7 +42,7 @@ import { readFinalizedVerdict, type TxVerdict } from './txResult'
 import { pointRead } from './indexerConfig'
 import {
   loadSpentOutputs, lockedCoinsFor, lockedTxIds, promoteToSpent, recordSweepAttempt, release,
-  resolveLockAction, type LockAction,
+  resolveLockAction, settleCoins, type LockAction,
 } from './spentOutputs'
 
 
@@ -168,6 +168,9 @@ export async function sweepLocks(
     const verdict = body === null ? null : readFinalizedVerdict(body)
     let action = resolveLockAction(verdict)
     let via: SweepStep['via'] = verdict === null ? 'none' : 'result'
+    // The coins a fee-only commit's fee intent consumed (from its fee diff), or the coins the probe
+    // below found gone — the spent half of a coin-by-coin settlement.
+    let spentIds: ReadonlySet<string> = verdict?.kind === 'fee-only' && verdict.consumed ? new Set(verdict.consumed) : new Set()
 
     // ── THE FALLBACK: ASK ABOUT THE COINS ────────────────────────────────────
     //
@@ -178,11 +181,16 @@ export async function sweepLocks(
       const oldest = coins.reduce((m, c) => Math.min(m, c.at), Number.POSITIVE_INFINITY)
       if (coins.length > 0 && now - oldest >= STALE_LOCK_MS) {
         const states = await Promise.all(coins.map(c => probeCoin(c.id)))
-        // UNANIMITY OR NOTHING. A transaction consumes all of its inputs or none of them, so a
-        // mixed answer means the chain is telling us something we do not understand — and one
-        // `unknown` is enough to make the whole reading untrustworthy. Either way: keep the lock.
+        // EVERY COIN ANSWERED, OR NOTHING: one `unknown` makes the whole reading untrustworthy, so
+        // the lock stays. A MIXED answer is no longer a mystery — it is what a fee-only commit leaves
+        // behind (its fee intent consumed the fee coin; its rejected main intent consumed nothing) —
+        // so each coin is settled by what the chain says about IT: gone stays spent, live comes back.
         if (states.every(st => st === 'gone')) { action = 'promote'; via = 'substate' }
         else if (states.every(st => st === 'live')) { action = 'release'; via = 'substate' }
+        else if (states.every(st => st !== 'unknown')) {
+          action = 'settle'; via = 'substate'
+          spentIds = new Set(coins.filter((_, i) => states[i] === 'gone').map(c => c.id))
+        }
       }
     }
 
@@ -192,6 +200,10 @@ export async function sweepLocks(
       resolved++
     } else if (action === 'release') {
       affected = release(walletAddress, txId, now).released
+      resolved++
+    } else if (action === 'settle') {
+      const r = settleCoins(walletAddress, txId, spentIds, now)
+      affected = r.promoted + r.released
       resolved++
     } else {
       // Still unresolved. Counted so the safety net can eventually say so out loud rather than

@@ -51,7 +51,7 @@ import {
 } from './stealthUtxos'
 import type { SecretKeyWallet } from '@tari-project/ootle-secret-key-wallet'
 import { awaitFinality } from './finality'
-import { markLocked, promoteToSpent, release } from './spentOutputs'
+import { markLocked, settleLocks } from './spentOutputs'
 import { loadSelectionExcludedIds, newReservationToken, releaseCoins, reserveCoins } from './coinReservations'
 import { confirmer } from './quote'
 import { INDEXER_URL } from './indexerConfig'
@@ -438,8 +438,8 @@ export async function prepareConfidentialSend(
       const feeMicrotari = feePaid != null ? BigInt(feePaid) : undefined
       provider.stopWatcher?.()
 
-      if (outcome === 'Commit') promoteToSpent(senderAddress, txId)
-      else if (outcome === 'Reject') release(senderAddress, txId)
+      // Commit spends, a reject releases, a fee-only commit settles coin by coin, a timeout keeps.
+      settleLocks(senderAddress, txId, outcome, body)
 
       return { txId, outcome, reason, recipientUtxoId: real.recipientUtxoId, feeMicrotari, selfOutputIds: real.selfOutputIds, spentInputIds }
     },

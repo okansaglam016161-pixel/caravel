@@ -90,6 +90,7 @@ import { preparePlaceOrder, recoverTradeState, refreshOwnOrders, runTrade, trade
 import { checkPayout, listBoardOrderIds, orderLegitimacy, readBoard, readOrder } from '../src/crypto/tradeRead'
 import { BUY, SELL, TRADE_CARAVEL_FEE_ACCOUNT, type TradeMode } from '../src/crypto/tradeConfig'
 import { loadTradeState } from '../src/crypto/tradeStore'
+import { MarketReader, type BookEntry } from '../src/crypto/market'
 import { decodeStatement, encodeStatement } from '../src/crypto/statementCbor'
 import { buildActivity, type TradeActivityRow } from '../src/crypto/activity'
 import { Mask, StealthTransferStatement, TARI_RESOURCE_ADDRESS, createOutput, signBalanceProof } from '@tari-project/ootle'
@@ -2621,6 +2622,31 @@ async function cmdTradeCborCheck(h: Harnessed): Promise<void> {
   field('result', `${ok} match, ${bad} mismatch`)
 }
 
+/** READ-ONLY. The market as the Trade page will see it (crypto/market.MarketReader — what useMarket feeds). */
+async function cmdMarket(h: Harnessed): Promise<void> {
+  rule('market  (crypto/market.MarketReader — book, my orders, recent trades)  ·  READ-ONLY')
+  const mark = net.length
+  const reader = new MarketReader({ walletAddress: h.address, tradeRoot: h.purposeKeys.tradeRoot })
+  const d = await reader.refresh()
+  const px = (p: { micro: bigint; exact: boolean }) => `${p.micro < 0n ? '−' : ''}${formatUnits(p.micro < 0n ? -p.micro : p.micro, 6)}${p.exact ? '' : '…'} cUSD/tTARI`
+  const leg = (l: { resource: string; amount: bigint }) => (l.resource === CUSD_ASSET.resource ? cusdFmt(l.amount) : amt(l.amount))
+  const row = (e: BookEntry) => `    ${e.orderId.slice(0, 18)}…  ${px(e.price).padEnd(22)} N=${e.n} P=${e.p}  taker pays ${leg(e.pays)} · receives ${leg(e.receives)}${e.yours ? `  ◀ YOURS (cancel key ${e.cancelIndex})` : ''}`
+  field('discovered', `${d.discovered} orders on the Board · ${d.book.sells.length + d.book.buys.length} on the book · ${d.hidden.length} hidden`)
+  console.log('\n  SELLS (cheapest first)'); for (const e of d.book.sells) console.log(row(e))
+  if (!d.book.sells.length) console.log('    (none)')
+  console.log(`\n  SPREAD  ${d.book.spread ? px(d.book.spread) : '— (needs both sides)'}`)
+  console.log('\n  BUYS (dearest first)'); for (const e of d.book.buys) console.log(row(e))
+  if (!d.book.buys.length) console.log('    (none)')
+  console.log('\n  MY ORDERS')
+  for (const m of d.mine) console.log(`    ${m.state.padEnd(9)} ${m.side === SELL ? 'SELL' : 'BUY '} ${m.orderId.slice(0, 18)}…  N=${m.n} P=${m.p} ${px(m.price)}  key ${m.cancelIndex}${m.placedAt === null ? '  (found on chain)' : ''}${m.confirmed ? '' : '  (checking — not readable verified right now)'}`)
+  if (!d.mine.length) console.log('    (none)')
+  console.log('\n  RECENT TRADES (newest first)')
+  for (const t of (d.recent ?? []).slice(0, 12)) console.log(`    ${t.at === null ? '(time unknown)     ' : new Date(t.at).toISOString().slice(0, 19).replace('T', ' ')}${t.atEstimated ? '~' : ' '} ${t.side === SELL ? 'bought' : 'sold  '} ${amt(t.n)} for ${cusdFmt(t.p)} @ ${px(t.price)}${t.yours ? `  ◀ yours (${t.yours})` : ''}`)
+  if (d.recent === null) console.log('    (could not be read this time)')
+  if (d.hidden.length) { console.log('\n  HIDDEN'); for (const x of d.hidden) console.log(`    ${x.orderId.slice(0, 18)}…  ${x.reason}`) }
+  printNet(mark)
+}
+
 const USAGE = `
 CARAVEL TERMINAL HARNESS — the real crypto/tx paths against the live Esmeralda indexer.
 
@@ -2704,6 +2730,8 @@ Environment:
               [--to private|public] [--yes]   no trade fee).
   trade-recover               Find this wallet's orders from the seed alone (a restore). Run it with
                               no CARAVEL_HARNESS_STATE to start from an empty store.
+  market                      The market as the Trade page sees it: the book (sorted, spread, taker
+                              legs after the 1% fee, YOURS flags), my orders, recent trades. READ-ONLY.
   trade-cbor-check            crypto/statementCbor against the Rust statement-cbor tool: fresh payouts,
                               and every payout stored on the Board (STATEMENT_CBOR_TOOL to override).
 
@@ -2843,6 +2871,9 @@ export async function main(argv: string[]): Promise<void> {
         break
       case 'trade-recover':
         await cmdTradeRecover(h)
+        break
+      case 'market':
+        await cmdMarket(h)
         break
       case 'trade-cbor-check':
         await cmdTradeCborCheck(h)

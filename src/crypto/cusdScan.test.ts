@@ -81,6 +81,20 @@ describe('scanCusdPrivate', () => {
     expect(scan.units).toBe(10_000_000_000n)
   })
 
+  it('never counts a coin this wallet already spent, even while an indexer still vouches for it', async () => {
+    // Measured live (T3b): right after a cUSD spend committed, the first indexer read still returned a
+    // `verified: true` live body for the spent coin; both said 404 a minute later.
+    const read = async (): Promise<VerifiedRead> => ({ kind: 'verified', body: liveBody() })
+    const scan = await scanCusdPrivate({
+      open: openerFrom({ [idOf(C(1))]: 9_976_000_000n, [idOf(C(2))]: 9_974_000_000n }),
+      listRows: listRows([1, 2]),
+      read,
+      knownIds: [],
+      spentIds: new Set([idOf(C(1))]),
+    })
+    expect(scan.units).toBe(9_974_000_000n)
+  })
+
   it('does not count a recovered id the view key does not actually open', async () => {
     const recovered = idOf(C(9))
     const read = async (): Promise<VerifiedRead> => ({ kind: 'verified', body: liveBody() })

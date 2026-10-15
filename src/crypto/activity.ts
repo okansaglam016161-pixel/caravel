@@ -18,6 +18,7 @@ import { sortKey, type CaravelMessage } from '../messaging/types'
 import type { SentEntry } from './txHistory'
 import type { JournalEntry, JournalOutcome } from './journal'
 import type { ReconciledReceive } from './reconcile'
+import type { TradeRecord } from './tradeStore'
 import * as nip19 from 'nostr-tools/nip19'
 
 // npub1abcd…wxyz — never throws (blank/invalid hex falls back to a raw prefix).
@@ -155,6 +156,7 @@ export type ActivityRow =
    * the two can be days apart — see firstSeenLabel, which renders it without a time of day for
    * exactly that reason.
    */
+  | TradeActivityRow
   | {
       kind: 'received-unattributed'
       id: string
@@ -169,6 +171,37 @@ export type ActivityRow =
       source: ActivitySource
     }
 
+/**
+ * A Caravel Trade event (T3b). Six of them, named for what the user did or saw:
+ *
+ *   placed-sell / placed-buy   this wallet placed an order (its escrow left for the order)
+ *   sold / bought              this wallet FILLED someone's order: a BUY order (it sold tTARI) or a
+ *                              SELL order (it bought tTARI)
+ *   order-filled               somebody filled an order of OURS — no transaction of ours, so it comes
+ *                              from crypto/tradeStore (first seen filled), not the journal
+ *   cancelled                  this wallet cancelled its own order; the escrow came back
+ *
+ * Two currencies, so it carries each signed delta in its own units (µtTARI, cUSD base units) — `null`
+ * when that token did not move — and the renderer formats each. `feeMicrotari` is the network fee
+ * (none for order-filled: the taker paid it). `trade` is a journalled trade whose record is missing
+ * here (a store loss): it says a trade happened and nothing it cannot know.
+ */
+export type TradeActivityKind = 'placed-sell' | 'placed-buy' | 'sold' | 'bought' | 'order-filled' | 'cancelled' | 'trade'
+
+export type TradeActivityRow = {
+  kind: 'trade'
+  id: string
+  tradeKind: TradeActivityKind
+  timestamp: number
+  tariDelta: bigint | null
+  cusdDelta: bigint | null
+  feeMicrotari: bigint | null
+  outcome: ActivityOutcome
+  source: ActivitySource
+  txId: string | null
+  orderId: string | null
+}
+
 /** txHistory's outcome vocabulary, normalised onto the journal's. One table, one direction. */
 const LEGACY_OUTCOME: Record<'Commit' | 'Reject' | 'Timeout', JournalOutcome> = {
   Commit: 'committed',
@@ -178,7 +211,7 @@ const LEGACY_OUTCOME: Record<'Commit' | 'Reject' | 'Timeout', JournalOutcome> = 
 
 /** One journalled action, projected into a row. Returns null for kinds the list does not show.
  *  `cusdUnits` maps a cUSD-claim journal id to its claimed amount (crypto/cusdStore). */
-function fromJournal(e: JournalEntry, cusdUnits: ReadonlyMap<string, bigint>): ActivityRow | null {
+function fromJournal(e: JournalEntry, cusdUnits: ReadonlyMap<string, bigint>, trades: ReadonlyMap<string, TradeRecord>): ActivityRow | null {
   const common = {
     id: e.id,
     timestamp: e.timestamp,
@@ -231,6 +264,48 @@ function fromJournal(e: JournalEntry, cusdUnits: ReadonlyMap<string, bigint>): A
       return null
     case 'burn':
       return { kind: 'burn', ...common, from: e.from === 'public' ? 'public' : 'private' }
+    case 'trade-place':
+    case 'trade-fill':
+    case 'trade-cancel':
+      return tradeRow(e, trades.get(e.id))
+  }
+}
+
+/** The signed tTARI / cUSD a trade moved for this wallet, by what the user did. */
+export function tradeDeltas(kind: TradeActivityKind, r: Pick<TradeRecord, 'side' | 'n' | 'p' | 'tradeFee'>): { tari: bigint | null; cusd: bigint | null } {
+  const sell = r.side === 0
+  switch (kind) {
+    case 'placed-sell': return { tari: -r.n, cusd: null }
+    case 'placed-buy': return { tari: null, cusd: -r.p }
+    case 'sold': return { tari: -r.n, cusd: r.p }                      // filled a BUY order
+    case 'bought': return { tari: r.n - r.tradeFee, cusd: -r.p }       // filled a SELL order
+    case 'order-filled': return sell ? { tari: null, cusd: r.p } : { tari: r.n - r.tradeFee, cusd: null }
+    case 'cancelled': return sell ? { tari: r.n, cusd: null } : { tari: null, cusd: r.p }
+    case 'trade': return { tari: null, cusd: null }
+  }
+}
+
+function tradeRow(e: JournalEntry, r: TradeRecord | undefined): TradeActivityRow {
+  const tradeKind: TradeActivityKind = !r ? 'trade'
+    : r.action === 'place' ? (r.side === 0 ? 'placed-sell' : 'placed-buy')
+    : r.action === 'fill' ? (r.side === 0 ? 'bought' : 'sold')
+    : 'cancelled'
+  const d = r ? tradeDeltas(tradeKind, r) : { tari: null, cusd: null }
+  return {
+    kind: 'trade', id: e.id, tradeKind, timestamp: e.timestamp,
+    tariDelta: d.tari, cusdDelta: d.cusd, feeMicrotari: e.feeMicrotari,
+    outcome: e.outcome as ActivityOutcome, source: 'local-journal', txId: e.txId, orderId: r?.orderId ?? null,
+  }
+}
+
+/** A maker's order that somebody filled: the "Order filled" row, from the trade store. */
+function orderFilledRow(r: TradeRecord): TradeActivityRow | null {
+  if (r.action !== 'place' || r.orderState !== 'filled' || r.filledSeenAt === null || !r.orderId) return null
+  const d = tradeDeltas('order-filled', r)
+  return {
+    kind: 'trade', id: `filled-${r.orderId}`, tradeKind: 'order-filled', timestamp: r.filledSeenAt,
+    tariDelta: d.tari, cusdDelta: d.cusd, feeMicrotari: null,
+    outcome: 'committed', source: 'chain', txId: null, orderId: r.orderId,
   }
 }
 
@@ -266,13 +341,22 @@ export function buildActivity(
   reconciled: readonly ReconciledReceive[] = [],
   /** cUSD claimed per journal id — see crypto/cusdStore. Empty is fine; those rows show `···`. */
   cusdUnits: ReadonlyMap<string, bigint> = new Map(),
+  /** This wallet's Caravel Trade records (crypto/tradeStore): trade terms, and its orders seen filled. */
+  trades: readonly TradeRecord[] = [],
 ): ActivityRow[] {
   const rows: ActivityRow[] = []
   const claimedTxIds = new Set<string>()
+  const tradeByJournal = new Map(trades.map(t => [t.journalId, t]))
+
+  // A maker's filled order is nobody's journal entry here — the taker's transaction did it.
+  for (const t of trades) {
+    const row = orderFilledRow(t)
+    if (row) rows.push(row)
+  }
 
   // FIRST, so it wins every collision below.
   for (const e of journal) {
-    const row = fromJournal(e, cusdUnits)
+    const row = fromJournal(e, cusdUnits, tradeByJournal)
     // ORDER MATTERS: a kind that renders nothing claims nothing either. A `chat-payment` entry is
     // recorded only so its change output can be subtracted later, and it names the same txId the
     // chat message does — so claiming it here would silently delete the chat row that legitimately

@@ -39,6 +39,13 @@ export type JournalKind =
   // and the fee coins. The cUSD amount lives in crypto/cusdStore, never here, because every
   // downstream reader treats a journal output id as TARI.
   | 'cusd-faucet'
+  // Caravel Trade (T3b): placing an order, filling one, cancelling one's own. As with the cUSD claim,
+  // the journal holds the TARI side only — `amountMicrotari` is the tTARI the trade moved (0 when its
+  // leg is cUSD), `feeMicrotari` the network fee, `selfOutputIds`/`spentInputIds` tTARI ids. A place
+  // also lists, among its self outputs, a private tTARI payout a later fill will create for us (a BUY
+  // order's), so that output is never mistaken for a stranger's payment. The terms and every cUSD
+  // figure live in crypto/tradeStore, keyed by this entry.
+  | 'trade-place' | 'trade-fill' | 'trade-cancel'
 
 /**
  * How it ended.
@@ -177,6 +184,16 @@ export const OUTPUT_CREATING_ACTIONS = [
    * no burn existed before this was recorded, so the original threshold still holds.
    */
   'burn',
+  /**
+   * A cUSD faucet claim: its tTARI fee coin's change comes back to us (T3a). Added with the trades, as
+   * 'burn' was added after coverage first shipped — useJournalCoverage re-declares and keeps the original
+   * threshold, which is truthful: neither could happen before the code that records it shipped.
+   */
+  'cusd-faucet',
+  /** Caravel Trade: tTARI change, a private tTARI receive, a cancel's returned escrow, a maker's payout. */
+  'trade-place',
+  'trade-fill',
+  'trade-cancel',
 ] as const
 
 export type OutputCreatingAction = (typeof OUTPUT_CREATING_ACTIONS)[number]

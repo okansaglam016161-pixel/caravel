@@ -38,6 +38,7 @@ import { loadTariAddresses, setTariAddress, type TariAddressMap } from '../messa
 import { recoverAccountAddress } from '../crypto/accountRecovery'
 import { fetchRevealedBalance } from '../crypto/revealedBalance'
 import { scanCusd, cusdTotal, type CusdBalances } from '../crypto/cusdScan'
+import { refreshOwnOrders } from '../crypto/tradeActions'
 import {
   advanceAll, anySettling, acknowledged, isAccountedFor, withSettle,
   type PendingSettle, type SettleEvidence, type SideBalances,
@@ -516,7 +517,11 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     const viewSecret = w.getViewOnlySecret()
     if (!viewSecret) return
     setCusd(prev => ({ ...CUSD_IDLE, status: 'scanning', generation: prev.generation }))
-    scanCusd(viewSecret, walletAddress, ctrl.signal)
+    // This wallet's own open Caravel Trade orders first (crypto/tradeActions): one somebody filled
+    // becomes "Order filled", and its private cUSD payout is then asked for by id in the scan below.
+    // Best-effort — an unreadable order is simply checked again on the next refresh.
+    refreshOwnOrders(walletAddress).catch(() => 0)
+      .then(() => scanCusd(viewSecret, walletAddress, ctrl.signal))
       .then(balances => {
         if (ctrl.signal.aborted) return
         setCusd({ status: 'done', units: cusdTotal(balances), balances, error: '', generation })

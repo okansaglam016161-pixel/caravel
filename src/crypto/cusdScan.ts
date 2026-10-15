@@ -32,7 +32,7 @@
 import { decryptOwnedUtxo, Network, WasmStealthCrypto, type IndexerGetSubstateResponse } from '@tari-project/ootle'
 import { CUSD_ASSET } from './assets'
 import { loadAccountAddress } from './accountStore'
-import { loadCusdClaims } from './cusdStore'
+import { knownCusdIds, spentCusdIds } from './tradeStore'
 import { INDEXER_URLS, POINT_READ_TIMEOUT_MS } from './indexerConfig'
 import { fetchWithRetry } from './indexerRetry'
 import { decodeRevealedAmount } from './revealedBalance'
@@ -129,29 +129,36 @@ export async function scanCusdPrivate(opts: {
   signal?: AbortSignal
   listRows?: () => Promise<{ rows: UtxoRow[]; incomplete: boolean }>
   read?: VerifiedReader
-  /** Output ids to ask for even if unlisted. Defaults to this wallet's recorded claim outputs. */
+  /** Output ids to ask for even if unlisted. Defaults to this wallet's own cUSD outputs (claims, trades). */
   knownIds?: readonly string[]
+  /** Coins already spent by this wallet (tradeStore.spentCusdIds by default) — never counted. */
+  spentIds?: ReadonlySet<string>
 }): Promise<CusdPrivateScan> {
   const read = opts.read ?? verifiedRead
   const feed = await (opts.listRows
     ? opts.listRows()
     : fetchAllUtxoRows({ resourceHex: CUSD_ASSET.resourceHex, signal: opts.signal }))
 
+  // Coins this wallet has spent in a trade: never counted, whatever a lagging indexer still says.
+  const spent = opts.spentIds ?? (opts.walletAddress ? spentCusdIds(opts.walletAddress) : new Set<string>())
+
   // Owned per the listing — a hint that something of ours exists at this id.
   const candidates = new Set<string>()
   for (const [commitment, body] of feed.rows) {
     if (opts.signal?.aborted) break
     const id = cusdId(commitment)
+    if (spent.has(id)) continue
     if (await opts.open(id, body) !== null) candidates.add(id)
   }
 
   // Our own outputs the listing does not have yet.
   const listed = new Set(feed.rows.map(([c]) => cusdId(c)))
-  const known = opts.knownIds ?? (opts.walletAddress ? loadCusdClaims(opts.walletAddress).map(r => r.outputId) : [])
+  // Our own cUSD outputs — the faucet claim's and every trade's (crypto/tradeStore includes the claims).
+  const known = opts.knownIds ?? (opts.walletAddress ? knownCusdIds(opts.walletAddress) : [])
   const recovered: string[] = []
   for (const id of known) {
     if (!id.startsWith(`utxo_${CUSD_ASSET.resourceHex}_`)) continue   // only ever cUSD ids
-    if (listed.has(id) || candidates.has(id)) continue
+    if (listed.has(id) || candidates.has(id) || spent.has(id)) continue
     candidates.add(id)
     recovered.push(id)
   }

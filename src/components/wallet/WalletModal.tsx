@@ -39,7 +39,7 @@ import {
   type PreparedPublicSend,
 } from '../../crypto/publicSend'
 import { parseOotleAddress } from '@tari-project/ootle-wasm'
-import { buildActivity, type ActivityOutcome, type ActivityRow } from '../../crypto/activity'
+import { buildActivity, type ActivityOutcome, type ActivityRow, type TradeActivityKind, type TradeActivityRow } from '../../crypto/activity'
 import { beginEntry, settleEntry } from '../../crypto/journalStore'
 import type { JournalOutcome } from '../../crypto/journal'
 import { createActionLock, guarded } from '../../crypto/actionLock'
@@ -53,7 +53,8 @@ import type { Dir } from './v2/moveCopy'
 import { ActivityRowShell, type ActivityStatus, type SendSource, type SendView } from './v2/panels'
 import { useJournal } from '../../hooks/useJournal'
 import { useCusdClaims } from '../../hooks/useCusdClaims'
-import { CUSD_ASSET, formatUnits } from '../../crypto/assets'
+import { useTrades } from '../../hooks/useTrades'
+import { CUSD_ASSET, TARI_ASSET, formatUnits } from '../../crypto/assets'
 import { useUtxoLedger } from '../../hooks/useUtxoLedger'
 import { useJournalCoverage } from '../../hooks/useJournalCoverage'
 import { useSpentOutputs } from '../../hooks/useSpentOutputs'
@@ -238,6 +239,44 @@ function BurnRowV2({ row, hidden }: { row: Extract<ActivityRow, { kind: 'burn' }
   }} />
 }
 
+const TARI_DECIMALS = TARI_ASSET.decimals
+
+/** A Caravel Trade signed figure in its own units — `+2 cUSD`, `−1 TARI`. */
+function tradeFigure(delta: bigint, decimals: number, ticker: string): string {
+  const sign = delta < 0n ? '−' : '+'
+  return `${sign}${formatUnits(delta < 0n ? -delta : delta, decimals)} ${ticker}`
+}
+
+const TRADE_TITLE: Record<TradeActivityKind, string> = {
+  'placed-sell': 'Placed sell order', 'placed-buy': 'Placed buy order', sold: 'Sold', bought: 'Bought',
+  'order-filled': 'Order filled', cancelled: 'Cancelled', trade: 'Trade',
+}
+const TRADE_NOTE: Record<TradeActivityKind, string> = {
+  'placed-sell': 'Caravel Trade · escrowed until filled or cancelled',
+  'placed-buy': 'Caravel Trade · escrowed until filled or cancelled',
+  sold: 'Caravel Trade · filled a buy order', bought: 'Caravel Trade · filled a sell order',
+  'order-filled': 'Caravel Trade · your order was filled', cancelled: 'Caravel Trade · escrow returned',
+  trade: 'Caravel Trade',
+}
+
+/**
+ * A Caravel Trade event (T3b). Two currencies can move in one row, so both signed figures are
+ * formatted here — each in its own units — and passed as text; the shell formats TARI only. The
+ * direction follows the tTARI: out when it left (an order placed, a sale), in when it arrived.
+ */
+function TradeRowV2({ row, hidden }: { row: TradeActivityRow; hidden: boolean }) {
+  const parts: string[] = []
+  if (row.tariDelta !== null) parts.push(tradeFigure(row.tariDelta, TARI_DECIMALS, TICKER))
+  if (row.cusdDelta !== null) parts.push(tradeFigure(row.cusdDelta, CUSD_ASSET.decimals, CUSD_ASSET.ticker))
+  const out = row.tariDelta !== null ? row.tariDelta < 0n : row.cusdDelta !== null && row.cusdDelta < 0n
+  return <ActivityRowShell hidden={hidden} row={{
+    id: row.id, direction: out ? 'out' : 'in', title: TRADE_TITLE[row.tradeKind], note: TRADE_NOTE[row.tradeKind],
+    status: row.tradeKind === 'order-filled' ? 'received' : STATUS_FOR[row.outcome],
+    amountMicrotari: null,
+    amountText: parts.length ? parts.join(' · ') : undefined,
+  }} />
+}
+
 /** One row, whichever kind it is. */
 function ActivityRowFor({ row, hidden }: { row: ActivityRow; hidden: boolean }) {
   switch (row.kind) {
@@ -246,6 +285,7 @@ function ActivityRowFor({ row, hidden }: { row: ActivityRow; hidden: boolean }) 
     case 'faucet': return <FaucetRowV2 row={row} hidden={hidden} />
     case 'cusd-faucet': return <CusdFaucetRowV2 row={row} hidden={hidden} />
     case 'burn': return <BurnRowV2 row={row} hidden={hidden} />
+    case 'trade': return <TradeRowV2 row={row} hidden={hidden} />
     case 'received': return <ReceivedRowV2 row={row} hidden={hidden} />
     case 'received-unattributed': return <UnattributedReceiveRowV2 row={row} hidden={hidden} />
   }
@@ -1314,7 +1354,8 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
     () => new Map(cusdClaims.map(c => [c.journalId, c.units] as const)),
     [cusdClaims],
   )
-  const activity = buildActivity(journal, txHistory, messages, reconciled, cusdUnitsByJournal)
+  const trades = useTrades(address)
+  const activity = buildActivity(journal, txHistory, messages, reconciled, cusdUnitsByJournal, trades)
 
   const body = (
     <WalletModalV2

@@ -11,6 +11,7 @@ import { draftToEntry, type JournalEntry } from './journal'
 import type { SentEntry } from './txHistory'
 import type { CaravelMessage } from '../messaging/types'
 import type { ReconciledReceive } from './reconcile'
+import type { TradeRecord } from './tradeStore'
 
 const ADDRESS = 'otl_esm_1tnay4uzgpe0cvu4tzwfmhdhtvc3pq97szrnteetuz2dvqmjk2ecwq34fnsm8hz7tk43xrur8d2y6mye4w3shjq4qj5sm7xvpq7yqqngs8224p'
 
@@ -327,5 +328,50 @@ describe('reconciled receives reach the list, saying only what is known', () => 
 
   it('still emits no row for a journalled `receive` kind — those are derived, not stored', () => {
     expect(buildActivity([journalled({ kind: 'receive' })], [], [], [])).toEqual([])
+  })
+})
+
+// ── Caravel Trade rows (T3b) ─────────────────────────────────────────────────
+
+
+function trade(over: Partial<TradeRecord> = {}): TradeRecord {
+  return {
+    journalId: 'tj', action: 'place', txId: 'ttx', at: 1, side: 0, n: 1_000_000n, p: 2_000_000n,
+    tradeFee: 10_000n, caravelCut: 7_000n, burnCut: 3_000n, pays: null, gets: null, orderId: 'component_o',
+    cancelIndex: 0, cusdOutputIds: [], cusdSpentIds: [], outcome: 'committed', payoutOutputId: null,
+    orderState: 'open', filledSeenAt: null, ...over,
+  }
+}
+
+describe('buildActivity — Caravel Trade', () => {
+  const rowFor = (kind: 'trade-place' | 'trade-fill' | 'trade-cancel', t: TradeRecord) => {
+    const rows = buildActivity([journalled({ id: t.journalId, kind, feeMicrotari: 21_756n, txId: t.txId })], [], [], [], new Map(), [t])
+    return rows.find(r => r.kind === 'trade')!
+  }
+
+  it('names each trade for what the user did, with each token\'s signed delta in its own units', () => {
+    expect(rowFor('trade-place', trade({ side: 0 }))).toMatchObject({ tradeKind: 'placed-sell', tariDelta: -1_000_000n, cusdDelta: null, feeMicrotari: 21_756n })
+    expect(rowFor('trade-place', trade({ side: 1 }))).toMatchObject({ tradeKind: 'placed-buy', tariDelta: null, cusdDelta: -2_000_000n })
+    // Filling a SELL order buys tTARI (N minus the fee); filling a BUY order sells it.
+    expect(rowFor('trade-fill', trade({ action: 'fill', side: 0 }))).toMatchObject({ tradeKind: 'bought', tariDelta: 990_000n, cusdDelta: -2_000_000n })
+    expect(rowFor('trade-fill', trade({ action: 'fill', side: 1 }))).toMatchObject({ tradeKind: 'sold', tariDelta: -1_000_000n, cusdDelta: 2_000_000n })
+    expect(rowFor('trade-cancel', trade({ action: 'cancel', side: 0 }))).toMatchObject({ tradeKind: 'cancelled', tariDelta: 1_000_000n, cusdDelta: null })
+    expect(rowFor('trade-cancel', trade({ action: 'cancel', side: 1 }))).toMatchObject({ tradeKind: 'cancelled', tariDelta: null, cusdDelta: 2_000_000n })
+  })
+
+  it('a maker\'s order seen filled is its own row — no journal entry, no network fee (the taker paid it)', () => {
+    const rows = buildActivity([], [], [], [], new Map(), [
+      trade({ side: 0, orderState: 'filled', filledSeenAt: 50 }),
+      trade({ journalId: 'b', side: 1, orderId: 'component_b', orderState: 'filled', filledSeenAt: 60 }),
+      trade({ journalId: 'c', orderId: 'component_c', orderState: 'open' }),
+    ])
+    expect(rows).toHaveLength(2)
+    expect(rows[0]).toMatchObject({ tradeKind: 'order-filled', tariDelta: 990_000n, cusdDelta: null, feeMicrotari: null, source: 'chain', timestamp: 60 })
+    expect(rows[1]).toMatchObject({ tradeKind: 'order-filled', tariDelta: null, cusdDelta: 2_000_000n, timestamp: 50 })
+  })
+
+  it('a journalled trade whose record is gone says only that a trade happened', () => {
+    const [row] = buildActivity([journalled({ id: 'lost', kind: 'trade-fill' })], [], [])
+    expect(row).toMatchObject({ kind: 'trade', tradeKind: 'trade', tariDelta: null, cusdDelta: null })
   })
 })

@@ -95,8 +95,10 @@ export interface BookEntry {
   /** tTARI side, µtTARI; cUSD side, base units. */
   n: bigint
   p: bigint
-  /** The 1% trade fee (on the tTARI side). */
+  /** The 1% trade fee (on the tTARI side), and its shares as the order fixed them at placement. */
   fee: bigint
+  caravelCut: bigint
+  burnCut: bigint
   /** The version the verified read saw — what a fill pins. */
   version: number
   price: Price
@@ -124,7 +126,7 @@ export function toBookEntry(o: OrderInfo, seq: number, mine: ReadonlyMap<string,
   const { pays, receives } = takerLegs(o)
   const cancelIndex = mine.get(o.id) ?? null
   return {
-    orderId: o.id, side: o.side, n: o.n, p: o.p, fee: o.fee, version: o.version,
+    orderId: o.id, side: o.side, n: o.n, p: o.p, fee: o.fee, caravelCut: o.caravelCut, burnCut: o.burnCut, version: o.version,
     price: pricePerTari(o.n, o.p), pays, receives, yours: cancelIndex !== null, cancelIndex, seq,
   }
 }
@@ -198,6 +200,8 @@ export interface MyOrder {
   side: OrderSide
   n: bigint
   p: bigint
+  /** The order's 1% trade fee (tTARI), as fixed at placement. */
+  fee: bigint
   price: Price
   state: OrderState
   /**
@@ -234,7 +238,7 @@ export function myOrdersFrom(
       : before ? stateOf(before) : r.orderState
     if (!state) continue
     out.push({
-      orderId: r.orderId, side: r.side, n: r.n, p: r.p, price: pricePerTari(r.n, r.p), state, confirmed: !!now,
+      orderId: r.orderId, side: r.side, n: r.n, p: r.p, fee: (now ?? before)?.fee ?? r.tradeFee, price: pricePerTari(r.n, r.p), state, confirmed: !!now,
       cancelIndex: r.cancelIndex, placedAt: r.journalId.startsWith('recovered-') ? null : r.at,
     })
   }

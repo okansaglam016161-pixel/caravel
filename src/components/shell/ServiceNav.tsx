@@ -90,13 +90,13 @@ import LogoTile from '../primitives/LogoTile'
 // NOTHING NEEDS A FALLBACK. AppShell defaults to 'wallet' and always did, and this union is only
 // ever compared by equality, never switched on exhaustively. The two tables under it are
 // Record<Service, …>, so adding a member here is a type error until both are filled in.
-const SERVICES = ['wallet', 'chat', 'burn'] as const
+const SERVICES = ['wallet', 'chat', 'burn', 'trade'] as const
 
 /** Type-only export: keeps this file a component module, which is what fast refresh wants. */
 export type Service = (typeof SERVICES)[number]
 
 /** The tooltip text, and the accessible name. Both, from one string — see the header note. */
-const LABEL: Record<Service, string> = { wallet: 'Wallet', chat: 'Chat', burn: 'Burn' }
+const LABEL: Record<Service, string> = { wallet: 'Wallet', chat: 'Chat', burn: 'Burn', trade: 'Trade' }
 
 const ICON: Record<Service, React.ReactNode> = {
   wallet: (
@@ -116,6 +116,12 @@ const ICON: Record<Service, React.ReactNode> = {
   burn: (
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
       <path d="M12 3c1.2 4.8 6 6.6 6 12a6 6 0 0 1-12 0c0-2.4 1.2-4.2 2.4-5.4 0 2.4 1.2 3.6 2.4 3.6 0-3.6.6-7.2 1.2-10.2z" />
+    </svg>
+  ),
+  // Caravel Trade's rising line, as the Trade design draws it in the spine.
+  trade: (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 17l6-6 4 4 8-8" /><path d="M15 7h6v6" />
     </svg>
   ),
 }

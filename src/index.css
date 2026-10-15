@@ -513,3 +513,20 @@ a:hover { color: var(--accent-200); }
    finished at that point and we are waiting on an index, so a determinate bar would be a lie. */
 @keyframes cv-slide { 0% { transform: translateX(-60%); } 100% { transform: translateX(260%); } }
 @keyframes cv-breathe { 0%, 100% { box-shadow: 0 0 0 0 rgba(var(--accent-400-rgb), 0.35); } 50% { box-shadow: 0 0 0 4px rgba(var(--accent-400-rgb), 0); } }
+
+/* ── Caravel Trade (components/trade) ─────────────────────────────────────── */
+.cv-trade-grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.cv-trade-book { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.cv-trade-book > .cv-trade-side + .cv-trade-side { border-left: 1px solid var(--border); }
+.cv-trade-brow { display: grid; grid-template-columns: 1fr 1fr 1fr 64px; gap: 8px; }
+.cv-trade-trow { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 8px; }
+.cv-trade-field:focus-within { border-color: var(--accent-400) !important; box-shadow: 0 0 0 3px rgba(var(--accent-400-rgb), .15); }
+@media (max-width: 760px) {
+  .cv-trade-book { grid-template-columns: minmax(0, 1fr); }
+  .cv-trade-book > .cv-trade-side + .cv-trade-side { border-left: none; border-top: 1px solid var(--border); }
+  .cv-trade-brow { grid-template-columns: 1fr 1fr 1fr 56px; gap: 6px; }
+}
+@media (max-width: 520px) {
+  .cv-trade-grid2 { grid-template-columns: minmax(0, 1fr); }
+  .cv-trade-actions { flex-direction: column; }
+}

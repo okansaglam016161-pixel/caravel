@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from 'vitest'
 import {
-  scanCusdPrivate, readCusdPublic, accountVaultIds, cusdTotal,
+  scanCusdPrivate, readCusdPublic, accountVaultIds, cusdTotal, addCusdOutput,
   type VerifiedRead, type CusdBalances,
 } from './cusdScan'
 import { CUSD_ASSET } from './assets'
@@ -95,6 +95,36 @@ describe('scanCusdPrivate', () => {
     expect(scan.units).toBe(9_974_000_000n)
   })
 
+  it('counts OUR OWN fresh output from an unverified body (a just-made claim) — never a stranger\'s', async () => {
+    // Both read `unknown` verified (freshly written). C(9) is our recorded claim output; C(3) is a
+    // listed row our key opens but that we never recorded — still needs a verified read.
+    const read = async (): Promise<VerifiedRead> => ({ kind: 'unknown' })
+    const readAny = async () => liveBody()
+    const scan = await scanCusdPrivate({
+      open: openerFrom({ [idOf(C(9))]: 10_000_000_000n, [idOf(C(3))]: 7_000_000n }),
+      listRows: listRows([3]),
+      read,
+      readAny,
+      knownIds: [idOf(C(9))],
+    })
+    expect(scan.outputs.map(o => o.id)).toEqual([idOf(C(9))])
+    expect(scan.ownUnverified).toEqual([idOf(C(9))])
+    expect(scan.unverified).toEqual([idOf(C(3))])
+    expect(scan.incomplete).toBe(true)   // the stranger row keeps the total honest
+  })
+
+  it('an own output nobody serves yet stays unverified — the figure is not established', async () => {
+    const scan = await scanCusdPrivate({
+      open: openerFrom({ [idOf(C(9))]: 10_000_000_000n }),
+      listRows: listRows([]),
+      read: async () => ({ kind: 'unknown' }),
+      readAny: async () => undefined,
+      knownIds: [idOf(C(9))],
+    })
+    expect(scan.units).toBe(0n)
+    expect(scan.incomplete).toBe(true)
+  })
+
   it('does not count a recovered id the view key does not actually open', async () => {
     const recovered = idOf(C(9))
     const read = async (): Promise<VerifiedRead> => ({ kind: 'verified', body: liveBody() })
@@ -160,22 +190,36 @@ describe('readCusdPublic', () => {
 
 describe('cusdTotal', () => {
   const base = (over: Partial<CusdBalances>): CusdBalances => ({
-    private: { outputs: [], units: 0n, incomplete: false, unverified: [], gone: [], recovered: [], listed: 0 },
+    private: { outputs: [], units: 0n, incomplete: false, unverified: [], gone: [], recovered: [], ownUnverified: [], listed: 0 },
     public: { kind: 'ok', units: 0n },
     ...over,
   })
   it('sums private and public when both are established', () => {
     expect(cusdTotal(base({
-      private: { outputs: [], units: 6_000_000n, incomplete: false, unverified: [], gone: [], recovered: [], listed: 0 },
+      private: { outputs: [], units: 6_000_000n, incomplete: false, unverified: [], gone: [], recovered: [], ownUnverified: [], listed: 0 },
       public: { kind: 'ok', units: 4_000_000n },
     }))).toBe(10_000_000n)
   })
   it('is null when the private half is incomplete', () => {
     expect(cusdTotal(base({
-      private: { outputs: [], units: 6_000_000n, incomplete: true, unverified: ['x'], gone: [], recovered: [], listed: 0 },
+      private: { outputs: [], units: 6_000_000n, incomplete: true, unverified: ['x'], gone: [], recovered: [], ownUnverified: [], listed: 0 },
     }))).toBeNull()
   })
   it('is null when the public half is unknown', () => {
     expect(cusdTotal(base({ public: { kind: 'unknown', reason: 'x' } }))).toBeNull()
+  })
+})
+
+describe('addCusdOutput — a claim counted the moment it commits', () => {
+  const base: CusdBalances = {
+    private: { outputs: [{ id: 'a', units: 5n }], units: 5n, incomplete: false, unverified: [], gone: [], recovered: [], ownUnverified: [], listed: 1 },
+    public: { kind: 'ok', units: 3n },
+  }
+  it('adds the output to the private side, so the total rises by exactly its value', () => {
+    const b = addCusdOutput(base, 'claim', 10_000_000_000n)
+    expect(cusdTotal(b)).toBe(10_000_000_008n)
+  })
+  it('never counts the same output twice', () => {
+    expect(addCusdOutput(base, 'a', 5n)).toBe(base)
   })
 })

@@ -90,6 +90,7 @@ import { preparePlaceOrder, recoverTradeState, refreshOwnOrders, runTrade, trade
 import { checkPayout, listBoardOrderIds, orderLegitimacy, readBoard, readOrder } from '../src/crypto/tradeRead'
 import { BUY, SELL, TRADE_CARAVEL_FEE_ACCOUNT, type TradeMode } from '../src/crypto/tradeConfig'
 import { loadTradeState } from '../src/crypto/tradeStore'
+import { recordCusdClaim } from '../src/crypto/cusdStore'
 import { MarketReader, type BookEntry } from '../src/crypto/market'
 import { decodeStatement, encodeStatement } from '../src/crypto/statementCbor'
 import { buildActivity, type TradeActivityRow } from '../src/crypto/activity'
@@ -183,12 +184,20 @@ const realFetch = globalThis.fetch
 /** See the note in the wrapper below. */
 const BLOCK_SSE = (process.env.CARAVEL_HARNESS_BLOCK_SSE ?? '') !== ''
 
+/** `trade-offline-check` flips this to cut EVERY request, as a browser gone offline would. */
+const harnessNet = { offline: false }
+
 globalThis.fetch = async function instrumentedFetch(input: RequestInfo | URL, init?: RequestInit) {
   const requested = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
   const method = (init?.method ?? (typeof input === 'object' && 'method' in input ? input.method : 'GET') ?? 'GET').toUpperCase()
   const reqBody = typeof init?.body === 'string' ? init.body : undefined
   const started = performance.now()
   const n = net.length + 1
+
+  if (harnessNet.offline) {
+    net.push({ n, method, url: requested, status: 'OFFLINE (trade-offline-check)', bytes: 0, ms: 0 })
+    throw new TypeError('Failed to fetch')
+  }
 
   // ── SIMULATING A BROKEN EVENT STREAM ─────────────────────────────────────
   //
@@ -1345,6 +1354,19 @@ async function cmdCusdClaim(h: Harnessed, yes: boolean): Promise<void> {
   field('tTARI change', result.tariChangeOutputIds ? JSON.stringify(result.tariChangeOutputIds) : 'undefined')
   field('tTARI spent', JSON.stringify(result.spentInputIds))
   printNet(mark)
+  if (result.outcome === 'Commit') {
+    // What the app does on commit (CusdFaucetClaimPanel): record the output, add it at once
+    // (cusdScan.addCusdOutput), then the full scan — which must KEEP it (an own, fresh output).
+    rule('right after the claim  (the immediate figure, then a scan at once)')
+    const outputId = result.cusdOutputIds?.[0] ?? ''
+    recordCusdClaim(h.address, { journalId: `harness-${result.txId}`, txId: result.txId, outputId, units: result.units, at: Date.now() })
+    const t0 = performance.now()
+    const scan = await scanCusdPrivate({ walletAddress: h.address, open: viewKeyOpener(h.viewSecret) })
+    field('scan at once', `${cusdAmt(scan.units)}${scan.incomplete ? '  (INCOMPLETE)' : ''} in ${((performance.now() - t0) / 1000).toFixed(1)}s`)
+    field('  claim output', scan.outputs.some(o => o.id === outputId)
+      ? `counted${scan.ownUnverified.includes(outputId) ? ' (served unverified — counted as our own output)' : ' (verified)'}`
+      : 'NOT COUNTED ✗')
+  }
   console.log('\n  The cUSD output takes 60-90s to appear in /utxos; the cUSD scan recovers it by id before then.')
   console.log('  Re-run cusd-status to see the 10,000 cUSD, then again after a minute to see it from the listing.')
 }
@@ -2647,6 +2669,52 @@ async function cmdMarket(h: Harnessed): Promise<void> {
   printNet(mark)
 }
 
+/**
+ * THE TRADE PAGE'S REFRESH, as hooks/useFullRescan runs it: the market first (book, My orders, recent
+ * trades — and this wallet's filled orders recorded from their fill events), then the full wallet scan
+ * (own orders re-checked, then TARI private + public and cUSD). Printed: the book, My orders, balances.
+ */
+async function fullRescanOnce(h: Harnessed, account: string | null, reader: MarketReader): Promise<{ market: string; balances: TradeBalances | null }> {
+  let market = ''
+  try {
+    const d = await reader.refresh()
+    const yours = [...d.book.sells, ...d.book.buys].filter(e => e.yours).map(e => e.orderId.slice(0, 18) + '…')
+    market = `book ${d.book.sells.length} sells / ${d.book.buys.length} buys (yours: ${yours.join(', ') || 'none'}) · my orders ${d.mine.map(m => `${m.orderId.slice(10, 18)}=${m.state}${m.confirmed ? '' : '(unconfirmed)'}`).join(' ') || 'none'} · hidden ${d.hidden.map(x => `${x.orderId.slice(10, 18)}: ${x.reason}`).join('; ') || 'none'}`
+  } catch (e) {
+    market = `UNREACHABLE — ${e instanceof Error ? e.message : String(e)}`
+  }
+  try {
+    await refreshOwnOrders(h.address)
+    return { market, balances: await tradeBalances(h, account) }
+  } catch (e) {
+    console.log(`  wallet scan failed: ${e instanceof Error ? e.message : String(e)}`)
+    return { market, balances: null }
+  }
+}
+
+async function cmdTradeRescan(h: Harnessed): Promise<void> {
+  rule('trade-rescan  (hooks/useFullRescan: market read, then the full wallet scan) · READ-ONLY')
+  const account = await primeAccount(h)
+  const r = await fullRescanOnce(h, account, new MarketReader({ walletAddress: h.address, tradeRoot: h.purposeKeys.tradeRoot }))
+  field('market', r.market)
+  if (r.balances) printBalances(r.balances)
+}
+
+/** Offline, then "Try again" — the same function both times; the second must bring everything back. */
+async function cmdTradeOfflineCheck(h: Harnessed): Promise<void> {
+  rule('trade-offline-check  (the network cut, then Try again)  ·  READ-ONLY')
+  const account = await primeAccount(h)
+  const reader = new MarketReader({ walletAddress: h.address, tradeRoot: h.purposeKeys.tradeRoot })
+  harnessNet.offline = true
+  const down = await fullRescanOnce(h, account, reader)
+  field('offline: market', down.market)
+  field('offline: wallet', down.balances === null ? 'no figures (scan failed — nothing invented)' : 'FIGURES SHOWN WHILE OFFLINE ✗')
+  harnessNet.offline = false
+  const up = await fullRescanOnce(h, account, reader)
+  field('Try again: market', up.market)
+  if (up.balances) printBalances(up.balances)
+}
+
 const USAGE = `
 CARAVEL TERMINAL HARNESS — the real crypto/tx paths against the live Esmeralda indexer.
 
@@ -2730,6 +2798,8 @@ Environment:
               [--to private|public] [--yes]   no trade fee).
   trade-recover               Find this wallet's orders from the seed alone (a restore). Run it with
                               no CARAVEL_HARNESS_STATE to start from an empty store.
+  trade-rescan                The Trade page's refresh (market read, then the full wallet scan). READ-ONLY.
+  trade-offline-check         The same refresh with the network cut, then again (Try again). READ-ONLY.
   market                      The market as the Trade page sees it: the book (sorted, spread, taker
                               legs after the 1% fee, YOURS flags), my orders, recent trades. READ-ONLY.
   trade-cbor-check            crypto/statementCbor against the Rust statement-cbor tool: fresh payouts,
@@ -2871,6 +2941,12 @@ export async function main(argv: string[]): Promise<void> {
         break
       case 'trade-recover':
         await cmdTradeRecover(h)
+        break
+      case 'trade-rescan':
+        await cmdTradeRescan(h)
+        break
+      case 'trade-offline-check':
+        await cmdTradeOfflineCheck(h)
         break
       case 'market':
         await cmdMarket(h)

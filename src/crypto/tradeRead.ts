@@ -18,7 +18,7 @@ import { CUSD_ASSET } from './assets'
 import { verifiedRead, type VerifiedReader } from './cusdScan'
 import { decodeStatement, payoutCommitment, StatementCborError } from './statementCbor'
 import { fetchWithRetry } from './indexerRetry'
-import { INDEXER_URLS, POINT_READ_TIMEOUT_MS } from './indexerConfig'
+import { INDEXER_URLS, POINT_READ_TIMEOUT_MS, pointRead } from './indexerConfig'
 import { TARI_RESOURCE_ADDRESS } from '@tari-project/ootle'
 import {
   BUY, ORDER_OPEN, SELL, TRADE_BOARD_ADDRESS, TRADE_BOARD_BADGE, TRADE_BOARD_TEMPLATE, TRADE_ORDER_TEMPLATE, TRADE_QUOTE,
@@ -203,6 +203,16 @@ export async function readOrder(id: string, read: VerifiedReader = verifiedRead)
   return parseOrder(id, r.body)
 }
 
+/**
+ * The order at `id` from a PLAIN (unverified) read — for this wallet's OWN just-placed order only, in
+ * the seconds before the indexer serves it verified. Never used to show or fill anyone else's order.
+ */
+export async function readOrderUnverified(id: string): Promise<OrderInfo | null> {
+  const r = await pointRead(`/substates/${id}`)
+  if (!r.answered || r.body === null) return null
+  try { return parseOrder(id, r.body) } catch { return null }
+}
+
 /** What the maker is owed out of a fill: P cUSD for a SELL, N minus the fee in tTARI for a BUY. */
 export function makerOwed(o: Pick<OrderInfo, 'side' | 'n' | 'p' | 'fee'>): { resource: string; amount: bigint } {
   return o.side === SELL ? { resource: CUSD_ASSET.resource, amount: o.p } : { resource: TARI_RESOURCE_ADDRESS, amount: o.n - o.fee }
@@ -295,4 +305,26 @@ export async function readOpenOrders(read: VerifiedReader = verifiedRead): Promi
     } catch { /* an order that cannot be read verified is not shown */ }
   }
   return out
+}
+
+/**
+ * What an order's OWN events say happened to it — 'filled', 'cancelled', or null (neither yet, or no
+ * answer). Kept only when the ENGINE stamped the event with this order and the Order template (a topic
+ * is just a name). For the moments after a fill or cancel when the order's new state is not yet served
+ * verified (measured: ~40-50 s): the event is already there.
+ */
+export async function orderOutcomeFromEvents(orderId: string): Promise<'filled' | 'cancelled' | null> {
+  try {
+    const q = new URLSearchParams({ substate_id: orderId, limit: '20' })
+    const res = await fetchWithRetry(INDEXER_URLS, `/transactions/events?${q}`, {}, { attempts: 2, timeoutMs: POINT_READ_TIMEOUT_MS, alternate: true })
+    if (!res.ok) return null
+    const body = await res.json() as { events?: unknown }
+    for (const e of Array.isArray(body.events) ? body.events : []) {
+      const ev = (e as unknown[])?.[1] as { substate_id?: unknown; template_address?: unknown; topic?: unknown } | undefined
+      if (ev?.substate_id !== orderId || ev.template_address !== TRADE_ORDER_TEMPLATE) continue
+      if (ev.topic === 'CaravelTradeOrder.Filled') return 'filled'
+      if (ev.topic === 'CaravelTradeOrder.Cancelled') return 'cancelled'
+    }
+  } catch { /* no answer: nothing concluded */ }
+  return null
 }

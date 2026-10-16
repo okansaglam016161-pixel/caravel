@@ -50,7 +50,7 @@ import { fetchWithRetry } from './indexerRetry'
 import {
   ORDER_CANCELLED, ORDER_FILLED, ORDER_OPEN, SELL, TRADE_ORDER_TEMPLATE, type OrderSide,
 } from './tradeConfig'
-import { checkPayout, listBoardOrderIds, orderLegitimacy, readBoard, readOrder, type BoardInfo, type OrderInfo, type PayoutCheck } from './tradeRead'
+import { checkPayout, listBoardOrderIds, orderLegitimacy, readBoard, readOrder, readOrderUnverified, type BoardInfo, type OrderInfo, type PayoutCheck } from './tradeRead'
 import { loadTradeState, observeOrder, recordRecovery, type OrderState, type TradeRecord } from './tradeStore'
 
 const TARI = TARI_RESOURCE_ADDRESS
@@ -107,6 +107,11 @@ export interface BookEntry {
   receives: Leg
   /** This wallet's own order: the book offers Cancel, not Buy/Sell. */
   yours: boolean
+  /**
+   * Read VERIFIED. False only for this wallet's own just-placed order, shown from a plain read before
+   * the indexer serves it verified — "confirming", with no Cancel until it is.
+   */
+  confirmed: boolean
   /** Its cancel key index when `yours`. */
   cancelIndex: number | null
   /** Discovery order — the tie-breaker: at one price, the older order first. */
@@ -122,10 +127,11 @@ export interface Book {
   spread: Price | null
 }
 
-export function toBookEntry(o: OrderInfo, seq: number, mine: ReadonlyMap<string, number>): BookEntry {
+export function toBookEntry(o: OrderInfo, seq: number, mine: ReadonlyMap<string, number>, confirmed = true): BookEntry {
   const { pays, receives } = takerLegs(o)
   const cancelIndex = mine.get(o.id) ?? null
   return {
+    confirmed,
     orderId: o.id, side: o.side, n: o.n, p: o.p, fee: o.fee, caravelCut: o.caravelCut, burnCut: o.burnCut, version: o.version,
     price: pricePerTari(o.n, o.p), pays, receives, yours: cancelIndex !== null, cancelIndex, seq,
   }
@@ -424,11 +430,29 @@ export class MarketReader {
     } catch (e) {
       throw new MarketUnreachable(e instanceof Error ? e.message : 'The order book could not be read.')
     }
+    // THIS WALLET'S OWN committed orders, even before the Board's event listing has them (measured:
+    // ~20-30 s behind a placement). Caravel knows the id from the committed result, so a placed order
+    // is in the placer's book on the next refresh, not the one after.
+    const ownPlaced = this.opts.walletAddress
+      ? loadTradeState(this.opts.walletAddress).records.filter(r => r.action === 'place' && r.orderId && r.outcome === 'committed')
+      : []
+    for (const r of ownPlaced) if (!ids.includes(r.orderId!)) ids = [...ids, r.orderId!]
     const read = await mapLimit(ids, READ_CONCURRENCY, async id => ({ id, o: await this.order(id) }))
     const hidden: MarketData['hidden'] = []
     const legit = new Map<string, OrderInfo>()
+    // Own just-placed orders not yet served verified: shown to their placer from a plain read,
+    // flagged unconfirmed. Never anyone else's.
+    const ownIndex = new Map(ownPlaced.map(r => [r.orderId!, r.cancelIndex]))
+    const unconfirmedOwn: OrderInfo[] = []
     for (const { id, o } of read) {
-      if (!o) { hidden.push({ orderId: id, reason: 'not readable verified' }); continue }
+      if (!o) {
+        if (ownIndex.has(id)) {
+          const plain = await readOrderUnverified(id).catch(() => null)
+          if (plain && plain.status === ORDER_OPEN && orderLegitimacy(plain, board) === null) { unconfirmedOwn.push(plain); continue }
+        }
+        hidden.push({ orderId: id, reason: 'not readable verified' })
+        continue
+      }
       const why = orderLegitimacy(o, board)
       if (why) { hidden.push({ orderId: id, reason: why }); continue }
       legit.set(id, o)
@@ -445,6 +469,10 @@ export class MarketReader {
       if (!c.ok) { hidden.push({ orderId: o.id, reason: c.reason }); continue }
       entries.push(toBookEntry(o, seqOf.get(o.id) ?? 0, mine))
     }
+    for (const o of unconfirmedOwn) {
+      const idx = ownIndex.get(o.id)
+      entries.push(toBookEntry(o, seqOf.get(o.id) ?? 0, idx === null || idx === undefined ? mine : new Map([...mine, [o.id, idx]]), false))
+    }
 
     // Recent fills: one topic query, then each new fill's time once. A failure here costs only this
     // list (null = not known now), never the book.
@@ -456,6 +484,10 @@ export class MarketReader {
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const allFills = parseFillEvents(await res.json(), this.legitSeen)
       for (const f of allFills) filledIds.add(f.orderId)
+      // This wallet's orders that somebody filled: recorded now, from the engine's fill event, so the
+      // cUSD scan that follows (hooks/useFullRescan) asks for the maker's payout by id at once.
+      const address = this.opts.walletAddress
+      if (address) for (const id of filledIds) if (mine.has(id)) observeOrder(address, id, 'filled')
       const fills = allFills.slice(0, RECENT_LIMIT)
       let epochPromise: Promise<number | null> | null = null
       const epochNow = () => (epochPromise ??= currentEpoch())

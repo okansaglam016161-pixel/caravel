@@ -31,7 +31,7 @@ const entry = (id: string, side: 0 | 1, n: bigint, p: bigint, yours = false): Bo
   price: { micro: p * 1_000_000n / n, exact: (p * 1_000_000n) % n === 0n },
   pays: side === 0 ? { resource: CUSD, amount: p } : { resource: TARI_RESOURCE_ADDRESS, amount: n },
   receives: side === 0 ? { resource: TARI_RESOURCE_ADDRESS, amount: n - n / 100n } : { resource: CUSD, amount: p },
-  yours, cancelIndex: yours ? 4 : null, seq: 0,
+  yours, cancelIndex: yours ? 4 : null, seq: 0, confirmed: true,
 })
 const data = (over: Partial<MarketData> = {}): MarketData => ({
   book: {
@@ -110,6 +110,14 @@ describe('TradePage', () => {
     const t = text(page())
     expect(t).toContain('The order book can’t be shown right now')
     expect(t).not.toContain('Sell orders')
+  })
+
+  it('your just-placed order, not yet served verified: Yours · Confirming…, no Cancel yet', () => {
+    const fresh = { ...entry('s9', 0, 1_000_000n, 2_000_000n, true), confirmed: false }
+    state.market = ready(data({ book: { sells: [fresh], buys: [], spread: null } }))
+    const t = text(page())
+    expect(t).toMatch(/2 1\.000000 2\.00 Yours Confirming…/)
+    expect(t).not.toMatch(/Yours Cancel/)
   })
 
   it('an empty book invites the first order', () => {

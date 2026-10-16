@@ -26,6 +26,11 @@ export function marketFeedFor(address: string, tradeRoot: Uint8Array): MarketFee
   return feed
 }
 
+/** The feed for `address` if one exists — never creates one (a refresh off the Trade page). */
+export function existingMarketFeed(address: string): MarketFeed | null {
+  return feeds.get(address) ?? null
+}
+
 /** Stop and forget every feed (the wallet locked). */
 export function dropMarketFeeds(): void {
   for (const f of feeds.values()) f.stop()

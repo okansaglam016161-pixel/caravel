@@ -11,7 +11,7 @@ import {
 } from './market'
 import { BUY, SELL, TRADE_BOARD_ADDRESS, TRADE_BOARD_BADGE, TRADE_ORDER_TEMPLATE, TRADE_QUOTE, TRADE_BURN_WALLET, TRADE_CARAVEL_FEE_ACCOUNT } from './tradeConfig'
 import type { BoardInfo, OrderInfo, PayoutCheck } from './tradeRead'
-import { loadTradeState, type TradeRecord } from './tradeStore'
+import { loadTradeState, recordTrade, type TradeRecord } from './tradeStore'
 import { cancelKeyFor } from './derivation'
 import { setStoreKey } from './sessionKey'
 
@@ -123,6 +123,7 @@ const net = vi.hoisted(() => ({
   payout: new Map<string, unknown>(),
   boardFails: false,
   fills: { events: [] as unknown[] },
+  plain: new Map<string, unknown>(),
 }))
 
 vi.mock('./tradeRead', async (importActual) => {
@@ -141,6 +142,7 @@ vi.mock('./tradeRead', async (importActual) => {
       return (o as OrderInfo) ?? null
     },
     checkPayout: async (o: OrderInfo) => (net.payout.get(o.id) as PayoutCheck) ?? { ok: true, outputId: null },
+    readOrderUnverified: async (id: string) => (net.plain.get(id) as OrderInfo) ?? null,
   }
 })
 vi.mock('./indexerRetry', async (importActual) => ({
@@ -231,5 +233,29 @@ describe('MarketReader — "yours", from the seed alone (a restore)', () => {
     expect(data.book.sells.find(e => e.orderId === 'theirs')).toMatchObject({ yours: false })
     expect(data.mine).toMatchObject([{ orderId: 'mine', state: 'open', cancelIndex: 2, placedAt: null }])
     expect(loadTradeState(ADDR).nextCancelIndex).toBe(3)   // index 2 is in use: never handed out again
+  })
+})
+
+describe('MarketReader — your just-placed order', () => {
+  it('is in YOUR book before the event listing has it and before it reads verified — flagged unconfirmed; a stranger\'s is not', async () => {
+    net.ids = []; net.orders.clear(); net.reads.clear(); net.payout.clear(); net.boardFails = false; net.fills = { events: [] }; net.plain.clear()
+    const map = new Map<string, string>()
+    globalThis.localStorage = {
+      get length() { return map.size }, clear: () => map.clear(), getItem: (k: string) => map.get(k) ?? null,
+      key: (i: number) => [...map.keys()][i] ?? null, removeItem: (k: string) => { map.delete(k) }, setItem: (k: string, v: string) => { map.set(k, v) },
+    } as Storage
+    setStoreKey(new Uint8Array(32).fill(5))
+    const ADDR = 'otl_esm_1justplaced'
+    recordTrade(ADDR, {
+      journalId: 'j', action: 'place', txId: 't', at: 1, side: SELL, n: 1_000_000n, p: 2_000_000n, tradeFee: 10_000n,
+      caravelCut: 7_000n, burnCut: 3_000n, pays: null, gets: null, orderId: 'mineNew', cancelIndex: 6, cusdOutputIds: [],
+      cusdSpentIds: [], outcome: 'committed', payoutOutputId: null, orderState: 'open', filledSeenAt: null,
+    })
+    net.ids = ['strangerNew']                       // the listing has only someone else's new order
+    net.orders.set('mineNew', 'unreadable'); net.orders.set('strangerNew', 'unreadable')
+    net.plain.set('mineNew', order('mineNew')); net.plain.set('strangerNew', order('strangerNew'))
+    const data = await new MarketReader({ walletAddress: ADDR, tradeRoot: new Uint8Array(32).fill(1) }).refresh()
+    expect(data.book.sells.map(e => [e.orderId, e.yours, e.confirmed, e.cancelIndex])).toEqual([['mineNew', true, false, 6]])
+    expect(data.hidden.map(h => h.orderId)).toEqual(['strangerNew'])
   })
 })

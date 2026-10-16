@@ -8,9 +8,9 @@
 // computes a price, a fee or a total of its own — tradeModel formats what those return.
 //
 // HONEST STATES, per the design (§03): reading (no figures), updating (a refresh you asked for — the
-// rows dim), can't reach the network (the last data, dimmed, with the time it was read, and Retry),
-// an empty book, and "taken" in the sheet. A background poll does not dim anything; the refresh icon
-// spins.
+// rows dim and the icon spins until the wallet scan AND the book read are done), can't reach the
+// network (the last data, dimmed, with the time it was read, and Retry), an empty book, and "taken"
+// in the sheet. The background 20 s book poll does not dim anything and scans no wallet.
 //
 // NO SPREAD. The design leaves it off the page and so does this.
 
@@ -22,6 +22,7 @@ import { SELL, type OrderSide, type TradeMode } from '../../crypto/tradeConfig'
 import { useMarket } from '../../hooks/useMarket'
 import { useTradeBalances, type Amount } from '../../hooks/useTradeBalances'
 import { useTrades } from '../../hooks/useTrades'
+import { useFullRescan } from '../../hooks/useFullRescan'
 import ThemeToggle from '../primitives/ThemeToggle'
 import CusdFaucetClaimPanel from '../wallet/CusdFaucetClaimPanel'
 import { fmt6 } from '../wallet/v2/format'
@@ -34,21 +35,23 @@ import { TTARI, fmtCusd, fmtPrice, myOrderView, timeLabel, tradeRowView, usdOf, 
 type Tab = 'book' | 'mine' | 'trades'
 
 export default function TradePage() {
-  const { address, rescan } = useWallet()
+  const { address } = useWallet()
   const market = useMarket()
   const balances = useTradeBalances()
   const records = useTrades(address)
   const [tab, setTab] = useState<Tab>('book')
   const [sheet, setSheet] = useState<SheetMode | null>(null)
-  /** A refresh the person asked for: rows dim while it runs (a background poll does not). */
-  const [manual, setManual] = useState(false)
+  /**
+   * THE full rescan (hooks/useFullRescan): the Wallet tab's own wallet scan — TARI and cUSD, private
+   * and public — plus a fresh order book read. The refresh button, "Try again", "Retry" and the
+   * refresh after a trade are all this one function. `busy` until both have finished: the icon spins
+   * and the rows dim ("Updating…"); a background book poll does neither.
+   */
+  const full = useFullRescan()
 
   const data = market.data
-  const refresh = () => {
-    setManual(true)
-    void market.refresh().finally(() => setManual(false))
-  }
-  const afterTrade = () => { rescan(); void market.refresh() }
+  const refresh = () => { void full.run() }
+  const afterTrade = refresh
 
   /** Where a cancelled order's escrow goes: back the way it came, as this device recorded it. */
   const cancelTo = (orderId: string): TradeMode =>
@@ -59,7 +62,7 @@ export default function TradePage() {
   }
 
   const stale = market.status === 'unreachable' && data !== null
-  const dim = stale ? 0.6 : manual && market.status === 'updating' ? 0.55 : 1
+  const dim = stale ? 0.6 : full.busy ? 0.55 : 1
 
   return (
     <div style={{ flex: 1, minWidth: 0, overflowY: 'auto' }}>
@@ -69,7 +72,7 @@ export default function TradePage() {
       }}>
         <ModalShell chrome="page">
           <RootHeader title="Trade" chip="ESMERALDA TESTNET" chrome="page" right={<>
-            <HeaderIcon label="Refresh the market" onClick={refresh} busy={market.status === 'updating' || market.status === 'loading'}>
+            <HeaderIcon label="Refresh balances and the market" onClick={refresh} busy={full.busy || market.status === 'loading'}>
               <Refresh color="currentColor" />
             </HeaderIcon>
             <ThemeToggle size={30} />
@@ -85,7 +88,7 @@ export default function TradePage() {
             </div>
 
             {stale && <UnreachableBar at={data!.at} onRetry={refresh} />}
-            {manual && market.status === 'updating' && (
+            {full.busy && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: C.mutedDim }}><Spinner size={11} />Updating…</div>
             )}
 
@@ -221,7 +224,15 @@ function BookSide({ side, entries, onFill, onCancel }: {
           <span style={{ color: sell ? 'var(--danger-500)' : 'var(--positive)', fontWeight: 600 }} title="cUSD per tTARI">{fmtPrice(e.price)}</span>
           <span style={{ textAlign: 'right', color: C.primary }}>{fmt6(e.n)}</span>
           <span style={{ textAlign: 'right', color: C.bodyDim }}>{fmtCusd(e.p)}</span>
-          {e.yours
+          {e.yours && !e.confirmed
+            ? (
+              // Just placed: in the book before the indexer serves it verified. Cancel once it is.
+              <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
+                <YoursBadge />
+                <span style={{ fontFamily: 'inherit', fontSize: 10.5, fontWeight: 600, color: C.mutedDim }}>Confirming…</span>
+              </span>
+            )
+            : e.yours
             ? (
               <span role="button" tabIndex={0} onClick={() => onCancel(e)} onKeyDown={k => k.key === 'Enter' && onCancel(e)}
                 style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2, cursor: 'pointer' }}>

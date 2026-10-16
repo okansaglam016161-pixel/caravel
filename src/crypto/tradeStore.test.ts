@@ -95,3 +95,11 @@ describe('cUSD bookkeeping', () => {
     expect(spentCusdIds(ADDR)).toEqual(new Set([cusd('1'), cusd('2'), cusd('3')]))
   })
 })
+
+describe('a claim recorded with the wrong resource prefix (before the fix)', () => {
+  it('is still asked for by id — under cUSD\'s prefix, the same commitment', () => {
+    const commitment = 'ab'.repeat(32)
+    recordCusdClaim(ADDR, { journalId: 'old', txId: 't', outputId: `utxo_${'01'.repeat(32)}_${commitment}`, units: 1n, at: 1 })
+    expect(knownCusdIds(ADDR)).toEqual([`utxo_${CUSD_ASSET.resourceHex}_${commitment}`])
+  })
+})

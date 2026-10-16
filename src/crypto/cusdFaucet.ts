@@ -223,7 +223,7 @@ export async function prepareCusdClaim(
       envelope: sealTransaction(signed),
       // The cUSD output — recorded in the cUSD store, recovered by the cUSD scan. NEVER the journal
       // (its selfOutputIds are read as TARI).
-      cusdOutputIds: readOutputSubstateIds(cusdOut) ?? undefined,
+      cusdOutputIds: readOutputSubstateIds(cusdOut, CUSD_ASSET.resourceHex) ?? undefined,
       // The tTARI change from the fee coin — a normal TARI output of ours, so the journal and the
       // TARI scan handle it exactly like any other change.
       tariChangeOutputIds: readOutputSubstateIds(feeOut) ?? undefined,

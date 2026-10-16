@@ -43,7 +43,16 @@ export function utxoSubstateIdFromCommitment(commitmentHex: string): string {
  *         not record a partial list as if it were complete, because a missing id later reads as a
  *         payment from a stranger.
  */
-export function readOutputSubstateIds(outputsStatement: { parsed(): unknown }): string[] | null {
+export function readOutputSubstateIds(
+  outputsStatement: { parsed(): unknown },
+  /**
+   * The resource the statement's outputs hold. TARI by default — every TARI path. A cUSD statement
+   * MUST pass cUSD's: the id names the resource, and a cUSD output under TARI's prefix is an id the
+   * cUSD scan never asks for (the T3a claim recorded exactly that, so its output was only found
+   * once a listing had it).
+   */
+  resourceHex: string = RESOURCE_HEX,
+): string[] | null {
   let parsed: ParsedOutputs
   try {
     parsed = outputsStatement.parsed() as ParsedOutputs
@@ -58,7 +67,7 @@ export function readOutputSubstateIds(outputsStatement: { parsed(): unknown }): 
     // ALL OR NOTHING. A list missing one id is more dangerous than no list, so a single unreadable
     // entry discards the whole thing rather than producing a subtraction set with a gap in it.
     if (typeof commitment !== 'string' || commitment.length === 0) return null
-    ids.push(utxoSubstateIdFromCommitment(commitment))
+    ids.push(`utxo_${resourceHex}_${commitment}`)
   }
   return ids
 }

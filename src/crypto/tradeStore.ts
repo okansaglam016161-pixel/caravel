@@ -210,7 +210,9 @@ export function spentCusdIds(walletAddress: string): Set<string> {
 /** Every cUSD output this wallet made for itself — claims and trades — for recovery by id. */
 export function knownCusdIds(walletAddress: string): string[] {
   const prefix = `utxo_${CUSD_ASSET.resourceHex}_`
-  const ids = new Set<string>(loadCusdClaims(walletAddress).map(c => c.outputId))
+  // A claim's output is always cUSD. Claims recorded before the fix carry TARI's prefix (the id was
+  // built with the wrong resource), so the commitment is re-keyed to cUSD's — the same output.
+  const ids = new Set<string>(loadCusdClaims(walletAddress).map(c => `${prefix}${c.outputId.split('_').pop()}`))
   for (const r of loadTradeState(walletAddress).records) {
     for (const id of r.cusdOutputIds) ids.add(id)
     // A maker's cUSD payout exists only once the order is filled; ask for it from then on.

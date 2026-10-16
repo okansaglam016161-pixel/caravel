@@ -199,10 +199,7 @@ const bytesToHex = (b: Uint8Array) => Array.from(b, x => x.toString(16).padStart
 
 /** The output ids a statement creates, as `utxo_<resource>_<commitment>`. */
 function createdIds(outs: unknown, resource: string): string[] {
-  const ids = readOutputSubstateIds(outs as { parsed(): unknown }) ?? []
-  // readOutputSubstateIds names TARI ids; re-key them to the statement's own resource.
-  const hex = resource.replace(/^resource_/, '')
-  return ids.map(id => `utxo_${hex}_${id.split('_').pop()}`)
+  return readOutputSubstateIds(outs as { parsed(): unknown }, resource.replace(/^resource_/, '')) ?? []
 }
 
 // ── Accounts ─────────────────────────────────────────────────────────────────

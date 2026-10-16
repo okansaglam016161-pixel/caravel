@@ -33,7 +33,7 @@ import { decryptOwnedUtxo, Network, WasmStealthCrypto, type IndexerGetSubstateRe
 import { CUSD_ASSET } from './assets'
 import { loadAccountAddress } from './accountStore'
 import { knownCusdIds, spentCusdIds } from './tradeStore'
-import { INDEXER_URLS, POINT_READ_TIMEOUT_MS } from './indexerConfig'
+import { INDEXER_URLS, POINT_READ_TIMEOUT_MS, pointRead } from './indexerConfig'
 import { fetchWithRetry } from './indexerRetry'
 import { decodeRevealedAmount } from './revealedBalance'
 import { fetchAllUtxoRows, type UtxoRow } from './utxoFeed'
@@ -94,6 +94,8 @@ export interface CusdPrivateScan {
   gone: string[]
   /** Claim outputs asked for by id because no listing had them yet. Diagnostic. */
   recovered: string[]
+  /** Our own outputs counted from an unverified (fresh) indexer body. Diagnostic. */
+  ownUnverified: string[]
   /** Rows in the cUSD listing union. Diagnostic. */
   listed: number
 }
@@ -133,6 +135,11 @@ export async function scanCusdPrivate(opts: {
   knownIds?: readonly string[]
   /** Coins already spent by this wallet (tradeStore.spentCusdIds by default) — never counted. */
   spentIds?: ReadonlySet<string>
+  /**
+   * A plain (unverified) read of one substate, for this wallet's OWN outputs only: the body, `null`
+   * when every indexer said 404, `undefined` when none answered. Defaults to indexerConfig.pointRead.
+   */
+  readAny?: (path: string) => Promise<unknown | null | undefined>
 }): Promise<CusdPrivateScan> {
   const read = opts.read ?? verifiedRead
   const feed = await (opts.listRows
@@ -163,13 +170,38 @@ export async function scanCusdPrivate(opts: {
     recovered.push(id)
   }
 
+  // OUR OWN OUTPUTS — a claim's, a trade's change or receive, a filled order's payout: built by this
+  // wallet, in a transaction that committed. A freshly written substate is served `verified: false`
+  // for a while (measured: ~40-50 s after commit), and treating that as "unknown" left a just-claimed
+  // 10,000 cUSD as "···". So for these ids only, a live body any indexer serves — that our view key
+  // opens, at the value it opens to — counts. It can never make the figure short, and a coin this
+  // wallet spent is already excluded above. Anything else still needs a verified read.
+  const own = new Set(known.filter(id => !spent.has(id)))
+  const readAny = opts.readAny ?? (async (path: string) => {
+    const r = await pointRead(path)
+    return r.answered ? r.body : undefined
+  })
+
   const outputs: CusdOutput[] = []
   const unverified: string[] = []
   const gone: string[] = []
+  const ownUnverified: string[] = []
   for (const id of candidates) {
     if (opts.signal?.aborted) break
-    const r = await read(`/substates/${encodeURIComponent(id)}`)
-    if (r.kind === 'unknown') { unverified.push(id); continue }
+    const path = `/substates/${encodeURIComponent(id)}`
+    const r = await read(path)
+    if (r.kind === 'unknown') {
+      if (own.has(id)) {
+        const body = await readAny(path).catch(() => undefined)
+        const utxo = (body as { substate?: { Utxo?: { output?: unknown } } } | null | undefined)?.substate?.Utxo
+        if (utxo?.output != null) {
+          const units = await opts.open(id, utxo)
+          if (units !== null) { outputs.push({ id, units }); ownUnverified.push(id); continue }
+        }
+      }
+      unverified.push(id)
+      continue
+    }
     if (r.kind === 'absent') { gone.push(id); continue }
     const utxo = (r.body as { substate?: { Utxo?: { output?: unknown } } })?.substate?.Utxo
     if (!utxo || utxo.output == null) { gone.push(id); continue }   // spent / frozen: `output: null`
@@ -186,6 +218,7 @@ export async function scanCusdPrivate(opts: {
     unverified,
     gone,
     recovered,
+    ownUnverified,
     listed: feed.rows.length,
   }
 }
@@ -255,4 +288,16 @@ export async function scanCusd(viewSecret: Uint8Array, walletAddress: string, si
 export function cusdTotal(b: CusdBalances | null): bigint | null {
   if (!b || b.private.incomplete || b.public.kind !== 'ok') return null
   return b.private.units + b.public.units
+}
+
+/**
+ * `balances` with one more private output of ours counted — a cUSD output this wallet just created
+ * (its faucet claim), added the moment the claim commits. Unchanged when already counted.
+ */
+export function addCusdOutput(balances: CusdBalances, outputId: string, units: bigint): CusdBalances {
+  if (balances.private.outputs.some(o => o.id === outputId)) return balances
+  return {
+    ...balances,
+    private: { ...balances.private, outputs: [...balances.private.outputs, { id: outputId, units }], units: balances.private.units + units },
+  }
 }

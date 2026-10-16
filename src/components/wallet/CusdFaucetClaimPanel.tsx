@@ -23,6 +23,7 @@ import { QuoteChanged } from '../../crypto/quote'
 import { createActionLock, guarded } from '../../crypto/actionLock'
 import { beginEntry, settleEntry } from '../../crypto/journalStore'
 import { recordCusdClaim } from '../../crypto/cusdStore'
+import { runFullRescan } from '../../hooks/useFullRescan'
 import { FaucetBanner } from './v2/panels'
 import { plainError } from './v2/plainError'
 
@@ -45,7 +46,7 @@ function readDismissed(address: string | null): boolean {
 }
 
 export default function CusdFaucetClaimPanel() {
-  const { wallet, purposeKeys, address, cusd, rescan } = useWallet()
+  const { wallet, purposeKeys, address, cusd, rescan, addOwnCusdOutput } = useWallet()
   const [phase, setPhase] = useState<Phase>('idle')
   const [msg, setMsg] = useState<string | null>(null)
   const [status, setStatus] = useState<Status>(null)
@@ -171,7 +172,12 @@ export default function CusdFaucetClaimPanel() {
       setStatus('claimed')
       setPhase('done')
       setMsg(`Added ${CLAIM_LABEL} to your wallet.`)
-      rescan()   // the cUSD scan recovers the new output by id — the Assets row updates
+      // IN THE BALANCE AT ONCE, by its id — Caravel built this output, so it knows it and its value,
+      // as the TARI faucet knows its own. Then the full rescan (wallet + market), whose cUSD scan
+      // recovers the same id and keeps it even before the indexer serves it verified.
+      const outputId = r.cusdOutputIds?.[0]
+      if (outputId) addOwnCusdOutput(outputId, r.units)
+      void runFullRescan(rescan, address)
       return
     }
     if (r.outcome === 'Reject') {

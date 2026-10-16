@@ -18,7 +18,7 @@ import { beginEntry, settleEntry } from './journalStore'
 import { SubmitMaybeLandedError } from './submitGuard'
 import { preparePlace, type PlaceParams, type PreparedTrade, type Trader, type TradeResult } from './trade'
 import { ORDER_CANCELLED, ORDER_FILLED, ORDER_OPEN, TRADE_BOARD_ADDRESS, TRADE_ORDER_TEMPLATE } from './tradeConfig'
-import { listBoardOrderIds, readOrder } from './tradeRead'
+import { listBoardOrderIds, orderOutcomeFromEvents, readOrder } from './tradeRead'
 import {
   claimCancelIndex, knownCusdIds, loadTradeState, observeOrder, ownOpenOrders, peekCancelIndex, recordRecovery, recordTrade,
   type TradeRecord,
@@ -128,12 +128,16 @@ export async function runTrade(t: Trader, prepared: PreparedTrade, onProgress?: 
 export async function refreshOwnOrders(walletAddress: string): Promise<number> {
   let changed = 0
   for (const r of ownOpenOrders(walletAddress)) {
+    let state: 'open' | 'filled' | 'cancelled' | null = null
     try {
       const o = await readOrder(r.orderId!)
-      if (!o) continue
-      const state = o.status === ORDER_FILLED ? 'filled' : o.status === ORDER_CANCELLED ? 'cancelled' : 'open'
-      if (state !== r.orderState) { observeOrder(walletAddress, r.orderId!, state); changed++ }
-    } catch { /* try again on the next refresh */ }
+      if (o) state = o.status === ORDER_FILLED ? 'filled' : o.status === ORDER_CANCELLED ? 'cancelled' : 'open'
+    } catch {
+      // Not served verified right now — just after a fill or cancel, typically. The order's own
+      // engine-stamped event says what happened; without one, try again on the next refresh.
+      state = await orderOutcomeFromEvents(r.orderId!)
+    }
+    if (state && state !== r.orderState) { observeOrder(walletAddress, r.orderId!, state); changed++ }
   }
   return changed
 }

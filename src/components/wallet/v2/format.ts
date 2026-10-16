@@ -67,3 +67,19 @@ export function firstSeenLabel(ts: number, now = Date.now()): string {
     ? { day: 'numeric', month: 'short' }
     : { day: 'numeric', month: 'short', year: 'numeric' })
 }
+
+/**
+ * When a transaction happened on chain, in a list: HH:MM for a time today, "Oct 14" otherwise; "~"
+ * when estimated from the epoch (crypto/txTimes); "—" when unknown. ONE rule for the Trade and
+ * Burn pages, fed only by the indexer's time or the deterministic epoch estimate — never a device's
+ * own record — so every device shows the same label.
+ */
+export function timeLabel(at: number | null, estimated = false, now = Date.now()): string {
+  if (at === null) return '—'
+  const d = new Date(at), today = new Date(now)
+  const same = d.toDateString() === today.toDateString()
+  const s = same
+    ? d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
+    : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+  return `${estimated ? '~' : ''}${s}`
+}

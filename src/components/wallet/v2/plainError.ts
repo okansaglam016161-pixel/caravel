@@ -24,7 +24,7 @@ function toTari(micro: bigint): string {
  * Rewrite a fund-module error for display.
  *
  * Two passes, and the ORDER MATTERS. Several messages already carry their own parenthesised TARI
- * gloss — "100000 µtTARI (0.10 TARI)" — so that shape is collapsed to just the gloss first.
+ * gloss — "100000 µtTARI (0.10 TARI)" — so that shape is collapsed to one figure first.
  * Whatever bare `N µtTARI` remains is then converted. Doing it the other way round would produce
  * "0.1 TARI (0.10 TARI)".
  *
@@ -42,8 +42,12 @@ export function plainError(message: string): string {
 
   let out = message
 
-  // 1 — "N µtTARI (X TARI)" → "X TARI". The module already did the conversion; keep only that.
-  out = out.replace(/[\d_]+\s*µtTARI\s*\((\d[\d.,]*)\s*TARI\)/gi, `$1 ${TICKER}`)
+  // 1 — "N µtTARI (X TARI)" → one figure in TARI. The module's own gloss is dropped and the figure
+  //     is rebuilt from the exact N with the shared formatter: a hand-written "0.10" would put a
+  //     trailing zero on screen.
+  out = out.replace(/([\d_]+)\s*µtTARI\s*\(\d[\d.,]*\s*TARI\)/gi, (_m, digits: string) => {
+    try { return `${toTari(BigInt(digits.replace(/_/g, '')))} ${TICKER}` } catch { return _m }
+  })
 
   // 2 — a bare "N µtTARI" → the same figure in TARI.
   out = out.replace(/([\d_]+)\s*µtTARI/gi, (_m, digits: string) => {

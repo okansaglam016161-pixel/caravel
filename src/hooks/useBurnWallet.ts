@@ -7,9 +7,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { loadAccountAddress } from '../crypto/accountStore'
 import {
-  accountVaultIds, burnCreatedAt, classifyBurn, currentEpoch, listDeposits, readBurnWallet,
+  accountVaultIds, classifyBurn, listDeposits, readBurnWallet,
   type BurnClassification, type BurnWalletReading,
 } from '../crypto/burnWallet'
+import { txTime, type TxTime } from '../crypto/txTimes'
 import { buildBurnRows, burnSettled, depositsComplete, type BurnRow } from '../components/burn/burnModel'
 import { useJournal } from './useJournal'
 
@@ -71,19 +72,19 @@ export function useBurnWallet(address: string | null, active: boolean) {
         const deposits = await listDeposits()
         const shown = deposits.slice(0, ROWS_SHOWN)
         const account = address ? loadAccountAddress(address) : null
-        const journalled = new Map<string, number>()
+        const journalled = new Set<string>()
         for (const e of journalRef.current) {
-          if (e.kind === 'burn' && e.txId) journalled.set(e.txId, e.timestamp)
+          if (e.kind === 'burn' && e.txId) journalled.add(e.txId)
         }
-        const [classes, created, ownVaults, epoch] = await Promise.all([
+        const [classes, times, ownVaults] = await Promise.all([
           Promise.all(shown.map(async d => [d.txId, await classifyBurn(d.txId)] as const))
             .then(pairs => new Map<string, BurnClassification>(pairs)),
-          Promise.all(shown.filter(d => !journalled.has(d.txId)).map(async d => [d.txId, await burnCreatedAt(d.txId)] as const))
-            .then(pairs => new Map<string, number | null>(pairs)),
+          // The Trade page's times (crypto/txTimes): indexer first, deterministic estimate after.
+          Promise.all([...new Set(shown.map(d => d.txId))].map(async id => [id, await txTime(id)] as const))
+            .then(pairs => new Map<string, TxTime>(pairs)),
           account ? accountVaultIds(account) : Promise.resolve(new Set<string>()),
-          currentEpoch(),
         ])
-        rows = buildBurnRows(shown, classes, { ownVaults, journalled, createdAt: created, currentEpoch: epoch, now: Date.now() })
+        rows = buildBurnRows(shown, classes, { ownVaults, journalled, times })
         setList({
           status: 'ready', rows, total: deposits.length,
           complete: depositsComplete(deposits, verifiedTotal ?? lastVerified.current?.totalDeposited ?? null),

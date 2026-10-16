@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import type { BurnClassification } from '../../crypto/burnWallet'
-import { EPOCH_MS_APPROX } from '../../crypto/burnWallet'
+import { TRADE_BOARD_TEMPLATE, TRADE_ORDER_TEMPLATE } from '../../crypto/tradeConfig'
+import { estimateFromEpoch, type TxTime } from '../../crypto/txTimes'
+import { timeLabel } from '../wallet/v2/format'
 import {
-  SUPPLY_REFERENCE, buildBurnRows, burnSettled, burnTimeLabel, burnTitle, compactSupply, depositsComplete, formatSupplyPercent, parseTariInput,
+  SUPPLY_REFERENCE, buildBurnRows, burnDetail, burnSettled, burnTitle, compactSupply, depositsComplete, formatSupplyPercent, parseTariInput,
   type RowContext,
 } from './burnModel'
+import { KNOWN_BURN_APPS, burnAppOf } from './burnApps'
 
 describe('parseTariInput — exact, no float', () => {
   it('parses whole and fractional TARI to µtTARI exactly', () => {
@@ -23,19 +26,21 @@ describe('parseTariInput — exact, no float', () => {
   })
 })
 
-const cls = (source: BurnClassification['source'], withdrawVaults: string[] = [], epoch: number | null = 100): BurnClassification =>
-  ({ source, withdrawVaults, epoch })
+const cls = (source: BurnClassification['source'], withdrawVaults: string[] = [], epoch: number | null = 100, appTemplates: string[] = []): BurnClassification =>
+  ({ source, withdrawVaults, epoch, appTemplates })
+
+const exact = (at: number): TxTime => ({ at, estimated: false })
 
 const ctx = (over: Partial<RowContext> = {}): RowContext => ({
   ownVaults: new Set(['vault_mine']),
-  journalled: new Map(),
-  createdAt: new Map(),
-  currentEpoch: 104,
-  now: 1_000_000_000_000,
+  journalled: new Set(),
+  times: new Map(),
   ...over,
 })
 
-describe('buildBurnRows', () => {
+const OTHER_APP = 'ab'.repeat(32)
+
+describe('buildBurnRows — who burned', () => {
   const deposits = [
     { txId: 'pubMine', amount: 1n },
     { txId: 'pubOther', amount: 2n },
@@ -49,26 +54,66 @@ describe('buildBurnRows', () => {
     ['privOther', cls('private')],
   ])
 
-  it('a public burn is yours when it came from your account’s vault; a private one only when journalled here', () => {
-    const rows = buildBurnRows(deposits, classes, ctx({ journalled: new Map([['privMine', 5]]) }))
+  it('a person: "Burn"; this wallet: "Burned by you" — public from your account, private only when journalled here', () => {
+    const rows = buildBurnRows(deposits, classes, ctx({ journalled: new Set(['privMine']) }))
     const by = Object.fromEntries(rows.map(r => [r.txId, r]))
-    expect(['pubMine', 'pubOther', 'privMine', 'privOther'].map(t => [by[t].source, by[t].byYou, burnTitle(by[t])])).toEqual([
-      ['public', true, 'Burned by you'],
-      ['public', false, 'Public burn'],
-      ['private', true, 'Burned by you'],
-      ['private', false, 'Private burn'],
+    expect(['pubMine', 'pubOther', 'privMine', 'privOther'].map(t => [by[t].byYou, burnTitle(by[t]), burnDetail(by[t])])).toEqual([
+      [true, 'Burned by you', 'Public'],
+      [false, 'Burn', 'Public'],
+      [true, 'Burned by you', 'Private'],
+      [false, 'Burn', 'Private'],
     ])
   })
 
-  it('times: the journal first, then the transaction’s created_at, then an estimate from the epoch', () => {
-    const rows = buildBurnRows(deposits, classes, ctx({
-      journalled: new Map([['privMine', 42]]),
-      createdAt: new Map([['pubOther', 77], ['pubMine', null], ['privMine', 99]]),
-    }))
+  it('a Caravel Trade fill: "Caravel Trade burn · Trading fee" — NEVER yours, even when your account paid in it', () => {
+    // A fill this wallet took publicly: its own account vault withdrew in the same transaction.
+    const fill = cls('public', ['vault_order_escrow', 'vault_mine'], 100, [TRADE_ORDER_TEMPLATE])
+    const [row] = buildBurnRows([{ txId: 'fill', amount: 3_000n }], new Map([['fill', fill]]), ctx({ journalled: new Set(['fill']) }))
+    expect([row.byYou, burnTitle(row), burnDetail(row)]).toEqual([false, 'Caravel Trade burn', 'Trading fee'])
+  })
+
+  it('any other contract: "App burn · Unknown app"', () => {
+    const [row] = buildBurnRows([{ txId: 'x', amount: 1n }], new Map([['x', cls('public', ['vault_mine'], 1, [OTHER_APP])]]), ctx())
+    expect([row.byYou, burnTitle(row), burnDetail(row)]).toEqual([false, 'App burn', 'Unknown app'])
+  })
+
+  it('an unreadable receipt is a plain "Burn" with no detail, never a guess', () => {
+    const [row] = buildBurnRows([{ txId: 'x', amount: 1n }], new Map(), ctx())
+    expect(row.source).toBe('unknown')
+    expect([burnTitle(row), burnDetail(row)]).toEqual(['Burn', null])
+    expect(row.at).toBeNull()
+  })
+})
+
+describe('burnAppOf — the known apps list', () => {
+  it('names Caravel Trade by its Order or Board template; a known app wins over an unknown one beside it', () => {
+    expect(burnAppOf([TRADE_ORDER_TEMPLATE])?.name).toBe('Caravel Trade burn')
+    expect(burnAppOf([TRADE_BOARD_TEMPLATE])?.name).toBe('Caravel Trade burn')
+    expect(burnAppOf([OTHER_APP, TRADE_ORDER_TEMPLATE].sort())?.name).toBe('Caravel Trade burn')
+    expect(burnAppOf([OTHER_APP])?.name).toBe('App burn')
+    expect(burnAppOf([])).toBeNull()
+    expect(KNOWN_BURN_APPS.size).toBe(2)
+  })
+})
+
+describe('buildBurnRows — times (the Trade page rule)', () => {
+  it('takes crypto/txTimes as it is: exact, or estimated and marked; never this device’s journal', () => {
+    const rows = buildBurnRows(
+      [{ txId: 'a', amount: 1n }, { txId: 'b', amount: 1n }],
+      new Map(),
+      ctx({ journalled: new Set(['a']), times: new Map([['a', exact(77)], ['b', { at: estimateFromEpoch(12300), estimated: true }]]) }),
+    )
     const by = Object.fromEntries(rows.map(r => [r.txId, r]))
-    expect([by.privMine.at, by.privMine.exact]).toEqual([42, true])
-    expect([by.pubOther.at, by.pubOther.exact]).toEqual([77, true])
-    expect([by.pubMine.at, by.pubMine.exact]).toEqual([1_000_000_000_000 - 4 * EPOCH_MS_APPROX, false])
+    expect([by.a.at, by.a.estimated]).toEqual([77, false])
+    expect([by.b.at, by.b.estimated]).toEqual([estimateFromEpoch(12300), true])
+  })
+
+  it('labels like Trade: HH:MM today, a date before, "~" only when estimated', () => {
+    const now = new Date(2026, 9, 16, 15, 0).getTime()
+    expect(timeLabel(new Date(2026, 9, 16, 14, 32).getTime(), false, now)).toBe('14:32')
+    expect(timeLabel(new Date(2026, 9, 14, 9, 5).getTime(), false, now)).toBe('Oct 14')
+    expect(timeLabel(new Date(2026, 9, 14, 9, 5).getTime(), true, now)).toBe('~Oct 14')
+    expect(timeLabel(null, false, now)).toBe('—')
   })
 
   it('sorts newest first by that time, whatever order the indexer listed them in', () => {
@@ -80,22 +125,18 @@ describe('buildBurnRows', () => {
         { txId: '64d022bb', amount: 2n },
         { txId: 'old', amount: 3n },
         { txId: '5d8eceb8', amount: 4n },
-        { txId: 'mine', amount: 5n },
       ],
-      new Map([['old', cls('private', [], 90)]]),
-      ctx({
-        now: t(23, 0),
-        currentEpoch: 104,
-        journalled: new Map([['mine', t(21, 0)]]),
-        createdAt: new Map([['cccbb79e', t(19, 42)], ['64d022bb', t(20, 35)], ['5d8eceb8', t(19, 34)], ['mine', t(5, 0)]]),
-      }),
+      new Map(),
+      ctx({ times: new Map([
+        ['cccbb79e', exact(t(19, 42))], ['64d022bb', exact(t(20, 35))], ['5d8eceb8', exact(t(19, 34))],
+        ['old', { at: t(15, 4), estimated: true }],
+      ]) }),
     )
-    // The journal's 21:00 beats the indexer's 05:00 for this device's own burn; the epoch estimate
-    // (14 epochs back, about 15:04) sorts among the exact times.
-    expect(rows.map(r => r.txId)).toEqual(['mine', '64d022bb', 'cccbb79e', '5d8eceb8', 'old'])
+    expect(rows.map(r => r.txId)).toEqual(['64d022bb', 'cccbb79e', '5d8eceb8', 'old'])
   })
 
   it('breaks ties by transaction id, puts rows with no time last, and keeps one transaction’s deposits in order', () => {
+    const times = new Map([['a', exact(10)], ['b', exact(10)]])
     const rows = buildBurnRows(
       [
         { txId: 'none2', amount: 1n },
@@ -105,19 +146,12 @@ describe('buildBurnRows', () => {
         { txId: 'b', amount: 5n },
       ],
       new Map(),
-      ctx({ createdAt: new Map([['a', 10], ['b', 10]]) }),
+      ctx({ times }),
     )
     expect(rows.map(r => [r.txId, r.amount])).toEqual([['a', 4n], ['b', 2n], ['b', 5n], ['none1', 3n], ['none2', 1n]])
     // And the same answer from any input order.
-    const again = buildBurnRows([...rows].reverse().map(r => ({ txId: r.txId, amount: r.amount })), new Map(), ctx({ createdAt: new Map([['a', 10], ['b', 10]]) }))
+    const again = buildBurnRows([...rows].reverse().map(r => ({ txId: r.txId, amount: r.amount })), new Map(), ctx({ times }))
     expect(again.map(r => r.txId)).toEqual(['a', 'b', 'b', 'none1', 'none2'])
-  })
-
-  it('an unreadable receipt is a plain "Burn", never a guess', () => {
-    const [row] = buildBurnRows([{ txId: 'x', amount: 1n }], new Map(), ctx())
-    expect(row.source).toBe('unknown')
-    expect(burnTitle(row)).toBe('Burn')
-    expect(row.at).toBeNull()
   })
 })
 
@@ -127,20 +161,6 @@ describe('depositsComplete', () => {
     expect(depositsComplete(d, 1_000_100_000n)).toBe(true)
     expect(depositsComplete(d, 1_000_200_000n)).toBe(false)
     expect(depositsComplete(d, null)).toBe(false)
-  })
-})
-
-describe('burnTimeLabel', () => {
-  const now = new Date(2026, 9, 9, 15, 0).getTime()
-  it('says when, like the rest of the app', () => {
-    expect(burnTimeLabel(new Date(2026, 9, 9, 14, 32).getTime(), true, now)).toBe('Today 14:32')
-    expect(burnTimeLabel(new Date(2026, 9, 8, 9, 5).getTime(), true, now)).toBe('Yesterday 09:05')
-  })
-
-  it('an estimate says so, and carries no time of day', () => {
-    expect(burnTimeLabel(now - 5 * 3_600_000, false, now)).toBe('About 5 hours ago')
-    expect(burnTimeLabel(now - 3 * 86_400_000, false, now)).toBe('About 3 days ago')
-    expect(burnTimeLabel(null, false, now)).toBe('Time unknown')
   })
 })
 
@@ -188,7 +208,7 @@ describe('untrusted, enormous figures', () => {
 
 describe('burnSettled — a fresh burn is watched until its row is classified', () => {
   const row = (source: 'public' | 'private' | 'unknown') =>
-    buildBurnRows([{ txId: 'mine', amount: 100_000n }], new Map([['mine', { source, withdrawVaults: [], epoch: 1 }]]), ctx())
+    buildBurnRows([{ txId: 'mine', amount: 100_000n }], new Map([['mine', cls(source, [], 1)]]), ctx())
 
   it('the total including it is not enough while its receipt is still unread', () => {
     expect(burnSettled(1_100_000n, 1_000_000n, 100_000n, row('unknown'), 'mine')).toBe(false)

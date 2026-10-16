@@ -54,7 +54,11 @@ import { preparePublicSend } from '../src/crypto/publicSend'
 import { preparePrivateBurn, preparePublicBurn, type BurnSource } from '../src/crypto/burn'
 import {
   BURN_WALLET_COMPONENT, accountVaultIds, classifyBurn, listDeposits, readBurnWallet,
+  type BurnClassification,
 } from '../src/crypto/burnWallet'
+import { buildBurnRows, burnDetail, burnTitle } from '../src/components/burn/burnModel'
+import { timeLabel } from '../src/components/wallet/v2/format'
+import { txTime, type TxTime } from '../src/crypto/txTimes'
 import { parseOotleAddress } from '@tari-project/ootle-wasm'
 import { FAUCET_COMPONENT_ADDRESS, FAUCET_VAULT_ADDRESS, faucetReceiptId } from '../src/crypto/faucetConfig'
 import { decodeFaucetState, decodeFaucetVault, faucetStatusFrom } from '../src/crypto/faucetStatus'
@@ -2644,6 +2648,34 @@ async function cmdTradeCborCheck(h: Harnessed): Promise<void> {
   field('result', `${ok} match, ${bad} mismatch`)
 }
 
+/**
+ * READ-ONLY. The Burn page's list, as hooks/useBurnWallet builds it: every deposit, its receipt's
+ * classification (person / you / app), its time from crypto/txTimes, labelled by burnModel.
+ */
+async function cmdBurnList(h: Harnessed): Promise<void> {
+  rule('burn-list  (hooks/useBurnWallet → components/burn/burnModel)  ·  READ-ONLY')
+  const mark = net.length
+  const deposits = (await listDeposits()).slice(0, 50)
+  const account = loadAccountAddress(h.address)
+  const journalled = new Set(loadJournal(h.address).filter(e => e.kind === 'burn' && e.txId).map(e => e.txId!))
+  const [classes, times, ownVaults] = await Promise.all([
+    Promise.all(deposits.map(async d => [d.txId, await classifyBurn(d.txId)] as const)).then(p => new Map<string, BurnClassification>(p)),
+    Promise.all([...new Set(deposits.map(d => d.txId))].map(async id => [id, await txTime(id)] as const)).then(p => new Map<string, TxTime>(p)),
+    account ? accountVaultIds(account) : Promise.resolve(new Set<string>()),
+  ])
+  const rows = buildBurnRows(deposits, classes, { ownVaults, journalled, times })
+  field('rows', `${rows.length} (account ${account ? account.slice(0, 18) + '…' : 'none'}, ${journalled.size} journalled here)`)
+  const counts = new Map<string, number>()
+  for (const r of rows) {
+    const title = burnTitle(r)
+    counts.set(title, (counts.get(title) ?? 0) + 1)
+    const at = r.at === null ? '(no time)          ' : new Date(r.at).toISOString().slice(0, 16).replace('T', ' ') + (r.estimated ? '~' : ' ')
+    console.log(`    ${r.txId.slice(0, 10)}…  ${at}  ${timeLabel(r.at, r.estimated).padEnd(8)} ${title.padEnd(19)} ${(burnDetail(r) ?? '—').padEnd(12)} ${amt(r.amount)}${classes.get(r.txId)?.appTemplates.length ? `  [apps ${classes.get(r.txId)!.appTemplates.map(t => t.slice(0, 8)).join(',')}]` : ''}`)
+  }
+  field('labels', [...counts].map(([k, v]) => `${k} ×${v}`).join(' · '))
+  printNet(mark)
+}
+
 /** READ-ONLY. The market as the Trade page will see it (crypto/market.MarketReader — what useMarket feeds). */
 async function cmdMarket(h: Harnessed): Promise<void> {
   rule('market  (crypto/market.MarketReader — book, my orders, recent trades)  ·  READ-ONLY')
@@ -2802,6 +2834,8 @@ Environment:
   trade-offline-check         The same refresh with the network cut, then again (Try again). READ-ONLY.
   market                      The market as the Trade page sees it: the book (sorted, spread, taker
                               legs after the 1% fee, YOURS flags), my orders, recent trades. READ-ONLY.
+  burn-list                   The Burn page's list: each burn's label (Burn / Burned by you / Caravel
+                              Trade burn / App burn), detail and time, as the page builds it. READ-ONLY.
   trade-cbor-check            crypto/statementCbor against the Rust statement-cbor tool: fresh payouts,
                               and every payout stored on the Board (STATEMENT_CBOR_TOOL to override).
 
@@ -2950,6 +2984,9 @@ export async function main(argv: string[]): Promise<void> {
         break
       case 'market':
         await cmdMarket(h)
+        break
+      case 'burn-list':
+        await cmdBurnList(h)
         break
       case 'trade-cbor-check':
         await cmdTradeCborCheck(h)

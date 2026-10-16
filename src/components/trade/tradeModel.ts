@@ -16,7 +16,7 @@ import { CUSD_ASSET, formatUnits, formatUsd } from '../../crypto/assets'
 import type { BookEntry, MyOrder, Price, RecentTrade } from '../../crypto/market'
 import { QuoteChanged } from '../../crypto/quote'
 import { SELL, type OrderSide } from '../../crypto/tradeConfig'
-import { fmt6 } from '../wallet/v2/format'
+import { fmt6, timeLabel } from '../wallet/v2/format'
 
 /** The testnet token, as the Trade design names it everywhere (the wallet's shared TICKER says TARI). */
 export const TTARI = 'tTARI'
@@ -154,16 +154,8 @@ export function isTaken(e: unknown): boolean {
   return /no longer open|does not exist|payout output already exists|terms are not the ones/i.test(m)
 }
 
-/** HH:MM for a time today, "Oct 14" otherwise; "~" when estimated from the epoch; "—" when unknown. */
-export function timeLabel(at: number | null, estimated = false, now = Date.now()): string {
-  if (at === null) return '—'
-  const d = new Date(at), today = new Date(now)
-  const same = d.toDateString() === today.toDateString()
-  const s = same
-    ? d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
-    : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-  return `${estimated ? '~' : ''}${s}`
-}
+/** The shared chain-time label (wallet/v2/format.timeLabel), re-exported for the Trade page. */
+export { timeLabel }
 
 export interface MyOrderView {
   key: string

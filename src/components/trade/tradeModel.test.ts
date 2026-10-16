@@ -5,10 +5,10 @@ import { describe, expect, it } from 'vitest'
 import { QuoteChanged } from '../../crypto/quote'
 import { BUY, SELL } from '../../crypto/tradeConfig'
 import {
-  fillRows, fmtCusd, fmtPrice, isTaken, myOrderView, orderTotal, parsePrice, parseTari, placeRows, timeLabel, tradeRowView, usdOf,
+  fillRows, fmtCusd, fmtPrice, isTaken, myOrderView, orderTotal, parsePrice, parseTari, placeRows, termsLine, timeLabel, tradeMessage, tradeRowView, usdOf,
 } from './tradeModel'
 
-const split = { fee: 10_000n, caravelCut: 7_000n, burnCut: 3_000n }
+const split = { fee: 10_000n }
 
 describe('parsing', () => {
   it('tTARI and prices to six decimals, positive, nothing else', () => {
@@ -34,32 +34,47 @@ describe('formatting', () => {
   })
 })
 
-describe('placeRows / fillRows — the fee is tTARI, N − 1% to whoever receives tTARI, full cUSD to the seller', () => {
-  it('placing a SELL: you get the full cUSD, the buyer gets N − 1% tTARI, the fee is tTARI', () => {
-    const rows = placeRows(SELL, 1_000_000n, 2_500_000n, split)
-    expect(rows.map(r => [r.k, r.v])).toEqual([
+describe('placeRows / fillRows — what you give, what you get; the fee stays tTARI', () => {
+  it('placing a SELL: you receive the FULL cUSD; the buyer receives N − 1% tTARI', () => {
+    expect(placeRows(SELL, 1_000_000n, 2_500_000n, split).map(r => r.note ? ['note', r.v] : [r.k, r.v])).toEqual([
       ['You receive', '2.50 cUSD'],
-      ['Buyer receives', '0.990000 tTARI'],
-      ['1% trade fee', '0.010000 tTARI · 0.007000 Caravel, 0.003000 burned'],
+      ['note', 'Buyer receives 0.990000 tTARI after the 1% trading fee'],
     ])
   })
-  it('placing a BUY: you pay the cUSD total and receive N − 1% tTARI', () => {
-    expect(placeRows(BUY, 1_000_000n, 1_800_000n, split).map(r => r.v)).toEqual(['1.80 cUSD', '0.990000 tTARI', '0.010000 tTARI · 0.007000 Caravel, 0.003000 burned'])
+  it('placing a BUY: you pay the cUSD total, receive N − 1% tTARI; one fee note', () => {
+    expect(placeRows(BUY, 1_000_000n, 1_800_000n, split).map(r => r.note ? ['note', r.v] : [r.k, r.v])).toEqual([
+      ['You pay', '1.80 cUSD'], ['You receive', '0.990000 tTARI'], ['note', 'Includes 1% trading fee'],
+    ])
   })
-  it('with no Board settings yet, no fee figure is invented', () => {
-    expect(placeRows(SELL, 1_000_000n, 2_500_000n, null).slice(1).map(r => r.v)).toEqual(['—', '—'])
+  it('with no fee settings yet, no figure is invented', () => {
+    expect(placeRows(SELL, 1_000_000n, 2_500_000n, null)[1].v).toBe('Buyer receives — after the 1% trading fee')
   })
   it('filling a SELL order: pay P cUSD, receive N − 1% tTARI', () => {
-    expect(fillRows({ side: SELL, n: 1_000_000n, p: 2_200_000n, ...split }).map(r => [r.k, r.v])).toEqual([
-      ['You pay', '2.20 cUSD'], ['Trade fee 1%', '0.010000 tTARI · 0.007000 Caravel, 0.003000 burned'], ['You receive', '0.990000 tTARI'],
-    ])
+    expect(fillRows({ side: SELL, n: 1_000_000n, p: 2_200_000n, fee: 10_000n }).map(r => r.v)).toEqual(['2.20 cUSD', '0.990000 tTARI', 'Includes 1% trading fee'])
   })
-  it('filling a BUY order: pay N tTARI (the fee comes out of it), receive the FULL P cUSD', () => {
-    const rows = fillRows({ side: BUY, n: 1_000_000n, p: 1_900_000n, ...split })
-    expect(rows[0].v).toBe('1.000000 tTARI')
-    expect(rows[1].v).toMatch(/^0\.010000 tTARI · .* the buyer receives 0\.990000 tTARI$/)
-    expect(rows[2].v).toBe('1.90 cUSD')
-    expect(rows.some(r => /cUSD/.test(r.v) && /fee/i.test(r.k))).toBe(false)   // never a cUSD fee
+  it('filling a BUY order: pay N tTARI, receive the FULL P cUSD — never a cUSD fee', () => {
+    const rows = fillRows({ side: BUY, n: 1_000_000n, p: 1_900_000n, fee: 10_000n })
+    expect(rows.map(r => r.v)).toEqual(['1.000000 tTARI', '1.90 cUSD', 'Includes 1% trading fee'])
+  })
+  it('an order\'s terms in one line', () => {
+    expect(termsLine(1_000_000n, 2_500_000n)).toBe('1.000000 tTARI @ 2.5')
+  })
+})
+
+describe('tradeMessage — plain words, no internals', () => {
+  it('maps every kind of refusal to something a person can act on', () => {
+    expect(tradeMessage(new Error('Could not read the trade Board verified — try again in a moment.'))).toBe('Can’t reach the network. Nothing was sent. Try again in a moment.')
+    expect(tradeMessage(new Error('Failed to fetch'))).toBe('Can’t reach the network. Nothing was sent. Try again in a moment.')
+    expect(tradeMessage(new Error('Not enough private cUSD: this needs 5000001, and the wallet holds 400000 spendable.'))).toBe('Insufficient balance.')
+    expect(tradeMessage(new Error('This wallet has no public account to pay from.'))).toBe('Insufficient balance.')
+    expect(tradeMessage(new Error('New orders are paused on the Board right now.'))).toMatch(/^New orders are paused right now/)
+    expect(tradeMessage(new Error('This order was not placed by the Caravel Trade Board.'))).toBe('This order isn’t available.')
+    expect(tradeMessage(new Error('weird internal thing'))).toBe('Something went wrong. Nothing was sent. Try again in a moment.')
+  })
+  it('never lets an internal term through', () => {
+    for (const raw of ['Board', 'verified', 'SubstateNotFound', 'indexer HTTP 503', 'TemplateError']) {
+      expect(tradeMessage(new Error(raw))).not.toMatch(/Board|verified|Substate|indexer|Template/)
+    }
   })
 })
 
@@ -76,7 +91,7 @@ describe('isTaken — somebody got there first, nothing charged', () => {
 describe('rows', () => {
   const now = Date.UTC(2026, 9, 15, 13, 0, 0)
   it('my orders: open shows Cancel; unconfirmed never claims a state as fact', () => {
-    const base = { orderId: 'o', side: SELL as 0, n: 1_000_000n, p: 2_500_000n, fee: 10_000n, price: { micro: 2_500_000n, exact: true }, cancelIndex: 4, placedAt: null }
+    const base = { orderId: 'o', side: SELL as 0, n: 1_000_000n, p: 2_500_000n, fee: 10_000n, price: { micro: 2_500_000n, exact: true }, cancelIndex: 4, placedAt: null, placedEstimated: false, placedTx: null }
     expect(myOrderView({ ...base, state: 'open', confirmed: true })).toMatchObject({ status: 'Open', canCancel: true, title: 'Sell 1.000000 tTARI @ 2.5' })
     expect(myOrderView({ ...base, state: 'filled', confirmed: true })).toMatchObject({ status: 'Filled', sub: 'Filled · 2.50 cUSD received' })
     expect(myOrderView({ ...base, side: BUY, state: 'filled', confirmed: true }).sub).toBe('Filled · 0.990000 tTARI received')

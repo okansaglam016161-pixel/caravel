@@ -54,6 +54,7 @@ import { ActivityRowShell, type ActivityStatus, type SendSource, type SendView }
 import { useJournal } from '../../hooks/useJournal'
 import { useCusdClaims } from '../../hooks/useCusdClaims'
 import { useTrades } from '../../hooks/useTrades'
+import { useTxTimes } from '../../hooks/useTxTimes'
 import { CUSD_ASSET, TARI_ASSET, formatUnits } from '../../crypto/assets'
 import { useUtxoLedger } from '../../hooks/useUtxoLedger'
 import { useJournalCoverage } from '../../hooks/useJournalCoverage'
@@ -1355,7 +1356,13 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
     [cusdClaims],
   )
   const trades = useTrades(address)
-  const activity = buildActivity(journal, txHistory, messages, reconciled, cusdUnitsByJournal, trades)
+  // Trade rows are dated by the INDEXER's time of their transaction — the same on every device.
+  const tradeTxIds = [
+    ...journal.filter(e => e.kind.startsWith('trade-') && e.txId).map(e => e.txId!),
+    ...trades.filter(t => t.closedTxId).map(t => t.closedTxId!),
+  ]
+  const txTimes = useTxTimes(tradeTxIds)
+  const activity = buildActivity(journal, txHistory, messages, reconciled, cusdUnitsByJournal, trades, txTimes)
 
   const body = (
     <WalletModalV2

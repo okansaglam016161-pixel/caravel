@@ -116,7 +116,7 @@ export async function runTrade(t: Trader, prepared: PreparedTrade, onProgress?: 
     orderId: result.orderId ?? record.orderId,
     orderState: d.action === 'place' && result.outcome === 'Commit' ? 'open' : null,
   })
-  if (d.action === 'cancel' && result.outcome === 'Commit' && d.orderId) observeOrder(t.address, d.orderId, 'cancelled')
+  if (d.action === 'cancel' && result.outcome === 'Commit' && d.orderId) observeOrder(t.address, d.orderId, 'cancelled', result.txId)
   return { ...result, journalId: entry.id }
 }
 
@@ -129,15 +129,21 @@ export async function refreshOwnOrders(walletAddress: string): Promise<number> {
   let changed = 0
   for (const r of ownOpenOrders(walletAddress)) {
     let state: 'open' | 'filled' | 'cancelled' | null = null
+    let txId: string | null = null
     try {
       const o = await readOrder(r.orderId!)
       if (o) state = o.status === ORDER_FILLED ? 'filled' : o.status === ORDER_CANCELLED ? 'cancelled' : 'open'
     } catch {
       // Not served verified right now — just after a fill or cancel, typically. The order's own
       // engine-stamped event says what happened; without one, try again on the next refresh.
-      state = await orderOutcomeFromEvents(r.orderId!)
+      const ev = await orderOutcomeFromEvents(r.orderId!)
+      if (ev) { state = ev.state; txId = ev.txId }
     }
-    if (state && state !== r.orderState) { observeOrder(walletAddress, r.orderId!, state); changed++ }
+    if (!state || state === r.orderState) continue
+    // The transaction that closed it, for its time (the indexer's, on every device).
+    if (state !== 'open' && txId === null) txId = (await orderOutcomeFromEvents(r.orderId!))?.txId ?? null
+    observeOrder(walletAddress, r.orderId!, state, txId)
+    changed++
   }
   return changed
 }

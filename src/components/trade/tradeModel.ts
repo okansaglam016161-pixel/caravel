@@ -59,51 +59,82 @@ export const usdOf = (units: bigint) => formatUsd(units, CUSD_ASSET)
 /** A price per tTARI: "2.2", "1.666666…" when it does not end at six decimals. */
 export const fmtPrice = (price: Price) => `${formatUnits(price.micro, CUSD_ASSET.decimals)}${price.exact ? '' : '…'}`
 
-export interface Row { k: string; v: string; strong?: boolean; positive?: boolean }
-
-/** The 1% trade fee line: always tTARI, with its two shares. */
-export function feeLine(fee: bigint, caravelCut: bigint, burnCut: bigint): string {
-  return `${fmtTari(fee)} · ${fmt6(caravelCut)} Caravel, ${fmt6(burnCut)} burned`
+export interface Row {
+  k: string
+  v: string
+  strong?: boolean
+  positive?: boolean
+  /** A small explanatory line under the figures, not a figure (`k` is unused). */
+  note?: boolean
 }
 
+/** The one line that stands for the whole fee breakdown on a trade sheet. */
+export const TRADING_FEE_NOTE = 'Includes 1% trading fee'
+
 /**
- * What placing an order means, before the network fee is priced. SELL: you are paid the FULL cUSD
- * total, the buyer receives N − 1% tTARI. BUY: you pay the cUSD total and receive N − 1% tTARI.
+ * What placing an order means — what you give and what you get. SELL: you are paid the FULL cUSD
+ * total; the buyer receives N − 1% tTARI. BUY: you pay the cUSD total and receive N − 1% tTARI. The
+ * fee is always tTARI; `split` is the order's (or the Board's live) fee, null while unknown.
  */
-export function placeRows(side: OrderSide, n: bigint, p: bigint, split: { fee: bigint; caravelCut: bigint; burnCut: bigint } | null): Row[] {
-  const net = split ? n - split.fee : null
-  const fee: Row = { k: '1% trade fee', v: split ? feeLine(split.fee, split.caravelCut, split.burnCut) : '—' }
+export function placeRows(side: OrderSide, n: bigint, p: bigint, split: { fee: bigint } | null): Row[] {
+  const net = split ? fmtTari(n - split.fee) : '—'
   return side === SELL
     ? [
-        { k: 'You receive', v: fmtCusdWithUnit(p), strong: true },
-        { k: 'Buyer receives', v: net === null ? '—' : fmtTari(net) },
-        fee,
+        { k: 'You receive', v: fmtCusdWithUnit(p), strong: true, positive: true },
+        { k: '', v: `Buyer receives ${net} after the 1% trading fee`, note: true },
       ]
     : [
         { k: 'You pay', v: fmtCusdWithUnit(p), strong: true },
-        { k: 'You receive', v: net === null ? '—' : fmtTari(net), positive: true },
-        fee,
+        { k: 'You receive', v: net, strong: true, positive: true },
+        { k: '', v: TRADING_FEE_NOTE, note: true },
       ]
 }
 
 /**
  * What filling a book order means for the taker. From a SELL order: pay P cUSD, receive N − 1% tTARI.
- * Into a BUY order: pay N tTARI — the 1% comes out of it, so the buyer receives N − 1% — and receive
- * the FULL P cUSD.
+ * Into a BUY order: pay N tTARI (the 1% comes out of it — the buyer receives N − 1%) and receive the
+ * FULL P cUSD.
  */
-export function fillRows(e: Pick<BookEntry, 'side' | 'n' | 'p' | 'fee' | 'caravelCut' | 'burnCut'>): Row[] {
-  const fee = feeLine(e.fee, e.caravelCut, e.burnCut)
+export function fillRows(e: Pick<BookEntry, 'side' | 'n' | 'p' | 'fee'>): Row[] {
   return e.side === SELL
     ? [
         { k: 'You pay', v: fmtCusdWithUnit(e.p), strong: true },
-        { k: 'Trade fee 1%', v: fee },
         { k: 'You receive', v: fmtTari(e.n - e.fee), strong: true, positive: true },
+        { k: '', v: TRADING_FEE_NOTE, note: true },
       ]
     : [
         { k: 'You pay', v: fmtTari(e.n), strong: true },
-        { k: 'Trade fee 1%', v: `${fee} · from the tTARI you pay; the buyer receives ${fmtTari(e.n - e.fee)}` },
         { k: 'You receive', v: fmtCusdWithUnit(e.p), strong: true, positive: true },
+        { k: '', v: TRADING_FEE_NOTE, note: true },
       ]
+}
+
+/** "1.000000 tTARI @ 2.5" — an order's terms in one line. */
+export function termsLine(n: bigint, p: bigint): string {
+  return `${fmtTari(n)} @ ${fmtPrice({ micro: (p * MICRO) / n, exact: (p * MICRO) % n === 0n })}`
+}
+
+export const NETWORK_MESSAGE = 'Can’t reach the network. Nothing was sent. Try again in a moment.'
+export const INSUFFICIENT_MESSAGE = 'Insufficient balance.'
+
+/**
+ * Any refusal or failure, in plain words. No internal names, no network jargon, no raw error text:
+ * what happened, that nothing was sent, and what to do. (A taken order has its own state — isTaken.)
+ */
+export function tradeMessage(e: unknown): string {
+  const m = e instanceof Error ? e.message : String(e)
+  if (/locked/i.test(m) && /unlock/i.test(m)) return 'Your wallet is locked. Unlock it to trade.'
+  if (/smallest order/i.test(m)) return `The smallest order is 1 ${TTARI}.`
+  if (/not enough|no public account|must leave change|too small|insufficient/i.test(m)) return INSUFFICIENT_MESSAGE
+  if (/paused/i.test(m)) return 'New orders are paused right now. Nothing was sent. Try again later.'
+  if (/kept changing/i.test(m)) return 'The network fee kept changing. Nothing was sent. Try again in a moment.'
+  if (/fee .*(above|exceeds)|reserves|unusually high/i.test(m)) return 'The network fee is unusually high right now. Nothing was sent. Try again later.'
+  if (/cancel key/i.test(m)) return 'This order can’t be cancelled from this wallet.'
+  if (/not a caravel trade order|not placed by|badge|not the one this app trusts|wrong template|exactly one way|fee does not add up|not quoted|not positive|not an order address/i.test(m)) {
+    return 'This order isn’t available.'
+  }
+  if (/could not|couldn’t|can.t reach|no indexer|failed to fetch|network|indexer|did not respond|timed? ?out|busy|verified|try again in a moment/i.test(m)) return NETWORK_MESSAGE
+  return 'Something went wrong. Nothing was sent. Try again in a moment.'
 }
 
 /**
@@ -140,9 +171,9 @@ export interface MyOrderView {
 export function myOrderView(m: MyOrder): MyOrderView {
   const sell = m.side === SELL
   const title = `${sell ? 'Sell' : 'Buy'} ${fmt6(m.n)} ${TTARI} @ ${fmtPrice(m.price)}`
-  const placed = m.placedAt !== null ? ` · placed ${timeLabel(m.placedAt)}` : ''
+  const placed = m.placedAt !== null ? ` · placed ${timeLabel(m.placedAt, m.placedEstimated)}` : ''
   if (!m.confirmed) {
-    return { key: m.orderId, side: sell ? 'SELL' : 'BUY', title, sub: `Checking on chain · last seen ${m.state}`, status: 'Unconfirmed', canCancel: false }
+    return { key: m.orderId, side: sell ? 'SELL' : 'BUY', title, sub: `Waiting for confirmation${placed}`, status: 'Unconfirmed', canCancel: false }
   }
   if (m.state === 'open') {
     return { key: m.orderId, side: sell ? 'SELL' : 'BUY', title, sub: `Total ${fmtCusdWithUnit(m.p)}${placed}`, status: 'Open', canCancel: m.cancelIndex !== null }

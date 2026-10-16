@@ -2660,7 +2660,7 @@ async function cmdMarket(h: Harnessed): Promise<void> {
   console.log('\n  BUYS (dearest first)'); for (const e of d.book.buys) console.log(row(e))
   if (!d.book.buys.length) console.log('    (none)')
   console.log('\n  MY ORDERS')
-  for (const m of d.mine) console.log(`    ${m.state.padEnd(9)} ${m.side === SELL ? 'SELL' : 'BUY '} ${m.orderId.slice(0, 18)}…  N=${m.n} P=${m.p} ${px(m.price)}  key ${m.cancelIndex}${m.placedAt === null ? '  (found on chain)' : ''}${m.confirmed ? '' : '  (checking — not readable verified right now)'}`)
+  for (const m of d.mine) console.log(`    ${m.state.padEnd(9)} ${m.side === SELL ? 'SELL' : 'BUY '} ${m.orderId.slice(0, 18)}…  N=${m.n} P=${m.p} ${px(m.price)}  key ${m.cancelIndex}  placed ${m.placedAt === null ? '?' : new Date(m.placedAt).toISOString().slice(0, 19).replace('T', ' ') + (m.placedEstimated ? '~' : '')}${m.confirmed ? '' : '  (checking — not readable verified right now)'}`)
   if (!d.mine.length) console.log('    (none)')
   console.log('\n  RECENT TRADES (newest first)')
   for (const t of (d.recent ?? []).slice(0, 12)) console.log(`    ${t.at === null ? '(time unknown)     ' : new Date(t.at).toISOString().slice(0, 19).replace('T', ' ')}${t.atEstimated ? '~' : ' '} ${t.side === SELL ? 'bought' : 'sold  '} ${amt(t.n)} for ${cusdFmt(t.p)} @ ${px(t.price)}${t.yours ? `  ◀ yours (${t.yours})` : ''}`)

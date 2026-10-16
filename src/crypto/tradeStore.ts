@@ -65,6 +65,8 @@ export interface TradeRecord {
   /** Place: the order's state as last seen, and when it was first seen filled (the "Order filled" row). */
   orderState: OrderState | null
   filledSeenAt: number | null
+  /** Place: the transaction that filled or cancelled the order — its time is the indexer's. */
+  closedTxId?: string | null
 }
 
 export interface TradeState {
@@ -115,6 +117,7 @@ const parse: Parse<TradeState> = (decoded) => {
       payoutOutputId: typeof r.payoutOutputId === 'string' ? r.payoutOutputId : null,
       orderState: r.orderState === 'open' || r.orderState === 'filled' || r.orderState === 'cancelled' ? r.orderState : null,
       filledSeenAt: typeof r.filledSeenAt === 'number' ? r.filledSeenAt : null,
+      closedTxId: typeof r.closedTxId === 'string' ? r.closedTxId : null,
     })
   }
   return { nextCancelIndex: root.nextCancelIndex, recoveredAt: typeof root.recoveredAt === 'number' ? root.recoveredAt : null, records }
@@ -165,14 +168,23 @@ export function recordTrade(walletAddress: string, rec: TradeRecord): boolean {
   return save(walletAddress, { ...s, records: [...s.records.filter(r => r.journalId !== rec.journalId), rec] })
 }
 
-/** Patch the placed-order record for `orderId` with what the chain now says about it. */
-export function observeOrder(walletAddress: string, orderId: string, state: OrderState, now = Date.now()): boolean {
+/**
+ * Patch the placed-order record for `orderId` with what the chain now says about it — and, when known,
+ * the transaction that filled or cancelled it.
+ */
+export function observeOrder(walletAddress: string, orderId: string, state: OrderState, closedTxId: string | null = null, now = Date.now()): boolean {
   const s = loadTradeState(walletAddress)
   let changed = false
   const records = s.records.map(r => {
-    if (r.action !== 'place' || r.orderId !== orderId || r.orderState === state) return r
+    if (r.action !== 'place' || r.orderId !== orderId) return r
+    const newTx = closedTxId !== null && state !== 'open' && r.closedTxId !== closedTxId
+    if (r.orderState === state && !newTx) return r
     changed = true
-    return { ...r, orderState: state, filledSeenAt: state === 'filled' ? (r.filledSeenAt ?? now) : r.filledSeenAt }
+    return {
+      ...r, orderState: state,
+      filledSeenAt: state === 'filled' ? (r.filledSeenAt ?? now) : r.filledSeenAt,
+      closedTxId: newTx ? closedTxId : r.closedTxId ?? null,
+    }
   })
   return changed ? save(walletAddress, { ...s, records }) : true
 }

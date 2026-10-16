@@ -42,16 +42,16 @@
 
 import { TARI_RESOURCE_ADDRESS } from '@tari-project/ootle'
 import { CUSD_ASSET } from './assets'
-import { currentEpoch, estimateEpochTime, parseTxCreatedAt } from './burnWallet'
 import { verifiedRead, type VerifiedReader } from './cusdScan'
 import { cancelKeyFor } from './derivation'
-import { INDEXER_URLS, POINT_READ_TIMEOUT_MS, pointRead } from './indexerConfig'
+import { INDEXER_URLS, POINT_READ_TIMEOUT_MS } from './indexerConfig'
 import { fetchWithRetry } from './indexerRetry'
 import {
   ORDER_CANCELLED, ORDER_FILLED, ORDER_OPEN, SELL, TRADE_ORDER_TEMPLATE, type OrderSide,
 } from './tradeConfig'
-import { checkPayout, listBoardOrderIds, orderLegitimacy, readBoard, readOrder, readOrderUnverified, type BoardInfo, type OrderInfo, type PayoutCheck } from './tradeRead'
+import { checkPayout, listBoardOrders, orderLegitimacy, readBoard, readOrder, readOrderUnverified, type BoardInfo, type OrderInfo, type PayoutCheck } from './tradeRead'
 import { loadTradeState, observeOrder, recordRecovery, type OrderState, type TradeRecord } from './tradeStore'
+import { txTime } from './txTimes'
 
 const TARI = TARI_RESOURCE_ADDRESS
 const CUSD = CUSD_ASSET.resource
@@ -114,8 +114,11 @@ export interface BookEntry {
   confirmed: boolean
   /** Its cancel key index when `yours`. */
   cancelIndex: number | null
-  /** Discovery order — the tie-breaker: at one price, the older order first. */
+  /** Discovery order — the last resort tie-breaker. */
   seq: number
+  /** The transaction that placed it, and when (the indexer's time — the same on every device). */
+  placedTx: string | null
+  placedAt: number | null
 }
 
 export interface Book {
@@ -127,13 +130,17 @@ export interface Book {
   spread: Price | null
 }
 
-export function toBookEntry(o: OrderInfo, seq: number, mine: ReadonlyMap<string, number>, confirmed = true): BookEntry {
+export function toBookEntry(
+  o: OrderInfo, seq: number, mine: ReadonlyMap<string, number>, confirmed = true,
+  placed: { txId: string | null; at: number | null } = { txId: null, at: null },
+): BookEntry {
   const { pays, receives } = takerLegs(o)
   const cancelIndex = mine.get(o.id) ?? null
   return {
     confirmed,
     orderId: o.id, side: o.side, n: o.n, p: o.p, fee: o.fee, caravelCut: o.caravelCut, burnCut: o.burnCut, version: o.version,
     price: pricePerTari(o.n, o.p), pays, receives, yours: cancelIndex !== null, cancelIndex, seq,
+    placedTx: placed.txId, placedAt: placed.at,
   }
 }
 
@@ -146,9 +153,20 @@ export function spreadOf(bestSell: { n: bigint; p: bigint }, bestBuy: { n: bigin
   return { micro: q, exact: num % den === 0n }
 }
 
+/**
+ * At one price, the OLDER order first — by the indexer's placement time, then by the placing
+ * transaction's id — so every wallet shows the same order. Discovery order only as a last resort.
+ */
+function byAge(a: BookEntry, b: BookEntry): number {
+  const ta = a.placedAt ?? Number.POSITIVE_INFINITY, tb = b.placedAt ?? Number.POSITIVE_INFINITY
+  if (ta !== tb) return ta < tb ? -1 : 1
+  const xa = a.placedTx ?? '', xb = b.placedTx ?? ''
+  return xa < xb ? -1 : xa > xb ? 1 : a.seq - b.seq
+}
+
 export function buildBook(entries: readonly BookEntry[]): Book {
-  const sells = entries.filter(e => e.side === SELL).sort((a, b) => comparePrice(a, b) || a.seq - b.seq)
-  const buys = entries.filter(e => e.side !== SELL).sort((a, b) => comparePrice(b, a) || a.seq - b.seq)
+  const sells = entries.filter(e => e.side === SELL).sort((a, b) => comparePrice(a, b) || byAge(a, b))
+  const buys = entries.filter(e => e.side !== SELL).sort((a, b) => comparePrice(b, a) || byAge(a, b))
   return { sells, buys, spread: sells.length && buys.length ? spreadOf(sells[0], buys[0]) : null }
 }
 
@@ -218,8 +236,13 @@ export interface MyOrder {
   confirmed: boolean
   /** The cancel key index — what a Cancel needs. */
   cancelIndex: number | null
-  /** When it was placed here (journalled), or null for an order recovered from the chain. */
+  /**
+   * When it was placed — the INDEXER's time of the placing transaction, the same on every device and
+   * after a restore; `placedEstimated` when only an epoch estimate is left; null while not known.
+   */
   placedAt: number | null
+  placedEstimated: boolean
+  placedTx: string | null
 }
 
 /**
@@ -232,6 +255,8 @@ export function myOrdersFrom(
   chain: ReadonlyMap<string, OrderInfo>,
   lastKnown: ReadonlyMap<string, OrderInfo> = new Map(),
   filledIds: ReadonlySet<string> = new Set(),
+  /** Each order's placing transaction and its indexer time. */
+  placed: ReadonlyMap<string, { txId: string; at: number | null; estimated: boolean }> = new Map(),
 ): MyOrder[] {
   const rank: Record<OrderState, number> = { open: 0, filled: 1, cancelled: 2 }
   const out: MyOrder[] = []
@@ -245,10 +270,20 @@ export function myOrdersFrom(
     if (!state) continue
     out.push({
       orderId: r.orderId, side: r.side, n: r.n, p: r.p, fee: (now ?? before)?.fee ?? r.tradeFee, price: pricePerTari(r.n, r.p), state, confirmed: !!now,
-      cancelIndex: r.cancelIndex, placedAt: r.journalId.startsWith('recovered-') ? null : r.at,
+      cancelIndex: r.cancelIndex,
+      placedAt: placed.get(r.orderId)?.at ?? null,
+      placedEstimated: placed.get(r.orderId)?.estimated ?? false,
+      placedTx: placed.get(r.orderId)?.txId ?? r.txId ?? null,
     })
   }
-  return out.sort((a, b) => rank[a.state] - rank[b.state] || (b.placedAt ?? 0) - (a.placedAt ?? 0))
+  // Open first; newest first within a state; a tie broken by the placing transaction's id.
+  return out.sort((a, b) => rank[a.state] - rank[b.state] || (b.placedAt ?? 0) - (a.placedAt ?? 0)
+    || ((a.placedTx ?? '') < (b.placedTx ?? '') ? -1 : (a.placedTx ?? '') > (b.placedTx ?? '') ? 1 : 0))
+}
+
+/** Newest first; a tie (same time or estimate) broken by transaction id — the same order everywhere. */
+export function sortRecent(trades: RecentTrade[]): RecentTrade[] {
+  return trades.sort((a, b) => (b.at ?? 0) - (a.at ?? 0) || (a.txId < b.txId ? -1 : a.txId > b.txId ? 1 : 0))
 }
 
 function stateOf(o: OrderInfo): OrderState {
@@ -314,7 +349,6 @@ export class MarketReader {
   /** Every order ever read verified AND legitimate — terms are immutable, so this never goes stale. */
   private readonly legitSeen = new Map<string, OrderInfo>()
   private readonly payout = new Map<string, { check: PayoutCheck; at: number }>()
-  private readonly fillTimes = new Map<string, { at: number | null; estimated: boolean }>()
   private board: { info: BoardInfo; at: number } | null = null
   private cancelKeys: string[] = []
 
@@ -402,31 +436,16 @@ export class MarketReader {
     return mine
   }
 
-  private async fillTime(txId: string, epochNow: () => Promise<number | null>): Promise<{ at: number | null; estimated: boolean }> {
-    const hit = this.fillTimes.get(txId)
-    if (hit) return hit
-    const tx = await pointRead(`/transactions/${txId}`)
-    let at = parseTxCreatedAt(tx.body)
-    let estimated = false
-    if (at === null) {
-      // Not retained any more: estimate from the epoch its receipt names (crypto/burnWallet's rule).
-      const receipt = await pointRead(`/transaction-receipts/${txId}`)
-      const epoch = (receipt.body as { receipt?: { epoch?: unknown } } | null)?.receipt?.epoch
-      const current = typeof epoch === 'number' ? await epochNow() : null
-      if (typeof epoch === 'number' && current !== null) { at = estimateEpochTime(epoch, current, this.now); estimated = true }
-      if (!tx.answered && !receipt.answered) return { at: null, estimated: false }   // ask again next time
-    }
-    const result = { at, estimated }
-    this.fillTimes.set(txId, result)
-    return result
-  }
-
   /** One refresh. Throws MarketUnreachable when the Board or its order list cannot be read at all. */
   async refresh(): Promise<MarketData> {
     const board = await this.boardInfo()
     let ids: string[]
+    /** Each order's placing transaction: from the Board's events, or this wallet's own record. */
+    const placedTxOf = new Map<string, string>()
     try {
-      ids = await listBoardOrderIds()
+      const listed = await listBoardOrders()
+      ids = listed.map(o => o.id)
+      for (const o of listed) placedTxOf.set(o.id, o.txId)
     } catch (e) {
       throw new MarketUnreachable(e instanceof Error ? e.message : 'The order book could not be read.')
     }
@@ -436,7 +455,10 @@ export class MarketReader {
     const ownPlaced = this.opts.walletAddress
       ? loadTradeState(this.opts.walletAddress).records.filter(r => r.action === 'place' && r.orderId && r.outcome === 'committed')
       : []
-    for (const r of ownPlaced) if (!ids.includes(r.orderId!)) ids = [...ids, r.orderId!]
+    for (const r of ownPlaced) {
+      if (!ids.includes(r.orderId!)) ids = [...ids, r.orderId!]
+      if (r.txId && !placedTxOf.has(r.orderId!)) placedTxOf.set(r.orderId!, r.txId)
+    }
     const read = await mapLimit(ids, READ_CONCURRENCY, async id => ({ id, o: await this.order(id) }))
     const hidden: MarketData['hidden'] = []
     const legit = new Map<string, OrderInfo>()
@@ -464,14 +486,29 @@ export class MarketReader {
     const open = [...legit.values()].filter(o => o.status === ORDER_OPEN)
     const checks = await mapLimit(open, READ_CONCURRENCY, async o => ({ o, c: await this.payable(o) }))
     const seqOf = new Map(ids.map((id, i) => [id, i]))
+    // The indexer's time of each placing transaction we need: the book's open orders and my orders
+    // (read once per transaction, crypto/txTimes).
+    const records = this.opts.walletAddress ? loadTradeState(this.opts.walletAddress).records : []
+    const needTimes = new Set<string>([
+      ...open.map(o => o.id), ...unconfirmedOwn.map(o => o.id),
+      ...records.filter(r => r.action === 'place' && r.orderId).map(r => r.orderId!),
+    ])
+    const placed = new Map<string, { txId: string; at: number | null; estimated: boolean }>()
+    await mapLimit([...needTimes], READ_CONCURRENCY, async id => {
+      const txId = placedTxOf.get(id)
+      if (!txId) return
+      const t = await txTime(txId, this.now)
+      placed.set(id, { txId, at: t.at, estimated: t.estimated })
+    })
+    const placedOf = (id: string) => ({ txId: placed.get(id)?.txId ?? placedTxOf.get(id) ?? null, at: placed.get(id)?.at ?? null })
     const entries: BookEntry[] = []
     for (const { o, c } of checks) {
       if (!c.ok) { hidden.push({ orderId: o.id, reason: c.reason }); continue }
-      entries.push(toBookEntry(o, seqOf.get(o.id) ?? 0, mine))
+      entries.push(toBookEntry(o, seqOf.get(o.id) ?? 0, mine, true, placedOf(o.id)))
     }
     for (const o of unconfirmedOwn) {
       const idx = ownIndex.get(o.id)
-      entries.push(toBookEntry(o, seqOf.get(o.id) ?? 0, idx === null || idx === undefined ? mine : new Map([...mine, [o.id, idx]]), false))
+      entries.push(toBookEntry(o, seqOf.get(o.id) ?? 0, idx === null || idx === undefined ? mine : new Map([...mine, [o.id, idx]]), false, placedOf(o.id)))
     }
 
     // Recent fills: one topic query, then each new fill's time once. A failure here costs only this
@@ -484,33 +521,33 @@ export class MarketReader {
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const allFills = parseFillEvents(await res.json(), this.legitSeen)
       for (const f of allFills) filledIds.add(f.orderId)
-      // This wallet's orders that somebody filled: recorded now, from the engine's fill event, so the
-      // cUSD scan that follows (hooks/useFullRescan) asks for the maker's payout by id at once.
+      // This wallet's orders that somebody filled: recorded now, from the engine's fill event (with
+      // the filling transaction, for its time), so the cUSD scan that follows (hooks/useFullRescan)
+      // asks for the maker's payout by id at once.
       const address = this.opts.walletAddress
-      if (address) for (const id of filledIds) if (mine.has(id)) observeOrder(address, id, 'filled')
+      if (address) for (const f of allFills) if (mine.has(f.orderId)) observeOrder(address, f.orderId, 'filled', f.txId)
       const fills = allFills.slice(0, RECENT_LIMIT)
-      let epochPromise: Promise<number | null> | null = null
-      const epochNow = () => (epochPromise ??= currentEpoch())
       const takerTx = new Set(this.opts.walletAddress
         ? loadTradeState(this.opts.walletAddress).records.filter(r => r.action === 'fill' && r.txId).map(r => r.txId!)
         : [])
       recent = await mapLimit(fills, READ_CONCURRENCY, async f => {
         const o = this.legitSeen.get(f.orderId)!
-        const t = await this.fillTime(f.txId, epochNow)
+        const t = await txTime(f.txId, this.now)
         return {
           orderId: f.orderId, txId: f.txId, side: o.side, n: o.n, p: o.p, price: pricePerTari(o.n, o.p),
           at: t.at, atEstimated: t.estimated,
           yours: mine.has(f.orderId) ? 'maker' : takerTx.has(f.txId) ? 'taker' : null,
         } satisfies RecentTrade
       })
-      recent.sort((a, b) => (b.at ?? 0) - (a.at ?? 0))
+      sortRecent(recent)
     } catch {
       recent = null
     }
 
-    const records = this.opts.walletAddress ? loadTradeState(this.opts.walletAddress).records : []
+    // Re-read: the fill events above may have just recorded orders as filled.
+    const latest = this.opts.walletAddress ? loadTradeState(this.opts.walletAddress).records : records
     return {
-      book: buildBook(entries), mine: myOrdersFrom(records, legit, this.legitSeen, filledIds), recent, hidden,
+      book: buildBook(entries), mine: myOrdersFrom(latest, legit, this.legitSeen, filledIds, placed), recent, hidden,
       discovered: ids.length, board, at: this.now,
     }
   }

@@ -25,12 +25,13 @@ import { SELL, type OrderSide, type TradeMode } from '../../crypto/tradeConfig'
 import type { BoardInfo } from '../../crypto/tradeRead'
 import { GenerationGuard } from '../wallet/v2/generation'
 import { Clock, Eye, Lock, Spinner } from '../wallet/v2/icons'
-import { ActionButton, CARD, Emblem, OUTCOME_CARD, Outcome, Receipt, SheetHeader, VerbatimBox } from '../wallet/v2/panels'
-import { plainError } from '../wallet/v2/plainError'
+import { ActionButton, CARD, Emblem, OUTCOME_CARD, Outcome, Receipt, SheetHeader } from '../wallet/v2/panels'
+import { useTradeBalances, type Amount } from '../../hooks/useTradeBalances'
 import { Sheet } from '../wallet/v2/primitives'
 import { C, MONO } from '../wallet/v2/tokens'
 import {
-  TTARI, fillRows, fmtCusdWithUnit, fmtPrice, fmtTari, isTaken, orderTotal, parsePrice, parseTari, placeRows, type Row,
+  INSUFFICIENT_MESSAGE, TTARI, fillRows, fmtCusdWithUnit, fmtPrice, fmtTari, isTaken, orderTotal, parsePrice, parseTari,
+  placeRows, termsLine, tradeMessage, type Row,
 } from './tradeModel'
 
 /** What the sheet is for. A cancel carries everything Cancel needs (its seed-derived key index). */
@@ -79,6 +80,23 @@ export default function TradeSheet({ mode, board, onClose, onTraded }: {
   const total = n !== null && px !== null ? orderTotal(n, px) : null
   const split = n !== null && board ? tradeFeeSplit(n, board.feeBps, board.caravelPct) : null
 
+  // ── ENOUGH TO PAY? — checked BEFORE pricing, from balances already read ──
+  // What this trade takes from the side it pays from, and at least a little of that side's tTARI for
+  // the network fee. A figure not read yet is not judged (pricing would still refuse a real shortfall,
+  // and that refusal reads the same).
+  const balances = useTradeBalances()
+  const known = (a: Amount) => (a.status === 'ready' ? a.value : null)
+  const short = (() => {
+    if (mode.kind === 'cancel') return false   // the network fee only; priced as the sheet opens
+    let tari = 1n, cusd = 0n
+    if (mode.kind === 'place') { if (mode.side === SELL) tari += n ?? 0n; else cusd = total?.p ?? 0n }
+    else if (mode.entry.side === SELL) cusd = mode.entry.p
+    else tari += mode.entry.n
+    const t = known(pay === 'private' ? balances.tari.private : balances.tari.public)
+    const c = known(pay === 'private' ? balances.cusd.private : balances.cusd.public)
+    return (t !== null && t < tari) || (cusd > 0n && c !== null && c < cusd)
+  })()
+
   async function review(notice?: string) {
     const t = trader()
     if (!t) { setView({ step: 'form', error: 'Your wallet is locked — unlock it to trade.' }); return }
@@ -95,6 +113,7 @@ export default function TradeSheet({ mode, board, onClose, onTraded }: {
       const o = mode.order
       run = () => prepareCancel(t, { orderId: o.orderId, cancelIndex: o.cancelIndex, to: o.to })
     }
+    if (short) { setView({ step: 'form', error: INSUFFICIENT_MESSAGE }); return }
     const token = gen.current.begin()
     setView({ step: 'review', prepared: null, notice })
     try {
@@ -104,7 +123,7 @@ export default function TradeSheet({ mode, board, onClose, onTraded }: {
     } catch (e) {
       if (gen.current.isStale(token)) return
       if (isTaken(e)) { onTraded(); setView({ step: 'taken' }); return }
-      const message = plainError(e instanceof Error ? e.message : String(e))
+      const message = tradeMessage(e)
       setView(mode.kind === 'cancel' ? { step: 'error', message } : { step: 'form', error: message })
     }
   }
@@ -126,7 +145,12 @@ export default function TradeSheet({ mode, board, onClose, onTraded }: {
       else if (run.outcome === 'Timeout') setView({ step: 'unconfirmed', txId: run.txId })
       // A pinned order that moved is refused before it runs and pays nothing: somebody got there first.
       else if (!run.feeOnly && mode.kind === 'fill' && /no longer open|version|FailedToLock|is down/i.test(run.reason ?? '')) setView({ step: 'taken' })
-      else setView({ step: 'error', message: run.reason ?? 'The network rejected this trade.' })
+      else setView({
+        step: 'error',
+        message: run.feeOnly
+          ? 'The network fee was charged, but the trade didn’t go through. Nothing else moved.'
+          : 'The network turned this trade down. Nothing was charged.',
+      })
     } catch (e) {
       if (e instanceof QuoteChanged && (e.reason === 'fee-risen' || e.reason === 'stale')) {
         setLocked(false)
@@ -134,7 +158,7 @@ export default function TradeSheet({ mode, board, onClose, onTraded }: {
         return
       }
       if (isTaken(e)) { onTraded(); setView({ step: 'taken' }); return }
-      setView({ step: 'error', message: plainError(e instanceof Error ? e.message : String(e)) })
+      setView({ step: 'error', message: tradeMessage(e) })
     }
   }
 
@@ -159,7 +183,7 @@ export default function TradeSheet({ mode, board, onClose, onTraded }: {
             onChange={v => { setPrice(v); if (view.error) setView({ step: 'form' }) }} />
           <ModePair left={{ label: 'Pay from', value: pay, onChange: setPay }} right={{ label: 'Get paid', value: get, onChange: setGet }} />
           <Summary rows={[
-            ...(total ? placeRows(mode.side, n!, total.p, split) : placeRows(mode.side, 0n, 0n, null).map(r => ({ ...r, v: '—' }))),
+            ...(total ? placeRows(mode.side, n!, total.p, split) : placeRows(mode.side, 0n, 0n, null).map(r => (r.note ? r : { ...r, v: '—' }))),
             { k: 'Network fee', v: 'priced at review' },
           ]} />
           {total && !total.exact && (
@@ -167,8 +191,8 @@ export default function TradeSheet({ mode, board, onClose, onTraded }: {
               The total is rounded down to cUSD’s six decimals: the order is {fmtCusdWithUnit(total.p)}.
             </div>
           )}
-          {view.error && <ErrorLine>{view.error}</ErrorLine>}
-          <ActionButton tone={n !== null && total ? 'primary' : 'disabled'} onClick={() => { void review() }} mt={18}>Review order</ActionButton>
+          {(view.error || short) && <ErrorLine>{view.error ?? INSUFFICIENT_MESSAGE}</ErrorLine>}
+          <ActionButton tone={n !== null && total && !short ? 'primary' : 'disabled'} onClick={() => { void review() }} mt={18}>Review order</ActionButton>
         </div>
       )}
 
@@ -177,8 +201,8 @@ export default function TradeSheet({ mode, board, onClose, onTraded }: {
           <SheetHeader title={title} onClose={close} />
           <Summary rows={[...fillRows(mode.entry), { k: 'Network fee', v: 'priced at review' }]} mt={24} />
           <ModePair left={{ label: 'Pay with', value: pay, onChange: setPay }} right={{ label: 'Receive as', value: get, onChange: setGet }} />
-          {view.error && <ErrorLine>{view.error}</ErrorLine>}
-          <ActionButton tone="primary" onClick={() => { void review() }} mt={18}>Review</ActionButton>
+          {(view.error || short) && <ErrorLine>{view.error ?? INSUFFICIENT_MESSAGE}</ErrorLine>}
+          <ActionButton tone={short ? 'disabled' : 'primary'} onClick={() => { void review() }} mt={18}>Review</ActionButton>
         </div>
       )}
 
@@ -189,8 +213,8 @@ export default function TradeSheet({ mode, board, onClose, onTraded }: {
           {view.prepared && mode.kind === 'place' && (
             <div style={{ fontSize: 12, color: C.mutedDim, lineHeight: 1.55, marginTop: 12 }}>
               {mode.side === SELL
-                ? `The buyer receives ${fmtTari(view.prepared.details.n - view.prepared.details.tradeFee)} (1% trade fee in ${TTARI}: 0.7% to Caravel, 0.3% burned). You receive the full ${fmtCusdWithUnit(view.prepared.details.p)}. Your ${TTARI} is held until the order fills or you cancel.`
-                : `You receive ${fmtTari(view.prepared.details.n - view.prepared.details.tradeFee)} (1% trade fee in ${TTARI}: 0.7% to Caravel, 0.3% burned). Your cUSD is held until the order fills or you cancel.`}
+                ? `Your ${TTARI} is held until the order fills or you cancel.`
+                : 'Your cUSD is held until the order fills or you cancel.'}
             </div>
           )}
           {mode.kind === 'cancel' && (
@@ -264,9 +288,8 @@ export default function TradeSheet({ mode, board, onClose, onTraded }: {
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12" /></svg>
           </Emblem>}
           title={mode.kind === 'cancel' ? 'Cancel failed' : 'Trade failed'}
-          sub="The network’s own words are below."
+          sub={view.message}
         >
-          <div style={{ marginTop: 18, textAlign: 'left' }}><VerbatimBox>{view.message}</VerbatimBox></div>
           <ActionButton tone="primary" onClick={() => { setLocked(false); if (mode.kind === 'cancel') void review(); else setView({ step: 'form' }) }} mt={16}>Try again</ActionButton>
           <span role="button" tabIndex={0} onClick={close} onKeyDown={e => e.key === 'Enter' && close()}
             style={{ display: 'block', marginTop: 12, fontSize: 12.5, fontWeight: 500, color: C.mutedDim, cursor: 'pointer', userSelect: 'none' }}
@@ -301,15 +324,14 @@ function reviewRows(mode: SheetMode, prepared: PreparedTrade | null, pay: TradeM
   const d = prepared.details
   if (mode.kind === 'place') {
     return [
-      { k: mode.side === SELL ? 'Sell' : 'Buy', v: fmtTari(d.n), strong: true },
-      { k: 'Price', v: `${fmtPrice({ micro: (d.p * 1_000_000n) / d.n, exact: (d.p * 1_000_000n) % d.n === 0n })} cUSD` },
-      ...placeRows(mode.side, d.n, d.p, { fee: d.tradeFee, caravelCut: d.caravelCut, burnCut: d.burnCut }),
+      { k: mode.side === SELL ? 'Sell' : 'Buy', v: termsLine(d.n, d.p), strong: true },
+      ...placeRows(mode.side, d.n, d.p, { fee: d.tradeFee }),
       fee,
       { k: 'Pay from · Get paid', v: `${modeWord(pay)} · ${modeWord(get)}` },
     ]
   }
   return [
-    ...fillRows({ side: d.side, n: d.n, p: d.p, fee: d.tradeFee, caravelCut: d.caravelCut, burnCut: d.burnCut }),
+    ...fillRows({ side: d.side, n: d.n, p: d.p, fee: d.tradeFee }),
     fee,
     { k: 'Pay with · Receive as', v: `${modeWord(pay)} · ${modeWord(get)}` },
   ]
@@ -338,7 +360,9 @@ function Summary({ rows, mt = 16 }: { rows: Row[]; mt?: number }) {
       display: 'flex', flexDirection: 'column', gap: 9, marginTop: mt, padding: '13px 15px',
       border: '1px solid var(--border)', borderRadius: 11, background: 'var(--surface-void)', fontSize: 12.5,
     }}>
-      {rows.map(r => (
+      {rows.map(r => r.note ? (
+        <div key={r.v} style={{ fontSize: 11.5, color: C.mutedDim, marginTop: -3 }}>{r.v}</div>
+      ) : (
         <div key={r.k} style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
           <span style={{ color: C.mutedDim, flexShrink: 0 }}>{r.k}</span>
           <span style={{

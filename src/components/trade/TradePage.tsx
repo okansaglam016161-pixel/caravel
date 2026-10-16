@@ -213,7 +213,6 @@ function BookSide({ side, entries, onFill, onCancel }: {
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '12px 16px', borderBottom: '1px solid var(--border)' }}>
         <span style={{ width: 7, height: 7, borderRadius: 99, background: sell ? 'var(--danger-500)' : 'var(--positive)' }} />
         <span style={{ fontSize: 13, fontWeight: 600, color: C.primary }}>{sell ? 'Sell orders' : 'Buy orders'}</span>
-        <span style={{ fontSize: 11.5, color: C.mutedDim }}>{sell ? 'cheapest first' : 'highest first'}</span>
       </div>
       <div className="cv-trade-brow" style={{ padding: '8px 16px', fontFamily: MONO, fontSize: 9.5, letterSpacing: '.1em', color: C.mutedDim }}>
         <span>PRICE</span><span style={{ textAlign: 'right' }}>AMOUNT</span><span style={{ textAlign: 'right' }}>TOTAL cUSD</span><span />
@@ -319,7 +318,7 @@ function Unreachable({ onRetry }: { onRetry: () => void }) {
     <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 14, padding: '30px 20px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, textAlign: 'center' }}>
       <WifiGlyph />
       <div style={{ fontSize: 14, fontWeight: 600, color: C.primary }}>Can’t reach the network</div>
-      <div style={{ fontSize: 12, color: C.mutedDim }}>The order book can’t be shown right now. Nothing has changed on chain.</div>
+      <div style={{ fontSize: 12, color: C.mutedDim }}>The order book can’t be shown right now. Try again in a moment.</div>
       <span role="button" tabIndex={0} onClick={onRetry} onKeyDown={e => e.key === 'Enter' && onRetry()} style={{
         padding: '7px 16px', borderRadius: 8, border: '1px solid var(--warn)', color: 'var(--warn)', fontSize: 12, fontWeight: 600, cursor: 'pointer',
       }}>Try again</span>

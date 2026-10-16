@@ -211,7 +211,7 @@ const LEGACY_OUTCOME: Record<'Commit' | 'Reject' | 'Timeout', JournalOutcome> = 
 
 /** One journalled action, projected into a row. Returns null for kinds the list does not show.
  *  `cusdUnits` maps a cUSD-claim journal id to its claimed amount (crypto/cusdStore). */
-function fromJournal(e: JournalEntry, cusdUnits: ReadonlyMap<string, bigint>, trades: ReadonlyMap<string, TradeRecord>): ActivityRow | null {
+function fromJournal(e: JournalEntry, cusdUnits: ReadonlyMap<string, bigint>, trades: ReadonlyMap<string, TradeRecord>, txTimes: ReadonlyMap<string, number>): ActivityRow | null {
   const common = {
     id: e.id,
     timestamp: e.timestamp,
@@ -267,7 +267,7 @@ function fromJournal(e: JournalEntry, cusdUnits: ReadonlyMap<string, bigint>, tr
     case 'trade-place':
     case 'trade-fill':
     case 'trade-cancel':
-      return tradeRow(e, trades.get(e.id))
+      return tradeRow(e, trades.get(e.id), txTimes)
   }
 }
 
@@ -285,27 +285,32 @@ export function tradeDeltas(kind: TradeActivityKind, r: Pick<TradeRecord, 'side'
   }
 }
 
-function tradeRow(e: JournalEntry, r: TradeRecord | undefined): TradeActivityRow {
+function tradeRow(e: JournalEntry, r: TradeRecord | undefined, txTimes: ReadonlyMap<string, number>): TradeActivityRow {
   const tradeKind: TradeActivityKind = !r ? 'trade'
     : r.action === 'place' ? (r.side === 0 ? 'placed-sell' : 'placed-buy')
     : r.action === 'fill' ? (r.side === 0 ? 'bought' : 'sold')
     : 'cancelled'
   const d = r ? tradeDeltas(tradeKind, r) : { tari: null, cusd: null }
   return {
-    kind: 'trade', id: e.id, tradeKind, timestamp: e.timestamp,
+    // THE INDEXER'S TIME of the transaction (the same on every device); this device's own clock only
+    // until that answer arrives.
+    kind: 'trade', id: e.id, tradeKind, timestamp: (e.txId !== null ? txTimes.get(e.txId) : undefined) ?? e.timestamp,
     tariDelta: d.tari, cusdDelta: d.cusd, feeMicrotari: e.feeMicrotari,
     outcome: e.outcome as ActivityOutcome, source: 'local-journal', txId: e.txId, orderId: r?.orderId ?? null,
   }
 }
 
 /** A maker's order that somebody filled: the "Order filled" row, from the trade store. */
-function orderFilledRow(r: TradeRecord): TradeActivityRow | null {
-  if (r.action !== 'place' || r.orderState !== 'filled' || r.filledSeenAt === null || !r.orderId) return null
+function orderFilledRow(r: TradeRecord, txTimes: ReadonlyMap<string, number>): TradeActivityRow | null {
+  if (r.action !== 'place' || r.orderState !== 'filled' || !r.orderId) return null
+  // When it was filled: the filling transaction's time on the indexer — known after a restore too.
+  const at = (r.closedTxId ? txTimes.get(r.closedTxId) : undefined) ?? r.filledSeenAt
+  if (at === null || at === undefined) return null
   const d = tradeDeltas('order-filled', r)
   return {
-    kind: 'trade', id: `filled-${r.orderId}`, tradeKind: 'order-filled', timestamp: r.filledSeenAt,
+    kind: 'trade', id: `filled-${r.orderId}`, tradeKind: 'order-filled', timestamp: at,
     tariDelta: d.tari, cusdDelta: d.cusd, feeMicrotari: null,
-    outcome: 'committed', source: 'chain', txId: null, orderId: r.orderId,
+    outcome: 'committed', source: 'chain', txId: r.closedTxId ?? null, orderId: r.orderId,
   }
 }
 
@@ -343,6 +348,8 @@ export function buildActivity(
   cusdUnits: ReadonlyMap<string, bigint> = new Map(),
   /** This wallet's Caravel Trade records (crypto/tradeStore): trade terms, and its orders seen filled. */
   trades: readonly TradeRecord[] = [],
+  /** The indexer's time of each trade transaction (crypto/txTimes) — what trade rows are dated by. */
+  txTimes: ReadonlyMap<string, number> = new Map(),
 ): ActivityRow[] {
   const rows: ActivityRow[] = []
   const claimedTxIds = new Set<string>()
@@ -350,13 +357,13 @@ export function buildActivity(
 
   // A maker's filled order is nobody's journal entry here — the taker's transaction did it.
   for (const t of trades) {
-    const row = orderFilledRow(t)
+    const row = orderFilledRow(t, txTimes)
     if (row) rows.push(row)
   }
 
   // FIRST, so it wins every collision below.
   for (const e of journal) {
-    const row = fromJournal(e, cusdUnits, tradeByJournal)
+    const row = fromJournal(e, cusdUnits, tradeByJournal, txTimes)
     // ORDER MATTERS: a kind that renders nothing claims nothing either. A `chat-payment` entry is
     // recorded only so its change output can be subtracted later, and it names the same txId the
     // chat message does — so claiming it here would silently delete the chat row that legitimately
@@ -470,6 +477,9 @@ export function buildActivity(
   // come from the chain and from our own local cache, never from the label. Ordering follows the
   // chat thread deliberately: a payment the user finds by scrolling to a message must sit where
   // that message sits, and two views of the same event disagreeing would be its own bug.
-  rows.sort((a, b) => b.timestamp - a.timestamp)
+  // Newest first; a tie (same time, or the same estimate) broken by transaction id, then row id, so
+  // every device lists the same rows in the same order.
+  const tie = (r: ActivityRow) => ('txId' in r && r.txId) || r.id
+  rows.sort((a, b) => b.timestamp - a.timestamp || (tie(a) < tie(b) ? -1 : tie(a) > tie(b) ? 1 : 0))
   return rows
 }

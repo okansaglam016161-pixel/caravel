@@ -25,7 +25,6 @@ import { beginEntry, settleEntry } from '../../crypto/journalStore'
 import { recordCusdClaim } from '../../crypto/cusdStore'
 import { runFullRescan } from '../../hooks/useFullRescan'
 import { FaucetBanner } from './v2/panels'
-import { plainError } from './v2/plainError'
 
 type Phase = 'idle' | 'claiming' | 'done' | 'error'
 type Status = 'open' | 'claimed' | 'unknown' | null
@@ -117,7 +116,7 @@ export default function CusdFaucetClaimPanel() {
     setPricing('idle')
     setPrepared(null)
     setPhase('claiming')
-    setMsg('Requesting test cUSD (self-signed, no daemon)…')
+    setMsg('Claiming test cUSD…')
 
     // Journalled before submit, so a throw still leaves a record. The TARI side: the fee the claim
     // paid, the tTARI change it created, the tTARI coins it spent. The cUSD amount is NOT here.
@@ -146,7 +145,9 @@ export default function CusdFaucetClaimPanel() {
         return
       }
       settleEntry(address, journalId, { outcome: 'pending' })
-      setPhase('error'); setMsg((e as Error).message || 'Claim failed.')
+      setPhase('error'); setMsg(/fetch|network|indexer|timed? ?out|busy|could not|respond/i.test((e as Error).message ?? '')
+        ? 'Can’t reach the network. Try again in a moment.'
+        : 'The claim couldn’t be completed. Check your balance in a moment, then try again.')
       return
     }
 
@@ -182,12 +183,12 @@ export default function CusdFaucetClaimPanel() {
     }
     if (r.outcome === 'Reject') {
       setPhase('error')
-      setMsg(r.reason ? plainError(r.reason) : 'The network rejected the claim — no cUSD was added.')
+      setMsg('The network turned the claim down. No cUSD was added.')
       return
     }
     // Timeout: broadcast, not yet confirmed. Honest, not a failure.
     setPhase('done')
-    setMsg(`Broadcast. ${CLAIM_LABEL} should arrive shortly — tap Refresh in a moment.`)
+    setMsg(`Sent. ${CLAIM_LABEL} should arrive shortly — tap Refresh in a moment.`)
     rescan()
   }
 
@@ -223,7 +224,7 @@ export default function CusdFaucetClaimPanel() {
   if (status === 'open' && !dismissed && !alreadyHasCusd) {
     return (
       <FaucetBanner
-        text={phase === 'claiming' ? (msg ?? 'Claiming test cUSD…') : `Claim ${CLAIM_LABEL} test dollars.`}
+        text={phase === 'claiming' ? (msg ?? 'Claiming test cUSD…') : `New here? Claim ${CLAIM_LABEL} to start trading.`}
         action={phase === 'claiming' ? undefined
           : prepared && pricing === 'idle' ? { label: 'Claim', onClick: () => void claim() }
           : pricing === 'failed' ? { label: 'Try again', onClick: () => void priceClaim() }

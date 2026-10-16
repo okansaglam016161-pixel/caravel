@@ -31,7 +31,7 @@ const entry = (id: string, side: 0 | 1, n: bigint, p: bigint, yours = false): Bo
   price: { micro: p * 1_000_000n / n, exact: (p * 1_000_000n) % n === 0n },
   pays: side === 0 ? { resource: CUSD, amount: p } : { resource: TARI_RESOURCE_ADDRESS, amount: n },
   receives: side === 0 ? { resource: TARI_RESOURCE_ADDRESS, amount: n - n / 100n } : { resource: CUSD, amount: p },
-  yours, cancelIndex: yours ? 4 : null, seq: 0, confirmed: true,
+  yours, cancelIndex: yours ? 4 : null, seq: 0, confirmed: true, placedTx: null, placedAt: null,
 })
 const data = (over: Partial<MarketData> = {}): MarketData => ({
   book: {
@@ -68,8 +68,9 @@ describe('TradePage', () => {
   it('the book: sides in order, Buy/Sell on others\' orders, Yours + Cancel on your own, the fee note — and no spread', () => {
     state.market = ready(data())
     const t = text(page())
-    expect(t).toMatch(/Sell orders cheapest first.*2\.2.*Buy 2\.5.*Yours Cancel Buy orders/)
-    expect(t).toMatch(/Buy orders highest first.*1\.9.*Sell 1\.8.*Yours Cancel/)
+    expect(t).toMatch(/Sell orders PRICE.*2\.2.*Buy 2\.5.*Yours Cancel Buy orders/)
+    expect(t).toMatch(/Buy orders PRICE.*1\.9.*Sell 1\.8.*Yours Cancel/)
+    expect(t).not.toMatch(/cheapest first|highest first/)
     expect(t).toContain('1% trade fee in tTARI · 0.7% Caravel, 0.3% burned')
     expect(t.toLowerCase()).not.toContain('spread')
     expect(t).toContain('Place sell order')
@@ -144,14 +145,31 @@ describe('TradeSheet', () => {
   it('buying from a sell order: pay cUSD, the fee in tTARI, receive N − 1% tTARI', () => {
     const t = sheet({ kind: 'fill', entry: entry('s1', 0, 1_000_000n, 2_200_000n) })
     expect(t).toContain('Buy from this order')
-    expect(t).toMatch(/You pay 2\.20 cUSD Trade fee 1% 0\.010000 tTARI · 0\.007000 Caravel, 0\.003000 burned You receive 0\.990000 tTARI/)
+    expect(t).toMatch(/You pay 2\.20 cUSD You receive 0\.990000 tTARI Includes 1% trading fee Network fee priced at review/)
+    expect(t).not.toMatch(/Caravel|burned/)
     expect(t).toMatch(/Pay with Private Public Receive as Private Public/)
   })
 
   it('selling into a buy order: pay N tTARI (fee out of it), receive the FULL cUSD', () => {
     const t = sheet({ kind: 'fill', entry: entry('b1', 1, 1_000_000n, 1_900_000n) })
     expect(t).toContain('Sell into this order')
-    expect(t).toMatch(/You pay 1\.000000 tTARI.*the buyer receives 0\.990000 tTARI You receive 1\.90 cUSD/)
+    expect(t).toMatch(/You pay 1\.000000 tTARI You receive 1\.90 cUSD Includes 1% trading fee/)
+  })
+
+  it('place SELL form: you receive the full cUSD, the buyer note, the network fee row, the toggles', () => {
+    const t = sheet({ kind: 'place', side: 0 })
+    expect(t).toMatch(/You receive — Buyer receives — after the 1% trading fee Network fee priced at review/)
+  })
+
+  it('insufficient balance: said plainly, Review disabled, before anything is priced', () => {
+    state.balances = {
+      tari: { private: amt(5_000n), public: amt(0n) },
+      cusd: { private: amt(1_000_000n), public: amt(0n), total: amt(1_000_000n) },
+      tariTotal: { status: 'ready', microtari: 5_000n },
+    }
+    const html = renderToString(createElement(TradeSheet, { mode: { kind: 'fill', entry: entry('s1', 0, 1_000_000n, 2_200_000n) }, board: data().board, onClose: () => {}, onTraded: () => {} }))
+    expect(text(html)).toContain('Insufficient balance.')
+    expect(html).toMatch(/aria-disabled="true"[^>]*>Review</)
   })
 
   it('cancel: priced as it opens — the order, what returns, no invented fee', () => {

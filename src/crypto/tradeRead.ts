@@ -273,7 +273,12 @@ const MAX_EVENT_PAGES = 50
 
 /** Every order the Board has announced (OrderPlaced), oldest first, de-duplicated. A hint, not a fact. */
 export async function listBoardOrderIds(): Promise<string[]> {
-  const ids: string[] = []
+  return (await listBoardOrders()).map(o => o.id)
+}
+
+/** {@link listBoardOrderIds}, with the transaction that placed each order (its time comes from that). */
+export async function listBoardOrders(): Promise<{ id: string; txId: string }[]> {
+  const ids: { id: string; txId: string }[] = []
   const seen = new Set<string>()
   let before: string | null = null
   for (let page = 0; page < MAX_EVENT_PAGES; page++) {
@@ -283,10 +288,11 @@ export async function listBoardOrderIds(): Promise<string[]> {
     if (!res.ok) throw new TradeReadError(`The order book could not be read (indexer HTTP ${res.status}).`)
     const body = await res.json() as { events?: unknown; next_before_id?: unknown }
     for (const e of Array.isArray(body.events) ? body.events : []) {
+      const txId = (e as unknown[])?.[0]
       const ev = (e as unknown[])?.[1] as { topic?: unknown; substate_id?: unknown; payload?: { order?: unknown } } | undefined
-      if (ev?.substate_id !== TRADE_BOARD_ADDRESS || ev.topic !== 'CaravelTradeBoard.OrderPlaced') continue
+      if (ev?.substate_id !== TRADE_BOARD_ADDRESS || ev.topic !== 'CaravelTradeBoard.OrderPlaced' || typeof txId !== 'string') continue
       const id = String(ev.payload?.order ?? '')
-      if (/^component_[0-9a-f]{64}$/.test(id) && !seen.has(id)) { seen.add(id); ids.push(id) }
+      if (/^component_[0-9a-f]{64}$/.test(id) && !seen.has(id)) { seen.add(id); ids.push({ id, txId }) }
     }
     if (body.next_before_id === null || body.next_before_id === undefined) break
     before = String(body.next_before_id)
@@ -313,17 +319,18 @@ export async function readOpenOrders(read: VerifiedReader = verifiedRead): Promi
  * is just a name). For the moments after a fill or cancel when the order's new state is not yet served
  * verified (measured: ~40-50 s): the event is already there.
  */
-export async function orderOutcomeFromEvents(orderId: string): Promise<'filled' | 'cancelled' | null> {
+export async function orderOutcomeFromEvents(orderId: string): Promise<{ state: 'filled' | 'cancelled'; txId: string } | null> {
   try {
     const q = new URLSearchParams({ substate_id: orderId, limit: '20' })
     const res = await fetchWithRetry(INDEXER_URLS, `/transactions/events?${q}`, {}, { attempts: 2, timeoutMs: POINT_READ_TIMEOUT_MS, alternate: true })
     if (!res.ok) return null
     const body = await res.json() as { events?: unknown }
     for (const e of Array.isArray(body.events) ? body.events : []) {
+      const txId = (e as unknown[])?.[0]
       const ev = (e as unknown[])?.[1] as { substate_id?: unknown; template_address?: unknown; topic?: unknown } | undefined
-      if (ev?.substate_id !== orderId || ev.template_address !== TRADE_ORDER_TEMPLATE) continue
-      if (ev.topic === 'CaravelTradeOrder.Filled') return 'filled'
-      if (ev.topic === 'CaravelTradeOrder.Cancelled') return 'cancelled'
+      if (ev?.substate_id !== orderId || ev.template_address !== TRADE_ORDER_TEMPLATE || typeof txId !== 'string') continue
+      if (ev.topic === 'CaravelTradeOrder.Filled') return { state: 'filled', txId }
+      if (ev.topic === 'CaravelTradeOrder.Cancelled') return { state: 'cancelled', txId }
     }
   } catch { /* no answer: nothing concluded */ }
   return null

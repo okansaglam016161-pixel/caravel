@@ -71,10 +71,16 @@ describe('records', () => {
   it('an order seen filled keeps its first-seen moment; open ones are what the watcher re-reads', () => {
     recordTrade(ADDR, rec())
     expect(ownOpenOrders(ADDR)).toHaveLength(1)
-    observeOrder(ADDR, 'component_o1', 'filled', 1000)
-    observeOrder(ADDR, 'component_o1', 'filled', 2000)
+    observeOrder(ADDR, 'component_o1', 'filled', null, 1000)
+    observeOrder(ADDR, 'component_o1', 'filled', null, 2000)
     expect(loadTradeState(ADDR).records[0].filledSeenAt).toBe(1000)
     expect(ownOpenOrders(ADDR)).toHaveLength(0)
+  })
+  it('keeps the transaction that closed the order, learned even after the state was', () => {
+    recordTrade(ADDR, rec())
+    observeOrder(ADDR, 'component_o1', 'filled')                 // seen filled, tx not known yet
+    observeOrder(ADDR, 'component_o1', 'filled', 'tx_fill')      // the fill event names it later
+    expect(loadTradeState(ADDR).records[0].closedTxId).toBe('tx_fill')
   })
 })
 

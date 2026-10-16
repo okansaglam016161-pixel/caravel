@@ -375,3 +375,23 @@ describe('buildActivity — Caravel Trade', () => {
     expect(row).toMatchObject({ kind: 'trade', tradeKind: 'trade', tariDelta: null, cusdDelta: null })
   })
 })
+
+describe('buildActivity — trade rows dated by the indexer, the same on every device', () => {
+  it('a trade row takes its transaction\'s indexer time, not this device\'s clock', () => {
+    const rows = buildActivity([journalled({ id: 'p', kind: 'trade-place', txId: 'tx_p', timestamp: 999 })], [], [], [], new Map(),
+      [trade({ journalId: 'p' })], new Map([['tx_p', 123]]))
+    expect(rows[0]).toMatchObject({ kind: 'trade', timestamp: 123 })
+  })
+  it('after a restore: "Order filled" from the filling transaction alone (no local sighting)', () => {
+    const rows = buildActivity([], [], [], [], new Map(),
+      [trade({ journalId: 'recovered-o', orderState: 'filled', filledSeenAt: null, closedTxId: 'tx_f' })], new Map([['tx_f', 500]]))
+    expect(rows[0]).toMatchObject({ tradeKind: 'order-filled', timestamp: 500, txId: 'tx_f' })
+  })
+  it('two rows at the same moment always list in the same order (transaction id)', () => {
+    const j = [journalled({ id: 'a', kind: 'trade-place', txId: 'tx_b' }), journalled({ id: 'b', kind: 'trade-place', txId: 'tx_a' })]
+    const t = [trade({ journalId: 'a' }), trade({ journalId: 'b' })]
+    const times = new Map([['tx_a', 7], ['tx_b', 7]])
+    expect(buildActivity(j, [], [], [], new Map(), t, times).map(r => ('txId' in r ? r.txId : null))).toEqual(['tx_a', 'tx_b'])
+    expect(buildActivity([...j].reverse(), [], [], [], new Map(), t, times).map(r => ('txId' in r ? r.txId : null))).toEqual(['tx_a', 'tx_b'])
+  })
+})

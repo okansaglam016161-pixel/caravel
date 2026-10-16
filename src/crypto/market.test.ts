@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { TARI_RESOURCE_ADDRESS } from '@tari-project/ootle'
 import { CUSD_ASSET } from './assets'
 import {
-  buildBook, comparePrice, MarketReader, MarketUnreachable, myOrdersFrom, parseFillEvents, pricePerTari, spreadOf,
+  buildBook, comparePrice, MarketReader, MarketUnreachable, myOrdersFrom, parseFillEvents, pricePerTari, sortRecent, spreadOf,
   takerLegs, toBookEntry,
 } from './market'
 import { BUY, SELL, TRADE_BOARD_ADDRESS, TRADE_BOARD_BADGE, TRADE_ORDER_TEMPLATE, TRADE_QUOTE, TRADE_BURN_WALLET, TRADE_CARAVEL_FEE_ACCOUNT } from './tradeConfig'
@@ -85,6 +85,13 @@ describe('parseFillEvents — only the engine\'s word counts', () => {
   })
 })
 
+describe('sortRecent', () => {
+  it('newest first; a tie broken by transaction id — the same on every wallet', () => {
+    const t = (txId: string, at: number | null) => ({ orderId: 'o', txId, side: SELL as 0, n: 1n, p: 1n, price: { micro: 1n, exact: true }, at, atEstimated: false, yours: null })
+    expect(sortRecent([t('b', 5), t('a', 5), t('c', 9), t('d', null)]).map(x => x.txId)).toEqual(['c', 'a', 'b', 'd'])
+  })
+})
+
 describe('myOrdersFrom', () => {
   const rec = (over: Partial<TradeRecord>): TradeRecord => ({
     journalId: 'j', action: 'place', txId: 't', at: 10, side: SELL, n: 1_000_000n, p: 2_000_000n, tradeFee: 10_000n,
@@ -100,9 +107,19 @@ describe('myOrdersFrom', () => {
       rec({ journalId: 'e', action: 'fill', orderId: 'oe' }),
     ]
     const chain = new Map([['oa', order('oa', { status: 1 })], ['oc', order('oc')]])
-    const mine = myOrdersFrom(records, chain)
+    // Placement times are the INDEXER's (ob's not known yet).
+    const placed = new Map([['oa', { txId: 'ta', at: 1, estimated: false }], ['oc', { txId: 'tc', at: 3, estimated: true }]])
+    const mine = myOrdersFrom(records, chain, new Map(), new Set(), placed)
     expect(mine.map(m => [m.orderId, m.state])).toEqual([['oc', 'open'], ['ob', 'open'], ['oa', 'filled']])
     expect(mine.find(m => m.orderId === 'ob')!.placedAt).toBeNull()
+    expect(mine.find(m => m.orderId === 'oc')).toMatchObject({ placedAt: 3, placedEstimated: true, placedTx: 'tc' })
+  })
+
+  it('two orders placed at the same moment are always listed in the same order (by transaction id)', () => {
+    const records = [rec({ journalId: 'x', orderId: 'ox' }), rec({ journalId: 'y', orderId: 'oy' })]
+    const placed = new Map([['ox', { txId: 'tz', at: 5, estimated: true }], ['oy', { txId: 'ta', at: 5, estimated: true }]])
+    expect(myOrdersFrom(records, new Map(), new Map(), new Set(), placed).map(m => m.orderId)).toEqual(['oy', 'ox'])
+    expect(myOrdersFrom([...records].reverse(), new Map(), new Map(), new Set(), placed).map(m => m.orderId)).toEqual(['oy', 'ox'])
   })
 
   it('an order not readable verified right now is UNCONFIRMED — filled if its fill event is in, else as last known', () => {
@@ -135,6 +152,7 @@ vi.mock('./tradeRead', async (importActual) => {
       return { badge: TRADE_BOARD_BADGE } as BoardInfo
     },
     listBoardOrderIds: async () => net.ids,
+    listBoardOrders: async () => net.ids.map(id => ({ id, txId: `tx_${id}` })),
     readOrder: async (id: string) => {
       net.reads.set(id, (net.reads.get(id) ?? 0) + 1)
       const o = net.orders.get(id)
@@ -231,7 +249,8 @@ describe('MarketReader — "yours", from the seed alone (a restore)', () => {
     const data = await new MarketReader({ walletAddress: ADDR, tradeRoot: root }).refresh()
     expect(data.book.sells.find(e => e.orderId === 'mine')).toMatchObject({ yours: true, cancelIndex: 2 })
     expect(data.book.sells.find(e => e.orderId === 'theirs')).toMatchObject({ yours: false })
-    expect(data.mine).toMatchObject([{ orderId: 'mine', state: 'open', cancelIndex: 2, placedAt: null }])
+    // A restored device knows when it was placed: the placing transaction's time on the indexer.
+    expect(data.mine).toMatchObject([{ orderId: 'mine', state: 'open', cancelIndex: 2, placedAt: Date.UTC(2026, 9, 15, 11, 46, 29), placedEstimated: false }])
     expect(loadTradeState(ADDR).nextCancelIndex).toBe(3)   // index 2 is in use: never handed out again
   })
 })

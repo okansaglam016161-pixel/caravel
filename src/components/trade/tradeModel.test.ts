@@ -91,11 +91,19 @@ describe('isTaken — somebody got there first, nothing charged', () => {
 describe('rows', () => {
   const now = Date.UTC(2026, 9, 15, 13, 0, 0)
   it('my orders: open shows Cancel; unconfirmed never claims a state as fact', () => {
-    const base = { orderId: 'o', side: SELL as 0, n: 1_000_000n, p: 2_500_000n, fee: 10_000n, price: { micro: 2_500_000n, exact: true }, cancelIndex: 4, placedAt: null, placedEstimated: false, placedTx: null }
+    const base = { orderId: 'o', side: SELL as 0, n: 1_000_000n, p: 2_500_000n, fee: 10_000n, price: { micro: 2_500_000n, exact: true }, cancelIndex: 4, placedAt: null, placedEstimated: false, placedTx: null, closedAt: null, closedEstimated: false }
     expect(myOrderView({ ...base, state: 'open', confirmed: true })).toMatchObject({ status: 'Open', canCancel: true, title: 'Sell 1.000000 tTARI @ 2.5' })
     expect(myOrderView({ ...base, state: 'filled', confirmed: true })).toMatchObject({ status: 'Filled', sub: 'Filled · 2.50 cUSD received' })
     expect(myOrderView({ ...base, side: BUY, state: 'filled', confirmed: true }).sub).toBe('Filled · 0.990000 tTARI received')
     expect(myOrderView({ ...base, state: 'open', confirmed: false })).toMatchObject({ status: 'Unconfirmed', canCancel: false })
+  })
+  it('my orders: every order carries its time — placed, filled or cancelled; "~" only when estimated', () => {
+    const base = { orderId: 'o', side: SELL as 0, n: 1_000_000n, p: 2_500_000n, fee: 10_000n, price: { micro: 2_500_000n, exact: true }, cancelIndex: 4, placedTx: null, confirmed: true }
+    const today = Date.now()
+    const hhmm = new Date(today).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
+    expect(myOrderView({ ...base, state: 'open', placedAt: today, placedEstimated: false, closedAt: null, closedEstimated: false }).sub).toBe(`Total 2.50 cUSD · placed ${hhmm}`)
+    expect(myOrderView({ ...base, state: 'filled', placedAt: today, placedEstimated: false, closedAt: today, closedEstimated: false }).sub).toBe(`Filled · 2.50 cUSD received · ${hhmm}`)
+    expect(myOrderView({ ...base, state: 'cancelled', placedAt: null, placedEstimated: false, closedAt: Date.UTC(2026, 9, 14, 20, 0), closedEstimated: true }).sub).toBe('Cancelled · everything returned · ~Oct 14')
   })
   it('recent trades read from the taker side, with an honest time', () => {
     const t = { orderId: 'o', txId: 't', side: SELL as 0, n: 1_000_000n, p: 2_200_000n, price: { micro: 2_200_000n, exact: true }, at: null, atEstimated: false, yours: null }

@@ -49,7 +49,7 @@ import { fetchWithRetry } from './indexerRetry'
 import {
   ORDER_CANCELLED, ORDER_FILLED, ORDER_OPEN, SELL, TRADE_ORDER_TEMPLATE, type OrderSide,
 } from './tradeConfig'
-import { checkPayout, listBoardOrders, orderLegitimacy, readBoard, readOrder, readOrderUnverified, type BoardInfo, type OrderInfo, type PayoutCheck } from './tradeRead'
+import { checkPayout, listBoardOrders, orderLegitimacy, orderOutcomeFromEvents, readBoard, readOrder, readOrderUnverified, type BoardInfo, type OrderInfo, type PayoutCheck } from './tradeRead'
 import { loadTradeState, observeOrder, recordRecovery, type OrderState, type TradeRecord } from './tradeStore'
 import { txTime } from './txTimes'
 
@@ -243,6 +243,9 @@ export interface MyOrder {
   placedAt: number | null
   placedEstimated: boolean
   placedTx: string | null
+  /** When it was filled or cancelled — the closing transaction's indexer time; null while open or unknown. */
+  closedAt: number | null
+  closedEstimated: boolean
 }
 
 /**
@@ -274,6 +277,7 @@ export function myOrdersFrom(
       placedAt: placed.get(r.orderId)?.at ?? null,
       placedEstimated: placed.get(r.orderId)?.estimated ?? false,
       placedTx: placed.get(r.orderId)?.txId ?? r.txId ?? null,
+      closedAt: null, closedEstimated: false,
     })
   }
   // Open first; newest first within a state; a tie broken by the placing transaction's id.
@@ -348,6 +352,8 @@ export class MarketReader {
   private readonly orders = new Map<string, OrderInfo>()
   /** Every order ever read verified AND legitimate — terms are immutable, so this never goes stale. */
   private readonly legitSeen = new Map<string, OrderInfo>()
+  /** My closed orders whose closing transaction was looked up from their events (once). */
+  private readonly closedFound = new Set<string>()
   private readonly payout = new Map<string, { check: PayoutCheck; at: number }>()
   private board: { info: BoardInfo; at: number } | null = null
   private cancelKeys: string[] = []
@@ -497,7 +503,7 @@ export class MarketReader {
     await mapLimit([...needTimes], READ_CONCURRENCY, async id => {
       const txId = placedTxOf.get(id)
       if (!txId) return
-      const t = await txTime(txId, this.now)
+      const t = await txTime(txId)
       placed.set(id, { txId, at: t.at, estimated: t.estimated })
     })
     const placedOf = (id: string) => ({ txId: placed.get(id)?.txId ?? placedTxOf.get(id) ?? null, at: placed.get(id)?.at ?? null })
@@ -532,7 +538,7 @@ export class MarketReader {
         : [])
       recent = await mapLimit(fills, READ_CONCURRENCY, async f => {
         const o = this.legitSeen.get(f.orderId)!
-        const t = await txTime(f.txId, this.now)
+        const t = await txTime(f.txId)
         return {
           orderId: f.orderId, txId: f.txId, side: o.side, n: o.n, p: o.p, price: pricePerTari(o.n, o.p),
           at: t.at, atEstimated: t.estimated,
@@ -545,9 +551,29 @@ export class MarketReader {
     }
 
     // Re-read: the fill events above may have just recorded orders as filled.
-    const latest = this.opts.walletAddress ? loadTradeState(this.opts.walletAddress).records : records
+    const address = this.opts.walletAddress
+    const latest = address ? loadTradeState(address).records : records
+    // WHEN EACH OF MY CLOSED ORDERS CLOSED: its filling or cancelling transaction's indexer time. An
+    // order whose closing transaction is not recorded (closed on another device, or before this was
+    // kept) has it looked up once from its own events.
+    let mineList = myOrdersFrom(latest, legit, this.legitSeen, filledIds, placed)
+    const closing = new Map(latest.filter(r => r.action === 'place' && r.orderId && r.closedTxId).map(r => [r.orderId!, r.closedTxId!]))
+    const closed = new Map<string, { at: number | null; estimated: boolean }>()
+    await mapLimit(mineList.filter(m => m.state !== 'open'), READ_CONCURRENCY, async m => {
+      let tx = closing.get(m.orderId)
+      if (!tx && !this.closedFound.has(m.orderId)) {
+        const ev = await orderOutcomeFromEvents(m.orderId)
+        if (ev) {
+          tx = ev.txId
+          this.closedFound.add(m.orderId)
+          if (address) observeOrder(address, m.orderId, ev.state, ev.txId)
+        }
+      }
+      if (tx) closed.set(m.orderId, await txTime(tx))
+    })
+    mineList = mineList.map(m => ({ ...m, closedAt: closed.get(m.orderId)?.at ?? null, closedEstimated: closed.get(m.orderId)?.estimated ?? false }))
     return {
-      book: buildBook(entries), mine: myOrdersFrom(latest, legit, this.legitSeen, filledIds, placed), recent, hidden,
+      book: buildBook(entries), mine: mineList, recent, hidden,
       discovered: ids.length, board, at: this.now,
     }
   }

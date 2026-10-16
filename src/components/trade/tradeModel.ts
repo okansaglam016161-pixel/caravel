@@ -178,12 +178,14 @@ export function myOrderView(m: MyOrder): MyOrderView {
   if (m.state === 'open') {
     return { key: m.orderId, side: sell ? 'SELL' : 'BUY', title, sub: `Total ${fmtCusdWithUnit(m.p)}${placed}`, status: 'Open', canCancel: m.cancelIndex !== null }
   }
+  // When it closed — the filling or cancelling transaction's indexer time ("~" only if estimated).
+  const when = m.closedAt !== null ? ` · ${timeLabel(m.closedAt, m.closedEstimated)}` : ''
   if (m.state === 'filled') {
     // The seller of tTARI was paid the full cUSD; the buyer received N − 1% tTARI.
     const got = sell ? `${fmtCusdWithUnit(m.p)} received` : `${fmtTari(m.n - m.fee)} received`
-    return { key: m.orderId, side: sell ? 'SELL' : 'BUY', title, sub: `Filled · ${got}`, status: 'Filled', canCancel: false }
+    return { key: m.orderId, side: sell ? 'SELL' : 'BUY', title, sub: `Filled · ${got}${when}`, status: 'Filled', canCancel: false }
   }
-  return { key: m.orderId, side: sell ? 'SELL' : 'BUY', title, sub: 'Cancelled · everything returned', status: 'Cancelled', canCancel: false }
+  return { key: m.orderId, side: sell ? 'SELL' : 'BUY', title, sub: `Cancelled · everything returned${when}`, status: 'Cancelled', canCancel: false }
 }
 
 export interface TradeRowView { key: string; side: 'Buy' | 'Sell'; amount: string; price: string; time: string; yours: boolean }

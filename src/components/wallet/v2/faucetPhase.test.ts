@@ -67,15 +67,15 @@ describe('a claim in flight outranks the status', () => {
 describe('faucetAddedMessage — the claim\'s own amount, never the balance change', () => {
   it('reports what the claim paid in', () => {
     // A 1,000 claim at a 10,245 µtTARI fee lands 999.989755.
-    expect(faucetAddedMessage(999_989_755n)).toMatch(/^Added 999\.99 TARI\./)
+    expect(faucetAddedMessage(999_989_755n)).toMatch(/^Added 999\.989755 TARI\./)
   })
 
   it('a payment landing in the same window does not inflate it', () => {
     // The balance rose by 1,000.99 (claim + a 1 TARI payment); the claim itself was 999.99.
     const claim = 999_989_755n
     const balanceRise = claim + 1_000_000n
-    expect(faucetAddedMessage(claim)).toContain('999.99')
-    expect(faucetAddedMessage(claim)).not.toContain('1,000.99')
+    expect(faucetAddedMessage(claim)).toContain('999.989755')
+    expect(faucetAddedMessage(claim)).not.toContain('1,000.989755')
     expect(faucetAddedMessage(claim)).not.toContain(String(balanceRise))
   })
 

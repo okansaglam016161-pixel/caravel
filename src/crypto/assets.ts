@@ -78,7 +78,14 @@ export function approvedAsset(resource: string): ApprovedAsset | null {
   return APPROVED_ASSETS.find(a => a.resource === want) ?? null
 }
 
-/** Base units → a whole-token string with every significant decimal, grouped. `10000000000` → `10,000`. */
+/**
+ * THE AMOUNT FORMATTER — every tTARI and cUSD figure Caravel shows goes through this one function.
+ *
+ * Base units → the EXACT amount, grouped, with only trailing zeros dropped: `15194` → `0.015194`,
+ * `100000` → `0.1`, `1000000` → `1`, `9998900000` → `9,998.9`, `10000000000` → `10,000`. Never rounds,
+ * never truncates: every significant decimal up to the token's precision (six for both) is kept.
+ * Input fields have their own ungrouped form (wallet/v2/format.toInput).
+ */
 export function formatUnits(units: bigint, decimals: number): string {
   const neg = units < 0n
   const abs = neg ? -units : units

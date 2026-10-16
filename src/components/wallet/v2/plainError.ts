@@ -1,5 +1,6 @@
 import { TICKER } from './format'
 import { NETWORK_BUSY_MESSAGE } from '../../../crypto/indexerRetry'
+import { formatUnits } from '../../../crypto/assets'
 // Turning the fund modules' internal error strings into something a person can act on.
 //
 // WHY THIS EXISTS RATHER THAN EDITING THE MESSAGES AT SOURCE. conceal.ts and reveal.ts speak in
@@ -13,13 +14,10 @@ import { NETWORK_BUSY_MESSAGE } from '../../../crypto/indexerRetry'
 // else in the product. This is the fix for all three, plus anything future code adds: the generic
 // pass catches any `N µtTARI` a new message introduces.
 
-const MICRO = 1_000_000n
 
-/** µtTARI → a trimmed TARI decimal. Bigint throughout; 100000 → "0.1", 16138 → "0.016138". */
+/** µtTARI → the shared exact form (assets.formatUnits); 100000 → "0.1", 16138 → "0.016138". */
 function toTari(micro: bigint): string {
-  const whole = micro / MICRO
-  const frac = (micro % MICRO).toString().padStart(6, '0').replace(/0+$/, '')
-  return frac ? `${whole}.${frac}` : `${whole}`
+  return formatUnits(micro, 6)
 }
 
 /**

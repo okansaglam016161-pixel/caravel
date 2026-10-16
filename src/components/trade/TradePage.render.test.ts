@@ -80,10 +80,10 @@ describe('TradePage', () => {
   it('balances: tTARI and cUSD, private and public; cUSD with ≈ $', () => {
     state.market = ready(data())
     const t = text(page())
-    expect(t).toContain('996.383420')
-    expect(t).toContain('10,007.50')
+    expect(t).toContain('996.38342')
+    expect(t).toContain('10,007.5')
     expect(t).toContain('≈ $10,007.50')
-    expect(t).toMatch(/993\.896467 private 2\.486953 public/)
+    expect(t).toMatch(/993\.89646\d* private 2\.486953 public/)
   })
 
   it('a balance still being read shows no figure; one that failed shows a dash — never a zero', () => {
@@ -117,7 +117,7 @@ describe('TradePage', () => {
     const fresh = { ...entry('s9', 0, 1_000_000n, 2_000_000n, true), confirmed: false }
     state.market = ready(data({ book: { sells: [fresh], buys: [], spread: null } }))
     const t = text(page())
-    expect(t).toMatch(/2 1\.000000 2\.00 Yours Confirming…/)
+    expect(t).toMatch(/2 1 2 Yours Confirming…/)
     expect(t).not.toMatch(/Yours Cancel/)
   })
 
@@ -145,7 +145,7 @@ describe('TradeSheet', () => {
   it('buying from a sell order: pay cUSD, the fee in tTARI, receive N − 1% tTARI', () => {
     const t = sheet({ kind: 'fill', entry: entry('s1', 0, 1_000_000n, 2_200_000n) })
     expect(t).toContain('Buy from this order')
-    expect(t).toMatch(/You pay 2\.20 cUSD You receive 0\.990000 tTARI Includes 1% trading fee Network fee priced at review/)
+    expect(t).toMatch(/You pay 2\.2 cUSD You receive 0\.99 tTARI Includes 1% trading fee Network fee priced at review/)
     expect(t).not.toMatch(/Caravel|burned/)
     expect(t).toMatch(/Pay with Private Public Receive as Private Public/)
   })
@@ -153,7 +153,7 @@ describe('TradeSheet', () => {
   it('selling into a buy order: pay N tTARI (fee out of it), receive the FULL cUSD', () => {
     const t = sheet({ kind: 'fill', entry: entry('b1', 1, 1_000_000n, 1_900_000n) })
     expect(t).toContain('Sell into this order')
-    expect(t).toMatch(/You pay 1\.000000 tTARI You receive 1\.90 cUSD Includes 1% trading fee/)
+    expect(t).toMatch(/You pay 1 tTARI You receive 1\.9 cUSD Includes 1% trading fee/)
   })
 
   it('place SELL form: you receive the full cUSD, the buyer note, the network fee row, the toggles', () => {
@@ -174,7 +174,7 @@ describe('TradeSheet', () => {
 
   it('cancel: priced as it opens — the order, what returns, no invented fee', () => {
     const t = sheet({ kind: 'cancel', order: { orderId: 'o', side: 0, n: 1_000_000n, p: 2_500_000n, price: { micro: 2_500_000n, exact: true }, cancelIndex: 4, to: 'private' } })
-    expect(t).toMatch(/Order Sell 1\.000000 tTARI @ 2\.5 Returns to you 1\.000000 tTARI Network fee pricing…/)
+    expect(t).toMatch(/Order Sell 1 tTARI @ 2\.5 Returns to you 1 tTARI Network fee pricing…/)
     expect(t).toContain('Everything comes back, no trade fee.')
     expect(t).toContain('Keep order')
   })

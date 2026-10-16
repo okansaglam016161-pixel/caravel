@@ -161,12 +161,8 @@ function Hero({ hero, refreshing, onBurn, onRetry }: { hero: HeroState; refreshi
   )
 }
 
-/** The headline figure: whole TARI grouped, decimals only when there are any. "1,000" / "1,000.2". */
-function fmtBurned(microtari: bigint): string {
-  const [whole, frac] = fmt6(microtari).split('.')
-  const trimmed = frac.replace(/0+$/, '')
-  return trimmed ? `${whole}.${trimmed}` : whole
-}
+/** The headline figure — the shared exact form: "1,000" / "1,000.2". */
+const fmtBurned = fmt6
 
 // ── Lotto teaser ──────────────────────────────────────────────────────────────
 

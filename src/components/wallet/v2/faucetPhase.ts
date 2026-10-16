@@ -25,7 +25,7 @@
 
 import type { FaucetPhase } from './panels'
 import type { FaucetStatus } from '../../../crypto/faucetStatus'
-import { fmt2, TICKER } from './format'
+import { fmt6, TICKER } from './format'
 
 /** What the claim's own state machine is doing, independent of the faucet's status. */
 export type ClaimState = 'idle' | 'claiming' | 'verifying' | 'done' | 'lagging' | 'error'
@@ -82,5 +82,5 @@ export function isHidden(phase: FaucetPhase): boolean {
 export function faucetAddedMessage(claimedMicrotari: bigint | null): string {
   return claimedMicrotari === null
     ? 'Tokens received. You can now send them, make them public, or register a name.'
-    : `Added ${fmt2(claimedMicrotari)} ${TICKER}. You can now send it, make it public, or register a name.`
+    : `Added ${fmt6(claimedMicrotari)} ${TICKER}. You can now send it, make it public, or register a name.`
 }

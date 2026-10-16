@@ -47,17 +47,23 @@ export function orderTotal(n: bigint, price: bigint): { p: bigint; exact: boolea
 }
 
 export const fmtTari = (micro: bigint) => `${fmt6(micro)} ${TTARI}`
-/** cUSD with at least two decimals: "2.20", "1,000.50", "0.000001". */
+/** A cUSD amount — the shared exact form: "2.2", "1,000.5", "0.000001", "10,000". */
 export function fmtCusd(units: bigint): string {
-  const s = formatUnits(units, CUSD_ASSET.decimals)
-  const [w, f = ''] = s.split('.')
-  return `${w}.${f.padEnd(2, '0')}`
+  return formatUnits(units, CUSD_ASSET.decimals)
 }
 export const fmtCusdWithUnit = (units: bigint) => `${fmtCusd(units)} ${CUSD_ASSET.ticker}`
 /** cUSD's dollar value — exact (cUSD is $1). */
 export const usdOf = (units: bigint) => formatUsd(units, CUSD_ASSET)
-/** A price per tTARI: "2.2", "1.666666…" when it does not end at six decimals. */
+/**
+ * A price per tTARI, exact: "2.2", "1.5". Only a ratio that does not END within cUSD's six decimals
+ * (P/N = 2.5/1.5 = 1.6666…) is cut, at six places with "…" — and priceTitle gives its exact terms.
+ */
 export const fmtPrice = (price: Price) => `${formatUnits(price.micro, CUSD_ASSET.decimals)}${price.exact ? '' : '…'}`
+
+/** The full value behind a price, for hover: exact when the price is, the order's terms when cut. */
+export function priceTitle(n: bigint, p: bigint, price: Price): string {
+  return price.exact ? `${fmtPrice(price)} cUSD per ${TTARI}` : `${fmtCusd(p)} cUSD for ${fmt6(n)} ${TTARI}`
+}
 
 export interface Row {
   k: string

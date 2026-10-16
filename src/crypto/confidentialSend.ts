@@ -44,6 +44,7 @@ import { IndexerProvider } from '@tari-project/ootle-indexer'
 import { nextMaxEpoch } from './epoch'
 import { dryRunFee, exactFee, simulateFee, type FeeSimulation } from './feeProbe'
 import { readOutputSubstateIds } from './outputIds'
+import { formatUnits } from './assets'
 // The owned-UTXO scan lives in stealthUtxos.ts so the send and reveal paths share ONE input
 // discovery. It was moved out of this file unchanged; nothing about the behaviour here differs.
 import {
@@ -581,10 +582,9 @@ export function maxStealthSend(outputValues: readonly bigint[]): bigint {
  *
  * String arithmetic, no float anywhere: whole part, then six padded fractional digits.
  */
+/** A tTARI amount in words — the shared formatter (assets.formatUnits): exact, no trailing zeros. */
 export function describeMicrotari(microtari: bigint): string {
-  const whole = microtari / MICROTARI_PER_TARI
-  const frac = (microtari % MICROTARI_PER_TARI).toString().padStart(6, '0')
-  return `${whole}.${frac}`
+  return formatUnits(microtari, 6)
 }
 
 function toHex(bytes: Uint8Array): string {

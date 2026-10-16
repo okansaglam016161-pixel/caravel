@@ -30,7 +30,7 @@ import { Eye, Flame, Lock, Refresh, Spinner } from '../wallet/v2/icons'
 import { Body, HeaderIcon, ModalShell, RootHeader } from '../wallet/v2/primitives'
 import { C, MONO, PAGE_MAX_WIDTH } from '../wallet/v2/tokens'
 import TradeSheet, { type SheetMode } from './TradeSheet'
-import { TTARI, fmtCusd, fmtPrice, myOrderView, timeLabel, tradeRowView, usdOf, type MyOrderView } from './tradeModel'
+import { TTARI, fmtCusd, fmtPrice, myOrderView, priceTitle, timeLabel, tradeRowView, usdOf, type MyOrderView } from './tradeModel'
 
 type Tab = 'book' | 'mine' | 'trades'
 
@@ -220,7 +220,7 @@ function BookSide({ side, entries, onFill, onCancel }: {
       {entries.length === 0 && <div style={{ padding: '14px 16px', fontSize: 12, color: C.mutedDim, borderTop: '1px solid var(--border)' }}>None right now.</div>}
       {entries.map(e => (
         <div key={e.orderId} className="cv-trade-brow cv-activity-row" style={{ padding: '9px 16px', fontFamily: MONO, fontSize: 12, borderTop: '1px solid var(--border)', alignItems: 'center' }}>
-          <span style={{ color: sell ? 'var(--danger-500)' : 'var(--positive)', fontWeight: 600 }} title="cUSD per tTARI">{fmtPrice(e.price)}</span>
+          <span style={{ color: sell ? 'var(--danger-500)' : 'var(--positive)', fontWeight: 600 }} title={priceTitle(e.n, e.p, e.price)}>{fmtPrice(e.price)}</span>
           <span style={{ textAlign: 'right', color: C.primary }}>{fmt6(e.n)}</span>
           <span style={{ textAlign: 'right', color: C.bodyDim }}>{fmtCusd(e.p)}</span>
           {e.yours && !e.confirmed

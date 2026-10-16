@@ -9,7 +9,7 @@
 // on a large balance, and the M2 lesson was that a rounded figure fed back into an amount field
 // asks the network for a number that does not exist. Nothing here converts to Number.
 
-import { formatUnits } from '../../../crypto/assets'
+import { TARI_ASSET, formatUnits } from '../../../crypto/assets'
 
 const MICRO = 1_000_000n
 
@@ -19,7 +19,7 @@ const MICRO = 1_000_000n
  * DISPLAY ONLY. Nothing stored, sent or keyed carries it: amounts travel and persist as µtTARI
  * bigints, and the SDK's own symbols (TARI_RESOURCE_ADDRESS and the like) are not this.
  */
-export const TICKER = 'TARI'
+export const TICKER = TARI_ASSET.ticker
 
 /**
  * A tTARI amount for display: EXACT, grouped, trailing zeros dropped — "12,847.50321", "0.015194",

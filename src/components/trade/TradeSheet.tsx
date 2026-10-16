@@ -28,9 +28,10 @@ import { Clock, Eye, Lock, Spinner } from '../wallet/v2/icons'
 import { ActionButton, CARD, Emblem, OUTCOME_CARD, Outcome, Receipt, SheetHeader } from '../wallet/v2/panels'
 import { useTradeBalances, type Amount } from '../../hooks/useTradeBalances'
 import { Sheet } from '../wallet/v2/primitives'
+import { TICKER } from '../wallet/v2/format'
 import { C, MONO } from '../wallet/v2/tokens'
 import {
-  INSUFFICIENT_MESSAGE, TTARI, fillRows, fmtCusdWithUnit, fmtPrice, fmtTari, isTaken, orderTotal, parsePrice, parseTari,
+  INSUFFICIENT_MESSAGE, fillRows, fmtCusdWithUnit, fmtPrice, fmtTari, isTaken, orderTotal, parsePrice, parseTari,
   placeRows, termsLine, tradeMessage, type Row,
 } from './tradeModel'
 
@@ -102,9 +103,9 @@ export default function TradeSheet({ mode, board, onClose, onTraded }: {
     if (!t) { setView({ step: 'form', error: 'Your wallet is locked — unlock it to trade.' }); return }
     let run: () => Promise<PreparedTrade>
     if (mode.kind === 'place') {
-      if (n === null) { setView({ step: 'form', error: `Enter an amount of ${TTARI}.` }); return }
-      if (n < MIN_ORDER) { setView({ step: 'form', error: `The smallest order is 1 ${TTARI}.` }); return }
-      if (px === null || total === null || total.p <= 0n) { setView({ step: 'form', error: 'Enter a price per tTARI.' }); return }
+      if (n === null) { setView({ step: 'form', error: `Enter an amount of ${TICKER}.` }); return }
+      if (n < MIN_ORDER) { setView({ step: 'form', error: `The smallest order is 1 ${TICKER}.` }); return }
+      if (px === null || total === null || total.p <= 0n) { setView({ step: 'form', error: `Enter a price per ${TICKER}.` }); return }
       run = () => preparePlaceOrder(t, { side: mode.side, n, p: total.p, escrow: pay, payout: get })
     } else if (mode.kind === 'fill') {
       const e = mode.entry
@@ -177,9 +178,9 @@ export default function TradeSheet({ mode, board, onClose, onTraded }: {
       {view.step === 'form' && mode.kind === 'place' && (
         <div style={CARD}>
           <SheetHeader title={title} onClose={close} />
-          <Field label="Amount" hint={`min 1 ${TTARI}`} unit={TTARI} value={amount} big autoFocus
+          <Field label="Amount" hint={`min 1 ${TICKER}`} unit={TICKER} value={amount} big autoFocus
             onChange={v => { setAmount(v); if (view.error) setView({ step: 'form' }) }} />
-          <Field label="Price per tTARI" unit="cUSD" value={price}
+          <Field label={`Price per ${TICKER}`} unit="cUSD" value={price}
             onChange={v => { setPrice(v); if (view.error) setView({ step: 'form' }) }} />
           <ModePair left={{ label: 'Pay from', value: pay, onChange: setPay }} right={{ label: 'Get paid', value: get, onChange: setGet }} />
           <Summary rows={[
@@ -213,7 +214,7 @@ export default function TradeSheet({ mode, board, onClose, onTraded }: {
           {view.prepared && mode.kind === 'place' && (
             <div style={{ fontSize: 12, color: C.mutedDim, lineHeight: 1.55, marginTop: 12 }}>
               {mode.side === SELL
-                ? `Your ${TTARI} is held until the order fills or you cancel.`
+                ? `Your ${TICKER} is held until the order fills or you cancel.`
                 : 'Your cUSD is held until the order fills or you cancel.'}
             </div>
           )}

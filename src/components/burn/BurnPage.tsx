@@ -126,7 +126,7 @@ function Hero({ hero, refreshing, onBurn, onRetry }: { hero: HeroState; refreshi
               fontSize: 56, fontWeight: 600, letterSpacing: '-0.025em', fontFeatureSettings: "'tnum'",
               marginTop: 30, lineHeight: 1, color: dim ? 'var(--vault-label)' : C.bright,
             }}>{reading ? fmtBurned(reading.balance) : '—'}</div>
-            <div style={{ fontFamily: MONO, fontSize: 13, color: 'var(--vault-label)', marginTop: 12 }}>tTARI burned forever</div>
+            <div style={{ fontFamily: MONO, fontSize: 13, color: 'var(--vault-label)', marginTop: 12 }}>{TICKER} burned forever</div>
             {/* Of the VERIFIED total only — the same reading as the figure, dimmed with it. */}
             {reading && (
               <div style={{ fontFamily: MONO, fontSize: 11.5, color: 'var(--vault-label)', marginTop: 6, opacity: dim ? 0.6 : 0.8 }}>

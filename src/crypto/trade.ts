@@ -49,7 +49,7 @@ import {
 import { IndexerProvider } from '@tari-project/ootle-indexer'
 import type { SecretKeyWallet } from '@tari-project/ootle-secret-key-wallet'
 import { upSubstates } from './accountAddress'
-import { CUSD_ASSET } from './assets'
+import { CUSD_ASSET, TARI_ASSET } from './assets'
 import { feesPaid } from './conceal'
 import { accountVaultIds, verifiedRead } from './cusdScan'
 import { cancelKeyFor } from './derivation'
@@ -481,7 +481,7 @@ async function prepare(t: Trader, plan: Plan, onProgress?: (m: string) => void):
 /** Private tTARI coins for a private fee, plus `extra` the main intent will take from their change. */
 async function feeCoins(t: Trader, extra: bigint): Promise<OwnedUtxo[]> {
   const coins = await scanTradeCoins(crypto(), await t.wallet.getViewSecret(), t.address, TARI)
-  return (await selectLiveCoins(coins, extra + TRADE_FEE_PROBE_MICROTARI + 1n, 'tTARI')).inputs
+  return (await selectLiveCoins(coins, extra + TRADE_FEE_PROBE_MICROTARI + 1n, TARI_ASSET.ticker)).inputs
 }
 
 async function cusdCoins(t: Trader, amount: bigint): Promise<OwnedUtxo[]> {

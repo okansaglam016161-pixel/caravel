@@ -33,7 +33,7 @@ import {
 } from '@tari-project/ootle'
 import { IndexerProvider } from '@tari-project/ootle-indexer'
 import type { SecretKeyWallet } from '@tari-project/ootle-secret-key-wallet'
-import { CUSD_ASSET } from './assets'
+import { CUSD_ASSET, TARI_ASSET } from './assets'
 import {
   CUSD_CLAIM_UNITS, CUSD_FAUCET_COMPONENT_ADDRESS, CUSD_FAUCET_RECEIPTS_RESOURCE_ADDRESS,
   CUSD_FAUCET_VAULT_ADDRESS, cusdFaucetReceiptId,
@@ -87,7 +87,7 @@ export function cusdClaimRefusalMessage(r: CusdClaimRefusal): string {
     case 'already-claimed': return 'This wallet has already claimed its test cUSD.'
     case 'empty': return 'The cUSD faucet is empty right now. Check back soon.'
     case 'unsigned': return 'The claim could not be signed correctly. Nothing was taken.'
-    case 'no-tari': return 'You need a little tTARI to cover the network fee before claiming cUSD. Claim tTARI first.'
+    case 'no-tari': return `You need a little ${TARI_ASSET.ticker} to cover the network fee before claiming cUSD. Claim ${TARI_ASSET.ticker} first.`
   }
 }
 
@@ -148,7 +148,7 @@ export async function prepareCusdClaim(
   const maxEpoch = await nextMaxEpoch(provider)
 
   // The fee is paid from the wallet's own tTARI — the payout is cUSD and cannot cover it.
-  log('Finding tTARI for the fee…')
+  log(`Finding ${TARI_ASSET.ticker} for the fee…`)
   const tariCoins = await scanOwnedUtxos(crypto, await wallet.getViewSecret(), { walletAddress: ownerAddress })
   if (tariCoins.length === 0) throw new CusdClaimRefused('no-tari')
   // One coin that covers the fee probe; its one-time key signs its own spend and receives the change.
@@ -158,7 +158,7 @@ export async function prepareCusdClaim(
   } catch { throw new CusdClaimRefused('no-tari') }
   const feeCoins = selection.inputs
   const feeReceiver = feeCoins.find(u => u.spendKey)?.spendKey
-  if (!feeReceiver) throw new Error('Could not read the spend key of the tTARI covering the fee. Refresh your balance and try again.')
+  if (!feeReceiver) throw new Error(`Could not read the spend key of the ${TARI_ASSET.ticker} covering the fee. Refresh your balance and try again.`)
 
   // Rebuilt for each fee: both statements commit to it (the cUSD payout's balance, the tTARI fee's).
   async function buildEnvelope(feeMicrotari: bigint, dryRun: boolean) {

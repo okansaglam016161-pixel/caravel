@@ -37,11 +37,11 @@ describe('formatting', () => {
 describe('prices — exact; a cut one carries its exact terms on hover', () => {
   it('a price that ends within six decimals is shown whole, its hover says so', () => {
     expect(fmtPrice({ micro: 2_200_000n, exact: true })).toBe('2.2')
-    expect(priceTitle(1_000_000n, 2_200_000n, { micro: 2_200_000n, exact: true })).toBe('2.2 cUSD per tTARI')
+    expect(priceTitle(1_000_000n, 2_200_000n, { micro: 2_200_000n, exact: true })).toBe('2.2 cUSD per TARI')
   })
   it('only a ratio that never ends is cut — and its hover is the exact order', () => {
     expect(fmtPrice({ micro: 1_666_666n, exact: false })).toBe('1.666666…')
-    expect(priceTitle(1_500_000n, 2_500_000n, { micro: 1_666_666n, exact: false })).toBe('2.5 cUSD for 1.5 tTARI')
+    expect(priceTitle(1_500_000n, 2_500_000n, { micro: 1_666_666n, exact: false })).toBe('2.5 cUSD for 1.5 TARI')
   })
 })
 
@@ -49,26 +49,26 @@ describe('placeRows / fillRows — what you give, what you get; the fee stays tT
   it('placing a SELL: you receive the FULL cUSD; the buyer receives N − 1% tTARI', () => {
     expect(placeRows(SELL, 1_000_000n, 2_500_000n, split).map(r => r.note ? ['note', r.v] : [r.k, r.v])).toEqual([
       ['You receive', '2.5 cUSD'],
-      ['note', 'Buyer receives 0.99 tTARI after the 1% trading fee'],
+      ['note', 'Buyer receives 0.99 TARI after the 1% trading fee'],
     ])
   })
   it('placing a BUY: you pay the cUSD total, receive N − 1% tTARI; one fee note', () => {
     expect(placeRows(BUY, 1_000_000n, 1_800_000n, split).map(r => r.note ? ['note', r.v] : [r.k, r.v])).toEqual([
-      ['You pay', '1.8 cUSD'], ['You receive', '0.99 tTARI'], ['note', 'Includes 1% trading fee'],
+      ['You pay', '1.8 cUSD'], ['You receive', '0.99 TARI'], ['note', 'Includes 1% trading fee'],
     ])
   })
   it('with no fee settings yet, no figure is invented', () => {
     expect(placeRows(SELL, 1_000_000n, 2_500_000n, null)[1].v).toBe('Buyer receives — after the 1% trading fee')
   })
   it('filling a SELL order: pay P cUSD, receive N − 1% tTARI', () => {
-    expect(fillRows({ side: SELL, n: 1_000_000n, p: 2_200_000n, fee: 10_000n }).map(r => r.v)).toEqual(['2.2 cUSD', '0.99 tTARI', 'Includes 1% trading fee'])
+    expect(fillRows({ side: SELL, n: 1_000_000n, p: 2_200_000n, fee: 10_000n }).map(r => r.v)).toEqual(['2.2 cUSD', '0.99 TARI', 'Includes 1% trading fee'])
   })
   it('filling a BUY order: pay N tTARI, receive the FULL P cUSD — never a cUSD fee', () => {
     const rows = fillRows({ side: BUY, n: 1_000_000n, p: 1_900_000n, fee: 10_000n })
-    expect(rows.map(r => r.v)).toEqual(['1 tTARI', '1.9 cUSD', 'Includes 1% trading fee'])
+    expect(rows.map(r => r.v)).toEqual(['1 TARI', '1.9 cUSD', 'Includes 1% trading fee'])
   })
   it('an order\'s terms in one line', () => {
-    expect(termsLine(1_000_000n, 2_500_000n)).toBe('1 tTARI @ 2.5')
+    expect(termsLine(1_000_000n, 2_500_000n)).toBe('1 TARI @ 2.5')
   })
 })
 
@@ -103,9 +103,9 @@ describe('rows', () => {
   const now = Date.UTC(2026, 9, 15, 13, 0, 0)
   it('my orders: open shows Cancel; unconfirmed never claims a state as fact', () => {
     const base = { orderId: 'o', side: SELL as 0, n: 1_000_000n, p: 2_500_000n, fee: 10_000n, price: { micro: 2_500_000n, exact: true }, cancelIndex: 4, placedAt: null, placedEstimated: false, placedTx: null, closedAt: null, closedEstimated: false }
-    expect(myOrderView({ ...base, state: 'open', confirmed: true })).toMatchObject({ status: 'Open', canCancel: true, title: 'Sell 1 tTARI @ 2.5' })
+    expect(myOrderView({ ...base, state: 'open', confirmed: true })).toMatchObject({ status: 'Open', canCancel: true, title: 'Sell 1 TARI @ 2.5' })
     expect(myOrderView({ ...base, state: 'filled', confirmed: true })).toMatchObject({ status: 'Filled', sub: 'Filled · 2.5 cUSD received' })
-    expect(myOrderView({ ...base, side: BUY, state: 'filled', confirmed: true }).sub).toBe('Filled · 0.99 tTARI received')
+    expect(myOrderView({ ...base, side: BUY, state: 'filled', confirmed: true }).sub).toBe('Filled · 0.99 TARI received')
     expect(myOrderView({ ...base, state: 'open', confirmed: false })).toMatchObject({ status: 'Unconfirmed', canCancel: false })
   })
   it('my orders: every order carries its time — placed, filled or cancelled; "~" only when estimated', () => {

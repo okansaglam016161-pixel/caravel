@@ -16,10 +16,7 @@ import { CUSD_ASSET, formatUnits, formatUsd } from '../../crypto/assets'
 import type { BookEntry, MyOrder, Price, RecentTrade } from '../../crypto/market'
 import { QuoteChanged } from '../../crypto/quote'
 import { SELL, type OrderSide } from '../../crypto/tradeConfig'
-import { fmt6, timeLabel } from '../wallet/v2/format'
-
-/** The testnet token, as the Trade design names it everywhere (the wallet's shared TICKER says TARI). */
-export const TTARI = 'tTARI'
+import { TICKER, fmt6, timeLabel } from '../wallet/v2/format'
 
 const MICRO = 1_000_000n
 
@@ -46,7 +43,7 @@ export function orderTotal(n: bigint, price: bigint): { p: bigint; exact: boolea
   return { p: scaled / MICRO, exact: scaled % MICRO === 0n }
 }
 
-export const fmtTari = (micro: bigint) => `${fmt6(micro)} ${TTARI}`
+export const fmtTari = (micro: bigint) => `${fmt6(micro)} ${TICKER}`
 /** A cUSD amount — the shared exact form: "2.2", "1,000.5", "0.000001", "10,000". */
 export function fmtCusd(units: bigint): string {
   return formatUnits(units, CUSD_ASSET.decimals)
@@ -62,7 +59,7 @@ export const fmtPrice = (price: Price) => `${formatUnits(price.micro, CUSD_ASSET
 
 /** The full value behind a price, for hover: exact when the price is, the order's terms when cut. */
 export function priceTitle(n: bigint, p: bigint, price: Price): string {
-  return price.exact ? `${fmtPrice(price)} cUSD per ${TTARI}` : `${fmtCusd(p)} cUSD for ${fmt6(n)} ${TTARI}`
+  return price.exact ? `${fmtPrice(price)} cUSD per ${TICKER}` : `${fmtCusd(p)} cUSD for ${fmt6(n)} ${TICKER}`
 }
 
 export interface Row {
@@ -130,7 +127,7 @@ export const INSUFFICIENT_MESSAGE = 'Insufficient balance.'
 export function tradeMessage(e: unknown): string {
   const m = e instanceof Error ? e.message : String(e)
   if (/locked/i.test(m) && /unlock/i.test(m)) return 'Your wallet is locked. Unlock it to trade.'
-  if (/smallest order/i.test(m)) return `The smallest order is 1 ${TTARI}.`
+  if (/smallest order/i.test(m)) return `The smallest order is 1 ${TICKER}.`
   if (/not enough|no public account|must leave change|too small|insufficient/i.test(m)) return INSUFFICIENT_MESSAGE
   if (/paused/i.test(m)) return 'New orders are paused right now. Nothing was sent. Try again later.'
   if (/kept changing/i.test(m)) return 'The network fee kept changing. Nothing was sent. Try again in a moment.'
@@ -168,7 +165,7 @@ export interface MyOrderView {
 
 export function myOrderView(m: MyOrder): MyOrderView {
   const sell = m.side === SELL
-  const title = `${sell ? 'Sell' : 'Buy'} ${fmt6(m.n)} ${TTARI} @ ${fmtPrice(m.price)}`
+  const title = `${sell ? 'Sell' : 'Buy'} ${fmt6(m.n)} ${TICKER} @ ${fmtPrice(m.price)}`
   const placed = m.placedAt !== null ? ` · placed ${timeLabel(m.placedAt, m.placedEstimated)}` : ''
   if (!m.confirmed) {
     return { key: m.orderId, side: sell ? 'SELL' : 'BUY', title, sub: `Waiting for confirmation${placed}`, status: 'Unconfirmed', canCancel: false }

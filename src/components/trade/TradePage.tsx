@@ -25,12 +25,12 @@ import { useTrades } from '../../hooks/useTrades'
 import { useFullRescan } from '../../hooks/useFullRescan'
 import ThemeToggle from '../primitives/ThemeToggle'
 import CusdFaucetClaimPanel from '../wallet/CusdFaucetClaimPanel'
-import { fmt6 } from '../wallet/v2/format'
+import { TICKER, fmt6 } from '../wallet/v2/format'
 import { Eye, Flame, Lock, Refresh, Spinner } from '../wallet/v2/icons'
 import { Body, HeaderIcon, ModalShell, RootHeader } from '../wallet/v2/primitives'
 import { C, MONO, PAGE_MAX_WIDTH } from '../wallet/v2/tokens'
 import TradeSheet, { type SheetMode } from './TradeSheet'
-import { TTARI, fmtCusd, fmtPrice, myOrderView, priceTitle, timeLabel, tradeRowView, usdOf, type MyOrderView } from './tradeModel'
+import { fmtCusd, fmtPrice, myOrderView, priceTitle, timeLabel, tradeRowView, usdOf, type MyOrderView } from './tradeModel'
 
 type Tab = 'book' | 'mine' | 'trades'
 
@@ -104,7 +104,7 @@ export default function TradePage() {
                       <BookSide side={SELL} entries={data.book.sells} onFill={e => setSheet({ kind: 'fill', entry: e })} onCancel={openCancel} />
                       <BookSide side={1} entries={data.book.buys} onFill={e => setSheet({ kind: 'fill', entry: e })} onCancel={openCancel} />
                       <div style={{ gridColumn: '1 / -1', padding: '10px 16px', borderTop: '1px solid var(--border)', fontSize: 11.5, color: C.mutedDim, display: 'flex', alignItems: 'center', gap: 6 }}>
-                        1% trade fee in {TTARI} · 0.7% Caravel, 0.3% burned <Flame size={11} color="var(--accent-ink)" />
+                        1% trade fee in {TICKER} · 0.7% Caravel, 0.3% burned <Flame size={11} color="var(--accent-ink)" />
                       </div>
                     </div>
                   )}
@@ -128,7 +128,7 @@ export default function TradePage() {
             {data !== null && tab === 'trades' && (
               <ListCard dim={dim}>
                 <div className="cv-trade-trow" style={{ padding: '10px 16px', fontFamily: MONO, fontSize: 9.5, letterSpacing: '.1em', color: C.mutedDim }}>
-                  <span>SIDE</span><span style={{ textAlign: 'right' }}>AMOUNT {TTARI}</span><span style={{ textAlign: 'right' }}>PRICE cUSD</span><span style={{ textAlign: 'right' }}>TIME</span>
+                  <span>SIDE</span><span style={{ textAlign: 'right' }}>AMOUNT {TICKER}</span><span style={{ textAlign: 'right' }}>PRICE cUSD</span><span style={{ textAlign: 'right' }}>TIME</span>
                 </div>
                 {data.recent === null && <EmptyLine>Recent trades couldn’t be read just now.</EmptyLine>}
                 {data.recent?.length === 0 && <EmptyLine>No trades yet.</EmptyLine>}
@@ -169,7 +169,7 @@ function BalanceCards({ balances }: { balances: ReturnType<typeof useTradeBalanc
   const cusdTotal = balances.cusd.total
   return (
     <div className="cv-trade-grid2" style={{ gap: 12 }}>
-      <DarkCard tile="T" tileTone="accent" name={TTARI} figure={tariTotal}
+      <DarkCard tile="T" tileTone="accent" name={TICKER} figure={tariTotal}
         priv={fig(balances.tari.private, v => fmt6(v))} pub={fig(balances.tari.public, v => fmt6(v))} />
       <DarkCard tile="$" tileTone="positive" name={CUSD_ASSET.ticker}
         usd={cusdTotal.status === 'ready' ? `≈ ${usdOf(cusdTotal.value)}` : undefined}

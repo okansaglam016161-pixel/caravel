@@ -127,6 +127,14 @@ export async function runTrade(t: Trader, prepared: PreparedTrade, onProgress?: 
  */
 export async function refreshOwnOrders(walletAddress: string): Promise<number> {
   let changed = 0
+  // Closed orders whose closing transaction is not on record yet (recovered before it was looked up,
+  // or recorded by an older version): find it once, for the time of its "Order filled" row.
+  for (const r of loadTradeState(walletAddress).records) {
+    if (r.action !== 'place' || !r.orderId || r.closedTxId) continue
+    if (r.orderState !== 'filled' && r.orderState !== 'cancelled') continue
+    const ev = await orderOutcomeFromEvents(r.orderId)
+    if (ev && ev.state === r.orderState) { observeOrder(walletAddress, r.orderId, ev.state, ev.txId); changed++ }
+  }
   for (const r of ownOpenOrders(walletAddress)) {
     let state: 'open' | 'filled' | 'cancelled' | null = null
     let txId: string | null = null
@@ -177,8 +185,10 @@ export async function recoverTradeState(t: Pick<Trader, 'address' | 'tradeRoot'>
       side: o.side, n: o.n, p: o.p, tradeFee: o.fee, caravelCut: o.caravelCut, burnCut: o.burnCut,
       pays: null, gets: null, orderId: o.id, cancelIndex: i, cusdOutputIds: [], cusdSpentIds: [], outcome: 'committed', payoutOutputId: null,
       orderState: o.status === ORDER_OPEN ? 'open' : o.status === ORDER_FILLED ? 'filled' : 'cancelled',
-      // Seen filled before this device knew of it: no "Order filled" moment to show.
+      // Seen filled before this device knew of it: no local moment. Its time is the closing
+      // transaction's, on the indexer (below), so a restore dates an old fill when it happened.
       filledSeenAt: null,
+      closedTxId: o.status === ORDER_OPEN ? null : (await orderOutcomeFromEvents(o.id))?.txId ?? null,
     })
   }
   recordRecovery(t.address, next, found)

@@ -303,9 +303,13 @@ function tradeRow(e: JournalEntry, r: TradeRecord | undefined, txTimes: Readonly
 /** A maker's order that somebody filled: the "Order filled" row, from the trade store. */
 function orderFilledRow(r: TradeRecord, txTimes: ReadonlyMap<string, number>): TradeActivityRow | null {
   if (r.action !== 'place' || r.orderState !== 'filled' || !r.orderId) return null
-  // When it was filled: the filling transaction's time on the indexer — known after a restore too.
-  const at = (r.closedTxId ? txTimes.get(r.closedTxId) : undefined) ?? r.filledSeenAt
-  if (at === null || at === undefined) return null
+  // WHEN IT WAS FILLED, FROM THE CHAIN ONLY: the filling transaction's indexer time (crypto/txTimes:
+  // exact, or estimated from its receipt's epoch once the indexer forgets the body). If that cannot
+  // be had, the placement transaction's time, which a fill can only follow. Never this device's clock
+  // (`filledSeenAt`): that is when this device NOTICED the fill, which put a fill minutes late and every
+  // fill a restore recovered at the moment of the restore. With no chain time at all, no row yet.
+  const at = (r.closedTxId ? txTimes.get(r.closedTxId) : undefined) ?? (r.txId ? txTimes.get(r.txId) : undefined)
+  if (at === undefined) return null
   const d = tradeDeltas('order-filled', r)
   return {
     kind: 'trade', id: `filled-${r.orderId}`, tradeKind: 'order-filled', timestamp: at,

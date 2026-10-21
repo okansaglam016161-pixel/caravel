@@ -1360,6 +1360,8 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
   const tradeTxIds = [
     ...journal.filter(e => e.kind.startsWith('trade-') && e.txId).map(e => e.txId!),
     ...trades.filter(t => t.closedTxId).map(t => t.closedTxId!),
+    // A placed order's own transaction: the fallback time of its "Order filled" row (crypto/activity).
+    ...trades.filter(t => t.action === 'place' && t.txId).map(t => t.txId!),
   ]
   const txTimes = useTxTimes(tradeTxIds)
   const activity = buildActivity(journal, txHistory, messages, reconciled, cusdUnitsByJournal, trades, txTimes)

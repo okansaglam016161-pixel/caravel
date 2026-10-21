@@ -2532,12 +2532,22 @@ async function cmdTradeStatus(h: Harnessed): Promise<void> {
   }
   rule('balances  (app scans)')
   printBalances(await tradeBalances(h, account))
-  rule('Activity — trade rows  (crypto/activity.buildActivity)')
-  const rows = buildActivity(loadJournal(h.address), [], [], [], new Map(), st.records).filter((r): r is TradeActivityRow => r.kind === 'trade')
+  rule('Activity — trade rows  (crypto/activity.buildActivity, dated as WalletModal dates them)')
+  const journal = loadJournal(h.address)
+  // The same transactions WalletModal asks the indexer the time of (hooks/useTxTimes).
+  const timeIds = [...new Set([
+    ...journal.filter(e => e.kind.startsWith('trade-') && e.txId).map(e => e.txId!),
+    ...st.records.filter(t => t.closedTxId).map(t => t.closedTxId!),
+    ...st.records.filter(t => t.action === 'place' && t.txId).map(t => t.txId!),
+  ])]
+  const times = new Map<string, TxTime>(await Promise.all(timeIds.map(async id => [id, await txTime(id)] as const)))
+  const txTimes = new Map([...times].filter(([, t]) => t.at !== null).map(([id, t]) => [id, t.at!] as const))
+  const rows = buildActivity(journal, [], [], [], new Map(), st.records, txTimes).filter((r): r is TradeActivityRow => r.kind === 'trade')
   if (rows.length === 0) console.log('    (none)')
   for (const r of rows) {
     const parts = [r.tariDelta !== null ? signedTari(r.tariDelta) : null, r.cusdDelta !== null ? signedCusd(r.cusdDelta) : null].filter(Boolean)
-    console.log(`    ${new Date(r.timestamp).toISOString().slice(11, 19)}  ${r.tradeKind.padEnd(13)} ${r.outcome.padEnd(10)} ${parts.join(' · ')}${r.feeMicrotari !== null ? `  · fee ${r.feeMicrotari} µT` : ''}`)
+    const est = r.txId !== null && times.get(r.txId)?.estimated ? '~' : ' '
+    console.log(`    ${new Date(r.timestamp).toISOString().slice(0, 19).replace('T', ' ')}${est} ${r.tradeKind.padEnd(13)} ${r.outcome.padEnd(10)} ${parts.join(' · ')}${r.feeMicrotari !== null ? `  · fee ${r.feeMicrotari} µT` : ''}`)
   }
 }
 

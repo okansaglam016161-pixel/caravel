@@ -361,10 +361,10 @@ describe('buildActivity — Caravel Trade', () => {
 
   it('a maker\'s order seen filled is its own row — no journal entry, no network fee (the taker paid it)', () => {
     const rows = buildActivity([], [], [], [], new Map(), [
-      trade({ side: 0, orderState: 'filled', filledSeenAt: 50 }),
-      trade({ journalId: 'b', side: 1, orderId: 'component_b', orderState: 'filled', filledSeenAt: 60 }),
+      trade({ side: 0, orderState: 'filled', filledSeenAt: 50, closedTxId: 'tx_fa' }),
+      trade({ journalId: 'b', side: 1, orderId: 'component_b', orderState: 'filled', filledSeenAt: 60, closedTxId: 'tx_fb' }),
       trade({ journalId: 'c', orderId: 'component_c', orderState: 'open' }),
-    ])
+    ], new Map([['tx_fa', 50], ['tx_fb', 60]]))
     expect(rows).toHaveLength(2)
     expect(rows[0]).toMatchObject({ tradeKind: 'order-filled', tariDelta: 990_000n, cusdDelta: null, feeMicrotari: null, source: 'chain', timestamp: 60 })
     expect(rows[1]).toMatchObject({ tradeKind: 'order-filled', tariDelta: null, cusdDelta: 2_000_000n, timestamp: 50 })
@@ -386,6 +386,22 @@ describe('buildActivity — trade rows dated by the indexer, the same on every d
     const rows = buildActivity([], [], [], [], new Map(),
       [trade({ journalId: 'recovered-o', orderState: 'filled', filledSeenAt: null, closedTxId: 'tx_f' })], new Map([['tx_f', 500]]))
     expect(rows[0]).toMatchObject({ tradeKind: 'order-filled', timestamp: 500, txId: 'tx_f' })
+  })
+  // The 0.47 end-to-end run: a fill at 15:10:59 showed as 15:11:40 (when this device noticed it),
+  // and four fills from the 15th and 16th, found by a seed restore, all showed the restore's moment.
+  it('"Order filled" is the FILL transaction\'s time, never the moment this device noticed it', () => {
+    const t = trade({ orderState: 'filled', filledSeenAt: 999_999, closedTxId: 'tx_f' })
+    const [row] = buildActivity([], [], [], [], new Map(), [t], new Map([['tx_f', 500], ['ttx', 100]]))
+    expect(row).toMatchObject({ tradeKind: 'order-filled', timestamp: 500, txId: 'tx_f' })
+  })
+  it('without the fill\'s time, the placement transaction\'s: still the chain\'s, never the device clock', () => {
+    const t = trade({ orderState: 'filled', filledSeenAt: 999_999, closedTxId: 'tx_f' })
+    const [row] = buildActivity([], [], [], [], new Map(), [t], new Map([['ttx', 100]]))
+    expect(row).toMatchObject({ tradeKind: 'order-filled', timestamp: 100 })
+  })
+  it('with no chain time at all the row waits; it is never dated by when it was noticed', () => {
+    const t = trade({ orderState: 'filled', filledSeenAt: 999_999, closedTxId: 'tx_f' })
+    expect(buildActivity([], [], [], [], new Map(), [t], new Map())).toEqual([])
   })
   it('two rows at the same moment always list in the same order (transaction id)', () => {
     const j = [journalled({ id: 'a', kind: 'trade-place', txId: 'tx_b' }), journalled({ id: 'b', kind: 'trade-place', txId: 'tx_a' })]

@@ -154,3 +154,19 @@ describe('times', () => {
     expect(estimateEpochTime(12050, 12044, now)).toBe(now)
   })
 })
+
+// Ootle 0.47 serves the value at `state.up.substate`, with `verified` where it was.
+describe('the burn wallet parsers on a 0.47 indexer', () => {
+  const as047 = ({ substate, ...rest }: { substate: unknown; [k: string]: unknown }) => ({ ...rest, state: { up: { substate } } })
+
+  it('reads the verified component and vault from `state.up.substate`', () => {
+    expect(parseBurnComponent(as047(component()))).toEqual({ vault: BURN_WALLET_VAULT, totalDeposited: 1000200000n })
+    expect(parseBurnVault(as047(vault()))).toBe(1000200000n)
+  })
+
+  it('still refuses an unverified read, and a look-alike', () => {
+    expect(parseBurnComponent(as047(component({ verified: false })))).toBeNull()
+    expect(parseBurnComponent(as047(component({ owner: { ByPublicKey: 'ab' } })))).toBeNull()
+    expect(parseBurnVault(as047(vault({ verified: false })))).toBeNull()
+  })
+})

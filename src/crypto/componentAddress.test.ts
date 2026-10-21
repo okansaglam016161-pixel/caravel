@@ -230,6 +230,13 @@ describe('crossCheckDerivation — the network is the authority before funds mov
     expect((await crossCheckDerivation(p, PK)).status).toBe('confirmed')
   })
 
+  // Ootle 0.47 serves the value at `state.up.substate`; on that shape this read always said
+  // not-created.
+  it('reads the owner from a 0.47 body too', async () => {
+    const p = provider(async () => ({ version: 0, state: { up: { substate: { Component: { header: { owner_rule: { ByPublicKey: PK } } } } } }, verified: true }))
+    expect(await crossCheckDerivation(p, PK)).toEqual({ status: 'confirmed', component: COMPONENT })
+  })
+
   it('always reports the derived component, whatever the verdict', async () => {
     for (const g of [
       async () => ({ substate: { Component: { header: { owner_rule: { ByPublicKey: PK } } } } }),

@@ -21,6 +21,7 @@ import { createWalletSeed } from 'tari-cipherseed'
 import { scanWallet, type ScannedUtxo, type ScanProgress } from '../crypto/walletScanner'
 import { loadExcludedIds, loadSpentOutputs, heldOutOfBalance, type ExcludedValue, type HeldSummary } from '../crypto/spentOutputs'
 import { sweepLocks } from '../crypto/lockSweep'
+import { repairShapeBreakSpends } from '../crypto/spentRepair'
 import { loadHistory, addSent, type SentEntry, type NewSentParams } from '../crypto/txHistory'
 import { NostrMessagingProvider } from '../messaging/NostrMessagingProvider'
 import type { MessagingProvider, MessagingConnectionStatus, CaravelMessage, RelayState } from '../messaging/types'
@@ -500,6 +501,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     // timeout, so a dead indexer cannot hang an unlock. A failure here must never block one:
     // an unresolved lock is a wrong number, and a thrown unlock is no wallet.
     await sweepLocks(addr).catch(() => undefined)
+    // Then give back any live coin the 0.47 shape change made the sweep condemn as spent (once per
+    // wallet; crypto/spentRepair). Before the balance, for the same reason as the sweep above.
+    await repairShapeBreakSpends(addr).catch(() => undefined)
 
     const generation = ++readGenRef.current
     startScan(w, addr, generation)

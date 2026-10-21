@@ -29,6 +29,7 @@ the same code the rest of the ecosystem runs.
 | 0.43 | 0.7.0 | ^0.43.0 |
 | 0.45 | 0.8.0 | ^0.45.0 |
 | 0.46 (protocol V2) | **0.9.0** | **^0.46.1** |
+| 0.47 (substate reads under `state.up`) | **0.11.0** | **^0.47.0** |
 
 The four move TOGETHER, and npm will not stop you moving one. `-indexer` and `-secret-key-wallet`
 pin `ootle` to an exact version and the SDK carries a caret on the wasm it was built against, so

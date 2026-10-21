@@ -1,16 +1,32 @@
 ONS client — vendored build provenance
 ======================================
 source repo   : ootle-name-service (github.com/okansaglam016161-pixel/ootle-name-service)
-source commit : 109e923 (branch: sdk-0.9, from main 5d3d65d; client/ last changed in 109e923)
+source commit : 1eb1d3f (branch: upgrade-0.47, from main 3f88161; client/ last changed in 1eb1d3f)
 built from    : client/src → client/dist  (npm run build = tsc -p client/tsconfig.json)
-vendored at   : 2026-10-13
+vendored at   : 2026-10-21
 tree state    : clean (dist matches the commit above exactly — diff -rq, excluding this file)
-src digest    : 9301a9aa8bb233094a7b419c43bb59212bf6dd45a631740e643733033ca19e7f
+src digest    : 7bcd621998930e2dfe6680cceb08d0de754d4a65644187e481564c9ab8bf6ed8
                 (shasum -a 256 client/src/*.ts | sort | shasum -a 256)
 
-NO LOCAL PATCHES. Everything Caravel needs is in the upstream source.
+NO LOCAL PATCHES. Everything Caravel needs is in the upstream source. This build replaces the two
+patches hotfix-0.47 carried in reader.js and browser-writer.js, with fresh source maps.
 
-This build moves the peer deps to SDK 0.9 / ootle-wasm 0.46 (sdk-0.9, 109e923):
+This build is the Ootle 0.47 / SDK 0.11 one (upgrade-0.47, 1eb1d3f):
+  - reader.ts         : the registry is read from `state.up.substate` (Ootle 0.47's GET /substates,
+                        tari-ootle #2968) or `substate` (0.46); a `state.down` is a missing component.
+                        Before it, every @name lookup threw "unexpected component state shape".
+  - browser-writer.ts : the fallback fee-input scan's UTXO wrapper is built in both shapes. SDK 0.10+
+                        decryptOwnedUtxo parses only `state.up` and answers an unparseable response
+                        with null, the same as "not ours". Caravel passes its own owned set
+                        (BrowserSigner.ownedUtxos), so this is the fallback path.
+  - ootle-sdk.d.ts    : decryptOwnedUtxo takes an IndexerGetSubstateResponse with a required `state`;
+                        the source also type-checks against the real SDK 0.11.0 (stub excluded) with
+                        0 errors.
+  - package.json      : peer deps @tari-project/ootle* ^0.11.0, ootle-ts-bindings ^1.60.0,
+                        ootle-wasm ^0.47.0.
+  - tests             : npm test — 21 (3 new, reader.test.ts); excluded from this dist.
+
+Carried forward from the SDK 0.9 build (109e923):
   - package.json      : peer deps @tari-project/ootle* ^0.9.0, ootle-wasm ^0.46.0. SDK 0.9 is a
                         dependency bump only (ootle-ts-bindings 1.58, ootle-wasm 0.46); its source
                         is unchanged from 0.8.

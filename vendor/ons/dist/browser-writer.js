@@ -110,7 +110,11 @@ async function scanUtxos(indexerUrl, crypto, viewSecret) {
             continue;
         seen.add(commitmentHex);
         const substateId = `utxo_${RESOURCE_HEX}_${commitmentHex}`;
-        const fakeResponse = { version: 0, verified: false, substate: { Utxo: utxoBody } };
+        // The row is a UTXO BODY; the SDK decrypt takes a substate RESPONSE. Built in BOTH indexer
+        // shapes: SDK 0.10+ (Ootle 0.47) parses only `state.up.substate`, and its decryptOwnedUtxo
+        // answers null for a response it cannot parse, the same null as "not ours", so a wrapper in
+        // the old shape alone would read every coin as a stranger's. `substate` keeps SDK 0.9 working.
+        const fakeResponse = { version: 0, verified: false, state: { up: { substate: { Utxo: utxoBody } } }, substate: { Utxo: utxoBody } };
         const decrypted = await decryptOwnedUtxo(crypto, viewSecret, fakeResponse, substateId);
         if (decrypted !== null) {
             const output = utxoBody?.output?.output;

@@ -231,3 +231,23 @@ describe('the claimed record', () => {
     expect(loadFaucetClaimed(WALLET)).toBe(false)
   })
 })
+
+// Ootle 0.47 serves the value at `state.up.substate`. On that shape both decoders read nothing and
+// the faucet card said "not in the expected shape"; they read either shape now.
+describe('the faucet decoders on a 0.47 indexer', () => {
+  const as047 = ({ substate, ...rest }: { substate: unknown; [k: string]: unknown }) => ({ ...rest, state: { up: { substate } }, verified: true })
+
+  it('reads the component and the vault from `state.up.substate`', () => {
+    expect(decodeFaucetState(as047(componentBody()))).toEqual({ claimAmount: 1_000_000_000n, paused: false })
+    expect(decodeFaucetVault(as047(vaultBody('569000310000')))).toBe(569_000_310_000n)
+  })
+
+  it('reports the faucet open from 0.47 reads', () => {
+    expect(faucetStatusFrom(found(as047(componentBody())), found(as047(vaultBody('569000310000'))), [notFound]))
+      .toEqual({ kind: 'open', claimAmount: 1_000_000_000n, available: 569_000_310_000n })
+  })
+
+  it('still refuses another template, in the new shape too', () => {
+    expect(decodeFaucetState(as047(componentBody({ template: 'ff'.repeat(32) })))).toBeNull()
+  })
+})

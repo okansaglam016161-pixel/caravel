@@ -56,10 +56,12 @@
 // with `output: null`); no answer at all keeps it, because a network outage must never be able
 // to zero out live money.
 
-import { decryptOwnedUtxo, Network, WasmStealthCrypto, type IndexerGetSubstateResponse } from '@tari-project/ootle'
+import { Network, WasmStealthCrypto } from '@tari-project/ootle'
+import { openOwnedUtxo } from './openUtxo'
 import { loadJournal } from './journalStore'
 import { loadSpentOutputs, excludedIds } from './spentOutputs'
 import { pointRead } from './indexerConfig'
+import { substateValueOf } from './substateShape'
 import { fetchAllUtxoRows, RESOURCE_HEX, type UtxoFeed, type UtxoRow } from './utxoFeed'
 import {
   discoveredReceives, retireDiscovered, scanRecentReceives,
@@ -195,7 +197,7 @@ const fetchSubstateBody: SubstateFetcher = async (substateId) => {
   const read = await pointRead(`/substates/${encodeURIComponent(substateId)}`)
   if (!read.answered) return undefined
   if (read.body === null) return null
-  const utxo = (read.body as { substate?: { Utxo?: unknown } })?.substate?.Utxo
+  const utxo = (substateValueOf(read.body) as { Utxo?: unknown } | undefined)?.Utxo
   if (!utxo || typeof utxo !== 'object') return null
   // A spent or frozen output still answers 200 with `output: null`. Not a coin.
   if ((utxo as { output?: unknown }).output == null) return null
@@ -205,7 +207,7 @@ const fetchSubstateBody: SubstateFetcher = async (substateId) => {
 /**
  * Does our view key open this listed row? Injectable so the policy can be tested without wasm.
  *
- * The SAME trial decrypt both scanners run (`decryptOwnedUtxo` on the row wrapped as a substate),
+ * The SAME trial decrypt both scanners run (crypto/openUtxo on the row),
  * so "ours" here can never mean something different from "ours" in the balance or in selection.
  */
 export type ListedOwnershipTest = (substateId: string, body: unknown) => Promise<boolean>
@@ -214,13 +216,10 @@ let sharedCrypto: WasmStealthCrypto | undefined
 
 function viewKeyOwns(viewSecret: Uint8Array): ListedOwnershipTest {
   return async (substateId, body) => {
-    try {
-      const wrapped = { version: 0, verified: false, substate: { Utxo: body } } as IndexerGetSubstateResponse
-      const crypto = (sharedCrypto ??= new WasmStealthCrypto(Network.Esmeralda))
-      return (await decryptOwnedUtxo(crypto, viewSecret, wrapped, substateId)) !== null
-    } catch {
-      return false   // a failed trial decrypt is the ordinary "not ours"
-    }
+    // null is the ordinary "not ours"; an unreadable body throws, and fails the scan rather than
+    // quietly dropping a coin that may be ours (crypto/openUtxo).
+    const crypto = (sharedCrypto ??= new WasmStealthCrypto(Network.Esmeralda))
+    return (await openOwnedUtxo(crypto, viewSecret, substateId, body)) !== null
   }
 }
 

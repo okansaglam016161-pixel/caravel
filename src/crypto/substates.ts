@@ -6,10 +6,12 @@
 // money rather than correctness.
 
 import { SDK_READ_ATTEMPTS, withBusyRetry } from './indexerRetry'
-import { getVaultIdsForAccount, type Provider } from '@tari-project/ootle'
+import type { Provider } from '@tari-project/ootle'
+import { getAccountVaultIds } from './substateShape'
 
 /**
- * How vault ids are resolved for an account. Defaults to the SDK's walker; a test supplies a fake.
+ * How vault ids are resolved for an account. Defaults to the SDK's walker, read through
+ * crypto/substateShape so it understands a 0.47 indexer; a test supplies a fake.
  *
  * The same injectable seam the read path has always used — it keeps the network out of the unit
  * tests without mocking the module graph.
@@ -98,7 +100,7 @@ export interface AccountInputs {
 export async function resolveAccountInputs(
   provider: Provider,
   accountAddress: string,
-  resolveVaultIds: VaultIdResolver = getVaultIdsForAccount,
+  resolveVaultIds: VaultIdResolver = getAccountVaultIds,
 ): Promise<AccountInputs> {
   let vaultIds: string[]
   try {

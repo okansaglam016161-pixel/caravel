@@ -113,3 +113,37 @@ describe('pointRead — a busy node (Ootle 0.43: 429 / 503)', () => {
     expect(await pointRead('/substates/x')).toEqual({ body: null, answered: false, source: null })
   })
 })
+
+// ── Ootle 0.47: the value moved to `state.up.substate` ───────────────────────
+//
+// Every reader in the wallet looks for `body.substate`. pointRead is where a substate read is
+// handed to them, so it hands over both shapes at once (crypto/substateShape).
+describe('pointRead — both indexer shapes of a substate read', () => {
+  const VALUE = { Vault: { resource_container: {} } }
+  const v047 = { version: 2, state: { up: { substate: VALUE } }, verified: true }
+  const down = { version: 2, state: { down: {} }, verified: true }
+
+  it('serves a 0.47 body with `substate` lifted out, and `state` kept', async () => {
+    vi.stubGlobal('fetch', nodes({ [A]: ok(v047), [B]: ok(v047) }))
+    const r = await pointRead('/substates/vault_x')
+    expect(r.body).toEqual({ ...v047, substate: VALUE })
+  })
+
+  it('a 0.47 down is that node’s 404: the next node is asked', async () => {
+    vi.stubGlobal('fetch', nodes({ [A]: ok(down), [B]: ok(v047) }))
+    const r = await pointRead('/substates/vault_x')
+    expect(r).toMatchObject({ source: B, answered: true })
+    expect((r.body as { substate: unknown }).substate).toEqual(VALUE)
+  })
+
+  it('down on every node is an absence, the same answer as a 404 everywhere', async () => {
+    vi.stubGlobal('fetch', nodes({ [A]: ok(down), [B]: notFound }))
+    expect(await pointRead('/substates/vault_x')).toMatchObject({ body: null, answered: true, source: A })
+  })
+
+  it('does not touch any other route, even one with a `state` field', async () => {
+    const result = { state: { down: {} }, result: { Finalized: {} } }
+    vi.stubGlobal('fetch', nodes({ [A]: ok(result), [B]: ok(result) }))
+    expect((await pointRead('/transactions/tx1/result')).body).toEqual(result)
+  })
+})

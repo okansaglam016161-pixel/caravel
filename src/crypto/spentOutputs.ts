@@ -339,6 +339,44 @@ export function release(
   return { ok, released }
 }
 
+/**
+ * Can this wallet's spend record be opened right now? False with no store key, or a stored record
+ * that will not open, where loadSpentOutputs reads as EMPTY. A caller that would conclude "nothing
+ * to do" from an empty read checks this first. No record at all is readable (and truly empty).
+ */
+export function spentRecordReadable(walletAddress: string): boolean {
+  return getStoreKey() !== null && readStatus(walletAddress) !== 'unreadable'
+}
+
+/**
+ * Undo `spent` records the chain proves wrong. THE ONLY PLACE A SPENT RECORD IS EVER REVERSED.
+ *
+ * Exists for one recorded failure: on Ootle 0.47 the lock sweep's coin probe read every live coin
+ * as gone (crypto/substateShape) and promoted its lock to `spent`, excluding a live coin for good.
+ * The caller (crypto/spentRepair) passes only ids every indexer serves as a verified live UTXO,
+ * whose transaction is not a known Accept. Anything not currently `spent` is left alone, so a
+ * second call with the same ids changes nothing.
+ */
+export function restoreLiveSpent(
+  walletAddress: string,
+  ids: readonly string[],
+  now = Date.now(),
+): { ok: boolean; restored: string[] } {
+  const current = loadSpentOutputs(walletAddress)
+  const records = { ...current.records }
+  const restored: string[] = []
+  for (const id of ids) {
+    if (records[id]?.status !== 'spent') continue
+    delete records[id]
+    restored.push(id)
+  }
+  if (restored.length === 0) return { ok: true, restored }
+
+  const ok = save(walletAddress, { ...current, records })
+  if (!ok) markDegraded(walletAddress, now)
+  return { ok, restored }
+}
+
 // ── Reading ───────────────────────────────────────────────────────────────────
 
 /**

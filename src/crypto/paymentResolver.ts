@@ -39,8 +39,12 @@ export async function resolvePayment(
 
   // Structural check first: separates a spent/frozen output (output === null) from a live UTXO,
   // so we can distinguish "gone" from "not ours" rather than lumping both into a null decrypt.
+  // A body the SDK THROWS on is not a spent coin: it is a response we cannot read (a shape change
+  // did exactly this), so it is reported as retryable rather than as "spent" to the recipient.
   let parsed: unknown
-  try { parsed = parseSubstateUtxo(substate, utxoId) } catch { parsed = null }
+  try { parsed = parseSubstateUtxo(substate, utxoId) } catch (e) {
+    return { status: 'network_error', detail: `unreadable substate response: ${e instanceof Error ? e.message : String(e)}` }
+  }
   if (parsed === null) {
     // 200 + null output = the UTXO existed but is spent or frozen, as opposed to a 404 (never ours).
     return { status: 'spent' }
@@ -49,8 +53,10 @@ export async function resolvePayment(
   let decrypted: Awaited<ReturnType<typeof decryptOwnedUtxo>>
   try {
     decrypted = await decryptOwnedUtxo(stealthCrypto, viewSecret, substate, utxoId)
-  } catch {
-    decrypted = null   // decryptOwnedUtxo normally returns null for "not ours"; guard a throw too
+  } catch (e) {
+    // decryptOwnedUtxo answers "not ours" with null (it swallows the AEAD failure itself), so a
+    // throw is something else, and saying "not addressed to you" would be a guess.
+    return { status: 'network_error', detail: `could not open the output: ${e instanceof Error ? e.message : String(e)}` }
   }
   if (decrypted === null) return { status: 'unreadable' }
 

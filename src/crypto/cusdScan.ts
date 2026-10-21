@@ -29,7 +29,9 @@
 // Stealth container's `revealed_amount` for the cUSD resource is summed — decodeRevealedAmount, the
 // TARI public read's own decoder. A missing account is a real zero; anything unverified is unknown.
 
-import { decryptOwnedUtxo, Network, WasmStealthCrypto, type IndexerGetSubstateResponse } from '@tari-project/ootle'
+import { Network, WasmStealthCrypto } from '@tari-project/ootle'
+import { openOwnedUtxo } from './openUtxo'
+import { substateValueOf, upgradeSubstateBody } from './substateShape'
 import { CUSD_ASSET } from './assets'
 import { loadAccountAddress } from './accountStore'
 import { knownCusdIds, spentCusdIds } from './tradeStore'
@@ -65,7 +67,9 @@ export const verifiedRead: VerifiedReader = async (path) => {
     if (res.status === 404) { notFound++; continue }
     if (!res.ok) { other++; continue }
     try {
-      const body = await res.json() as { verified?: unknown }
+      // Either indexer shape (crypto/substateShape); a 0.47 `down` is this node's 404.
+      const body = upgradeSubstateBody(await res.json()) as { verified?: unknown } | null
+      if (body === null) { notFound++; continue }
       if (body?.verified === true) return { kind: 'verified', body }
     } catch { /* unparseable is not an answer */ }
     other++
@@ -107,14 +111,11 @@ let sharedCrypto: WasmStealthCrypto | undefined
 
 export function viewKeyOpener(viewSecret: Uint8Array): CusdOpener {
   return async (id, utxoBody) => {
-    try {
-      const crypto = (sharedCrypto ??= new WasmStealthCrypto(Network.Esmeralda))
-      const wrapped = { version: 0, verified: false, substate: { Utxo: utxoBody } } as IndexerGetSubstateResponse
-      const d = await decryptOwnedUtxo(crypto, viewSecret, wrapped, id)
-      return d === null ? null : d.value
-    } catch {
-      return null   // a failed trial decrypt is the ordinary "not ours"
-    }
+    // null is "not ours" (or not a coin); a body the SDK cannot parse THROWS and fails the scan, so
+    // an unreadable cUSD balance is "can't read", never a confident 0 (crypto/openUtxo).
+    const crypto = (sharedCrypto ??= new WasmStealthCrypto(Network.Esmeralda))
+    const d = await openOwnedUtxo(crypto, viewSecret, id, utxoBody)
+    return d === null ? null : d.value
   }
 }
 
@@ -193,7 +194,7 @@ export async function scanCusdPrivate(opts: {
     if (r.kind === 'unknown') {
       if (own.has(id)) {
         const body = await readAny(path).catch(() => undefined)
-        const utxo = (body as { substate?: { Utxo?: { output?: unknown } } } | null | undefined)?.substate?.Utxo
+        const utxo = (substateValueOf(body) as { Utxo?: { output?: unknown } } | undefined)?.Utxo
         if (utxo?.output != null) {
           const units = await opts.open(id, utxo)
           if (units !== null) { outputs.push({ id, units }); ownUnverified.push(id); continue }
@@ -203,7 +204,7 @@ export async function scanCusdPrivate(opts: {
       continue
     }
     if (r.kind === 'absent') { gone.push(id); continue }
-    const utxo = (r.body as { substate?: { Utxo?: { output?: unknown } } })?.substate?.Utxo
+    const utxo = (substateValueOf(r.body) as { Utxo?: { output?: unknown } } | undefined)?.Utxo
     if (!utxo || utxo.output == null) { gone.push(id); continue }   // spent / frozen: `output: null`
     // THE VALUE FROM THE VERIFIED BODY. A recovered id that our key does not open is not ours.
     const units = await opts.open(id, utxo)
@@ -229,8 +230,8 @@ export type CusdPublicRead = { kind: 'ok'; units: bigint } | { kind: 'unknown'; 
 
 /** The vault ids an account component's state names (CBOR tag 132, or a plain `vault_` string). */
 export function accountVaultIds(componentBody: unknown): string[] | null {
-  const state = (componentBody as { substate?: { Component?: { body?: { state?: unknown } } } })
-    ?.substate?.Component?.body?.state
+  const state = (substateValueOf(componentBody) as { Component?: { body?: { state?: unknown } } } | undefined)
+    ?.Component?.body?.state
   if (state === undefined) return null
   const found = new Set<string>()
   const walk = (v: unknown) => {
@@ -262,7 +263,7 @@ export async function readCusdPublic(accountAddress: string | null, read: Verifi
     const v = await read(`/substates/${vault}`)
     // The account itself names this vault, so it must exist: anything but a verified body is unknown.
     if (v.kind !== 'verified') return { kind: 'unknown', reason: `could not verify ${vault}` }
-    const amount = decodeRevealedAmount((v.body as { substate?: unknown })?.substate, CUSD_ASSET.resource)
+    const amount = decodeRevealedAmount(substateValueOf(v.body), CUSD_ASSET.resource)
     if (amount !== null) units += amount
   }
   return { kind: 'ok', units }

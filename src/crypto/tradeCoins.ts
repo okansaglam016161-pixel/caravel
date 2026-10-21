@@ -11,16 +11,22 @@
 // read on EVERY indexer and must be present there with a live output; a dead one is dropped and the
 // selection made again (caravel-trade live.ts `coins`, which did the same for every coin).
 
-import { decryptOwnedUtxo, TARI_RESOURCE_ADDRESS, type WasmStealthCrypto } from '@tari-project/ootle'
+import { TARI_RESOURCE_ADDRESS, type WasmStealthCrypto } from '@tari-project/ootle'
 import { CUSD_ASSET } from './assets'
 import { INDEXER_URLS, POINT_READ_TIMEOUT_MS } from './indexerConfig'
 import { fetchWithRetry } from './indexerRetry'
+import { openOwnedUtxo } from './openUtxo'
 import { loadExcludedIds } from './spentOutputs'
 import { fromHex, scanOwnedUtxos, selectStealthInputs, type InputSelection, type OwnedUtxo } from './stealthUtxos'
 import { fetchAllUtxoRows } from './utxoFeed'
 import { spentCusdIds } from './tradeStore'
+import { substateValueOf, upgradeSubstateBody } from './substateShape'
 
-/** Is the coin at `id` present with a live output on every indexer? `null`: some node did not answer. */
+/**
+ * Is the coin at `id` present with a live output on every indexer? `null`: some node did not answer,
+ * or answered with a body that is not a UTXO in either indexer shape. An unreadable body is NOT "not
+ * live": reading it so would quietly drop a good coin, as a shape change once did to every read.
+ */
 export async function liveEverywhere(id: string): Promise<boolean | null> {
   for (const base of INDEXER_URLS) {
     let res: Response
@@ -30,8 +36,11 @@ export async function liveEverywhere(id: string): Promise<boolean | null> {
     if (res.status === 404) return false
     if (!res.ok) return null
     try {
-      const body = await res.json() as { substate?: { Utxo?: { output?: unknown } } }
-      if (body?.substate?.Utxo?.output == null) return false
+      const body = upgradeSubstateBody(await res.json())
+      if (body === null) return false   // a 0.47 `down`: this version is spent
+      const utxo = (substateValueOf(body) as { Utxo?: { output?: unknown } } | undefined)?.Utxo
+      if (!utxo || typeof utxo !== 'object') return null
+      if (utxo.output == null) return false
     } catch { return null }
   }
   return true
@@ -72,16 +81,15 @@ async function scanCusdCoins(
     try {
       const res = await fetchWithRetry(INDEXER_URLS, `/substates/${encodeURIComponent(id)}`, {}, { attempts: 2, timeoutMs: POINT_READ_TIMEOUT_MS, alternate: true })
       if (!res.ok) continue
-      const utxo = (await res.json() as { substate?: { Utxo?: { output?: unknown } } })?.substate?.Utxo
+      const utxo = (substateValueOf(await res.json()) as { Utxo?: { output?: unknown } } | undefined)?.Utxo
       if (utxo?.output != null) rows.set(id, utxo)
     } catch { /* unreachable now; the listing will have it later */ }
   }
   const out: OwnedUtxo[] = []
   for (const [id, body] of rows) {
     if (held.has(id)) continue
-    const wrapped = { version: 0, verified: false, substate: { Utxo: body } } as Parameters<typeof decryptOwnedUtxo>[2]
-    let d: Awaited<ReturnType<typeof decryptOwnedUtxo>>
-    try { d = await decryptOwnedUtxo(crypto, viewSecret, wrapped, id) } catch { continue }
+    // null is "not ours"; an unreadable body throws, and the selection with it (crypto/openUtxo).
+    const d = await openOwnedUtxo(crypto, viewSecret, id, body)
     if (d === null) continue
     const outer = (body as { output?: { output?: { public_nonce?: string }; auth?: { Key?: string } } })?.output
     const nonce = outer?.output?.public_nonce

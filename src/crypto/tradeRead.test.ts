@@ -117,3 +117,22 @@ describe('makerOwed and the fee split — as the Order computes them', () => {
     expect(tradeFeeSplit(99n, 100n, 70n)).toEqual({ fee: 0n, caravelCut: 0n, burnCut: 0n })
   })
 })
+
+// Ootle 0.47 serves the value at `state.up.substate`, with `version` and `verified` where they were.
+// On that shape every read here threw "is not a component", so the Board and every order were gone.
+describe('the Board and an order on a 0.47 indexer', () => {
+  const as047 = <T extends { substate: unknown }>({ substate, ...rest }: T) => ({ ...rest, state: { up: { substate } } })
+
+  it('parseBoard reads the same Board from `state.up.substate`', () => {
+    expect(parseBoard(as047(BOARD_BODY))).toEqual(parseBoard(BOARD_BODY))
+  })
+
+  it('parseOrder reads the same order, cancel key included', () => {
+    const id = 'component_' + '11'.repeat(32)
+    expect(parseOrder(id, as047(orderBody()))).toEqual(parseOrder(id, orderBody()))
+  })
+
+  it('a look-alike is refused in the new shape too', () => {
+    expect(() => parseOrder('component_x', as047(orderBody({ template: 'ff'.repeat(32) })))).toThrow(/not a Caravel Trade order/)
+  })
+})

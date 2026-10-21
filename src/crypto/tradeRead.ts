@@ -17,6 +17,7 @@
 import { CUSD_ASSET } from './assets'
 import { verifiedRead, type VerifiedReader } from './cusdScan'
 import { decodeStatement, payoutCommitment, StatementCborError } from './statementCbor'
+import { substateValueOf } from './substateShape'
 import { fetchWithRetry } from './indexerRetry'
 import { INDEXER_URLS, POINT_READ_TIMEOUT_MS, pointRead } from './indexerConfig'
 import { TARI_RESOURCE_ADDRESS } from '@tari-project/ootle'
@@ -59,8 +60,9 @@ export function amountOf(v: unknown, what: string): bigint {
 interface ComponentBody { version: number; template: string; header: unknown; state: unknown[] }
 
 function component(body: unknown, what: string): ComponentBody {
-  const b = body as { version?: unknown; substate?: { Component?: { header?: { template_address?: unknown }; body?: { state?: unknown } } } }
-  const c = b?.substate?.Component
+  const b = (body ?? {}) as { version?: unknown }
+  // Either indexer shape (crypto/substateShape): 0.47 serves the value at `state.up.substate`.
+  const c = (substateValueOf(body) as { Component?: { header?: { template_address?: unknown }; body?: { state?: unknown } } } | undefined)?.Component
   const state = c?.body?.state
   if (!c || !Array.isArray(state) || typeof b.version !== 'number' || typeof c.header?.template_address !== 'string') {
     throw new TradeReadError(`${what} is not a component`)

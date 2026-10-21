@@ -42,7 +42,7 @@
 
 import {
   Mask, Network, StealthInput, StealthTransferStatement, TARI_RESOURCE_ADDRESS, TransactionBuilder, WasmStealthCrypto,
-  amountLiteral, bytesLiteral, componentAddressLiteral, createOutput, decryptOwnedUtxo, generateSealKeypair,
+  amountLiteral, bytesLiteral, componentAddressLiteral, createOutput, generateSealKeypair,
   publicKeyLiteral, resourceAddressLiteral, sealTransaction, serializeUnsignedTx, signBalanceProof, signTransaction,
   stealthTransferInstruction,
 } from '@tari-project/ootle'
@@ -58,6 +58,7 @@ import { compareToShownFee, dryRunFee, mainIntentBudget, priceAtBudget, simulate
 import { awaitFinality } from './finality'
 import { INDEXER_URL, INDEXER_URLS } from './indexerConfig'
 import { RETRYING_MESSAGE } from './indexerRetry'
+import { openOwnedUtxo } from './openUtxo'
 import { readOutputSubstateIds } from './outputIds'
 import { readFinalizedVerdict } from './txResult'
 import { PUBLIC_SEND_FEE_RESERVE } from './publicSend'
@@ -65,6 +66,7 @@ import { confirmer } from './quote'
 import { markLocked, settleLocks } from './spentOutputs'
 import { encodeStatement } from './statementCbor'
 import { StaticSigner, type OwnedUtxo } from './stealthUtxos'
+import { substateValueOf } from './substateShape'
 import { inputsStillUnspent, submitOnce, versionsUnchanged, type LandedCheck } from './submitGuard'
 import { holdCusdCoins, releaseCusdCoins, scanTradeCoins, selectLiveCoins } from './tradeCoins'
 import {
@@ -184,8 +186,9 @@ async function decodeOwn(t: Trader, resource: string, outs: unknown, index: numb
   const nonce = raw.output.public_nonce ?? raw.output.sender_public_nonce
   const o = { ...raw, output: { ...raw.output, public_nonce: nonce } }
   const id = `utxo_${resource.replace(/^resource_/, '')}_${o.output.commitment}`
-  const wrapped = { version: 0, verified: false, substate: { Utxo: { output: o, is_frozen: false } } } as unknown as Parameters<typeof decryptOwnedUtxo>[2]
-  const d = await decryptOwnedUtxo(crypto(), await t.wallet.getViewSecret(), wrapped, id)
+  // The same wrapper every scanner uses (crypto/openUtxo): a body it cannot parse throws, rather than
+  // reading our own change as somebody else's.
+  const d = await openOwnedUtxo(crypto(), await t.wallet.getViewSecret(), id, { output: o, is_frozen: false })
   if (!d || !o.auth?.Key || !nonce) throw new Error('Could not decode this wallet\'s own change output.')
   return { substateId: id, commitment: hexToBytes(o.output.commitment), nonce: hexToBytes(nonce), value: d.value, mask: d.mask, spendKey: hexToBytes(o.auth.Key) }
 }
@@ -213,8 +216,8 @@ async function accountVaults(account: string): Promise<{ vault: string; resource
   for (const vault of accountVaultIds(r.body) ?? []) {
     const v = await verifiedRead(`/substates/${vault}`)
     if (v.kind !== 'verified') throw new TradeReadError('Could not read an account vault verified — try again in a moment.')
-    const container = (v.body as { substate?: { Vault?: { resource_container?: Record<string, { address?: unknown }> } } })
-      ?.substate?.Vault?.resource_container
+    const container = (substateValueOf(v.body) as { Vault?: { resource_container?: Record<string, { address?: unknown }> } } | undefined)
+      ?.Vault?.resource_container
     const body = container ? Object.values(container)[0] : undefined
     const res = typeof body?.address === 'string' ? body.address : ''
     out.push({ vault, resource: res.startsWith('resource_') ? res : `resource_${res}` })

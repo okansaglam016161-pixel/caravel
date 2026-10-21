@@ -2,9 +2,9 @@
 // What is pinned here is the POLICY: count only verified-live outputs, never a figure that might be
 // short, recover our own outputs by id, and sum public from account vaults.
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
-  scanCusdPrivate, readCusdPublic, accountVaultIds, cusdTotal, addCusdOutput,
+  scanCusdPrivate, readCusdPublic, accountVaultIds, cusdTotal, addCusdOutput, verifiedRead,
   type VerifiedRead, type CusdBalances,
 } from './cusdScan'
 import { CUSD_ASSET } from './assets'
@@ -221,5 +221,53 @@ describe('addCusdOutput — a claim counted the moment it commits', () => {
   })
   it('never counts the same output twice', () => {
     expect(addCusdOutput(base, 'a', 5n)).toBe(base)
+  })
+})
+
+// Ootle 0.47 serves the value at `state.up.substate`. On that shape public cUSD read "unknown — the
+// account was not in the expected shape" and every private output went to `gone`.
+describe('cUSD reads on a 0.47 indexer', () => {
+  const up = (substate: unknown) => ({ version: 0, state: { up: { substate } }, verified: true })
+  const vault = 'vault_' + 'c'.repeat(64)
+
+  it('accountVaultIds reads the account from `state.up.substate`', () => {
+    expect(accountVaultIds(up({ Component: { body: { state: [vault] } } }))).toEqual([vault])
+  })
+
+  it('readCusdPublic sums the 0.47 vaults: the test wallet’s 8.4 cUSD', async () => {
+    const read = async (path: string): Promise<VerifiedRead> => path.endsWith('component_acct')
+      ? { kind: 'verified', body: up({ Component: { body: { state: [vault] } } }) }
+      : { kind: 'verified', body: up({ Vault: { resource_container: { Stealth: { address: CUSD_ASSET.resource, revealed_amount: '8400000', locked_amount: '0' } } } }) }
+    expect(await readCusdPublic('component_acct', read)).toEqual({ kind: 'ok', units: 8_400_000n })
+  })
+
+  it('scanCusdPrivate counts an output whose verified read is in the 0.47 shape', async () => {
+    const read = async (): Promise<VerifiedRead> => ({ kind: 'verified', body: up({ Utxo: { output: { commitment: 'x' }, is_frozen: false } }) })
+    const scan = await scanCusdPrivate({
+      open: openerFrom({ [idOf(C(1))]: 5_000_000n }),
+      listRows: async () => ({ rows: [[C(1), liveBody()]], incomplete: false }),
+      read, knownIds: [], spentIds: new Set(),
+    })
+    expect(scan).toMatchObject({ units: 5_000_000n, incomplete: false, gone: [] })
+  })
+})
+
+describe('verifiedRead — one node at a time, in either shape', () => {
+  const ok = (body: unknown) => new Response(JSON.stringify(body), { status: 200 })
+
+  it('a verified 0.47 body comes back with `substate` lifted out', async () => {
+    const value = { Vault: {} }
+    vi.stubGlobal('fetch', vi.fn(async () => ok({ version: 0, state: { up: { substate: value } }, verified: true })))
+    const r = await verifiedRead('/substates/vault_x')
+    vi.unstubAllGlobals()
+    expect(r.kind).toBe('verified')
+    expect((r as { body: { substate: unknown } }).body.substate).toEqual(value)
+  })
+
+  it('a 0.47 down on every node is absent, the same as a 404 everywhere', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ok({ version: 2, state: { down: {} }, verified: true })))
+    const r = await verifiedRead('/substates/utxo_x')
+    vi.unstubAllGlobals()
+    expect(r).toEqual({ kind: 'absent' })
   })
 })

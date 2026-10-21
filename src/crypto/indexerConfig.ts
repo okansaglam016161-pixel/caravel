@@ -28,6 +28,7 @@
 // returns. See utxoFeed for how far the union gets, and the note there about what is left.
 
 import { fetchWithRetry } from './indexerRetry'
+import { upgradeSubstateBody } from './substateShape'
 
 /** The public Esmeralda indexers, in preference order. The first is also the primary (below). */
 export const DEFAULT_INDEXER_URLS = [
@@ -108,6 +109,9 @@ export interface PointRead {
   source: string | null
 }
 
+/** `/substates/<id>`: one substate's read, not `/substates/fetch` or any other route. */
+const isSubstatePath = (path: string) => /^\/substates\/[^/?]+(\?.*)?$/.test(path) && !path.startsWith('/substates/fetch')
+
 /**
  * One read, tried against each indexer until one gives a definite answer.
  *
@@ -145,9 +149,21 @@ export async function pointRead(path: string): Promise<PointRead> {
       continue
     }
     if (!res.ok) continue   // 5xx and friends say nothing about the resource
+    let body: unknown
     try {
-      return { body: await res.json() as unknown, answered: true, source: base }
+      body = await res.json() as unknown
     } catch { continue }    // a 200 we could not parse is not an answer either
+    // A substate body in either indexer shape (crypto/substateShape). A 0.47 `down` is this node's
+    // 404 under another name, and is believed exactly as far as one: not until every node agrees.
+    if (isSubstatePath(path)) {
+      body = upgradeSubstateBody(body)
+      if (body === null) {
+        sawNotFound = true
+        notFoundSource ??= base
+        continue
+      }
+    }
+    return { body, answered: true, source: base }
   }
 
   // Every node that spoke said 404. That is a real absence.

@@ -21,6 +21,14 @@ vi.mock('@tari-project/ootle', () => ({
   TARI_RESOURCE_ADDRESS: 'resource_0101',
   Network: { Esmeralda: 38 },
   WasmStealthCrypto: class { constructor(_n?: number) { /* stateless fake */ } },
+  // SDK 0.11's structural parse, by its rule: ONLY the 0.47 shape (`state.up.substate.Utxo`) with a
+  // live output parses. A wrapper still building the 0.46 shape fails here, as it does for real, and
+  // the scan must throw rather than call every coin a stranger's (crypto/openUtxo).
+  parseSubstateUtxo: vi.fn((res: { state?: { up?: { substate?: { Utxo?: { output?: { output?: unknown } | null } } } } }) => {
+    const utxo = res.state?.up?.substate?.Utxo
+    if (res.state === undefined) throw new TypeError("Cannot use 'in' operator to search for 'up' in undefined")
+    return utxo?.output ? { commitment: new Uint8Array(32), body: utxo.output.output } : null
+  }),
   // Ours iff the commitment is in OWNED, mirroring a trial decrypt that succeeds or returns null.
   decryptOwnedUtxo: vi.fn(async (_c: unknown, _v: Uint8Array, _s: unknown, substateId: string) => {
     const value = OWNED[substateId]

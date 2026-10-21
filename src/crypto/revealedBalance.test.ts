@@ -326,3 +326,42 @@ describe('public-balance formatting', () => {
     expect(fmtExact(2_000_000n)).toBe('2.00')
   })
 })
+
+// ── Ootle 0.47: the read that showed a funded account as 0 ───────────────────
+//
+// A 0.47 indexer serves `{ state: { up: { substate } } }`. The SDK 0.9 vault walker then found no
+// vaults and the vault read found no value, so the wallet showed a confident 0 public. This runs
+// the DEFAULT resolver (crypto/substateShape.getAccountVaultIds) end to end on that shape, with the
+// test wallet's real figure.
+describe('readRevealedBalance — a 0.47 indexer', () => {
+  const VAULT_HEX = VAULT.slice('vault_'.length)
+  const account = {
+    Component: {
+      header: { template_address: '0'.repeat(64) },
+      body: {
+        state: [{
+          '@cbor': 'map',
+          entries: [[
+            { '@cbor': 'tag', tag: 131, value: { '@cbor': 'bytes', hex: '01'.repeat(32) } },
+            { '@cbor': 'tag', tag: 132, value: { '@cbor': 'bytes', hex: VAULT_HEX } },
+          ]],
+        }, {}],
+      },
+    },
+  }
+  const provider047 = (substates: Record<string, unknown>) => ({
+    getSubstate: vi.fn(async (id: string) => {
+      if (!(id in substates)) throw new Error(`substate not found: ${id}`)
+      return { version: 4, state: { up: { substate: substates[id] } }, verified: true }
+    }),
+  }) as never
+
+  it('reads the real public balance through the default resolver', async () => {
+    const p = provider047({ [ACCOUNT]: account, [VAULT]: stealthVault('995540589') })
+    expect(await readRevealedBalance(p, ACCOUNT)).toBe(995_540_589n)
+  })
+
+  it('a never-created account is still the zero it is', async () => {
+    expect(await readRevealedBalance(provider047({}), ACCOUNT)).toBe(0n)
+  })
+})

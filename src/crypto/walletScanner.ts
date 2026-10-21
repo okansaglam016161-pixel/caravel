@@ -1,5 +1,5 @@
-import { decryptOwnedUtxo, WasmStealthCrypto, Network } from '@tari-project/ootle'
-import type { IndexerGetSubstateResponse } from '@tari-project/ootle'
+import { WasmStealthCrypto, Network } from '@tari-project/ootle'
+import { openOwnedUtxo } from './openUtxo'
 import { RESOURCE_HEX } from './utxoFeed'
 import { fetchOwnedRows, type Recovery } from './ownedFeed'
 import type { ReceiveScanReport } from './receiveScan'
@@ -141,28 +141,19 @@ export async function scanWallet(
     if (signal.aborted) break
 
     const substateId = `utxo_${RESOURCE_HEX}_${commitmentHex}`
-    // Wrap the raw API body as IndexerGetSubstateResponse — same shape decryptOwnedUtxo expects
-    const fakeSubstate = {
-      version: 0,
-      substate: { Utxo: body },
-      verified: false,
-    } as IndexerGetSubstateResponse
-
-    try {
-      const decrypted = await decryptOwnedUtxo(stealthCrypto, viewSecret, fakeSubstate, substateId)
-      if (decrypted !== null) {
-        // OURS, BUT ALREADY SPENT. Recorded as still-listed so reconciliation can see the indexer
-        // has not caught up yet, then dropped — it is not part of the balance and it is not an
-        // input anything may select.
-        if (excluded.has(substateId)) {
-          excludedPresent.push({ id: substateId, microtari: decrypted.value })
-        } else {
-          const { payRef, message } = decodeMemo(decrypted.memo)
-          found.push({ id: substateId, commitment: commitmentHex, amount: decrypted.value, payRef, message })
-        }
+    // null is "not ours" (or not a coin). A row the SDK cannot parse THROWS, and so does this scan:
+    // an unreadable balance is "unavailable", never a confident 0. See crypto/openUtxo.
+    const decrypted = await openOwnedUtxo(stealthCrypto, viewSecret, substateId, body)
+    if (decrypted !== null) {
+      // OURS, BUT ALREADY SPENT. Recorded as still-listed so reconciliation can see the indexer
+      // has not caught up yet, then dropped — it is not part of the balance and it is not an
+      // input anything may select.
+      if (excluded.has(substateId)) {
+        excludedPresent.push({ id: substateId, microtari: decrypted.value })
+      } else {
+        const { payRef, message } = decodeMemo(decrypted.memo)
+        found.push({ id: substateId, commitment: commitmentHex, amount: decrypted.value, payRef, message })
       }
-    } catch {
-      // Trial-decrypt failures are expected (not our UTXO) — skip silently
     }
 
     totalScanned++

@@ -8,6 +8,7 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { setStoreKey } from './sessionKey'
+import { retryTiming } from './indexerRetry'
 import {
   __resetSpentSessionForTests, loadExcludedIds, loadSpentOutputs, markLocked, promoteToSpent,
   resolveLockAction, settleLocks,
@@ -280,5 +281,58 @@ describe('settleLocks — the rule every submit path applies once its transactio
     expect(settleLocks(ADDR, TX, 'Reject', FEE_ONLY)).toBe('settle')
     expect(loadSpentOutputs(ADDR).records[A]!.status).toBe('spent')
     expect(loadExcludedIds(ADDR)).toEqual(new Set([A]))
+  })
+})
+
+// ── The real probe, against the indexer's real answers ───────────────────────
+//
+// The failure this pins: on Ootle 0.47 `GET /substates/<id>` nests the value under `state.up`, the
+// probe found no `substate`, called every live coin `gone`, and the sweep promoted it to `spent`,
+// a permanent exclusion of money that was never spent. These run the DEFAULT probe through the real
+// pointRead, so a shape change has to get past the same code the wallet runs.
+describe('the default coin probe (Ootle 0.47 shape)', () => {
+  const RES = '01'.repeat(32)
+  const LIVE = `utxo_${RES}_${'ab'.repeat(32)}`
+  const LIVE2 = `utxo_${RES}_${'cd'.repeat(32)}`
+  const AGED = STALE_LOCK_MS + 1
+  const pruned = async () => null
+  const liveUtxo = { Utxo: { output: { output: { public_nonce: 'aa', encrypted_data: 'bb' } }, is_frozen: false } }
+
+  function indexer(respond: (path: string) => Response) {
+    return vi.fn(async (url: string | URL) => respond(new URL(String(url)).pathname))
+  }
+  const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200 })
+  const notFound = () => new Response('{"error":"not found"}', { status: 404 })
+
+  beforeEach(() => { vi.unstubAllGlobals(); retryTiming.sleep = async () => {} })
+
+  it('a LIVE coin in the 0.47 shape is released, never promoted to spent', async () => {
+    vi.stubGlobal('fetch', indexer(() => json({ version: 0, state: { up: { substate: liveUtxo } }, verified: true })))
+    markLocked(ADDR, [LIVE, LIVE2], TX, 0)
+    const r = await sweepLocks(ADDR, { fetchResult: pruned, now: AGED })
+    expect(r.steps[0]).toMatchObject({ action: 'release', via: 'substate' })
+    expect(loadExcludedIds(ADDR).size).toBe(0)
+  })
+
+  it('the same coin in the 0.46 shape is released too', async () => {
+    vi.stubGlobal('fetch', indexer(() => json({ version: 0, substate: liveUtxo, verified: true })))
+    markLocked(ADDR, [LIVE], TX, 0)
+    expect((await sweepLocks(ADDR, { fetchResult: pruned, now: AGED })).steps[0]!.action).toBe('release')
+  })
+
+  it('a 404 on every node, or a 0.47 down, is gone, and promotes', async () => {
+    vi.stubGlobal('fetch', indexer(p => (p.endsWith(LIVE) ? notFound() : json({ version: 1, state: { down: {} }, verified: true }))))
+    markLocked(ADDR, [LIVE, LIVE2], TX, 0)
+    const r = await sweepLocks(ADDR, { fetchResult: pruned, now: AGED })
+    expect(r.steps[0]!.action).toBe('promote')
+    expect(loadSpentOutputs(ADDR).records[LIVE]!.status).toBe('spent')
+  })
+
+  it('a body it cannot read is NOT evidence: the lock is kept, the coin is not condemned', async () => {
+    vi.stubGlobal('fetch', indexer(() => json({ version: 0, something: { new: true }, verified: true })))
+    markLocked(ADDR, [LIVE], TX, 0)
+    const r = await sweepLocks(ADDR, { fetchResult: pruned, now: AGED })
+    expect(r.steps[0]!.action).toBe('keep')
+    expect(loadSpentOutputs(ADDR).records[LIVE]!.status).toBe('locked')
   })
 })

@@ -42,6 +42,7 @@ import {
 } from './faucetConfig'
 import { pointRead, type PointRead } from './indexerConfig'
 import { decodeRevealedAmount } from './revealedBalance'
+import { substateValueOf } from './substateShape'
 import { TARI_RESOURCE_ADDRESS } from '@tari-project/ootle'
 
 export type FaucetStatus =
@@ -76,7 +77,8 @@ function readAmount(v: unknown): bigint | null {
 }
 
 /**
- * Decode the faucet component substate as `GET /substates/<component>` returns it.
+ * Decode the faucet component substate as `GET /substates/<component>` returns it, in either
+ * indexer shape (crypto/substateShape).
  *
  * The component's state is a CBOR array in field order —
  * `[vault, claim_amount, paused, receipts, admin_account]` — and the indexer serves it as JSON with
@@ -87,7 +89,7 @@ function readAmount(v: unknown): bigint | null {
  * Returns null for anything that is not that shape.
  */
 export function decodeFaucetState(body: unknown): FaucetState | null {
-  const component = obj(obj(obj(body)?.substate)?.Component)
+  const component = obj(obj(substateValueOf(body))?.Component)
   if (!component) return null
   if (obj(component.header)?.template_address !== FAUCET_TEMPLATE_ADDRESS) return null
   const state = obj(component.body)?.state
@@ -101,7 +103,7 @@ export function decodeFaucetState(body: unknown): FaucetState | null {
 
 /** The faucet vault's revealed TARI, from `GET /substates/<vault>`. Null if it is not that shape. */
 export function decodeFaucetVault(body: unknown): bigint | null {
-  return decodeRevealedAmount(obj(body)?.substate, TARI_RESOURCE_ADDRESS)
+  return decodeRevealedAmount(substateValueOf(body), TARI_RESOURCE_ADDRESS)
 }
 
 /**

@@ -2,7 +2,8 @@
 //   no daemon, no credentials, no fee. Resolution is permissionless and runs in the browser or Node.
 //
 //   The registry component stores one field, `registry: HashMap<String, NameRecord>`, which the
-//   indexer returns as plain JSON at `substate.Component.body.state[0]`:
+//   indexer returns as plain JSON at `state.up.substate.Component.body.state[0]` (Ootle 0.47; up to
+//   0.46 the value sat at `substate.Component.body.state[0]`, and both are read):
 //       { "okz": [ { "@cbor":"bytes", "hex":"c00a…" }, { "nostr":"npub1…" } ] }
 //   i.e. name → [ owner (cbor bytes), records (string→string) ]. No CBOR decoding needed.
 import { IndexerBusyError, fetchWithRetry } from "./retry.js";
@@ -40,7 +41,10 @@ export class OnsReader {
         if (!resp.ok)
             throw new Error(`ONS indexer HTTP ${resp.status}`);
         const body = (await resp.json());
-        const state = body?.substate?.Component?.body?.state;
+        if (body?.state?.down !== undefined) {
+            throw new Error(`ONS registry component not found: ${this.component} (the indexer says it is down)`);
+        }
+        const state = (body?.state?.up?.substate ?? body?.substate)?.Component?.body?.state;
         if (!Array.isArray(state) || state.length === 0 || typeof state[0] !== "object" || state[0] === null) {
             throw new Error("ONS: unexpected component state shape from indexer");
         }

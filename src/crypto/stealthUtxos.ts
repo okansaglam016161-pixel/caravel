@@ -20,7 +20,8 @@
 // is skipped silently — that is the overwhelming majority of the set and not an error. What IS
 // surfaced is a truncated listing: see the FETCH_LIMIT note below.
 
-import { decryptOwnedUtxo, WasmStealthCrypto, type Mask, type Signer } from '@tari-project/ootle'
+import { WasmStealthCrypto, type Mask, type Signer } from '@tari-project/ootle'
+import { openOwnedUtxo } from './openUtxo'
 import { RESOURCE_HEX } from './utxoFeed'
 import { fetchOwnedRows } from './ownedFeed'
 
@@ -98,13 +99,9 @@ export async function scanOwnedUtxos(
     // a transaction the chain can only reject with "Input substate utxo_... is down", after taking
     // its fee. See crypto/spentOutputs.
     if (excluded.has(substateId)) continue
-    const fakeResponse = { version: 0, verified: false, substate: { Utxo: utxoBody } }
-    const decrypted = await decryptOwnedUtxo(
-      crypto,
-      viewSecret,
-      fakeResponse as Parameters<typeof decryptOwnedUtxo>[2],
-      substateId,
-    )
+    // Unreadable throws (crypto/openUtxo): selection on a set it cannot read is refused, not run
+    // on the coins that happened to parse.
+    const decrypted = await openOwnedUtxo(crypto, viewSecret, substateId, utxoBody)
     if (decrypted !== null) {
       const outer = (utxoBody as { output?: { output?: { public_nonce?: string }; auth?: { Key?: string } } })?.output
       const output = outer?.output

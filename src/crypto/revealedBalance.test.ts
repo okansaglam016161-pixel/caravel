@@ -365,3 +365,42 @@ describe('readRevealedBalance — a 0.47 indexer', () => {
     expect(await readRevealedBalance(provider047({}), ACCOUNT)).toBe(0n)
   })
 })
+
+// ── An unreadable TARI vault is "unavailable", never a confident 0 ──────────
+//
+// Found by the 0.47 end-to-end run: a vault the account names, served in a shape nothing here
+// decodes, was skipped exactly like another resource's vault, and the wallet showed 0 public. A
+// thrown read is what the UI turns into "Your public balance is unavailable right now"
+// (WalletContext.startRevealedRead), so every reading that is not "another resource" must throw.
+describe('readRevealedBalance — an undecodable vault is unavailable, not 0', () => {
+  const tariVault = (container: unknown) => ({ Vault: { resource_container: container, freeze_flags: 0 } })
+
+  it('throws for a vault body in a shape nothing reads (no `Vault` at all)', async () => {
+    const p = providerWith({ [VAULT]: { Sideways: { amount: '5' } } })
+    await expect(readRevealedBalance(p, ACCOUNT, resolver([VAULT]))).rejects.toThrow(/could not read/i)
+  })
+
+  it('throws for a TARI Stealth vault whose amount does not parse', async () => {
+    const p = providerWith({ [VAULT]: stealthVault('12.5') })
+    await expect(readRevealedBalance(p, ACCOUNT, resolver([VAULT]))).rejects.toThrow(/could not read/i)
+  })
+
+  it('throws for a TARI vault in a container that is not Stealth', async () => {
+    const p = providerWith({ [VAULT]: tariVault({ Confidential: { address: TARI_RESOURCE_ADDRESS, revealed_amount: '5' } }) })
+    await expect(readRevealedBalance(p, ACCOUNT, resolver([VAULT]))).rejects.toThrow(/could not read/i)
+  })
+
+  it('throws for a vault whose resource cannot be told', async () => {
+    const p = providerWith({ [VAULT]: tariVault({ Stealth: { revealed_amount: '5' } }) })
+    await expect(readRevealedBalance(p, ACCOUNT, resolver([VAULT]))).rejects.toThrow(/could not read/i)
+  })
+
+  it('still SKIPS a vault that is genuinely of another resource, in any container', async () => {
+    const other = 'vault_' + '3'.repeat(64)
+    const p = providerWith({
+      [VAULT]: stealthVault('7'),
+      [other]: tariVault({ Fungible: { address: OTHER_RESOURCE, amount: '500' } }),
+    })
+    await expect(readRevealedBalance(p, ACCOUNT, resolver([VAULT, other]))).resolves.toBe(7n)
+  })
+})

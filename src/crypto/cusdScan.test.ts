@@ -271,3 +271,25 @@ describe('verifiedRead — one node at a time, in either shape', () => {
     expect(r).toEqual({ kind: 'absent' })
   })
 })
+
+// The same rule as the public TARI read (revealedBalance.vaultHolding): an account vault that cannot
+// be read makes public cUSD unknown, never a figure short by that vault; the account's TARI vault is
+// another resource and is skipped.
+describe('readCusdPublic — an unreadable vault is unknown, not a short figure', () => {
+  const cusdVault = 'vault_' + 'c'.repeat(64), tariVault = 'vault_' + 'd'.repeat(64)
+  const reader = (cusdBody: unknown) => async (path: string): Promise<VerifiedRead> => {
+    if (path.endsWith('component_acct')) return { kind: 'verified', body: { substate: { Component: { body: { state: [cusdVault, tariVault] } } } } }
+    if (path.endsWith(tariVault)) return { kind: 'verified', body: { substate: { Vault: { resource_container: { Stealth: { address: 'resource_' + '01'.repeat(32), revealed_amount: '995540589', locked_amount: '0' } } } } } }
+    return { kind: 'verified', body: cusdBody }
+  }
+
+  it('skips the TARI vault and counts the cUSD one', async () => {
+    const r = reader({ substate: { Vault: { resource_container: { Stealth: { address: CUSD_ASSET.resource, revealed_amount: '8400000', locked_amount: '0' } } } } })
+    expect(await readCusdPublic('component_acct', r)).toEqual({ kind: 'ok', units: 8_400_000n })
+  })
+
+  it('is unknown when a vault body cannot be read', async () => {
+    expect((await readCusdPublic('component_acct', reader({ substate: { Sideways: {} } }))).kind).toBe('unknown')
+    expect((await readCusdPublic('component_acct', reader({ substate: { Vault: { resource_container: { Stealth: { address: CUSD_ASSET.resource, revealed_amount: 'x' } } } } }))).kind).toBe('unknown')
+  })
+})

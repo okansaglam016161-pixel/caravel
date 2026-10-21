@@ -98,8 +98,8 @@ function obj(v: unknown): Record<string, unknown> | null {
  *     category error, and TARI is never Fungible.
  *   - `Confidential` DOES carry a `revealed_amount`, and it would be tempting to read it. It is
  *     still refused: encountering one here would mean the resource is not what we think it is, and
- *     a wrong assumption about the container is exactly the kind of thing that should surface as a
- *     visible zero rather than a plausible number.
+ *     a wrong assumption about the container is exactly the kind of thing that should surface
+ *     rather than read as a plausible number (in a balance sum, as "unavailable": see vaultHolding).
  *   - `NonFungible` has no amount at all.
  *
  * Returns `null` — not 0n — for "this is not our vault / not a shape we read", so the caller can
@@ -117,6 +117,36 @@ export function decodeRevealedAmount(substate: unknown, resourceAddress: string)
   return parseAmount(stealth.revealed_amount)
 }
 
+/**
+ * What one vault an account names says about `resourceAddress`, with "skip it" kept apart from "we
+ * cannot read it".
+ *
+ * decodeRevealedAmount answers null for both, which is right for a caller probing one known vault
+ * and wrong for a sum: there, an unreadable vault of OUR resource skipped like another resource's
+ * became a confident 0 (the Ootle 0.47 end-to-end run found exactly that). So:
+ *
+ *   other       the vault is genuinely of another resource: its container, in any variant, names a
+ *               different address. Skipping it is correct.
+ *   amount      our resource, Stealth, and the revealed amount parses.
+ *   unreadable  anything else: no `Vault`, no container, no address to tell the resource by, our
+ *               resource in a container we do not read, or an amount that does not parse.
+ */
+export type VaultHolding =
+  | { kind: 'other' }
+  | { kind: 'amount'; amount: bigint }
+  | { kind: 'unreadable'; reason: string }
+
+export function vaultHolding(substate: unknown, resourceAddress: string): VaultHolding {
+  const container = obj(obj(obj(substate)?.Vault)?.resource_container)
+  if (!container) return { kind: 'unreadable', reason: 'not a vault' }
+  const variants = Object.values(container).map(obj)
+  const address = variants.length === 1 ? variants[0]?.address : undefined
+  if (typeof address !== 'string') return { kind: 'unreadable', reason: 'its resource cannot be told' }
+  if (address !== resourceAddress) return { kind: 'other' }
+  const amount = decodeRevealedAmount(substate, resourceAddress)
+  return amount === null ? { kind: 'unreadable', reason: 'its amount could not be decoded' } : { kind: 'amount', amount }
+}
+
 // Re-exported so this module's long-standing import surface is unchanged; it is DEFINED in
 // substates.ts, beside the existence rules that now share it.
 export type { VaultIdResolver }
@@ -131,8 +161,9 @@ export type { VaultIdResolver }
  *   - the TARI vault exists and holds zero: the ordinary state after a faucet claim, which converts
  *     its entire payout and leaves the vault at exactly zero.
  *
- * THROWS on a network or indexer failure, deliberately. A thrown error becomes "unavailable" in the
- * UI; a swallowed one would become a confident, wrong "0 public". The single exception is an account
+ * THROWS on a network or indexer failure, and on a vault the account names that cannot be read (see
+ * vaultHolding), deliberately. A thrown error becomes "unavailable" in the UI; a swallowed one would
+ * become a confident, wrong "0 public". The single exception is an account
  * component that does not exist — see the vault-id read below, and isSubstateNotFound.
  *
  * Amounts across vaults are SUMMED. The engine keys an account's state by resource, so exactly one
@@ -177,8 +208,11 @@ export async function readRevealedBalance(
   for (const vaultId of vaultIds) {
     // A busy indexer is asked again (reads are safe to retry); every other failure throws as before.
     const res = await withBusyRetry(() => provider.getSubstate(vaultId), { attempts: SDK_READ_ATTEMPTS })
-    const amount = decodeRevealedAmount(substateValueOf(res) as SubstateValue | undefined, resourceAddress)
-    if (amount !== null) total += amount
+    // Only a vault genuinely of another resource is skipped. One that cannot be read throws, so
+    // the UI says "unavailable" rather than counting it as nothing.
+    const holding = vaultHolding(substateValueOf(res) as SubstateValue | undefined, resourceAddress)
+    if (holding.kind === 'unreadable') throw new Error(`Could not read ${vaultId}: ${holding.reason}`)
+    if (holding.kind === 'amount') total += holding.amount
   }
   return total
 }

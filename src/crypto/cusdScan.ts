@@ -37,7 +37,7 @@ import { loadAccountAddress } from './accountStore'
 import { knownCusdIds, spentCusdIds } from './tradeStore'
 import { INDEXER_URLS, POINT_READ_TIMEOUT_MS, pointRead } from './indexerConfig'
 import { fetchWithRetry } from './indexerRetry'
-import { decodeRevealedAmount } from './revealedBalance'
+import { vaultHolding } from './revealedBalance'
 import { fetchAllUtxoRows, type UtxoRow } from './utxoFeed'
 
 // ── Verified point reads ─────────────────────────────────────────────────────
@@ -263,8 +263,11 @@ export async function readCusdPublic(accountAddress: string | null, read: Verifi
     const v = await read(`/substates/${vault}`)
     // The account itself names this vault, so it must exist: anything but a verified body is unknown.
     if (v.kind !== 'verified') return { kind: 'unknown', reason: `could not verify ${vault}` }
-    const amount = decodeRevealedAmount(substateValueOf(v.body), CUSD_ASSET.resource)
-    if (amount !== null) units += amount
+    // Only a vault of another resource (the account's TARI vault) is skipped; one that cannot be
+    // read makes the figure unknown, never a cUSD balance short by that vault (revealedBalance.vaultHolding).
+    const holding = vaultHolding(substateValueOf(v.body), CUSD_ASSET.resource)
+    if (holding.kind === 'unreadable') return { kind: 'unknown', reason: `could not read ${vault}: ${holding.reason}` }
+    if (holding.kind === 'amount') units += holding.amount
   }
   return { kind: 'ok', units }
 }

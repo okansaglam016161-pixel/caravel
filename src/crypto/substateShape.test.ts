@@ -49,9 +49,9 @@ describe('upgradeSubstateBody', () => {
     expect(upgradeSubstateBody(down047)).toBeNull()
   })
 
-  it('passes a 0.46 body through untouched', () => {
+  it('gives a 0.46 body the 0.47 field too, which is all SDK 0.11 parses', () => {
     const body = v046(vaultValue)
-    expect(upgradeSubstateBody(body)).toBe(body)
+    expect(upgradeSubstateBody(body)).toEqual({ ...body, state: { up: { substate: vaultValue } } })
   })
 
   it('leaves anything that is not a substate body alone', () => {

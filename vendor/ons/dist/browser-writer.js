@@ -110,7 +110,9 @@ async function scanUtxos(indexerUrl, crypto, viewSecret) {
             continue;
         seen.add(commitmentHex);
         const substateId = `utxo_${RESOURCE_HEX}_${commitmentHex}`;
-        const fakeResponse = { version: 0, verified: false, substate: { Utxo: utxoBody } };
+        // Both indexer shapes: `state.up.substate` for SDK 0.10+ (Ootle 0.47), `substate` for 0.9.
+        // CARAVEL LOCAL PATCH (hotfix-0.47): see VENDOR_INFO.
+        const fakeResponse = { version: 0, verified: false, state: { up: { substate: { Utxo: utxoBody } } }, substate: { Utxo: utxoBody } };
         const decrypted = await decryptOwnedUtxo(crypto, viewSecret, fakeResponse, substateId);
         if (decrypted !== null) {
             const output = utxoBody?.output?.output;

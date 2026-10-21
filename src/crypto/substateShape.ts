@@ -16,10 +16,12 @@
 //
 // ── WHY BOTH SHAPES, AND WHY THE OLD FIELD IS KEPT ───────────────────────────
 //
-// SDK 0.9 (what this wallet runs) still parses the OLD shape inside `parseSubstateUtxo`,
-// `decryptOwnedUtxo` and `getVaultIdsForAccount`; SDK 0.10+ parses only the NEW one. An upgraded
-// body carries BOTH fields, so it is correct for either SDK and the SDK bump cannot quietly break
-// this again. An old-shape body (a test fixture, or a node not yet on 0.47) passes through as it is.
+// SDK 0.9 parsed only the OLD shape inside `parseSubstateUtxo`, `decryptOwnedUtxo` and
+// `getVaultIdsForAccount`; SDK 0.10+ (what this wallet runs since the 0.47 bump) parses only the NEW
+// one. An upgraded body carries BOTH fields, so every reader here and either SDK reads it the same
+// way. An old-shape body (a test fixture, or a node not yet on 0.47) gains the new field the same way.
+//
+// Bodies that are NOT responses (a `/utxos` row) are wrapped for the SDK by crypto/openUtxo.
 //
 // ── `down` IS AN ABSENCE ─────────────────────────────────────────────────────
 //
@@ -39,12 +41,15 @@ function obj(v: unknown): Record<string, unknown> | null {
  *
  * - 0.47 up → the same body with `substate` set from `state.up.substate` (both fields kept);
  * - 0.47 down → `null`, the same answer as a 404;
- * - anything else (the 0.46 shape, or not a substate body at all) → unchanged.
+ * - 0.46 (`substate`, no `state`) → the same body with `state.up.substate` added, which is all the
+ *   installed SDK parses;
+ * - anything else (not a substate body at all) → unchanged.
  */
 export function upgradeSubstateBody(body: unknown): unknown {
   const b = obj(body)
-  const state = obj(b?.state)
-  if (!b || !state) return body
+  if (!b) return body
+  const state = obj(b.state)
+  if (!state) return 'substate' in b ? { ...b, state: { up: { substate: b.substate } } } : body
   const up = obj(state.up)
   if (up && 'substate' in up) return { ...b, substate: up.substate }
   if ('down' in state) return null
@@ -57,9 +62,10 @@ export function substateValueOf(body: unknown): unknown {
 }
 
 /**
- * The provider with `getSubstate` answering in both shapes, for the SDK 0.9 helpers that read
- * `response.substate` themselves (`getVaultIdsForAccount`). A down answer throws as the indexer's
- * 404 does, so `isSubstateNotFound` reads it as the absence it is.
+ * The provider with `getSubstate` answering in both shapes, for the SDK helpers that read the
+ * response themselves (`getVaultIdsForAccount`). A down answer throws as the indexer's 404 does, so
+ * `isSubstateNotFound` reads it as the absence it is, where SDK 0.11 alone would read a downed
+ * account as one that exists with no vaults.
  */
 export function withSubstateShape<P extends Provider>(provider: P): P {
   return new Proxy(provider, {

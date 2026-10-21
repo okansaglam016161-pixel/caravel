@@ -40,6 +40,7 @@
 import { parseSubstateUtxo, type IndexerGetSubstateResponse } from '@tari-project/ootle'
 import { readFinalizedVerdict, type TxVerdict } from './txResult'
 import { pointRead } from './indexerConfig'
+import { substateValueOf } from './substateShape'
 import {
   loadSpentOutputs, lockedCoinsFor, lockedTxIds, promoteToSpent, recordSweepAttempt, release,
   resolveLockAction, type LockAction,
@@ -105,11 +106,18 @@ const probeSubstate: SubstateProbe = async (utxoId) => {
   if (!read.answered) return 'unknown'
   if (read.body === null) return 'gone'   // every node agreed it is not there
 
+  // A BODY WE CANNOT READ IS NOT EVIDENCE. On Ootle 0.47 the value moved under `state.up` and this
+  // probe, finding no `substate`, called every live coin gone (crypto/spentRepair gives those back).
+  // pointRead now serves both shapes; anything that is still not a UTXO body says nothing, and
+  // keeps the lock, rather than condemning a coin on a shape change.
+  const utxo = (substateValueOf(read.body) as { Utxo?: unknown } | undefined)?.Utxo
+  if (!utxo || typeof utxo !== 'object') return 'unknown'
+
   // parseSubstateUtxo is the SDK's own structural check and returns null for a spent or frozen
   // output — the same call paymentResolver uses to tell "gone" from "not ours".
   try {
     return parseSubstateUtxo(read.body as IndexerGetSubstateResponse, utxoId) === null ? 'gone' : 'live'
-  } catch { return 'gone' }
+  } catch { return 'unknown' }
 }
 
 /** What the sweep did about one locked transaction. Diagnostic — the harness prints these. */

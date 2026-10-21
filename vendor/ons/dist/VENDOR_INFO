@@ -8,7 +8,13 @@ tree state    : clean (dist matches the commit above exactly — diff -rq, exclu
 src digest    : 9301a9aa8bb233094a7b419c43bb59212bf6dd45a631740e643733033ca19e7f
                 (shasum -a 256 client/src/*.ts | sort | shasum -a 256)
 
-NO LOCAL PATCHES. Everything Caravel needs is in the upstream source.
+ONE LOCAL PATCH (Caravel hotfix-0.47, 2026-10-21). Everything else is the upstream source.
+  - reader.js         : fetchRegistry reads the registry from `state.up.substate` (Ootle 0.47's
+                        GET /substates shape, tari-ootle #2968) or `substate` (0.46). Without it
+                        every @name lookup threw "unexpected component state shape". reader.js.map
+                        is NOT regenerated and so no longer matches this one line. Replace the
+                        patch with a re-vendored build once client/src/reader.ts has the same fix
+                        upstream (ootle-name-service, Phase 2 of the 0.47 upgrade).
 
 This build moves the peer deps to SDK 0.9 / ootle-wasm 0.46 (sdk-0.9, 109e923):
   - package.json      : peer deps @tari-project/ootle* ^0.9.0, ootle-wasm ^0.46.0. SDK 0.9 is a

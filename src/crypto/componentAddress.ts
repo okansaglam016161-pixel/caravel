@@ -70,6 +70,7 @@
 // assertByteLayout below exists to make that failure impossible to reintroduce silently.
 
 import { SDK_READ_ATTEMPTS, withBusyRetry } from './indexerRetry'
+import { substateValueOf } from './substateShape'
 import { blake2b } from '@noble/hashes/blake2.js'
 import type { Provider } from '@tari-project/ootle'
 
@@ -258,7 +259,7 @@ export async function crossCheckDerivation(
     return { status: 'not-created', component }
   }
 
-  const header = obj(obj(obj(res)?.substate)?.Component)?.header
+  const header = obj(obj(substateValueOf(res))?.Component)?.header
   if (!header) return { status: 'not-created', component }
 
   const owner = obj(obj(header)?.owner_rule)?.ByPublicKey

@@ -40,7 +40,10 @@ export class OnsReader {
         if (!resp.ok)
             throw new Error(`ONS indexer HTTP ${resp.status}`);
         const body = (await resp.json());
-        const state = body?.substate?.Component?.body?.state;
+        // Ootle 0.47 nests the value under `state.up.substate`; 0.46 had it at `substate`. Read either.
+        // CARAVEL LOCAL PATCH (hotfix-0.47): see VENDOR_INFO; drop it when the upstream fix is re-vendored.
+        const value = body?.state?.up?.substate ?? body?.substate;
+        const state = value?.Component?.body?.state;
         if (!Array.isArray(state) || state.length === 0 || typeof state[0] !== "object" || state[0] === null) {
             throw new Error("ONS: unexpected component state shape from indexer");
         }

@@ -37,6 +37,7 @@
 import { iterVaultIdsInState } from '@tari-project/ootle'
 import { INDEXER_URLS, POINT_READ_TIMEOUT_MS, pointRead } from './indexerConfig'
 import { fetchWithRetry } from './indexerRetry'
+import { substateValueOf } from './substateShape'
 
 /** The official burn wallet on esmeralda. */
 export const BURN_WALLET_COMPONENT = 'component_2e91fb78b73440dd114bdbb887d256d760fa3be3276d7b833f4ab1b23d796029'
@@ -70,12 +71,11 @@ export type BurnWalletRead =
  * is exactly the burn wallet: our template, no owner, and the one vault we pinned.
  */
 export function parseBurnComponent(body: unknown): { vault: string; totalDeposited: bigint } | null {
-  const b = body as {
-    verified?: unknown
-    substate?: { Component?: { header?: { template_address?: unknown; owner_rule?: unknown }; body?: { state?: unknown } } }
-  } | null
+  const b = body as { verified?: unknown } | null
   if (b?.verified !== true) return null
-  const component = b.substate?.Component
+  const component = (substateValueOf(body) as {
+    Component?: { header?: { template_address?: unknown; owner_rule?: unknown }; body?: { state?: unknown } }
+  } | undefined)?.Component
   if (!component) return null
   if (component.header?.template_address !== BURN_WALLET_TEMPLATE) return null
   if (component.header?.owner_rule !== 'None') return null
@@ -91,12 +91,11 @@ export function parseBurnComponent(body: unknown): { vault: string; totalDeposit
 
 /** The vault's revealed TARI, from a `/substates/<vault>` body. Null unless verified and well-formed. */
 export function parseBurnVault(body: unknown): bigint | null {
-  const b = body as {
-    verified?: unknown
-    substate?: { Vault?: { resource_container?: { Stealth?: { address?: unknown; revealed_amount?: unknown } } } }
-  } | null
+  const b = body as { verified?: unknown } | null
   if (b?.verified !== true) return null
-  const stealth = b.substate?.Vault?.resource_container?.Stealth
+  const stealth = (substateValueOf(body) as {
+    Vault?: { resource_container?: { Stealth?: { address?: unknown; revealed_amount?: unknown } } }
+  } | undefined)?.Vault?.resource_container?.Stealth
   if (stealth?.address !== 'resource_0101010101010101010101010101010101010101010101010101010101010101') return null
   return toBigInt(stealth.revealed_amount)
 }
@@ -267,7 +266,7 @@ export function estimateEpochTime(epoch: number, current: number, now = Date.now
 /** The vaults an account component holds, for recognising this wallet's own public burns. */
 export async function accountVaultIds(account: string): Promise<Set<string>> {
   const read = await pointRead(`/substates/${account}`)
-  const state = (read.body as { substate?: { Component?: { body?: { state?: unknown } } } } | null)?.substate?.Component?.body?.state
+  const state = (substateValueOf(read.body) as { Component?: { body?: { state?: unknown } } } | undefined)?.Component?.body?.state
   if (state === undefined) return new Set()
   return new Set([...iterVaultIdsInState(state)].map(v => (v.startsWith('vault_') ? v : `vault_${v}`)))
 }

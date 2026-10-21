@@ -10,8 +10,11 @@
 // reachable only through the account Component that references it. So:
 //
 //     account component address  (captured at claim time — see accountAddress.ts)
-//       → getVaultIdsForAccount   (walks the component's CBOR state for vault ids)
+//       → getAccountVaultIds      (the SDK's walker over the component's CBOR state for vault ids)
 //       → getSubstate(vaultId)    (the Vault substate)
+//
+// Both reads go through crypto/substateShape: a 0.47 indexer nests the value under `state.up`, and
+// the SDK 0.9 walker on its own finds no vaults there, so a funded account read as a confident 0.
 //       → resource_container.Stealth.revealed_amount
 //
 // AMOUNTS ARE BIGINT, ALWAYS. `Amount` in the ts-bindings is `string | number | bigint` and is
@@ -35,12 +38,13 @@
 // was simply, verifiably, zero. See isSubstateNotFound below.
 
 import { SDK_READ_ATTEMPTS, withBusyRetry } from './indexerRetry'
-import { getVaultIdsForAccount, Network, TARI_RESOURCE_ADDRESS, type Provider } from '@tari-project/ootle'
+import { Network, TARI_RESOURCE_ADDRESS, type Provider } from '@tari-project/ootle'
 import { IndexerProvider } from '@tari-project/ootle-indexer'
 import type { SubstateValue } from '@tari-project/ootle-ts-bindings'
 import { loadAccountAddress } from './accountStore'
 import { isSubstateNotFound, type VaultIdResolver } from './substates'
 import { INDEXER_URL } from './indexerConfig'
+import { getAccountVaultIds, substateValueOf } from './substateShape'
 
 // The not-found predicate now lives in substates.ts — reveal, conceal and public send need the same
 // one, and a fund-critical test must not be able to drift from a balance-read test.
@@ -138,7 +142,7 @@ export type { VaultIdResolver }
 export async function readRevealedBalance(
   provider: Provider,
   accountAddress: string | null,
-  resolveVaultIds: VaultIdResolver = getVaultIdsForAccount,
+  resolveVaultIds: VaultIdResolver = getAccountVaultIds,
 ): Promise<bigint> {
   if (!accountAddress) return 0n
 
@@ -168,7 +172,7 @@ export async function readRevealedBalance(
   for (const vaultId of vaultIds) {
     // A busy indexer is asked again (reads are safe to retry); every other failure throws as before.
     const res = await withBusyRetry(() => provider.getSubstate(vaultId), { attempts: SDK_READ_ATTEMPTS })
-    const amount = decodeRevealedAmount(res?.substate as SubstateValue | undefined, TARI_RESOURCE_ADDRESS)
+    const amount = decodeRevealedAmount(substateValueOf(res) as SubstateValue | undefined, TARI_RESOURCE_ADDRESS)
     if (amount !== null) total += amount
   }
   return total

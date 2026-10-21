@@ -60,6 +60,7 @@ import { decryptOwnedUtxo, Network, WasmStealthCrypto, type IndexerGetSubstateRe
 import { loadJournal } from './journalStore'
 import { loadSpentOutputs, excludedIds } from './spentOutputs'
 import { pointRead } from './indexerConfig'
+import { substateValueOf } from './substateShape'
 import { fetchAllUtxoRows, RESOURCE_HEX, type UtxoFeed, type UtxoRow } from './utxoFeed'
 import {
   discoveredReceives, retireDiscovered, scanRecentReceives,
@@ -195,7 +196,7 @@ const fetchSubstateBody: SubstateFetcher = async (substateId) => {
   const read = await pointRead(`/substates/${encodeURIComponent(substateId)}`)
   if (!read.answered) return undefined
   if (read.body === null) return null
-  const utxo = (read.body as { substate?: { Utxo?: unknown } })?.substate?.Utxo
+  const utxo = (substateValueOf(read.body) as { Utxo?: unknown } | undefined)?.Utxo
   if (!utxo || typeof utxo !== 'object') return null
   // A spent or frozen output still answers 200 with `output: null`. Not a coin.
   if ((utxo as { output?: unknown }).output == null) return null

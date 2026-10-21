@@ -78,7 +78,7 @@ npm run preview  # serve the production build locally
 
 The Tari Ootle SDK (`@tari-project/ootle`) is installed from npm. The Caravel Name Service
 client is vendored as a pre-built dist under `vendor/ons/`, built from the
-[ootle-name-service](https://github.com/okansaglam016161-pixel/ootle-name-service) source with two small local patches for Ootle 0.47's substate shape (listed in `vendor/ons/dist/VENDOR_INFO`), so the repo builds on a fresh clone with no external setup. See
+[ootle-name-service](https://github.com/okansaglam016161-pixel/ootle-name-service) source with no local patches, so the repo builds on a fresh clone with no external setup. See
 `vendor/README.md`.
 
 ## Contracts

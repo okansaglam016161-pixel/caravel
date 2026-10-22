@@ -94,7 +94,7 @@ import { preparePlaceOrder, recoverTradeState, refreshOwnOrders, runTrade, syncO
 import { checkPayout, listBoardOrderIds, orderLegitimacy, readBoard, readOrder } from '../src/crypto/tradeRead'
 import { BUY, SELL, TRADE_CARAVEL_FEE_ACCOUNT, type TradeMode } from '../src/crypto/tradeConfig'
 import { loadCusdClaims, recordCusdClaim } from '../src/crypto/cusdStore'
-import { knownPayoutIds, loadTradeState } from '../src/crypto/tradeStore'
+import { cancelOutputIdsOf, knownPayoutIds, loadTradeState } from '../src/crypto/tradeStore'
 import { reconcile } from '../src/crypto/reconcile'
 import { loadLedger } from '../src/crypto/utxoLedger'
 import { MarketReader, type BookEntry } from '../src/crypto/market'
@@ -2574,8 +2574,9 @@ async function cmdActivity(h: Harnessed): Promise<void> {
   const rec = reconcile({ owned: scan.utxos, journal, ledger: loadLedger(h.address), epoch: loadEpoch(h.address), knownReceiveUtxoIds: attributed })
   field('reconcile', rec.reason === null ? `${rec.receives.length} receive(s), ${rec.suppressed.length} suppressed` : `nothing classified: ${rec.reason}`)
   const payouts = new Set(knownPayoutIds(h.address))
-  for (const u of scan.utxos.filter(u => payouts.has(u.id))) {
-    field('trade payout', `${u.id.slice(-20)}  ${amt(u.amount)}  → attributed: never a "Received" row`)
+  const cancels = new Set(cancelOutputIdsOf(st.records))
+  for (const u of scan.utxos.filter(u => payouts.has(u.id) || cancels.has(u.id))) {
+    field(payouts.has(u.id) ? 'trade payout' : 'own cancel', `${u.id.slice(-20)}  ${amt(u.amount)}  → attributed: never a "Received" row`)
   }
   const cusdUnits = new Map(loadCusdClaims(h.address).map(c => [c.journalId, c.units] as const))
   const timeIds = [...new Set([

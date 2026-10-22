@@ -30,6 +30,8 @@
 import { upSubstates } from './accountAddress'
 import { INDEXER_URL, INDEXER_URLS } from './indexerConfig'
 import { fetchWithRetry } from './indexerRetry'
+import { carriedOutputs, type RecentTxEntry } from './receiveScan'
+import { RESOURCE_HEX } from './utxoFeed'
 
 
 /** Matches the id format walletScanner builds, so the two sets compare directly. */
@@ -61,6 +63,10 @@ export async function fetchCreatedUtxoIds(
       { attempts: RESULT_READ_ATTEMPTS, timeoutMs: RESULT_READ_TIMEOUT_MS, alternate: true, signal },
     )
   } catch { return null }
+  // PRUNED: the indexers drop a transaction's RESULT within the hour (measured: a 09:58 cancel's
+  // result 404s by 11:00) while still serving the transaction itself. A committed transaction's own
+  // outputs statements name what it created, so they answer instead.
+  if (resp.status === 404) return createdFromBody(txId, signal)
   if (!resp.ok) return null
 
   let json: unknown
@@ -80,4 +86,26 @@ export async function fetchCreatedUtxoIds(
     if (substateId.startsWith(UTXO_PREFIX)) ids.push(substateId)
   }
   return ids
+}
+
+/**
+ * The tTARI outputs a COMMITTED transaction created, from the transaction itself (its stealth
+ * transfers' outputs statements, crypto/receiveScan.carriedOutputs) — for when its result is pruned.
+ * tTARI only: the outputs reconcile and the scans compare against. null unless the indexer says
+ * Commit — an aborted transaction created nothing, and an unreadable one is a hole.
+ */
+async function createdFromBody(txId: string, signal?: AbortSignal): Promise<string[] | null> {
+  let body: { transaction?: RecentTxEntry & { summary?: { outcome?: unknown } } }
+  try {
+    const resp = await fetchWithRetry(
+      [INDEXER_URL, ...INDEXER_URLS.filter(u => u !== INDEXER_URL)],
+      `/transactions/${encodeURIComponent(txId)}`,
+      {},
+      { attempts: RESULT_READ_ATTEMPTS, timeoutMs: RESULT_READ_TIMEOUT_MS, alternate: true, signal },
+    )
+    if (!resp.ok) return null
+    body = await resp.json() as typeof body
+  } catch { return null }
+  if (body.transaction?.summary?.outcome !== 'Commit') return null
+  return carriedOutputs(body.transaction).map(o => `${UTXO_PREFIX}${RESOURCE_HEX}_${o.commitment}`)
 }

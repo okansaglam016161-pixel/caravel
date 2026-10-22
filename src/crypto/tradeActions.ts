@@ -16,11 +16,12 @@ import { cancelKeyFor, type PurposeKeys } from './derivation'
 import type { JournalKind, JournalOutcome } from './journal'
 import { beginEntry, settleEntry } from './journalStore'
 import { SubmitMaybeLandedError } from './submitGuard'
+import { fetchCreatedUtxoIds } from './txOutputs'
 import { preparePlace, type PlaceParams, type PreparedTrade, type Trader, type TradeResult } from './trade'
 import { ORDER_CANCELLED, ORDER_FILLED, ORDER_OPEN, TRADE_BOARD_ADDRESS, TRADE_ORDER_TEMPLATE } from './tradeConfig'
 import { foundOrderRecord, listBoardOrderIds, orderOutcomeFromEvents, payoutLegOf, payoutOutputIdOf, readOrder } from './tradeRead'
 import {
-  claimCancelIndex, knownCusdIds, loadTradeState, notePayout, observeOrder, ownOpenOrders, peekCancelIndex, recordRecovery, recordTrade,
+  claimCancelIndex, knownCusdIds, loadTradeState, noteCloseOutputs, notePayout, observeOrder, ownOpenOrders, peekCancelIndex, recordRecovery, recordTrade,
   type TradeRecord,
 } from './tradeStore'
 
@@ -164,6 +165,15 @@ export async function refreshOwnOrders(walletAddress: string): Promise<number> {
     if (state !== 'open' && txId === null) txId = (await orderOutcomeFromEvents(r.orderId!))?.txId ?? null
     observeOrder(walletAddress, r.orderId!, state, txId)
     changed++
+  }
+  // A cancel of ours made ELSEWHERE (another device, or before this device's journal held it): what it
+  // created is this wallet's own — the escrow back and the fee's change — read once from its result,
+  // so those outputs are its "Cancelled" row's and never "Received · Sender unknown". A FILL's
+  // closing transaction is the taker's: nothing of it is ours but the payout (payoutOutputId).
+  for (const r of loadTradeState(walletAddress).records) {
+    if (r.action !== 'place' || !r.orderId || r.orderState !== 'cancelled' || !r.closedTxId || r.closeOutputIds) continue
+    const ids = await fetchCreatedUtxoIds(r.closedTxId)
+    if (ids !== null && noteCloseOutputs(walletAddress, r.orderId, ids)) changed++   // null: a hole — next refresh
   }
   return changed
 }

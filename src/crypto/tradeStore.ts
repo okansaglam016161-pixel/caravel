@@ -67,6 +67,12 @@ export interface TradeRecord {
   filledSeenAt: number | null
   /** Place: the transaction that filled or cancelled the order — its time is the indexer's. */
   closedTxId?: string | null
+  /**
+   * Place, CANCELLED: every output the cancelling transaction created — the escrow back and the fee's
+   * change. All ours: a cancel needs this wallet's cancel key. Read from the chain once (null until
+   * then), so a cancel made on ANOTHER device is still recognised here as this wallet's own money.
+   */
+  closeOutputIds?: string[] | null
 }
 
 export interface TradeState {
@@ -118,6 +124,7 @@ const parse: Parse<TradeState> = (decoded) => {
       orderState: r.orderState === 'open' || r.orderState === 'filled' || r.orderState === 'cancelled' ? r.orderState : null,
       filledSeenAt: typeof r.filledSeenAt === 'number' ? r.filledSeenAt : null,
       closedTxId: typeof r.closedTxId === 'string' ? r.closedTxId : null,
+      closeOutputIds: Array.isArray(r.closeOutputIds) ? r.closeOutputIds.filter((x): x is string => typeof x === 'string') : null,
     })
   }
   return { nextCancelIndex: root.nextCancelIndex, recoveredAt: typeof root.recoveredAt === 'number' ? root.recoveredAt : null, records }
@@ -202,6 +209,23 @@ export function notePayout(walletAddress: string, orderId: string, gets: TradeLe
     return { ...r, gets, payoutOutputId: r.payoutOutputId ?? payoutOutputId }
   })
   return changed ? save(walletAddress, { ...s, records }) : true
+}
+
+/** What a cancel of ours created, read from its result (crypto/txOutputs) — recorded once. */
+export function noteCloseOutputs(walletAddress: string, orderId: string, ids: string[]): boolean {
+  const s = loadTradeState(walletAddress)
+  let changed = false
+  const records = s.records.map(r => {
+    if (r.action !== 'place' || r.orderId !== orderId || r.closeOutputIds) return r
+    changed = true
+    return { ...r, closeOutputIds: ids }
+  })
+  return changed ? save(walletAddress, { ...s, records }) : true
+}
+
+/** The outputs cancels of OUR orders created — this wallet's own money, never a stranger's. */
+export function cancelOutputIdsOf(records: readonly TradeRecord[]): string[] {
+  return records.flatMap(r => (r.action === 'place' && r.orderState === 'cancelled' ? r.closeOutputIds ?? [] : []))
 }
 
 /**

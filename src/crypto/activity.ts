@@ -18,7 +18,7 @@ import { sortKey, type CaravelMessage } from '../messaging/types'
 import type { SentEntry } from './txHistory'
 import type { JournalEntry, JournalOutcome } from './journal'
 import type { ReconciledReceive } from './reconcile'
-import { payoutIdsOf, type TradeRecord } from './tradeStore'
+import { cancelOutputIdsOf, payoutIdsOf, type TradeRecord } from './tradeStore'
 import * as nip19 from 'nostr-tools/nip19'
 
 // npub1abcd…wxyz — never throws (blank/invalid hex falls back to a raw prefix).
@@ -302,15 +302,34 @@ function tradeRow(e: JournalEntry, r: TradeRecord | undefined, txTimes: Readonly
 
 /**
  * Owned outputs another row already explains, for reconcile's `knownReceiveUtxoIds`: a chat payment's
- * (the message names the sender) and a filled order's private payout (its "Order filled" row). Without
- * them each would ALSO show as "Received · Sender unknown" — a maker's payout is made by the taker's
- * transaction, so no journal entry of ours holds it.
+ * (the message names the sender), a filled order's private payout (its "Order filled" row), and what a
+ * cancel of ours created (its "Cancelled" row). Without them each would ALSO show as "Received · Sender
+ * unknown" — a maker's payout is made by the taker's transaction, and a cancel made on another device
+ * is in no journal here.
  */
 export function knownReceiveIds(messages: readonly CaravelMessage[], trades: readonly TradeRecord[]): string[] {
   return [
     ...messages.filter(m => m.direction === 'received' && m.payment?.utxoId).map(m => m.payment!.utxoId),
     ...payoutIdsOf(trades),
+    ...cancelOutputIdsOf(trades),
   ]
+}
+
+/**
+ * An order of ours that was cancelled, from the trade store: its "Cancelled" row on a device whose
+ * journal does not hold the cancel. Dated by the cancelling transaction on the indexer only — no row
+ * until that time is known. Yields to the journal's row for the same transaction (which carries the fee).
+ */
+function orderCancelledRow(r: TradeRecord, txTimes: ReadonlyMap<string, number>): TradeActivityRow | null {
+  if (r.action !== 'place' || r.orderState !== 'cancelled' || !r.orderId || !r.closedTxId) return null
+  const at = txTimes.get(r.closedTxId)
+  if (at === undefined) return null
+  const d = tradeDeltas('cancelled', r)
+  return {
+    kind: 'trade', id: `cancelled-${r.orderId}`, tradeKind: 'cancelled', timestamp: at,
+    tariDelta: d.tari, cusdDelta: d.cusd, feeMicrotari: null,
+    outcome: 'committed', source: 'chain', txId: r.closedTxId, orderId: r.orderId,
+  }
 }
 
 /** A maker's order that somebody filled: the "Order filled" row, from the trade store. */
@@ -387,6 +406,15 @@ export function buildActivity(
     // renders that payment. A non-displayed entry must never suppress a displayed one.
     if (!row) continue
     if (e.txId !== null) claimedTxIds.add(e.txId)
+    rows.push(row)
+  }
+
+  // A cancel of ours this journal does not hold (made on another device): its row from the trade
+  // store. After the journal, so a cancel made HERE is the journal's row alone.
+  for (const t of trades) {
+    const row = orderCancelledRow(t, txTimes)
+    if (!row || claimedTxIds.has(row.txId!)) continue
+    claimedTxIds.add(row.txId!)
     rows.push(row)
   }
 

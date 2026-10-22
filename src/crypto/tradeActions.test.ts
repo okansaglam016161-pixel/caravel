@@ -18,6 +18,7 @@ vi.mock('./tradeRead', async (actual) => ({
     return o && {
       id, template: TRADE_ORDER_TEMPLATE, board: TRADE_BOARD_ADDRESS, cancelKeyHex: o.key, status: o.status,
       side: 0, n: 1_000_000n, p: 1_000_000n, fee: 10_000n, caravelCut: 7_000n, burnCut: 3_000n,
+      payoutStatement: null, payoutAccount: 'component_payout',
     }
   }),
   orderOutcomeFromEvents: vi.fn(async (id: string) => {
@@ -76,8 +77,9 @@ describe('refreshOwnOrders backfills a closed order recorded without its closing
       cancelIndex: 0, cusdOutputIds: [], cusdSpentIds: [], outcome: 'committed', payoutOutputId: null,
       orderState: 'filled', filledSeenAt: 12345, closedTxId: null,
     })
-    expect(await refreshOwnOrders(ADDR)).toBe(1)
-    expect(loadTradeState(ADDR).records[0]).toMatchObject({ orderState: 'filled', closedTxId: 'tx_fill' })
+    // Two things recorded once: its closing transaction, and (found before payouts were) how it pays.
+    expect(await refreshOwnOrders(ADDR)).toBe(2)
+    expect(loadTradeState(ADDR).records[0]).toMatchObject({ orderState: 'filled', closedTxId: 'tx_fill', gets: { mode: 'public' }, payoutOutputId: null })
     expect(await refreshOwnOrders(ADDR)).toBe(0)
   })
 })

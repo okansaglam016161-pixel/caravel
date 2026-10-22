@@ -18,7 +18,7 @@ import { sortKey, type CaravelMessage } from '../messaging/types'
 import type { SentEntry } from './txHistory'
 import type { JournalEntry, JournalOutcome } from './journal'
 import type { ReconciledReceive } from './reconcile'
-import type { TradeRecord } from './tradeStore'
+import { payoutIdsOf, type TradeRecord } from './tradeStore'
 import * as nip19 from 'nostr-tools/nip19'
 
 // npub1abcd…wxyz — never throws (blank/invalid hex falls back to a raw prefix).
@@ -298,6 +298,19 @@ function tradeRow(e: JournalEntry, r: TradeRecord | undefined, txTimes: Readonly
     tariDelta: d.tari, cusdDelta: d.cusd, feeMicrotari: e.feeMicrotari,
     outcome: e.outcome as ActivityOutcome, source: 'local-journal', txId: e.txId, orderId: r?.orderId ?? null,
   }
+}
+
+/**
+ * Owned outputs another row already explains, for reconcile's `knownReceiveUtxoIds`: a chat payment's
+ * (the message names the sender) and a filled order's private payout (its "Order filled" row). Without
+ * them each would ALSO show as "Received · Sender unknown" — a maker's payout is made by the taker's
+ * transaction, so no journal entry of ours holds it.
+ */
+export function knownReceiveIds(messages: readonly CaravelMessage[], trades: readonly TradeRecord[]): string[] {
+  return [
+    ...messages.filter(m => m.direction === 'received' && m.payment?.utxoId).map(m => m.payment!.utxoId),
+    ...payoutIdsOf(trades),
+  ]
 }
 
 /** A maker's order that somebody filled: the "Order filled" row, from the trade store. */

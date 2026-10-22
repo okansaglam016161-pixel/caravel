@@ -14,6 +14,7 @@ import type { BoardInfo, OrderInfo, PayoutCheck } from './tradeRead'
 import { loadTradeState, recordTrade, type TradeRecord } from './tradeStore'
 import { cancelKeyFor } from './derivation'
 import { setStoreKey } from './sessionKey'
+import b1 from './payoutStatement.b1.json'
 
 const order = (id: string, over: Partial<OrderInfo> = {}): OrderInfo => ({
   id, version: 1, template: TRADE_ORDER_TEMPLATE, side: SELL, status: 0, board: TRADE_BOARD_ADDRESS,
@@ -252,6 +253,29 @@ describe('MarketReader — "yours", from the seed alone (a restore)', () => {
     // A restored device knows when it was placed: the placing transaction's time on the indexer.
     expect(data.mine).toMatchObject([{ orderId: 'mine', state: 'open', cancelIndex: 2, placedAt: Date.UTC(2026, 9, 15, 11, 46, 29), placedEstimated: false }])
     expect(loadTradeState(ADDR).nextCancelIndex).toBe(3)   // index 2 is in use: never handed out again
+  })
+})
+
+describe('MarketReader — an order of yours found on the Trade page records its payout', () => {
+  it('a filled private-payout BUY (live b1) is recorded with the output its fill created', async () => {
+    net.ids = []; net.orders.clear(); net.reads.clear(); net.payout.clear(); net.boardFails = false; net.fills = { events: [] }
+    const map = new Map<string, string>()
+    globalThis.localStorage = {
+      get length() { return map.size }, clear: () => map.clear(), getItem: (k: string) => map.get(k) ?? null,
+      key: (i: number) => [...map.keys()][i] ?? null, removeItem: (k: string) => { map.delete(k) }, setItem: (k: string, v: string) => { map.set(k, v) },
+    } as Storage
+    setStoreKey(new Uint8Array(32).fill(4))
+    const root = new Uint8Array(32).fill(7)
+    const hex = (b: Uint8Array) => Array.from(b, x => x.toString(16).padStart(2, '0')).join('')
+    const ADDR = 'otl_esm_1marketpayout'
+    net.ids = ['b1']
+    net.orders.set('b1', order('b1', {
+      side: BUY, status: 1, n: BigInt(b1.n), p: BigInt(b1.p), fee: BigInt(b1.fee), payoutAccount: null,
+      payoutStatement: Uint8Array.from(b1.payoutStatementHex.match(/../g)!.map(x => parseInt(x, 16))),
+      cancelKeyHex: hex(await cancelKeyFor(root, 0).getPublicKey()),
+    }))
+    await new MarketReader({ walletAddress: ADDR, tradeRoot: root }).refresh()
+    expect(loadTradeState(ADDR).records).toMatchObject([{ orderId: 'b1', payoutOutputId: b1.payoutOutputId, gets: { amount: 990_000n, mode: 'private' } }])
   })
 })
 

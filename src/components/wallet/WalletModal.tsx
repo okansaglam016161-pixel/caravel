@@ -39,7 +39,7 @@ import {
   type PreparedPublicSend,
 } from '../../crypto/publicSend'
 import { parseOotleAddress } from '@tari-project/ootle-wasm'
-import { buildActivity, type ActivityOutcome, type ActivityRow, type TradeActivityKind, type TradeActivityRow } from '../../crypto/activity'
+import { buildActivity, knownReceiveIds, type ActivityOutcome, type ActivityRow, type TradeActivityKind, type TradeActivityRow } from '../../crypto/activity'
 import { beginEntry, settleEntry } from '../../crypto/journalStore'
 import type { JournalOutcome } from '../../crypto/journal'
 import { createActionLock, guarded } from '../../crypto/actionLock'
@@ -1333,18 +1333,19 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
   // reasoned from, and suppressed UTXOs are deliberately NOT surfaced — a balance that is already
   // correct needs no apology, and "you may have hidden receives" would be noise.
   //
-  // `knownReceiveUtxoIds` is what stops a chat payment appearing twice: those UTXOs are owned and
-  // are not our own outputs, so without this they would be classified as unattributed receives and
-  // shown beside the chat row that already names the sender.
+  // `knownReceiveUtxoIds` is what stops a payment appearing twice: those UTXOs are owned and are not
+  // our own outputs, so without this they would be classified as unattributed receives and shown
+  // beside the row that already says what they are — a chat payment's, which names the sender, and a
+  // filled order's private payout, whose "Order filled" row comes from the trade store (made by the
+  // TAKER's transaction, so no journal entry of ours holds it).
+  const trades = useTrades(address)
   const reconciled = useMemo(() => reconcile({
     owned: scan.utxos,
     journal,
     ledger: loadLedger(address ?? ''),
     epoch: loadEpoch(address ?? ''),
-    knownReceiveUtxoIds: messages
-      .filter(m => m.direction === 'received' && m.payment?.utxoId)
-      .map(m => m.payment!.utxoId),
-  }).receives, [scan.utxos, journal, address, messages])
+    knownReceiveUtxoIds: knownReceiveIds(messages, trades),
+  }).receives, [scan.utxos, journal, address, messages, trades])
 
   // Live, without a reload: the journal is written straight to localStorage by the send, move and
   // faucet paths, and useJournal subscribes to it. See hooks/useJournal.
@@ -1355,7 +1356,6 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
     () => new Map(cusdClaims.map(c => [c.journalId, c.units] as const)),
     [cusdClaims],
   )
-  const trades = useTrades(address)
   // Trade rows are dated by the INDEXER's time of their transaction — the same on every device.
   const tradeTxIds = [
     ...journal.filter(e => e.kind.startsWith('trade-') && e.txId).map(e => e.txId!),

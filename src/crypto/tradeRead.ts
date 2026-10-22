@@ -21,8 +21,9 @@ import { substateValueOf } from './substateShape'
 import { fetchWithRetry } from './indexerRetry'
 import { INDEXER_URLS, POINT_READ_TIMEOUT_MS, pointRead } from './indexerConfig'
 import { TARI_RESOURCE_ADDRESS } from '@tari-project/ootle'
+import type { TradeLeg, TradeRecord } from './tradeStore'
 import {
-  BUY, ORDER_OPEN, SELL, TRADE_BOARD_ADDRESS, TRADE_BOARD_BADGE, TRADE_BOARD_TEMPLATE, TRADE_ORDER_TEMPLATE, TRADE_QUOTE,
+  BUY, ORDER_FILLED, ORDER_OPEN, SELL, TRADE_BOARD_ADDRESS, TRADE_BOARD_BADGE, TRADE_BOARD_TEMPLATE, TRADE_ORDER_TEMPLATE, TRADE_QUOTE,
   type OrderSide, type OrderStatus,
 } from './tradeConfig'
 
@@ -234,6 +235,50 @@ export function orderLegitimacy(o: OrderInfo, board: Pick<BoardInfo, 'badge'>): 
 
 // ── The payout must not collide ──────────────────────────────────────────────
 
+/**
+ * The output a fill creates for the maker of a PRIVATE-payout order — `utxo_<resource>_<commitment>`,
+ * from the payout statement the order stores on chain — or null for a public payout (it goes into the
+ * maker's account; no output). Throws when the stored statement cannot be read.
+ *
+ * The same id whichever device asks: what lets a wallet that did not place an order (a restore, an
+ * order placed elsewhere) still recognise its payout when the fill pays it.
+ */
+export function payoutOutputIdOf(o: Pick<OrderInfo, 'side' | 'n' | 'p' | 'fee' | 'payoutStatement'>): string | null {
+  if (o.payoutStatement === null) return null
+  const owed = makerOwed(o)
+  return `utxo_${owed.resource.replace(/^resource_/, '')}_${payoutCommitment(decodeStatement(o.payoutStatement), owed.amount)}`
+}
+
+/** How the maker of `o` is paid: the owed amount, privately (a payout output) or into its account. */
+export function payoutLegOf(o: Pick<OrderInfo, 'side' | 'n' | 'p' | 'fee' | 'payoutStatement'>): TradeLeg {
+  return { ...makerOwed(o), mode: o.payoutStatement === null ? 'public' : 'private' }
+}
+
+/** The payout output id, or null when it cannot be read (a payout never recognised is only a label). */
+function payoutOutputIdOrNull(o: OrderInfo): string | null {
+  try { return payoutOutputIdOf(o) } catch { return null }
+}
+
+/**
+ * The record of an order of ours FOUND on chain rather than placed on this device — a restore, the
+ * Trade page's discovery, or the wallet's own refresh finding an order placed elsewhere. Everything a
+ * placement would have recorded that the chain still holds: terms, cancel key, state, the closing
+ * transaction (its time is the "Order filled" row's), and how the maker is paid — with the payout
+ * output's id, so a fill's private payout is recognised as this order's and not as an unknown receive.
+ */
+export function foundOrderRecord(o: OrderInfo, cancelIndex: number, closedTxId: string | null, now = Date.now()): TradeRecord {
+  return {
+    journalId: `recovered-${o.id}`, action: 'place', txId: null, at: now,
+    side: o.side, n: o.n, p: o.p, tradeFee: o.fee, caravelCut: o.caravelCut, burnCut: o.burnCut,
+    pays: null, gets: payoutLegOf(o), orderId: o.id, cancelIndex, cusdOutputIds: [], cusdSpentIds: [], outcome: 'committed',
+    payoutOutputId: payoutOutputIdOrNull(o),
+    orderState: o.status === ORDER_OPEN ? 'open' : o.status === ORDER_FILLED ? 'filled' : 'cancelled',
+    // Seen closed before this device knew of it: no local moment. Its time is the closing transaction's.
+    filledSeenAt: null,
+    closedTxId,
+  }
+}
+
 /** `taken`: the payout already exists — the order was filled. Every other refusal is not "taken". */
 export type PayoutCheck = { ok: true; outputId: string | null } | { ok: false; reason: string; taken?: boolean }
 
@@ -243,19 +288,17 @@ export type PayoutCheck = { ok: true; outputId: string | null } | { ok: false; r
  * not a pass. A public payout's account must exist.
  */
 export async function checkPayout(o: OrderInfo, read: VerifiedReader = verifiedRead): Promise<PayoutCheck> {
-  const owed = makerOwed(o)
   if (o.payoutStatement === null) {
     const acct = await read(`/substates/${o.payoutAccount}`)
     if (acct.kind === 'verified') return { ok: true, outputId: null }
     return { ok: false, reason: acct.kind === 'absent' ? 'The maker\'s payout account does not exist.' : 'Could not verify the maker\'s payout account.' }
   }
-  let commitment: string
+  let outputId: string
   try {
-    commitment = payoutCommitment(decodeStatement(o.payoutStatement), owed.amount)
+    outputId = payoutOutputIdOf(o)!
   } catch (e) {
     return { ok: false, reason: e instanceof StatementCborError ? e.message : 'The order\'s payout could not be read.' }
   }
-  const outputId = `utxo_${owed.resource.replace(/^resource_/, '')}_${commitment}`
   for (const base of INDEXER_URLS) {
     let status: number
     try {

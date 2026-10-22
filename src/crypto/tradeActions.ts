@@ -18,9 +18,9 @@ import { beginEntry, settleEntry } from './journalStore'
 import { SubmitMaybeLandedError } from './submitGuard'
 import { preparePlace, type PlaceParams, type PreparedTrade, type Trader, type TradeResult } from './trade'
 import { ORDER_CANCELLED, ORDER_FILLED, ORDER_OPEN, TRADE_BOARD_ADDRESS, TRADE_ORDER_TEMPLATE } from './tradeConfig'
-import { listBoardOrderIds, orderOutcomeFromEvents, readOrder } from './tradeRead'
+import { foundOrderRecord, listBoardOrderIds, orderOutcomeFromEvents, payoutLegOf, payoutOutputIdOf, readOrder } from './tradeRead'
 import {
-  claimCancelIndex, knownCusdIds, loadTradeState, observeOrder, ownOpenOrders, peekCancelIndex, recordRecovery, recordTrade,
+  claimCancelIndex, knownCusdIds, loadTradeState, notePayout, observeOrder, ownOpenOrders, peekCancelIndex, recordRecovery, recordTrade,
   type TradeRecord,
 } from './tradeStore'
 
@@ -127,6 +127,18 @@ export async function runTrade(t: Trader, prepared: PreparedTrade, onProgress?: 
  */
 export async function refreshOwnOrders(walletAddress: string): Promise<number> {
   let changed = 0
+  // Orders found on chain before their payout was recorded: read how each pays its maker, once, so a
+  // fill's private payout is this order's "Order filled" and not an unknown receive.
+  for (const r of loadTradeState(walletAddress).records) {
+    if (r.action !== 'place' || !r.orderId || r.gets !== null) continue
+    try {
+      const o = await readOrder(r.orderId)
+      if (!o) continue
+      let id: string | null = null
+      try { id = payoutOutputIdOf(o) } catch { /* unreadable statement: the leg alone */ }
+      if (notePayout(walletAddress, r.orderId, payoutLegOf(o), id)) changed++
+    } catch { /* not served verified right now: next refresh */ }
+  }
   // Closed orders whose closing transaction is not on record yet (recovered before it was looked up,
   // or recorded by an older version): find it once, for the time of its "Order filled" row.
   for (const r of loadTradeState(walletAddress).records) {
@@ -180,17 +192,83 @@ export async function recoverTradeState(t: Pick<Trader, 'address' | 'tradeRoot'>
     if (!o) { misses++; continue }
     misses = 0
     next = i + 1
-    found.push({
-      journalId: `recovered-${o.id}`, action: 'place', txId: null, at: Date.now(),
-      side: o.side, n: o.n, p: o.p, tradeFee: o.fee, caravelCut: o.caravelCut, burnCut: o.burnCut,
-      pays: null, gets: null, orderId: o.id, cancelIndex: i, cusdOutputIds: [], cusdSpentIds: [], outcome: 'committed', payoutOutputId: null,
-      orderState: o.status === ORDER_OPEN ? 'open' : o.status === ORDER_FILLED ? 'filled' : 'cancelled',
-      // Seen filled before this device knew of it: no local moment. Its time is the closing
-      // transaction's, on the indexer (below), so a restore dates an old fill when it happened.
-      filledSeenAt: null,
-      closedTxId: o.status === ORDER_OPEN ? null : (await orderOutcomeFromEvents(o.id))?.txId ?? null,
-    })
+    // A restore dates an old fill by its closing transaction, on the indexer — when it happened.
+    found.push(foundOrderRecord(o, i, o.status === ORDER_OPEN ? null : (await orderOutcomeFromEvents(o.id))?.txId ?? null))
   }
   recordRecovery(t.address, next, found)
   return { found: found.length, nextCancelIndex: Math.max(next, loadTradeState(t.address).nextCancelIndex) }
+}
+
+// ── The wallet's own refresh: orders placed ELSEWHERE ─────────────────────────
+//
+// Before this, an order placed on another device (or by the harness) reached this device's store only
+// through the Trade page's market read or the one-time search before a first placement here. The
+// wallet's refresh re-read only orders already known — so a fill of an order the store never learned
+// of had no "Order filled" row, and its private TARI payout surfaced as "Received · Sender unknown".
+// Every refresh now finds this wallet's orders itself. An order's cancel key never changes, so each
+// Board order is read ONCE per session; a refresh reads only orders listed since the last one.
+
+/** Board order id → the cancel key its `cancel` rule names (null: not a Caravel Trade order). */
+export type BoardKeyCache = Map<string, string | null>
+const sessionBoardKeys: BoardKeyCache = new Map()
+/** This session's derived cancel public keys, per trade root (derivation is local, but not free). */
+const sessionCancelKeys = new WeakMap<Uint8Array, string[]>()
+
+async function cancelKeysUpTo(tradeRoot: Uint8Array, upTo: number): Promise<string[]> {
+  const keys = sessionCancelKeys.get(tradeRoot) ?? []
+  while (keys.length <= upTo) {
+    keys.push(Array.from(await cancelKeyFor(tradeRoot, keys.length).getPublicKey(), b => b.toString(16).padStart(2, '0')).join(''))
+  }
+  sessionCancelKeys.set(tradeRoot, keys)
+  return keys
+}
+
+/** How many Board orders are read at once when a refresh meets new ones. */
+const DISCOVERY_READS_AT_ONCE = 6
+
+/**
+ * Record every order of this wallet's on the Board that its store does not hold. Returns how many.
+ * An order that cannot be read now is left for the next refresh (never cached as "not ours").
+ */
+export async function discoverOwnOrders(t: Pick<Trader, 'address' | 'tradeRoot'>, cache: BoardKeyCache = sessionBoardKeys): Promise<number> {
+  const unread = (await listBoardOrderIds()).filter(id => !cache.has(id))
+  for (let i = 0; i < unread.length; i += DISCOVERY_READS_AT_ONCE) {
+    await Promise.all(unread.slice(i, i + DISCOVERY_READS_AT_ONCE).map(async id => {
+      try {
+        const o = await readOrder(id)
+        if (!o) return
+        cache.set(id, o.template === TRADE_ORDER_TEMPLATE && o.board === TRADE_BOARD_ADDRESS ? o.cancelKeyHex : null)
+      } catch { /* not served verified right now: read again next refresh */ }
+    }))
+  }
+
+  const state = loadTradeState(t.address)
+  const known = new Set(state.records.filter(r => r.action === 'place').map(r => r.orderId))
+  const byKey = new Map<string, string>()
+  for (const [id, key] of cache) if (key) byKey.set(key, id)
+  const found: TradeRecord[] = []
+  let next = 0
+  // From key 0 up past the last key in use, as a restore searches (failed placements leave gaps).
+  for (let i = 0, horizon = state.nextCancelIndex + CANCEL_KEY_GAP; i <= horizon; i++) {
+    const id = byKey.get((await cancelKeysUpTo(t.tradeRoot, horizon))[i])
+    if (!id) continue
+    next = i + 1
+    horizon = Math.max(horizon, i + CANCEL_KEY_GAP)
+    if (known.has(id)) continue
+    try {
+      const o = await readOrder(id)
+      if (o) found.push(foundOrderRecord(o, i, o.status === ORDER_OPEN ? null : (await orderOutcomeFromEvents(o.id))?.txId ?? null))
+    } catch { /* next refresh */ }
+  }
+  if (found.length > 0 || next > state.nextCancelIndex) recordRecovery(t.address, next, found)
+  return found.length
+}
+
+/**
+ * The wallet's refresh of its trades (WalletContext, each rescan): find orders placed elsewhere, then
+ * re-read every open one. Best-effort throughout — the balance never waits on, or fails with, this.
+ */
+export async function syncOwnOrders(t: Pick<Trader, 'address' | 'tradeRoot'>): Promise<number> {
+  const found = await discoverOwnOrders(t).catch(() => 0)
+  return found + await refreshOwnOrders(t.address)
 }

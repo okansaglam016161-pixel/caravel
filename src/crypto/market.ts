@@ -49,7 +49,7 @@ import { fetchWithRetry } from './indexerRetry'
 import {
   ORDER_CANCELLED, ORDER_FILLED, ORDER_OPEN, SELL, TRADE_ORDER_TEMPLATE, type OrderSide,
 } from './tradeConfig'
-import { checkPayout, listBoardOrders, orderLegitimacy, orderOutcomeFromEvents, readBoard, readOrder, readOrderUnverified, type BoardInfo, type OrderInfo, type PayoutCheck } from './tradeRead'
+import { checkPayout, foundOrderRecord, listBoardOrders, orderLegitimacy, orderOutcomeFromEvents, readBoard, readOrder, readOrderUnverified, type BoardInfo, type OrderInfo, type PayoutCheck } from './tradeRead'
 import { loadTradeState, observeOrder, recordRecovery, type OrderState, type TradeRecord } from './tradeStore'
 import { txTime } from './txTimes'
 
@@ -431,12 +431,8 @@ export class MarketReader {
       next = Math.max(next, idx + 1)
       const o = byKey.get(keys[idx])!
       if (known.has(id)) { observeOrder(address, id, stateOf(o)); continue }
-      found.push({
-        journalId: `recovered-${id}`, action: 'place', txId: null, at: this.now,
-        side: o.side, n: o.n, p: o.p, tradeFee: o.fee, caravelCut: o.caravelCut, burnCut: o.burnCut,
-        pays: null, gets: null, orderId: id, cancelIndex: idx, cusdOutputIds: [], cusdSpentIds: [],
-        outcome: 'committed', payoutOutputId: null, orderState: stateOf(o), filledSeenAt: null,
-      })
+      // Its closing transaction is looked up by the wallet's refresh (tradeActions.refreshOwnOrders).
+      found.push(foundOrderRecord(o, idx, null, this.now))
     }
     if (found.length > 0 || next > state.nextCancelIndex) recordRecovery(address, next, found)
     return mine

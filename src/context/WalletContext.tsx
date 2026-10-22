@@ -39,7 +39,7 @@ import { loadTariAddresses, setTariAddress, type TariAddressMap } from '../messa
 import { recoverAccountAddress } from '../crypto/accountRecovery'
 import { fetchRevealedBalance } from '../crypto/revealedBalance'
 import { addCusdOutput, scanCusd, cusdTotal, type CusdBalances } from '../crypto/cusdScan'
-import { refreshOwnOrders } from '../crypto/tradeActions'
+import { syncOwnOrders } from '../crypto/tradeActions'
 import {
   advanceAll, anySettling, acknowledged, isAccountedFor, withSettle,
   type PendingSettle, type SettleEvidence, type SideBalances,
@@ -361,6 +361,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const [revealed, setRevealed] = useState<RevealedState>(REVEALED_IDLE)
   const [cusd, setCusd] = useState<CusdState>(CUSD_IDLE)
   const cusdAbortRef = useRef<AbortController | null>(null)
+  /** The unlocked wallet's trade root (PurposeKeys.tradeRoot), for the refresh to find its own orders. */
+  const tradeRootRef = useRef<Uint8Array | null>(null)
   // Generation counter, the revealed-read equivalent of scanAbortRef: a read that resolves after a
   // lock or a newer read must not write its result into state.
   const revealedGenRef = useRef(0)
@@ -522,10 +524,11 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     const viewSecret = w.getViewOnlySecret()
     if (!viewSecret) return Promise.resolve()
     setCusd(prev => ({ ...CUSD_IDLE, status: 'scanning', generation: prev.generation }))
-    // This wallet's own open Caravel Trade orders first (crypto/tradeActions): one somebody filled
-    // becomes "Order filled", and its private cUSD payout is then asked for by id in the scan below.
-    // Best-effort — an unreadable order is simply checked again on the next refresh.
-    return refreshOwnOrders(walletAddress).catch(() => 0)
+    // This wallet's own Caravel Trade orders first (crypto/tradeActions): any placed elsewhere are
+    // found, and one somebody filled becomes "Order filled", its private cUSD payout then asked for by
+    // id in the scan below. Best-effort — an unreadable order is simply checked again next refresh.
+    const tradeRoot = tradeRootRef.current
+    return (tradeRoot ? syncOwnOrders({ address: walletAddress, tradeRoot }) : Promise.resolve(0)).catch(() => 0)
       .then(() => scanCusd(viewSecret, walletAddress, ctrl.signal))
       .then(balances => {
         if (ctrl.signal.aborted) return
@@ -811,6 +814,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const adoptIdentity = useCallback(async (identity: WalletIdentity) => {
     const { wallet: w, nostr } = identity
     setPurposeKeys(identity.purposeKeys)
+    tradeRootRef.current = identity.purposeKeys.tradeRoot
     nostrSecretKeyRef.current = nostr.privateKeyHex
     setNostrNpub(nostr.npub)
     setNostrPubkeyHex(nostr.publicKeyHex)
@@ -943,6 +947,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     setCusd(CUSD_IDLE)
     setWallet(null)
     setPurposeKeys(null)
+    tradeRootRef.current = null
     setAddress(null)
     setTxHistory([])
     setNostrNpub(null)

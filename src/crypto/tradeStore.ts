@@ -189,6 +189,34 @@ export function observeOrder(walletAddress: string, orderId: string, state: Orde
   return changed ? save(walletAddress, { ...s, records }) : true
 }
 
+/**
+ * A found order's payout, read from the chain once: how its maker is paid, and the private payout's
+ * output id (null for a public payout). Recorded for orders found before payouts were recorded.
+ */
+export function notePayout(walletAddress: string, orderId: string, gets: TradeLeg, payoutOutputId: string | null): boolean {
+  const s = loadTradeState(walletAddress)
+  let changed = false
+  const records = s.records.map(r => {
+    if (r.action !== 'place' || r.orderId !== orderId || r.gets !== null) return r
+    changed = true
+    return { ...r, gets, payoutOutputId: r.payoutOutputId ?? payoutOutputId }
+  })
+  return changed ? save(walletAddress, { ...s, records }) : true
+}
+
+/**
+ * The payout outputs fills of OUR orders have created: each one's "Order filled" row already shows it,
+ * so the wallet's reconciliation must count it as attributed, never as "Received · Sender unknown".
+ * (A maker's private payout is made by the TAKER's transaction, so no journal of ours holds it.)
+ */
+export function payoutIdsOf(records: readonly TradeRecord[]): string[] {
+  return records.filter(r => r.action === 'place' && r.orderState === 'filled' && r.payoutOutputId).map(r => r.payoutOutputId!)
+}
+
+export function knownPayoutIds(walletAddress: string): string[] {
+  return payoutIdsOf(loadTradeState(walletAddress).records)
+}
+
 /** After a chain search (a restore): never hand out an index at or below one the chain shows in use. */
 export function recordRecovery(walletAddress: string, nextCancelIndex: number, found: TradeRecord[], now = Date.now()): boolean {
   const s = loadTradeState(walletAddress)

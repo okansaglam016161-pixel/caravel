@@ -44,7 +44,7 @@ import { scanOwnedUtxos, MAX_STEALTH_INPUTS, RESOURCE_HEX } from '../src/crypto/
 import { fetchAllUtxoRows } from '../src/crypto/utxoFeed'
 import { INDEXER_URLS, pointRead } from '../src/crypto/indexerConfig'
 import { fetchOwnedRows, recoveryCandidates } from '../src/crypto/ownedFeed'
-import { beginEntry, loadJournal } from '../src/crypto/journalStore'
+import { beginEntry, loadEpoch, loadJournal } from '../src/crypto/journalStore'
 import { readRevealedBalance } from '../src/crypto/revealedBalance'
 import { prepareConceal, MIN_CONCEAL_MICROTARI } from '../src/crypto/conceal'
 import { prepareReveal, MIN_REVEAL_MICROTARI, maxRevealable } from '../src/crypto/reveal'
@@ -94,7 +94,9 @@ import { preparePlaceOrder, recoverTradeState, refreshOwnOrders, runTrade, trade
 import { checkPayout, listBoardOrderIds, orderLegitimacy, readBoard, readOrder } from '../src/crypto/tradeRead'
 import { BUY, SELL, TRADE_CARAVEL_FEE_ACCOUNT, type TradeMode } from '../src/crypto/tradeConfig'
 import { loadTradeState } from '../src/crypto/tradeStore'
-import { recordCusdClaim } from '../src/crypto/cusdStore'
+import { loadCusdClaims, recordCusdClaim } from '../src/crypto/cusdStore'
+import { reconcile } from '../src/crypto/reconcile'
+import { loadLedger } from '../src/crypto/utxoLedger'
 import { MarketReader, type BookEntry } from '../src/crypto/market'
 import { decodeStatement, encodeStatement } from '../src/crypto/statementCbor'
 import { buildActivity, type TradeActivityRow } from '../src/crypto/activity'
@@ -2469,6 +2471,7 @@ function printPrepared(pt: PreparedTrade): void {
   if (d.cancelIndex !== null) field('cancel key', `index ${d.cancelIndex} (seed-derived)`)
   field('network fee', `${amt(pt.fee)}  [${pt.feeMode}]  — shown = charged`)
   field('owner signs?', pt.ownerSigned ? 'YES (public path — the account needs it)' : 'no (private path: one-time keys only)')
+  if (pt.details.createsAccount) field('public account', 'OPENED by this trade (CreateAccount — it does not exist on chain yet)')
   if (pt.effects.payout) field('maker payout', `${pt.effects.payout.outputId}  (created by the fill)`)
 }
 
@@ -2548,6 +2551,51 @@ async function cmdTradeStatus(h: Harnessed): Promise<void> {
     const parts = [r.tariDelta !== null ? signedTari(r.tariDelta) : null, r.cusdDelta !== null ? signedCusd(r.cusdDelta) : null].filter(Boolean)
     const est = r.txId !== null && times.get(r.txId)?.estimated ? '~' : ' '
     console.log(`    ${new Date(r.timestamp).toISOString().slice(0, 19).replace('T', ' ')}${est} ${r.tradeKind.padEnd(13)} ${r.outcome.padEnd(10)} ${parts.join(' · ')}${r.feeMicrotari !== null ? `  · fee ${r.feeMicrotari} µT` : ''}`)
+  }
+}
+
+/** WalletModal's row title for each Activity kind (WalletModal *RowV2, TRADE_TITLE). */
+const ACTIVITY_TRADE_TITLE: Record<TradeActivityRow['tradeKind'], string> = {
+  'placed-sell': 'Placed sell order', 'placed-buy': 'Placed buy order', sold: 'Sold', bought: 'Bought',
+  'order-filled': 'Order filled', cancelled: 'Cancelled', trade: 'Trade',
+}
+
+async function cmdActivity(h: Harnessed): Promise<void> {
+  rule('activity  (crypto/activity.buildActivity, the wallet’s Activity list)  ·  READ-ONLY')
+  const journal = loadJournal(h.address)
+  const st = loadTradeState(h.address)
+  // Reconciled receives, from the same scan and stores WalletModal reconciles. No chat here, so no
+  // message-linked rows and no knownReceiveUtxoIds.
+  const scan = await scanWallet(h.viewSecret, () => {}, new AbortController().signal, { excluded: loadExcludedIds(h.address), walletAddress: h.address })
+  const rec = reconcile({ owned: scan.utxos, journal, ledger: loadLedger(h.address), epoch: loadEpoch(h.address) })
+  field('reconcile', rec.reason === null ? `${rec.receives.length} receive(s), ${rec.suppressed.length} suppressed` : `nothing classified: ${rec.reason}`)
+  const cusdUnits = new Map(loadCusdClaims(h.address).map(c => [c.journalId, c.units] as const))
+  const timeIds = [...new Set([
+    ...journal.filter(e => e.kind.startsWith('trade-') && e.txId).map(e => e.txId!),
+    ...st.records.filter(t => t.closedTxId).map(t => t.closedTxId!),
+    ...st.records.filter(t => t.action === 'place' && t.txId).map(t => t.txId!),
+  ])]
+  const txTimes = new Map((await Promise.all(timeIds.map(async id => [id, await txTime(id)] as const)))
+    .filter(([, t]) => t.at !== null).map(([id, t]) => [id, t.at!] as const))
+  const rows = buildActivity(journal, [], [], rec.receives, cusdUnits, st.records, txTimes)
+    .sort((a, b) => b.timestamp - a.timestamp)
+  if (rows.length === 0) console.log('    (none)')
+  for (const r of rows) {
+    const title = r.kind === 'sent' || r.kind === 'received' ? r.counterparty
+      : r.kind === 'swap' ? (r.to === 'private' ? 'Made private' : 'Made public')
+      : r.kind === 'faucet' ? 'Received · Testnet faucet claim'
+      : r.kind === 'cusd-faucet' ? 'Received · cUSD faucet claim'
+      : r.kind === 'burn' ? `Burned (${r.from})`
+      : r.kind === 'trade' ? ACTIVITY_TRADE_TITLE[r.tradeKind]
+      : 'Received'
+    const value = r.kind === 'trade'
+      ? [r.tariDelta !== null ? signedTari(r.tariDelta) : null, r.cusdDelta !== null ? signedCusd(r.cusdDelta) : null].filter(Boolean).join(' · ')
+      : r.kind === 'cusd-faucet' ? (r.cusdUnits !== null ? signedCusd(r.cusdUnits) : '···')
+      : 'amountMicrotari' in r && r.amountMicrotari !== null ? amt(r.amountMicrotari) : '···'
+    const fee = 'feeMicrotari' in r && r.feeMicrotari !== null ? `  · fee ${r.feeMicrotari} µT` : ''
+    const outcome = 'outcome' in r ? r.outcome : ''
+    const tx = 'txId' in r && r.txId ? `  tx ${r.txId.slice(0, 10)}` : ''
+    console.log(`    ${new Date(r.timestamp).toISOString().slice(0, 19).replace('T', ' ')}  ${title.padEnd(32)} ${String(outcome).padEnd(10)} ${value}${fee}${tx}`)
   }
 }
 
@@ -2830,6 +2878,8 @@ Environment:
   trade-status                Caravel Trade: this wallet's orders (status re-read), trades, balances
                               (tTARI + cUSD, private + public), the fee account and Burn Wallet, and
                               the trade Activity rows. READ-ONLY.
+  activity                    The wallet's Activity list as WalletModal builds it (journal, trades, cUSD
+                              claims, reconciled receives; no chat), with the indexer's trade times. READ-ONLY.
   trade-book                  Every order on the Board, read verified: status, legitimacy, payout
                               check (a private payout's output must not exist on either indexer).
   trade-place sell|buy N P    Place an order: N tTARI (12.5 = TARI, 12500000u = µtTARI), P cUSD.
@@ -2970,6 +3020,9 @@ export async function main(argv: string[]): Promise<void> {
         break
       case 'trade-status':
         await cmdTradeStatus(h)
+        break
+      case 'activity':
+        await cmdActivity(h)
         break
       case 'trade-book':
         await cmdTradeBook()

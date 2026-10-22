@@ -4,8 +4,9 @@
 import { describe, expect, it } from 'vitest'
 import { QuoteChanged } from '../../crypto/quote'
 import { BUY, SELL } from '../../crypto/tradeConfig'
+import { NO_PUBLIC_BALANCE, OrderTaken, TradeRefused } from '../../crypto/trade'
 import {
-  fillRows, fmtCusd, fmtPrice, isTaken, priceTitle, myOrderView, orderTotal, parsePrice, parseTari, placeRows, termsLine, timeLabel, tradeMessage, tradeRowView, usdOf,
+  NETWORK_MESSAGE, fillRows, fmtCusd, fmtPrice, isTaken, priceTitle, myOrderView, orderTotal, parsePrice, parseTari, placeRows, termsLine, timeLabel, tradeMessage, tradeRowView, usdOf,
 } from './tradeModel'
 
 const split = { fee: 10_000n }
@@ -90,12 +91,29 @@ describe('tradeMessage — plain words, no internals', () => {
 })
 
 describe('isTaken — somebody got there first, nothing charged', () => {
-  it('reads the refusals that mean the order went, and nothing else', () => {
-    expect(isTaken(new Error('This order is no longer open.'))).toBe(true)
-    expect(isTaken(new QuoteChanged('inputs-gone'))).toBe(true)
-    expect(isTaken(new Error("This order's payout output already exists, so filling it would fail. It cannot be filled."))).toBe(true)
+  it('is the ORDER gone or changed (OrderTaken), and nothing else', () => {
+    expect(isTaken(new OrderTaken('This order is no longer open.'))).toBe(true)
+    expect(isTaken(new OrderTaken("This order's payout output already exists, so filling it would fail. It cannot be filled."))).toBe(true)
     expect(isTaken(new QuoteChanged('fee-risen'))).toBe(false)
     expect(isTaken(new Error('Not enough private cUSD'))).toBe(false)
+  })
+
+  it('the trader’s own missing account is a normal error, never "taken" (the 0.47 matrix: wallet C)', () => {
+    const e = new Error('Could not estimate the network fee: indexer HTTP 400 — {"error":"SubstateManager error: Input substate component_0a3f9c4ca1251d6c9d3d62a85b99866de70f642559055374a1dadbf3dd8bf615 does not exist"}')
+    expect(isTaken(e)).toBe(false)
+    expect(tradeMessage(e)).toBe(NETWORK_MESSAGE)
+  })
+
+  it('the trader’s own coins changing re-prices; it does not say the order went', () => {
+    expect(isTaken(new QuoteChanged('inputs-gone'))).toBe(false)
+  })
+
+  it('a message that merely mentions the order is not OrderTaken', () => {
+    expect(isTaken(new Error('This order is no longer open.'))).toBe(false)
+  })
+
+  it('"no public balance yet" is shown as is, not as "Insufficient balance."', () => {
+    expect(tradeMessage(new TradeRefused(NO_PUBLIC_BALANCE))).toBe(NO_PUBLIC_BALANCE)
   })
 })
 

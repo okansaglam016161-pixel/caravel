@@ -234,7 +234,8 @@ export function orderLegitimacy(o: OrderInfo, board: Pick<BoardInfo, 'badge'>): 
 
 // ── The payout must not collide ──────────────────────────────────────────────
 
-export type PayoutCheck = { ok: true; outputId: string | null } | { ok: false; reason: string }
+/** `taken`: the payout already exists — the order was filled. Every other refusal is not "taken". */
+export type PayoutCheck = { ok: true; outputId: string | null } | { ok: false; reason: string; taken?: boolean }
 
 /**
  * Is the maker's payout still payable? A private payout's single output (the substate the fill will
@@ -262,7 +263,7 @@ export async function checkPayout(o: OrderInfo, read: VerifiedReader = verifiedR
     } catch {
       return { ok: false, reason: 'Could not check the maker\'s payout on every indexer — try again in a moment.' }
     }
-    if (status === 200) return { ok: false, reason: 'This order\'s payout output already exists, so filling it would fail. It cannot be filled.' }
+    if (status === 200) return { ok: false, taken: true, reason: 'This order\'s payout output already exists, so filling it would fail. It cannot be filled.' }
     if (status !== 404) return { ok: false, reason: 'Could not check the maker\'s payout on every indexer — try again in a moment.' }
   }
   return { ok: true, outputId }

@@ -39,6 +39,21 @@
 // order's own cancel key) — never by the owner key, so neither it nor the account appears. A public
 // path signs with the owner key, which an account needs. `ownerSigned` on every prepared trade says
 // which, and the harness checks it against the submitted transaction.
+//
+// ── A PUBLIC LEG ON A WALLET WITH NO ACCOUNT YET ─────────────────────────────
+//
+// The account address every unlock stores is DERIVED (accountRecovery): a wallet funded only privately
+// has one stored and no account on chain. Declaring that component fails the whole transaction
+// ("Input substate … does not exist"), so each public leg asks accountOnChain first:
+//
+//   RECEIVING into public (a fill's receive, a placement's payout) CREATES the account in the trade:
+//     CreateAccount on default rules is permissionless (the engine derives the address from the owner
+//     key), takes the incoming bucket as the account's first deposit, and is priced like every other
+//     instruction, so the fee shown still includes it. Never declared: it does not exist yet.
+//   PAYING from public (pay, escrow, or a cancel back to public — whose fee the account pays) is
+//     refused before anything is priced: an account that does not exist holds nothing.
+//   An account that EXISTS is declared and used, never re-created — CreateAccount without the
+//     component declared would mint a throwaway beside it.
 
 import {
   Mask, Network, StealthInput, StealthTransferStatement, TARI_RESOURCE_ADDRESS, TransactionBuilder, WasmStealthCrypto,
@@ -55,6 +70,7 @@ import { accountVaultIds, verifiedRead } from './cusdScan'
 import { cancelKeyFor } from './derivation'
 import { nextMaxEpoch } from './epoch'
 import { compareToShownFee, dryRunFee, mainIntentBudget, priceAtBudget, simulateFee, type FeeSimulation } from './feeProbe'
+import { accountOnChain } from './accountRecovery'
 import { awaitFinality } from './finality'
 import { INDEXER_URL, INDEXER_URLS } from './indexerConfig'
 import { RETRYING_MESSAGE } from './indexerRetry'
@@ -62,7 +78,7 @@ import { openOwnedUtxo } from './openUtxo'
 import { readOutputSubstateIds } from './outputIds'
 import { readFinalizedVerdict } from './txResult'
 import { PUBLIC_SEND_FEE_RESERVE } from './publicSend'
-import { confirmer } from './quote'
+import { QuoteChanged, confirmer } from './quote'
 import { markLocked, settleLocks } from './spentOutputs'
 import { encodeStatement } from './statementCbor'
 import { StaticSigner, type OwnedUtxo } from './stealthUtxos'
@@ -91,13 +107,31 @@ export class TradeRefused extends Error {
   }
 }
 
+/**
+ * The ORDER itself is gone, closed or changed — somebody got there first. Nothing was sent. The one
+ * refusal the Trade sheet shows as "taken"; a problem with anything else (this wallet's coins, its
+ * account, the network) is an ordinary error.
+ */
+export class OrderTaken extends TradeRefused {
+  constructor(message: string) {
+    super(message)
+    this.name = 'OrderTaken'
+  }
+}
+
+/** A public leg that would pay from an account this wallet has never created. */
+export const NO_PUBLIC_BALANCE = 'This wallet has no public balance yet. Make some TARI public first, or choose private.'
+
 /** Who is trading: the unlocked wallet, as the trade code needs it. */
 export interface Trader {
   /** The wallet (owner key). Signs only public paths; on private paths it only derives one-time keys. */
   wallet: SecretKeyWallet
   /** This wallet's Ootle address (`otl_esm_1…`). */
   address: string
-  /** Its account component, or null when it has none (public paths then refuse). */
+  /**
+   * Its account component ADDRESS, as unlock stored it — derived, so it may not exist on chain yet
+   * (see "A public leg on a wallet with no account yet"). null when it could not be identified.
+   */
   account: string | null
   /** derivation.PurposeKeys.tradeRoot — the cancel keys come from it. */
   tradeRoot: Uint8Array
@@ -230,6 +264,24 @@ async function declareAccount(tx: TradeTx, account: string) {
   for (const v of await accountVaults(account)) { tx.input(v.vault); tx.input(v.resource, false) }
 }
 
+/** CreateAccount on default rules (permissionless), optionally with `bucket` as its first deposit. */
+async function createAccount(t: Trader, bucket: { id: number; offset: null } | null): Promise<Ins> {
+  return { CreateAccount: { owner_public_key: bytesToHex(await t.wallet.getPublicKey()), owner_rule: null, access_rules: null, bucket_workspace_id: bucket } }
+}
+
+/**
+ * Before anything is priced: can this trade's public legs use the wallet's account? Returns whether
+ * the trade must CREATE it (a public receive into an account that does not exist yet); refuses a
+ * public payment from one. Private-only trades never read the account at all.
+ */
+async function publicAccount(t: Trader, paysFrom: boolean, receivesInto: boolean): Promise<{ create: boolean }> {
+  if (!paysFrom && !receivesInto) return { create: false }
+  if (!t.account) throw new TradeRefused('This wallet\u2019s public account could not be identified. Check your connection and try again, or choose private.')
+  if (await accountOnChain(t.account)) return { create: false }
+  if (paysFrom) throw new TradeRefused(NO_PUBLIC_BALANCE)
+  return { create: true }
+}
+
 // ── Paying, funding, taking (live.ts `payPrivately` / `payPublicly` / `fund` / `take`) ──
 
 /** Pay the fee from private tTARI coins in the fee intent. Returns the change coin (for a chained spend). */
@@ -283,10 +335,17 @@ async function fund(t: Trader, tx: TradeTx, resource: string, amount: bigint, mo
   return tx.put(1, stealthTransferInstruction({ resourceAddress: resource, revealedInputBucket: null, statement: m.st }, () => ws(0).Workspace) as unknown as Ins)
 }
 
-/** Hand the bucket on workspace `k` to this wallet: into the account, or into a new private output. */
-async function take(t: Trader, tx: TradeTx, k: number, resource: string, amount: bigint, mode: TradeMode) {
+/**
+ * Hand the bucket on workspace `k` to this wallet: into the account (creating it with this bucket
+ * when `create`), or into a new private output.
+ */
+async function take(t: Trader, tx: TradeTx, k: number, resource: string, amount: bigint, mode: TradeMode, create = false) {
   if (mode === 'public') {
     if (!t.account) throw new TradeRefused('This wallet has no public account to receive into.')
+    if (create) {
+      tx.push(1, await createAccount(t, { id: k, offset: null }))
+      return
+    }
     await declareAccount(tx, t.account)
     tx.push(1, call(t.account, 'deposit', [ws(k)]))
     return
@@ -331,6 +390,8 @@ export interface TradeDetails {
   orderId: string | null
   /** Place only: which of this wallet's cancel keys the order names. */
   cancelIndex: number | null
+  /** This trade creates the wallet's public account (a public receive into one not created yet). */
+  createsAccount: boolean
 }
 
 export interface TradeResult {
@@ -438,6 +499,18 @@ async function prepare(t: Trader, plan: Plan, onProgress?: (m: string) => void):
   }
   const preparedAt = Date.now()
   const check = confirmer({ preparedAt, simulate, inputs: { landed } })
+  // "Inputs gone" is the ORDER only when the order's own pinned version moved; this wallet's coins
+  // changing is an ordinary re-price.
+  const orderAware = async (step: () => Promise<void>) => {
+    try {
+      await step()
+    } catch (e) {
+      if (e instanceof QuoteChanged && e.reason === 'inputs-gone' && extra && await extra() !== 'not-landed') {
+        throw new OrderTaken('This order changed while you were confirming. Nothing was sent.')
+      }
+      throw e
+    }
+  }
   let used = false
 
   async function submit(onSubmitProgress?: (msg: string) => void): Promise<TradeResult> {
@@ -448,7 +521,7 @@ async function prepare(t: Trader, plan: Plan, onProgress?: (m: string) => void):
     used = true
     try {
       slog('Checking the fee…')
-      await check.ensureConfirmed()
+      await orderAware(() => check.ensureConfirmed())
       slog('Submitting…')
       const sub = await submitOnce(() => provider.submitTransaction(envelope as never), { landed, onBusyRetry: () => slog(RETRYING_MESSAGE) })
       const txId = sub.transaction_id as string
@@ -478,7 +551,10 @@ async function prepare(t: Trader, plan: Plan, onProgress?: (m: string) => void):
     }
   }
 
-  return { details: plan.details, effects: real.effects, fee, feeMode: plan.feeMode, ownerSigned: real.ownerSigns, preparedAt, simulate, confirm: check.confirm, submit }
+  return {
+    details: plan.details, effects: real.effects, fee, feeMode: plan.feeMode, ownerSigned: real.ownerSigns, preparedAt, simulate,
+    confirm: () => orderAware(() => check.confirm()), submit,
+  }
 }
 
 /** Private tTARI coins for a private fee, plus `extra` the main intent will take from their change. */
@@ -523,7 +599,7 @@ export async function preparePlace(t: Trader, params: PlaceParams, onProgress?: 
   if (board.paused) throw new TradeRefused('New orders are paused on the Board right now.')
   if (n < board.minOrder) throw new TradeRefused(`The smallest order is ${board.minOrder} µtTARI.`)
   if (p <= 0n) throw new TradeRefused('The cUSD amount must be positive.')
-  if ((escrow === 'public' || payout === 'public') && !t.account) throw new TradeRefused('This wallet has no public account.')
+  const { create } = await publicAccount(t, escrow === 'public', payout === 'public')
   const split = tradeFeeSplit(n, board.feeBps, board.caravelPct)
   const owed = side === SELL ? { resource: CUSD, amount: p } : { resource: TARI, amount: n - split.fee }
   const escrowRes = side === SELL ? TARI : CUSD
@@ -540,7 +616,7 @@ export async function preparePlace(t: Trader, params: PlaceParams, onProgress?: 
       action: 'place', side, n, p, tradeFee: split.fee, caravelCut: split.caravelCut, burnCut: split.burnCut,
       pays: { resource: escrowRes, amount: escrowAmt, mode: escrow },
       gets: { resource: owed.resource, amount: owed.amount, mode: payout },
-      orderId: null, cancelIndex,
+      orderId: null, cancelIndex, createsAccount: create,
     },
     watch: async () => null,
     build: async (fee) => {
@@ -560,7 +636,10 @@ export async function preparePlace(t: Trader, params: PlaceParams, onProgress?: 
       } else {
         method = side === SELL ? 'place_sell_public' : 'place_buy_public'
         args = [ws(k), amountLiteral(side === SELL ? p : n), componentAddressLiteral(t.account as never), publicKeyLiteral(cancelPk)]
-        tx.input(t.account!, false)
+        // The order stores the payout address, and the engine refuses an address it cannot see: an
+        // existing account is declared (read only); a new one is created first, in this transaction.
+        if (create) tx.push(1, await createAccount(t, null))
+        else tx.input(t.account!, false)
       }
       tx.push(1, call(TRADE_BOARD_ADDRESS, method, args))
       tx.input(TRADE_BOARD_ADDRESS); tx.input(board.badgeVault); tx.input(board.badge, false)
@@ -593,13 +672,14 @@ export interface FillParams {
 export async function checkFillSafety(params: Pick<FillParams, 'orderId' | 'expectedN' | 'expectedP'>, board?: BoardInfo): Promise<OrderInfo> {
   const b = board ?? await readBoard()
   const o = await readOrder(params.orderId)
-  if (!o) throw new TradeRefused('That order does not exist.')
+  if (!o) throw new OrderTaken('That order does not exist.')
   const notLegit = orderLegitimacy(o, b)
   if (notLegit) throw new TradeRefused(notLegit)
-  if (o.status !== ORDER_OPEN) throw new TradeRefused('This order is no longer open.')
-  if (o.n !== params.expectedN || o.p !== params.expectedP) throw new TradeRefused('This order\'s terms are not the ones you were shown.')
+  if (o.status !== ORDER_OPEN) throw new OrderTaken('This order is no longer open.')
+  if (o.n !== params.expectedN || o.p !== params.expectedP) throw new OrderTaken('This order\'s terms are not the ones you were shown.')
   const payout = await checkPayout(o)
-  if (!payout.ok) throw new TradeRefused(payout.reason)
+  // Its payout already existing means it was filled; any other payout problem is not "taken".
+  if (!payout.ok) throw payout.taken ? new OrderTaken(payout.reason) : new TradeRefused(payout.reason)
   return o
 }
 
@@ -607,7 +687,7 @@ export async function prepareFill(t: Trader, params: FillParams, onProgress?: (m
   onProgress?.('Checking the order…')
   const board = await readBoard()
   const o = await checkFillSafety(params, board)
-  if ((params.pay === 'public' || params.receive === 'public') && !t.account) throw new TradeRefused('This wallet has no public account.')
+  const { create } = await publicAccount(t, params.pay === 'public', params.receive === 'public')
   const due = o.side === SELL ? { resource: CUSD, amount: o.p } : { resource: TARI, amount: o.n }
   const gets = o.side === SELL ? { resource: TARI, amount: o.n - o.fee } : { resource: CUSD, amount: o.p }
 
@@ -622,6 +702,7 @@ export async function prepareFill(t: Trader, params: FillParams, onProgress?: (m
     details: {
       action: 'fill', side: o.side, n: o.n, p: o.p, tradeFee: o.fee, caravelCut: o.caravelCut, burnCut: o.burnCut,
       pays: { ...due, mode: params.pay }, gets: { ...gets, mode: params.receive }, orderId: o.id, cancelIndex: null,
+      createsAccount: create,
     },
     // The order pinned at the version the safety check read: if anything moved it, refuse.
     watch: async () => versionsUnchanged([o.id]),
@@ -632,7 +713,7 @@ export async function prepareFill(t: Trader, params: FillParams, onProgress?: (m
       else chained = (await payPrivately(t, tx, tariCoins!, fee)).change
       const k = await fund(t, tx, due.resource, due.amount, params.pay, chained, o.side === SELL ? cusd : null)
       const kg = tx.put(1, call(o.id, 'fill', [ws(k), amountLiteral(o.n), amountLiteral(o.p)]))
-      await take(t, tx, kg, gets.resource, gets.amount, params.receive)
+      await take(t, tx, kg, gets.resource, gets.amount, params.receive, create)
       tx.input(o.id, true, o.version)
       tx.input(o.escrowVault)
       tx.input(CUSD, false); tx.input(TARI, false)
@@ -659,12 +740,13 @@ export interface CancelParams {
 export async function prepareCancel(t: Trader, params: CancelParams, onProgress?: (m: string) => void): Promise<PreparedTrade> {
   onProgress?.('Checking the order…')
   const o = await readOrder(params.orderId)
-  if (!o) throw new TradeRefused('That order does not exist.')
+  if (!o) throw new OrderTaken('That order does not exist.')
   if (o.template !== TRADE_ORDER_TEMPLATE || o.board !== TRADE_BOARD_ADDRESS) throw new TradeRefused('This is not a Caravel Trade order.')
-  if (o.status !== ORDER_OPEN) throw new TradeRefused('This order is no longer open.')
+  if (o.status !== ORDER_OPEN) throw new OrderTaken('This order is no longer open.')
   const cancelKey = cancelKeyFor(t.tradeRoot, params.cancelIndex)
   if (o.cancelKeyHex !== bytesToHex(await cancelKey.getPublicKey())) throw new TradeRefused('This wallet does not hold this order\'s cancel key.')
-  if (params.to === 'public' && !t.account) throw new TradeRefused('This wallet has no public account.')
+  // Back to public: the account takes the escrow AND pays the fee, so it must already exist.
+  await publicAccount(t, params.to === 'public', false)
   const back = o.side === SELL ? { resource: TARI, amount: o.n } : { resource: CUSD, amount: o.p }
   const tariCoins = params.to === 'private' ? await feeCoins(t, 0n) : null
 
@@ -673,6 +755,7 @@ export async function prepareCancel(t: Trader, params: CancelParams, onProgress?
     details: {
       action: 'cancel', side: o.side, n: o.n, p: o.p, tradeFee: 0n, caravelCut: 0n, burnCut: 0n,
       pays: null, gets: { ...back, mode: params.to }, orderId: o.id, cancelIndex: params.cancelIndex,
+      createsAccount: false,
     },
     watch: async () => versionsUnchanged([o.id]),
     build: async (fee) => {

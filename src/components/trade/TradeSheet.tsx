@@ -31,7 +31,7 @@ import { Sheet } from '../wallet/v2/primitives'
 import { TICKER } from '../wallet/v2/format'
 import { C, MONO } from '../wallet/v2/tokens'
 import {
-  INSUFFICIENT_MESSAGE, fillRows, fmtCusdWithUnit, fmtPrice, fmtTari, isTaken, orderTotal, parsePrice, parseTari,
+  INSUFFICIENT_MESSAGE, fillRows, fmtCusdWithUnit, fmtPrice, fmtTari, isTaken, isTakenReject, orderTotal, parsePrice, parseTari,
   placeRows, termsLine, tradeMessage, type Row,
 } from './tradeModel'
 
@@ -145,7 +145,7 @@ export default function TradeSheet({ mode, board, onClose, onTraded }: {
       if (run.outcome === 'Commit') setView({ step: 'success', run, details: prepared.details })
       else if (run.outcome === 'Timeout') setView({ step: 'unconfirmed', txId: run.txId })
       // A pinned order that moved is refused before it runs and pays nothing: somebody got there first.
-      else if (!run.feeOnly && mode.kind === 'fill' && /no longer open|version|FailedToLock|is down/i.test(run.reason ?? '')) setView({ step: 'taken' })
+      else if (!run.feeOnly && mode.kind === 'fill' && isTakenReject(run.reason, mode.entry.orderId)) setView({ step: 'taken' })
       else setView({
         step: 'error',
         message: run.feeOnly
@@ -153,7 +153,8 @@ export default function TradeSheet({ mode, board, onClose, onTraded }: {
           : 'The network turned this trade down. Nothing was charged.',
       })
     } catch (e) {
-      if (e instanceof QuoteChanged && (e.reason === 'fee-risen' || e.reason === 'stale')) {
+      // Re-priced and asked again: a fee that rose, a quote gone stale, or this wallet's own coins changing.
+      if (e instanceof QuoteChanged && (e.reason === 'fee-risen' || e.reason === 'stale' || e.reason === 'inputs-gone')) {
         setLocked(false)
         void review(e.message)   // re-priced, and asked again — never sent at the old price
         return
@@ -323,18 +324,23 @@ function reviewRows(mode: SheetMode, prepared: PreparedTrade | null, pay: TradeM
   }
   if (!prepared) return [fee]
   const d = prepared.details
+  // Receiving into public on a wallet that has never been public: the trade opens the account, and
+  // the fee above already includes it.
+  const opens: Row[] = d.createsAccount ? [{ k: 'Public account', v: 'Opened by this trade' }] : []
   if (mode.kind === 'place') {
     return [
       { k: mode.side === SELL ? 'Sell' : 'Buy', v: termsLine(d.n, d.p), strong: true },
       ...placeRows(mode.side, d.n, d.p, { fee: d.tradeFee }),
       fee,
       { k: 'Pay from · Get paid', v: `${modeWord(pay)} · ${modeWord(get)}` },
+      ...opens,
     ]
   }
   return [
     ...fillRows({ side: d.side, n: d.n, p: d.p, fee: d.tradeFee }),
     fee,
     { k: 'Pay with · Receive as', v: `${modeWord(pay)} · ${modeWord(get)}` },
+    ...opens,
   ]
 }
 

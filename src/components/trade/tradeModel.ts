@@ -14,7 +14,7 @@
 
 import { CUSD_ASSET, formatUnits, formatUsd } from '../../crypto/assets'
 import type { BookEntry, MyOrder, Price, RecentTrade } from '../../crypto/market'
-import { QuoteChanged } from '../../crypto/quote'
+import { NO_PUBLIC_BALANCE, OrderTaken } from '../../crypto/trade'
 import { SELL, type OrderSide } from '../../crypto/tradeConfig'
 import { TICKER, fmt6, timeLabel } from '../wallet/v2/format'
 
@@ -128,6 +128,7 @@ export function tradeMessage(e: unknown): string {
   const m = e instanceof Error ? e.message : String(e)
   if (/locked/i.test(m) && /unlock/i.test(m)) return 'Your wallet is locked. Unlock it to trade.'
   if (/smallest order/i.test(m)) return `The smallest order is 1 ${TICKER}.`
+  if (m === NO_PUBLIC_BALANCE) return NO_PUBLIC_BALANCE
   if (/not enough|no public account|must leave change|too small|insufficient/i.test(m)) return INSUFFICIENT_MESSAGE
   if (/paused/i.test(m)) return 'New orders are paused right now. Nothing was sent. Try again later.'
   if (/kept changing/i.test(m)) return 'The network fee kept changing. Nothing was sent. Try again in a moment.'
@@ -141,14 +142,21 @@ export function tradeMessage(e: unknown): string {
 }
 
 /**
- * Was this refusal "somebody got there first"? The order is no longer open (checked before pricing),
- * moved between review and confirm (the version a fill pins), or its payout now exists. Every one of
- * these is refused before anything is charged.
+ * Was this refusal "somebody got there first"? Only when it is about the ORDER: gone, closed, its terms
+ * changed, its payout already made, or its pinned version moved between review and confirm — each an
+ * OrderTaken from crypto/trade, refused before anything is charged. A missing input that is the
+ * trader's own (its coins, its account) is an ordinary error, never "taken".
  */
 export function isTaken(e: unknown): boolean {
-  if (e instanceof QuoteChanged) return e.reason === 'inputs-gone'
-  const m = e instanceof Error ? e.message : String(e)
-  return /no longer open|does not exist|payout output already exists|terms are not the ones/i.test(m)
+  return e instanceof OrderTaken
+}
+
+/**
+ * A fill the network turned down after it was sent: "taken" only when the reason names the order
+ * itself (it moved, or is down), never one of the taker's own inputs.
+ */
+export function isTakenReject(reason: string | undefined, orderId: string): boolean {
+  return !!reason && reason.includes(orderId.replace(/^component_/, '')) && /no longer open|version|FailedToLock|is down/i.test(reason)
 }
 
 /** The shared chain-time label (wallet/v2/format.timeLabel), re-exported for the Trade page. */

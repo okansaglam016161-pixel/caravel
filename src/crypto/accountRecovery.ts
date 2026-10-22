@@ -43,6 +43,7 @@ import { loadAccountAddress, saveAccountAddress } from './accountStore'
 import { nextMaxEpoch } from './epoch'
 import { INDEXER_URL, INDEXER_URLS } from './indexerConfig'
 import { fetchWithRetry } from './indexerRetry'
+import { verifiedRead, type VerifiedReader } from './cusdScan'
 
 
 /** A dry run is one round trip; this bounds it so a hung request cannot stall an unlock. */
@@ -130,6 +131,11 @@ export type AccountProbe = (wallet: SecretKeyWallet) => Promise<string | null>
  * either unavailable (the indexer has no owner-based lookup) or requires the very address being
  * recovered. Guessing would add a failure mode to save an HTTP request.
  *
+ * THE ADDRESS IS NOT THE ACCOUNT. The probe names the address a CreateAccount WOULD use (the engine
+ * derives it from the owner key), whether or not that account was ever created — and a wallet funded
+ * only privately never creates one. So a stored address says where the account is or will be, never
+ * that it exists: anything about to declare it as an input, or pay from it, asks accountOnChain.
+ *
  * IDEMPOTENT AND CHEAP ON THE COMMON PATH: a wallet that already has an address short-circuits
  * before touching the network, so this is a no-op for every wallet after the first unlock.
  * saveAccountAddress is first-write-wins, so even a concurrent recovery cannot overwrite a good
@@ -146,4 +152,20 @@ export async function recoverAccountAddress(
   const recovered = await probe(wallet)
   if (recovered) saveAccountAddress(ownerAddress, recovered)
   return recovered
+}
+
+/**
+ * Does the account at `account` (a stored, derived address) exist on chain?
+ *
+ * true on a verified read of the component; false only when every indexer that answered said 404 —
+ * the address is derived, so "absent" is the normal state of a wallet that has never been public.
+ * Anything else (unreachable, busy, only unverified answers) THROWS: a transaction must not be built
+ * on a guess about whether the account is there, because building for the wrong answer either
+ * declares a component that does not exist or creates a throwaway one beside the real account.
+ */
+export async function accountOnChain(account: string, read: VerifiedReader = verifiedRead): Promise<boolean> {
+  const r = await read(`/substates/${account}`)
+  if (r.kind === 'verified') return true
+  if (r.kind === 'absent') return false
+  throw new Error('Could not read this wallet\u2019s public account just now — try again in a moment.')
 }

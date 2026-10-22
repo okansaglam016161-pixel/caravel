@@ -90,16 +90,16 @@ import { CUSD_FAUCET_COMPONENT_ADDRESS, cusdFaucetReceiptId } from '../src/crypt
 import { prepareCusdClaim, claimCusd, readCusdClaimed, CusdClaimRefused, type PreparedCusdClaim } from '../src/crypto/cusdFaucet'
 import { scanCusdPrivate, readCusdPublic, viewKeyOpener, cusdTotal, scanCusd } from '../src/crypto/cusdScan'
 import { prepareFill, prepareCancel, type PreparedTrade, type Trader, type TradeDetails } from '../src/crypto/trade'
-import { preparePlaceOrder, recoverTradeState, refreshOwnOrders, runTrade, traderFor } from '../src/crypto/tradeActions'
+import { preparePlaceOrder, recoverTradeState, refreshOwnOrders, runTrade, syncOwnOrders, traderFor } from '../src/crypto/tradeActions'
 import { checkPayout, listBoardOrderIds, orderLegitimacy, readBoard, readOrder } from '../src/crypto/tradeRead'
 import { BUY, SELL, TRADE_CARAVEL_FEE_ACCOUNT, type TradeMode } from '../src/crypto/tradeConfig'
-import { loadTradeState } from '../src/crypto/tradeStore'
 import { loadCusdClaims, recordCusdClaim } from '../src/crypto/cusdStore'
+import { knownPayoutIds, loadTradeState } from '../src/crypto/tradeStore'
 import { reconcile } from '../src/crypto/reconcile'
 import { loadLedger } from '../src/crypto/utxoLedger'
 import { MarketReader, type BookEntry } from '../src/crypto/market'
 import { decodeStatement, encodeStatement } from '../src/crypto/statementCbor'
-import { buildActivity, type TradeActivityRow } from '../src/crypto/activity'
+import { buildActivity, knownReceiveIds, type TradeActivityRow } from '../src/crypto/activity'
 import { Mask, StealthTransferStatement, TARI_RESOURCE_ADDRESS, createOutput, signBalanceProof } from '@tari-project/ootle'
 import { execFileSync } from 'node:child_process'
 import { isDeepStrictEqual } from 'node:util'
@@ -2562,13 +2562,21 @@ const ACTIVITY_TRADE_TITLE: Record<TradeActivityRow['tradeKind'], string> = {
 
 async function cmdActivity(h: Harnessed): Promise<void> {
   rule('activity  (crypto/activity.buildActivity, the wallet’s Activity list)  ·  READ-ONLY')
+  // The wallet's own refresh first, as WalletContext runs it on every rescan: orders placed elsewhere
+  // are found, and every open one re-read.
+  field('order sync', `${await syncOwnOrders({ address: h.address, tradeRoot: h.purposeKeys.tradeRoot })} change(s)  (crypto/tradeActions.syncOwnOrders)`)
   const journal = loadJournal(h.address)
   const st = loadTradeState(h.address)
-  // Reconciled receives, from the same scan and stores WalletModal reconciles. No chat here, so no
-  // message-linked rows and no knownReceiveUtxoIds.
+  // Reconciled receives, from the same scan, stores and attributions WalletModal reconciles (no chat
+  // here, so only the trade payouts are attributed).
   const scan = await scanWallet(h.viewSecret, () => {}, new AbortController().signal, { excluded: loadExcludedIds(h.address), walletAddress: h.address })
-  const rec = reconcile({ owned: scan.utxos, journal, ledger: loadLedger(h.address), epoch: loadEpoch(h.address) })
+  const attributed = knownReceiveIds([], st.records)
+  const rec = reconcile({ owned: scan.utxos, journal, ledger: loadLedger(h.address), epoch: loadEpoch(h.address), knownReceiveUtxoIds: attributed })
   field('reconcile', rec.reason === null ? `${rec.receives.length} receive(s), ${rec.suppressed.length} suppressed` : `nothing classified: ${rec.reason}`)
+  const payouts = new Set(knownPayoutIds(h.address))
+  for (const u of scan.utxos.filter(u => payouts.has(u.id))) {
+    field('trade payout', `${u.id.slice(-20)}  ${amt(u.amount)}  → attributed: never a "Received" row`)
+  }
   const cusdUnits = new Map(loadCusdClaims(h.address).map(c => [c.journalId, c.units] as const))
   const timeIds = [...new Set([
     ...journal.filter(e => e.kind.startsWith('trade-') && e.txId).map(e => e.txId!),

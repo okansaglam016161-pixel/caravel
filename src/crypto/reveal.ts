@@ -117,7 +117,7 @@ import {
   StaticSigner, reachableTotal, scanOwnedUtxos, selectStealthInputs, type OwnedUtxo,
 } from './stealthUtxos'
 import { awaitFinality } from './finality'
-import { markLocked, promoteToSpent, release } from './spentOutputs'
+import { markLocked, settleLocks } from './spentOutputs'
 import { loadSelectionExcludedIds, newReservationToken, releaseCoins, reserveCoins } from './coinReservations'
 import { confirmer } from './quote'
 import { INDEXER_URL } from './indexerConfig'
@@ -713,8 +713,8 @@ export async function prepareReveal(
         : undefined
       provider.stopWatcher?.()
 
-      if (outcome === 'Commit') promoteToSpent(ownerAddress, txId)
-      else if (outcome === 'Reject') release(ownerAddress, txId)
+      // Commit spends, a reject releases, a fee-only commit settles coin by coin, a timeout keeps.
+      settleLocks(ownerAddress, txId, outcome, body)
 
       // The free capture, as conceal does it: a reveal runs CreateAccount, so a wallet that never
       // stored its address gets one here. saveAccountAddress is first-write-wins, so a repeat is a

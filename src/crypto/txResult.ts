@@ -36,8 +36,15 @@
 export type TxVerdict =
   /** `Accept`. The transaction committed in full — this is the only success. */
   | { kind: 'accept' }
-  /** `AcceptFeeRejectRest`. The fee was taken and the transaction did not happen. */
-  | { kind: 'fee-only'; reason: string }
+  /**
+   * `AcceptFeeRejectRest`. The fee was taken and the transaction did not happen.
+   *
+   * `consumed` is what the FEE INTENT took down — the `down_substates` of the fee diff. The fee
+   * intent's own inputs (the coin a private fee was paid from) ARE spent; anything only the rejected
+   * main intent would have spent is not. `null` when the diff could not be read, which settles
+   * nothing (see spentOutputs.resolveLockAction).
+   */
+  | { kind: 'fee-only'; reason: string; consumed: string[] | null }
   /** `Reject`. Nothing committed. */
   | { kind: 'reject'; reason: string }
   /** Decided, but in terms this code cannot read. Failure, by the rule above. */
@@ -143,7 +150,7 @@ export function readFinalizedVerdict(body: unknown): TxVerdict | null {
     // worth reporting. Tolerant of a non-array in case the wire form ever changes.
     const pair = result.AcceptFeeRejectRest
     const reason = Array.isArray(pair) ? pair[1] : pair
-    return { kind: 'fee-only', reason: describeRejectReason(reason) }
+    return { kind: 'fee-only', reason: describeRejectReason(reason), consumed: Array.isArray(pair) ? downSubstateIds(pair[0]) : null }
   }
 
   if (result.Reject !== undefined) {
@@ -152,6 +159,22 @@ export function readFinalizedVerdict(body: unknown): TxVerdict | null {
 
   const seen = Object.keys(result).join(', ') || '(none)'
   return { kind: 'unreadable', reason: `the network returned an unrecognised transaction result (${seen})` }
+}
+
+/**
+ * The ids a `SubstateDiff` took down (`down_substates: [[id, version], …]`), or null when the shape is
+ * not that — never a partial list, because a list missing a consumed coin would hand it back.
+ */
+export function downSubstateIds(diff: unknown): string[] | null {
+  const down = obj(diff)?.down_substates
+  if (!Array.isArray(down)) return null
+  const ids: string[] = []
+  for (const entry of down) {
+    const id = Array.isArray(entry) ? entry[0] : undefined
+    if (typeof id !== 'string') return null
+    ids.push(id)
+  }
+  return ids
 }
 
 /**

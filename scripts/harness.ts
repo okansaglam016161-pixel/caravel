@@ -44,7 +44,7 @@ import { scanOwnedUtxos, MAX_STEALTH_INPUTS, RESOURCE_HEX } from '../src/crypto/
 import { fetchAllUtxoRows } from '../src/crypto/utxoFeed'
 import { INDEXER_URLS, pointRead } from '../src/crypto/indexerConfig'
 import { fetchOwnedRows, recoveryCandidates } from '../src/crypto/ownedFeed'
-import { beginEntry, loadJournal } from '../src/crypto/journalStore'
+import { beginEntry, loadEpoch, loadJournal } from '../src/crypto/journalStore'
 import { readRevealedBalance } from '../src/crypto/revealedBalance'
 import { prepareConceal, MIN_CONCEAL_MICROTARI } from '../src/crypto/conceal'
 import { prepareReveal, MIN_REVEAL_MICROTARI, maxRevealable } from '../src/crypto/reveal'
@@ -54,7 +54,11 @@ import { preparePublicSend } from '../src/crypto/publicSend'
 import { preparePrivateBurn, preparePublicBurn, type BurnSource } from '../src/crypto/burn'
 import {
   BURN_WALLET_COMPONENT, accountVaultIds, classifyBurn, listDeposits, readBurnWallet,
+  type BurnClassification,
 } from '../src/crypto/burnWallet'
+import { buildBurnRows, burnDetail, burnTitle } from '../src/components/burn/burnModel'
+import { timeLabel } from '../src/components/wallet/v2/format'
+import { txTime, type TxTime } from '../src/crypto/txTimes'
 import { parseOotleAddress } from '@tari-project/ootle-wasm'
 import { FAUCET_COMPONENT_ADDRESS, FAUCET_VAULT_ADDRESS, faucetReceiptId } from '../src/crypto/faucetConfig'
 import { decodeFaucetState, decodeFaucetVault, faucetStatusFrom } from '../src/crypto/faucetStatus'
@@ -81,6 +85,24 @@ import {
 import { IndexerProvider } from '@tari-project/ootle-indexer'
 import { Network, WasmStealthCrypto } from '@tari-project/ootle'
 import { SecretKeyWallet } from '@tari-project/ootle-secret-key-wallet'
+import { CUSD_ASSET, formatUnits } from '../src/crypto/assets'
+import { CUSD_FAUCET_COMPONENT_ADDRESS, cusdFaucetReceiptId } from '../src/crypto/cusdFaucetConfig'
+import { prepareCusdClaim, claimCusd, readCusdClaimed, CusdClaimRefused, type PreparedCusdClaim } from '../src/crypto/cusdFaucet'
+import { scanCusdPrivate, readCusdPublic, viewKeyOpener, cusdTotal, scanCusd } from '../src/crypto/cusdScan'
+import { prepareFill, prepareCancel, type PreparedTrade, type Trader, type TradeDetails } from '../src/crypto/trade'
+import { preparePlaceOrder, recoverTradeState, refreshOwnOrders, runTrade, syncOwnOrders, traderFor } from '../src/crypto/tradeActions'
+import { checkPayout, listBoardOrderIds, orderLegitimacy, readBoard, readOrder } from '../src/crypto/tradeRead'
+import { BUY, SELL, TRADE_CARAVEL_FEE_ACCOUNT, type TradeMode } from '../src/crypto/tradeConfig'
+import { loadCusdClaims, recordCusdClaim } from '../src/crypto/cusdStore'
+import { cancelOutputIdsOf, knownPayoutIds, loadTradeState } from '../src/crypto/tradeStore'
+import { reconcile } from '../src/crypto/reconcile'
+import { loadLedger } from '../src/crypto/utxoLedger'
+import { MarketReader, type BookEntry } from '../src/crypto/market'
+import { decodeStatement, encodeStatement } from '../src/crypto/statementCbor'
+import { buildActivity, knownReceiveIds, type TradeActivityRow } from '../src/crypto/activity'
+import { Mask, StealthTransferStatement, TARI_RESOURCE_ADDRESS, createOutput, signBalanceProof } from '@tari-project/ootle'
+import { execFileSync } from 'node:child_process'
+import { isDeepStrictEqual } from 'node:util'
 
 // ── WHICH INDEXER ────────────────────────────────────────────────────────────
 //
@@ -168,12 +190,20 @@ const realFetch = globalThis.fetch
 /** See the note in the wrapper below. */
 const BLOCK_SSE = (process.env.CARAVEL_HARNESS_BLOCK_SSE ?? '') !== ''
 
+/** `trade-offline-check` flips this to cut EVERY request, as a browser gone offline would. */
+const harnessNet = { offline: false }
+
 globalThis.fetch = async function instrumentedFetch(input: RequestInfo | URL, init?: RequestInit) {
   const requested = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
   const method = (init?.method ?? (typeof input === 'object' && 'method' in input ? input.method : 'GET') ?? 'GET').toUpperCase()
   const reqBody = typeof init?.body === 'string' ? init.body : undefined
   const started = performance.now()
   const n = net.length + 1
+
+  if (harnessNet.offline) {
+    net.push({ n, method, url: requested, status: 'OFFLINE (trade-offline-check)', bytes: 0, ms: 0 })
+    throw new TypeError('Failed to fetch')
+  }
 
   // ── SIMULATING A BROKEN EVENT STREAM ─────────────────────────────────────
   //
@@ -1257,6 +1287,96 @@ async function cmdFaucetClaim(h: Harnessed, yes: boolean): Promise<void> {
   console.log('  The claim receipt can take as long to appear on the indexers; re-run faucet-status after.')
 }
 
+// ── cUSD (T3a) ─────────────────────────────────────────────────────────────────
+
+const cusdAmt = (units: bigint) => `${formatUnits(units, CUSD_ASSET.decimals)} cUSD  (${units.toLocaleString('en-US')} base units)`
+
+/** READ-ONLY. The wallet's cUSD position and the faucet's status for it, with the claim dry run. */
+async function cmdCusdStatus(h: Harnessed): Promise<void> {
+  rule('cusd-status  (crypto/cusdScan + crypto/cusdFaucet.prepareCusdClaim)  ·  READ-ONLY, nothing is submitted')
+  await primeAccount(h)
+  const faucetPkHex = hex(await h.purposeKeys.faucet.getPublicKey())
+  field('cUSD resource', CUSD_ASSET.resource)
+  field('faucet', CUSD_FAUCET_COMPONENT_ADDRESS)
+  field('receipt id', cusdFaucetReceiptId(faucetPkHex))
+
+  const mark = net.length
+  const claimed = await readCusdClaimed(faucetPkHex)
+  field('claimed?', claimed)
+
+  rule('cUSD balance  (verified reads only)')
+  const priv = await scanCusdPrivate({ walletAddress: h.address, open: viewKeyOpener(h.viewSecret) })
+  const pub = await readCusdPublic(loadAccountAddress(h.address))
+  field('private', `${cusdAmt(priv.units)}${priv.incomplete ? '  (INCOMPLETE — some owned output unverified; not a figure to trust)' : ''}`)
+  field('  outputs', `${priv.outputs.length} counted · ${priv.listed} listed · recovered ${priv.recovered.length} · gone ${priv.gone.length} · unverified ${priv.unverified.length}`)
+  field('public', pub.kind === 'ok' ? cusdAmt(pub.units) : `unknown — ${pub.reason}`)
+  const total = cusdTotal({ private: priv, public: pub })
+  field('TOTAL', total === null ? '··· (not established)' : cusdAmt(total))
+
+  rule('claim dry run  (prepareCusdClaim — simulation only)')
+  try {
+    const pc = await prepareCusdClaim(h.wallet, h.address, h.purposeKeys.faucet, stage)
+    field('verdict', 'Accept')
+    field('claim', cusdAmt(pc.claimUnits))
+    field('fee (tTARI)', `${amt(pc.fee)}  (paid from this wallet's tTARI — the cUSD payout cannot cover it)`)
+  } catch (e) {
+    if (e instanceof CusdClaimRefused) field('verdict', `REFUSED — ${e.refusal}: ${e.message}`)
+    else field('verdict', `FAILED — ${e instanceof Error ? e.message : String(e)}`)
+  }
+  printNet(mark)
+}
+
+/** WRITE. Claim 10,000 cUSD; fee from this wallet's own tTARI. One per key, ever. */
+async function cmdCusdClaim(h: Harnessed, yes: boolean): Promise<void> {
+  rule('cusd-claim  (crypto/cusdFaucet.claimCusd)')
+  await primeAccount(h)
+  console.log(yes
+    ? '  ⚠  WRITE COMMAND. Submits a real cUSD claim. One per key, ever. Fee comes from your tTARI.'
+    : '  Add --yes to actually claim. Without it the claim is PRICED and CHECKED (dry runs), never sent.')
+  if (!yes) {
+    rule('price + confirm check  (prepareCusdClaim → confirm — dry runs only)')
+    let pc: PreparedCusdClaim
+    try {
+      pc = await prepareCusdClaim(h.wallet, h.address, h.purposeKeys.faucet, stage)
+    } catch (e) {
+      if (e instanceof CusdClaimRefused) { field('verdict', `REFUSED — ${e.refusal}: ${e.message}`); return }
+      throw e
+    }
+    field('banner', `You receive ${cusdAmt(pc.claimUnits)}, fee ${amt(pc.fee)} from your tTARI`)
+    await pc.confirm()
+    field('confirm check', 'PASSES — fresh, receipt absent, final claim accepted at the exact fee')
+    console.log('\n  STOPPED BEFORE SUBMIT. Nothing was sent.')
+    return
+  }
+
+  const mark = net.length
+  const result = await claimCusd(h.wallet, h.address, h.purposeKeys.faucet, stage)
+  field('tx id', result.txId)
+  field('outcome', result.outcome)
+  if (result.reason) console.log(`\n  ${result.reason}\n`)
+  field('cUSD added', result.outcome === 'Commit' ? cusdAmt(result.units) : '(not committed)')
+  field('fee (tTARI)', result.feeMicrotari === undefined ? '(not reported)' : amt(result.feeMicrotari))
+  field('cUSD output', result.cusdOutputIds ? JSON.stringify(result.cusdOutputIds) : 'undefined')
+  field('tTARI change', result.tariChangeOutputIds ? JSON.stringify(result.tariChangeOutputIds) : 'undefined')
+  field('tTARI spent', JSON.stringify(result.spentInputIds))
+  printNet(mark)
+  if (result.outcome === 'Commit') {
+    // What the app does on commit (CusdFaucetClaimPanel): record the output, add it at once
+    // (cusdScan.addCusdOutput), then the full scan — which must KEEP it (an own, fresh output).
+    rule('right after the claim  (the immediate figure, then a scan at once)')
+    const outputId = result.cusdOutputIds?.[0] ?? ''
+    recordCusdClaim(h.address, { journalId: `harness-${result.txId}`, txId: result.txId, outputId, units: result.units, at: Date.now() })
+    const t0 = performance.now()
+    const scan = await scanCusdPrivate({ walletAddress: h.address, open: viewKeyOpener(h.viewSecret) })
+    field('scan at once', `${cusdAmt(scan.units)}${scan.incomplete ? '  (INCOMPLETE)' : ''} in ${((performance.now() - t0) / 1000).toFixed(1)}s`)
+    field('  claim output', scan.outputs.some(o => o.id === outputId)
+      ? `counted${scan.ownUnverified.includes(outputId) ? ' (served unverified — counted as our own output)' : ' (verified)'}`
+      : 'NOT COUNTED ✗')
+  }
+  console.log('\n  The cUSD output takes 60-90s to appear in /utxos; the cUSD scan recovers it by id before then.')
+  console.log('  Re-run cusd-status to see the 10,000 cUSD, then again after a minute to see it from the listing.')
+}
+
 /** A brand-new wallet for `faucet-claim --fresh`. Its phrase goes to a 600 file, never to stdout. */
 async function freshIdentity(): Promise<Harnessed> {
   const { mnemonic } = await createWalletSeed()
@@ -2262,6 +2382,438 @@ async function cmdProveShortFee(h: Harnessed, dest: string, amount: bigint, yes:
   if (failures) process.exitCode = 1
 }
 
+// ══ CARAVEL TRADE (T3b) ═══════════════════════════════════════════════════════
+//
+// The trade paths the Trade page (T4) will drive — crypto/trade (place, fill, cancel), crypto/tradeRead
+// (the safety check), crypto/tradeActions (journal, trade record, cancel keys) — run against esmeralda.
+// Every write is priced and dry-run on EVERY indexer first; without --yes it stops after the confirm
+// check. With --yes it snapshots balances (the app's own scans), sends, and states: fee shown vs fee
+// charged, the 0.7% / 0.3% split as it landed, which keys signed (from the chain), and every delta.
+
+const cusdFmt = (u: bigint) => `${formatUnits(u, CUSD_ASSET.decimals)} cUSD  (${u.toLocaleString('en-US')} units)`
+const signedTari = (d: bigint) => `${d < 0n ? '−' : '+'}${amt(d < 0n ? -d : d)}`
+const signedCusd = (d: bigint) => `${d < 0n ? '−' : '+'}${cusdFmt(d < 0n ? -d : d)}`
+
+function flagOf(args: string[], name: string): string | undefined {
+  const i = args.indexOf(`--${name}`)
+  return i >= 0 ? args[i + 1] : undefined
+}
+function modeOf(args: string[], name: string, dflt: TradeMode): TradeMode {
+  const v = flagOf(args, name) ?? dflt
+  if (v !== 'private' && v !== 'public') throw new Error(`--${name} must be private or public.`)
+  return v
+}
+/** `2` / `2.5` is cUSD; `2500000u` is raw base units. String arithmetic, never a float. */
+function parseCusd(s: string): bigint {
+  if (/^\d+u$/.test(s)) return BigInt(s.slice(0, -1))
+  const m = /^(\d+)(?:\.(\d{1,6}))?$/.exec(s)
+  if (!m) throw new Error(`Not a cUSD amount: ${s}`)
+  return BigInt(m[1]) * 1_000_000n + BigInt((m[2] ?? '').padEnd(6, '0') || '0')
+}
+
+interface TradeBalances { privTari: bigint; pubTari: bigint; privCusd: bigint | null; pubCusd: bigint | null; caravelFee: bigint; burnTotal: bigint | null }
+
+/** Every figure a trade moves, read through the app's own code (scanWallet, readRevealedBalance, scanCusd). */
+async function tradeBalances(h: Harnessed, account: string | null): Promise<TradeBalances> {
+  const scan = await scanWallet(h.viewSecret, () => {}, new AbortController().signal, { excluded: loadExcludedIds(h.address), walletAddress: h.address })
+  const provider = await IndexerProvider.connect({ url: INDEXER, network: Network.Esmeralda })
+  const pubTari = await readRevealedBalance(provider, account)
+  const caravelFee = await readRevealedBalance(provider, TRADE_CARAVEL_FEE_ACCOUNT)
+  provider.stopWatcher?.()
+  const cusd = await scanCusd(h.viewSecret, h.address)
+  const burn = await readBurnWallet()
+  return {
+    privTari: scan.balance, pubTari,
+    privCusd: cusd.private.incomplete ? null : cusd.private.units,
+    pubCusd: cusd.public.kind === 'ok' ? cusd.public.units : null,
+    caravelFee, burnTotal: burn.kind === 'verified' ? burn.reading.totalDeposited : null,
+  }
+}
+
+function printBalances(b: TradeBalances): void {
+  field('private tTARI', amt(b.privTari))
+  field('public tTARI', amt(b.pubTari))
+  field('private cUSD', b.privCusd === null ? '··· (not established)' : cusdFmt(b.privCusd))
+  field('public cUSD', b.pubCusd === null ? '··· (not established)' : cusdFmt(b.pubCusd))
+  field('Caravel fee acct', amt(b.caravelFee))
+  field('Burn Wallet total', b.burnTotal === null ? '··· (not verified)' : amt(b.burnTotal))
+}
+
+/** The public keys that signed `txId`, read back from the chain (both indexers tried). */
+async function signerKeys(txId: string): Promise<string[] | null> {
+  for (const base of INDEXER_URLS) {
+    try {
+      const r = await fetch(`${base}/transactions/${txId}`)
+      if (!r.ok) continue
+      const body = await r.json() as { transaction?: { transaction?: { V1?: { body?: { signatures?: { public_key?: string }[] } } } } }
+      const sigs = body.transaction?.transaction?.V1?.body?.signatures
+      if (Array.isArray(sigs)) return sigs.map(s => String(s.public_key))
+    } catch { /* next */ }
+  }
+  return null
+}
+
+async function tradeTrader(h: Harnessed): Promise<{ trader: Trader; account: string | null }> {
+  const account = await primeAccount(h)
+  return { trader: traderFor(h.wallet, h.address, h.purposeKeys, account), account }
+}
+
+const legStr = (l: TradeDetails['pays']) => !l ? '—'
+  : `${l.resource === CUSD_ASSET.resource ? cusdFmt(l.amount) : amt(l.amount)}  [${l.mode}]`
+
+function printPrepared(pt: PreparedTrade): void {
+  const d = pt.details
+  field('action', `${d.action.toUpperCase()} ${d.side === SELL ? 'SELL' : 'BUY'} order${d.orderId ? ` ${d.orderId}` : ''}`)
+  field('terms', `N = ${amt(d.n)} · P = ${cusdFmt(d.p)}`)
+  if (d.action !== 'cancel') field('trade fee (1%)', `${amt(d.tradeFee)} = Caravel ${d.caravelCut.toLocaleString('en-US')} + burn ${d.burnCut.toLocaleString('en-US')} µtTARI`)
+  field('pays', legStr(d.pays))
+  field('gets', legStr(d.gets))
+  if (d.cancelIndex !== null) field('cancel key', `index ${d.cancelIndex} (seed-derived)`)
+  field('network fee', `${amt(pt.fee)}  [${pt.feeMode}]  — shown = charged`)
+  field('owner signs?', pt.ownerSigned ? 'YES (public path — the account needs it)' : 'no (private path: one-time keys only)')
+  if (pt.details.createsAccount) field('public account', 'OPENED by this trade (CreateAccount — it does not exist on chain yet)')
+  if (pt.effects.payout) field('maker payout', `${pt.effects.payout.outputId}  (created by the fill)`)
+}
+
+/** Confirm-only without --yes; with it: balances before, run, balances after, and every check. */
+async function runTradeCmd(h: Harnessed, trader: Trader, account: string | null, pt: PreparedTrade, yes: boolean): Promise<void> {
+  if (!yes) {
+    rule('confirm check  (prepared.confirm — dry runs only)')
+    await pt.confirm()
+    field('confirm check', 'PASSES — fresh, inputs unspent, order unmoved, final tx accepted at exactly the fee shown')
+    console.log('\n  STOPPED BEFORE SUBMIT. Nothing was sent. Add --yes to send it.')
+    return
+  }
+  rule('balances BEFORE')
+  const before = await tradeBalances(h, account)
+  printBalances(before)
+
+  rule('SEND  (crypto/tradeActions.runTrade)')
+  const mark = net.length
+  const r = await runTrade(trader, pt, stage)
+  field('tx id', r.txId)
+  field('outcome', `${r.outcome}${r.feeOnly ? '  (FEE-ONLY: the fee was taken, the trade did not happen)' : ''}`)
+  if (r.reason) console.log(`\n  ${r.reason}\n`)
+  if (r.orderId) field('order', r.orderId)
+  field('fee shown', amt(pt.fee))
+  field('fee charged', `${amt(r.feeMicrotari)}  ${r.feeMicrotari === pt.fee ? '= SHOWN ✓' : '≠ SHOWN ✗'}`)
+  const signers = await signerKeys(r.txId)
+  const ownerIn = signers?.includes(h.ownerPkHex) ?? null
+  field('signers (chain)', signers === null ? '(transaction not readable yet)' : `${signers.length}: ${signers.map(k => k.slice(0, 12) + '…').join(', ')}`)
+  field('owner key signed', ownerIn === null ? '?' : ownerIn
+    ? (pt.ownerSigned ? 'yes — expected on a public path' : 'YES ✗ — PRIVATE PATH LEAKED THE OWNER KEY')
+    : (pt.ownerSigned ? 'NO ✗ — a public path should be signed by the owner' : 'no ✓ (private path)'))
+  field('journal entry', r.journalId)
+  field('tTARI spent', JSON.stringify(r.effects.tariSpent))
+  field('tTARI created', JSON.stringify(r.effects.tariCreated))
+  field('cUSD spent', JSON.stringify(r.effects.cusdSpent))
+  field('cUSD created', JSON.stringify(r.effects.cusdCreated))
+  printNet(mark)
+
+  rule('balances AFTER  (read at once — our own outputs are recovered by id before any listing has them)')
+  const after = await tradeBalances(h, account)
+  printBalances(after)
+  rule('deltas')
+  field('private tTARI', signedTari(after.privTari - before.privTari))
+  field('public tTARI', signedTari(after.pubTari - before.pubTari))
+  if (after.privCusd !== null && before.privCusd !== null) field('private cUSD', signedCusd(after.privCusd - before.privCusd))
+  if (after.pubCusd !== null && before.pubCusd !== null) field('public cUSD', signedCusd(after.pubCusd - before.pubCusd))
+  field('Caravel fee acct', `${signedTari(after.caravelFee - before.caravelFee)}  (expected +${pt.details.action === 'fill' ? pt.details.caravelCut : 0n} µtTARI)`)
+  if (after.burnTotal !== null && before.burnTotal !== null) field('Burn Wallet', `${signedTari(after.burnTotal - before.burnTotal)}  (expected +${pt.details.action === 'fill' ? pt.details.burnCut : 0n} µtTARI)`)
+}
+
+async function cmdTradeStatus(h: Harnessed): Promise<void> {
+  rule('trade-status  ·  READ-ONLY')
+  const account = await primeAccount(h)
+  rule('own orders  (crypto/tradeActions.refreshOwnOrders → crypto/tradeStore)')
+  const changed = await refreshOwnOrders(h.address)
+  const st = loadTradeState(h.address)
+  field('next cancel idx', String(st.nextCancelIndex))
+  field('state changes', String(changed))
+  for (const r of st.records) {
+    console.log(`    ${r.action.padEnd(6)} ${r.side === SELL ? 'SELL' : 'BUY '} N=${r.n} P=${r.p} order=${r.orderId ?? '—'} idx=${r.cancelIndex ?? '—'} state=${r.orderState ?? '—'} tx=${r.txId?.slice(0, 10) ?? '—'}`)
+  }
+  rule('balances  (app scans)')
+  printBalances(await tradeBalances(h, account))
+  rule('Activity — trade rows  (crypto/activity.buildActivity, dated as WalletModal dates them)')
+  const journal = loadJournal(h.address)
+  // The same transactions WalletModal asks the indexer the time of (hooks/useTxTimes).
+  const timeIds = [...new Set([
+    ...journal.filter(e => e.kind.startsWith('trade-') && e.txId).map(e => e.txId!),
+    ...st.records.filter(t => t.closedTxId).map(t => t.closedTxId!),
+    ...st.records.filter(t => t.action === 'place' && t.txId).map(t => t.txId!),
+  ])]
+  const times = new Map<string, TxTime>(await Promise.all(timeIds.map(async id => [id, await txTime(id)] as const)))
+  const txTimes = new Map([...times].filter(([, t]) => t.at !== null).map(([id, t]) => [id, t.at!] as const))
+  const rows = buildActivity(journal, [], [], [], new Map(), st.records, txTimes).filter((r): r is TradeActivityRow => r.kind === 'trade')
+  if (rows.length === 0) console.log('    (none)')
+  for (const r of rows) {
+    const parts = [r.tariDelta !== null ? signedTari(r.tariDelta) : null, r.cusdDelta !== null ? signedCusd(r.cusdDelta) : null].filter(Boolean)
+    const est = r.txId !== null && times.get(r.txId)?.estimated ? '~' : ' '
+    console.log(`    ${new Date(r.timestamp).toISOString().slice(0, 19).replace('T', ' ')}${est} ${r.tradeKind.padEnd(13)} ${r.outcome.padEnd(10)} ${parts.join(' · ')}${r.feeMicrotari !== null ? `  · fee ${r.feeMicrotari} µT` : ''}`)
+  }
+}
+
+/** WalletModal's row title for each Activity kind (WalletModal *RowV2, TRADE_TITLE). */
+const ACTIVITY_TRADE_TITLE: Record<TradeActivityRow['tradeKind'], string> = {
+  'placed-sell': 'Placed sell order', 'placed-buy': 'Placed buy order', sold: 'Sold', bought: 'Bought',
+  'order-filled': 'Order filled', cancelled: 'Cancelled', trade: 'Trade',
+}
+
+async function cmdActivity(h: Harnessed): Promise<void> {
+  rule('activity  (crypto/activity.buildActivity, the wallet’s Activity list)  ·  READ-ONLY')
+  // The wallet's own refresh first, as WalletContext runs it on every rescan: orders placed elsewhere
+  // are found, and every open one re-read.
+  field('order sync', `${await syncOwnOrders({ address: h.address, tradeRoot: h.purposeKeys.tradeRoot })} change(s)  (crypto/tradeActions.syncOwnOrders)`)
+  const journal = loadJournal(h.address)
+  const st = loadTradeState(h.address)
+  // Reconciled receives, from the same scan, stores and attributions WalletModal reconciles (no chat
+  // here, so only the trade payouts are attributed).
+  const scan = await scanWallet(h.viewSecret, () => {}, new AbortController().signal, { excluded: loadExcludedIds(h.address), walletAddress: h.address })
+  const attributed = knownReceiveIds([], st.records)
+  const rec = reconcile({ owned: scan.utxos, journal, ledger: loadLedger(h.address), epoch: loadEpoch(h.address), knownReceiveUtxoIds: attributed })
+  field('reconcile', rec.reason === null ? `${rec.receives.length} receive(s), ${rec.suppressed.length} suppressed` : `nothing classified: ${rec.reason}`)
+  const payouts = new Set(knownPayoutIds(h.address))
+  const cancels = new Set(cancelOutputIdsOf(st.records))
+  for (const u of scan.utxos.filter(u => payouts.has(u.id) || cancels.has(u.id))) {
+    field(payouts.has(u.id) ? 'trade payout' : 'own cancel', `${u.id.slice(-20)}  ${amt(u.amount)}  → attributed: never a "Received" row`)
+  }
+  const cusdUnits = new Map(loadCusdClaims(h.address).map(c => [c.journalId, c.units] as const))
+  const timeIds = [...new Set([
+    ...journal.filter(e => e.kind.startsWith('trade-') && e.txId).map(e => e.txId!),
+    ...st.records.filter(t => t.closedTxId).map(t => t.closedTxId!),
+    ...st.records.filter(t => t.action === 'place' && t.txId).map(t => t.txId!),
+  ])]
+  const txTimes = new Map((await Promise.all(timeIds.map(async id => [id, await txTime(id)] as const)))
+    .filter(([, t]) => t.at !== null).map(([id, t]) => [id, t.at!] as const))
+  const rows = buildActivity(journal, [], [], rec.receives, cusdUnits, st.records, txTimes)
+    .sort((a, b) => b.timestamp - a.timestamp)
+  if (rows.length === 0) console.log('    (none)')
+  for (const r of rows) {
+    const title = r.kind === 'sent' || r.kind === 'received' ? r.counterparty
+      : r.kind === 'swap' ? (r.to === 'private' ? 'Made private' : 'Made public')
+      : r.kind === 'faucet' ? 'Received · Testnet faucet claim'
+      : r.kind === 'cusd-faucet' ? 'Received · cUSD faucet claim'
+      : r.kind === 'burn' ? `Burned (${r.from})`
+      : r.kind === 'trade' ? ACTIVITY_TRADE_TITLE[r.tradeKind]
+      : 'Received'
+    const value = r.kind === 'trade'
+      ? [r.tariDelta !== null ? signedTari(r.tariDelta) : null, r.cusdDelta !== null ? signedCusd(r.cusdDelta) : null].filter(Boolean).join(' · ')
+      : r.kind === 'cusd-faucet' ? (r.cusdUnits !== null ? signedCusd(r.cusdUnits) : '···')
+      : 'amountMicrotari' in r && r.amountMicrotari !== null ? amt(r.amountMicrotari) : '···'
+    const fee = 'feeMicrotari' in r && r.feeMicrotari !== null ? `  · fee ${r.feeMicrotari} µT` : ''
+    const outcome = 'outcome' in r ? r.outcome : ''
+    const tx = 'txId' in r && r.txId ? `  tx ${r.txId.slice(0, 10)}` : ''
+    console.log(`    ${new Date(r.timestamp).toISOString().slice(0, 19).replace('T', ' ')}  ${title.padEnd(32)} ${String(outcome).padEnd(10)} ${value}${fee}${tx}`)
+  }
+}
+
+async function cmdTradeBook(): Promise<void> {
+  rule('trade-book  (crypto/tradeRead — every order on the Board, verified)  ·  READ-ONLY')
+  const board = await readBoard()
+  field('Board', `fee ${board.feeBps} bps · Caravel ${board.caravelPct}% · min ${amt(board.minOrder)} · ${board.paused ? 'PAUSED' : 'open'}`)
+  for (const id of await listBoardOrderIds()) {
+    const o = await readOrder(id).catch(() => null)
+    if (!o) { console.log(`    ${id.slice(0, 18)}…  (unreadable)`); continue }
+    const status = ['OPEN', 'FILLED', 'CANCELLED'][o.status]
+    const legit = orderLegitimacy(o, board)
+    let payout = o.payoutAccount ? `account ${o.payoutAccount.slice(0, 18)}…` : ''
+    // The payout-collision check for every legit order (a filled one's private payout DOES exist, so
+    // it shows the refusal a copied statement would meet).
+    if (legit === null) {
+      const c = await checkPayout(o)
+      payout = c.ok ? (c.outputId ? `private …${c.outputId.slice(-12)} free on both indexers` : payout + ' exists') : `payout check REFUSES: ${c.reason}`
+    }
+    console.log(`    ${id.slice(0, 18)}…  ${status.padEnd(9)} ${o.side === SELL ? 'SELL' : 'BUY '} N=${o.n} P=${o.p} fee=${o.fee} (${o.caravelCut}+${o.burnCut}) v${o.version} ${legit ?? 'legit'}${payout ? ` · ${payout}` : ''}`)
+  }
+}
+
+async function cmdTradePlace(h: Harnessed, args: string[], yes: boolean): Promise<void> {
+  const side = args[1] === 'sell' ? SELL : args[1] === 'buy' ? BUY : null
+  if (side === null || !args[2] || !args[3]) throw new Error('trade-place needs sell|buy, N (tTARI) and P (cUSD).')
+  const n = parseAmount(args[2]), p = parseCusd(args[3])
+  rule(`trade-place  (crypto/tradeActions.preparePlaceOrder → crypto/trade.preparePlace)`)
+  const { trader, account } = await tradeTrader(h)
+  const pt = await preparePlaceOrder(trader, { side, n, p, escrow: modeOf(args, 'escrow', 'private'), payout: modeOf(args, 'payout', 'private') }, stage)
+  printPrepared(pt)
+  await runTradeCmd(h, trader, account, pt, yes)
+}
+
+async function cmdTradeFill(h: Harnessed, args: string[], yes: boolean): Promise<void> {
+  const id = args[1]
+  if (!id) throw new Error('trade-fill needs an order address.')
+  rule('trade-fill  (crypto/trade.checkFillSafety → crypto/trade.prepareFill)')
+  const o = await readOrder(id)
+  if (!o) throw new Error('No such order.')
+  const { trader, account } = await tradeTrader(h)
+  // The taker states the terms it was shown: the ones just read (or --n/--p to test a mismatch).
+  const expectedN = flagOf(args, 'n') ? parseAmount(flagOf(args, 'n')!) : o.n
+  const expectedP = flagOf(args, 'p') ? parseCusd(flagOf(args, 'p')!) : o.p
+  const pt = await prepareFill(trader, { orderId: id, expectedN, expectedP, pay: modeOf(args, 'pay', 'private'), receive: modeOf(args, 'recv', 'private') }, stage)
+  printPrepared(pt)
+  await runTradeCmd(h, trader, account, pt, yes)
+}
+
+async function cmdTradeCancel(h: Harnessed, args: string[], yes: boolean): Promise<void> {
+  const id = args[1]
+  if (!id) throw new Error('trade-cancel needs an order address.')
+  rule('trade-cancel  (crypto/trade.prepareCancel — signed by the seed-derived cancel key)')
+  const { trader, account } = await tradeTrader(h)
+  let rec = loadTradeState(h.address).records.find(r => r.action === 'place' && r.orderId === id)
+  if (!rec || rec.cancelIndex === null) {
+    console.log('  No local record of this order — recovering this wallet\'s orders from the seed…')
+    await recoverTradeState(trader)
+    rec = loadTradeState(h.address).records.find(r => r.action === 'place' && r.orderId === id)
+  }
+  if (!rec || rec.cancelIndex === null) throw new Error('This wallet holds no cancel key for that order.')
+  const pt = await prepareCancel(trader, { orderId: id, cancelIndex: rec.cancelIndex, to: modeOf(args, 'to', rec.pays?.mode ?? 'private') }, stage)
+  printPrepared(pt)
+  await runTradeCmd(h, trader, account, pt, yes)
+}
+
+/** READ-ONLY on chain. A restore: find this wallet's orders from the seed alone (needs an empty store). */
+async function cmdTradeRecover(h: Harnessed): Promise<void> {
+  rule('trade-recover  (crypto/tradeActions.recoverTradeState — cancel keys from the seed, matched on chain)')
+  const before = loadTradeState(h.address)
+  field('local records', `${before.records.length}${before.records.length ? '  (not a clean restore — run without CARAVEL_HARNESS_STATE for that)' : '  (none — as a restored device)'}`)
+  const r = await recoverTradeState({ address: h.address, tradeRoot: h.purposeKeys.tradeRoot })
+  field('orders found', String(r.found))
+  field('next cancel idx', String(r.nextCancelIndex))
+  for (const rec of loadTradeState(h.address).records.filter(x => x.journalId.startsWith('recovered-'))) {
+    console.log(`    idx ${rec.cancelIndex}  ${rec.side === SELL ? 'SELL' : 'BUY '} N=${rec.n} P=${rec.p}  ${rec.orderState}  ${rec.orderId}`)
+  }
+}
+
+/** The browser statement encoder against the Rust tool: fresh payouts, and every payout on the Board. */
+async function cmdTradeCborCheck(h: Harnessed): Promise<void> {
+  rule('trade-cbor-check  (crypto/statementCbor vs caravel-trade tools/statement-cbor)')
+  const tool = process.env.STATEMENT_CBOR_TOOL ?? path.join(process.env.HOME ?? '', 'dev/caravel-trade/tools/statement-cbor/target/release/statement-cbor')
+  const rust = (input: string, decode = false) => execFileSync(tool, decode ? ['--decode'] : [], { input }).toString().trim()
+  const toHex = (b: Uint8Array) => Buffer.from(b).toString('hex')
+  const crypto = new WasmStealthCrypto(Network.Esmeralda)
+  let ok = 0, bad = 0
+  for (const [res, amount] of [[CUSD_ASSET.resource, 2_000_000n], [TARI_RESOURCE_ADDRESS, 990_000n], [CUSD_ASSET.resource, 123_456_789_012n]] as const) {
+    const { statement: outs, outputMask } = await crypto.generateOutputsStatement([createOutput({ destination: h.address, amount, resourceAddress: res })], null)
+    const ins = await crypto.buildInputsStatement([], amount)
+    const st = new StealthTransferStatement(ins, outs, await signBalanceProof(crypto, Mask.zero(), outputMask, ins, outs))
+    const ts = toHex(encodeStatement(st.toCompactJson()))
+    const rs = rust(st.toCompactJson())
+    const same = ts === rs
+    if (same) ok++; else bad++
+    field(`fresh payout`, `${amount} of ${res.slice(0, 18)}…  ${ts.length / 2} bytes  ${same ? 'TS = Rust ✓' : 'TS ≠ Rust ✗'}`)
+  }
+  for (const id of await listBoardOrderIds()) {
+    const o = await readOrder(id).catch(() => null)
+    if (!o?.payoutStatement) continue
+    const stored = toHex(o.payoutStatement)
+    const back = toHex(encodeStatement(decodeStatement(o.payoutStatement)))
+    const rustJson = JSON.parse(rust(stored, true))
+    const same = back === stored && isDeepStrictEqual(rustJson, decodeStatement(o.payoutStatement))
+    if (same) ok++; else bad++
+    field(`on-chain payout`, `${id.slice(0, 18)}…  ${stored.length / 2} bytes  ${same ? 'decode→encode = stored, TS decode = Rust decode ✓' : '✗ MISMATCH'}`)
+  }
+  field('result', `${ok} match, ${bad} mismatch`)
+}
+
+/**
+ * READ-ONLY. The Burn page's list, as hooks/useBurnWallet builds it: every deposit, its receipt's
+ * classification (person / you / app), its time from crypto/txTimes, labelled by burnModel.
+ */
+async function cmdBurnList(h: Harnessed): Promise<void> {
+  rule('burn-list  (hooks/useBurnWallet → components/burn/burnModel)  ·  READ-ONLY')
+  const mark = net.length
+  const deposits = (await listDeposits()).slice(0, 50)
+  const account = loadAccountAddress(h.address)
+  const journalled = new Set(loadJournal(h.address).filter(e => e.kind === 'burn' && e.txId).map(e => e.txId!))
+  const [classes, times, ownVaults] = await Promise.all([
+    Promise.all(deposits.map(async d => [d.txId, await classifyBurn(d.txId)] as const)).then(p => new Map<string, BurnClassification>(p)),
+    Promise.all([...new Set(deposits.map(d => d.txId))].map(async id => [id, await txTime(id)] as const)).then(p => new Map<string, TxTime>(p)),
+    account ? accountVaultIds(account) : Promise.resolve(new Set<string>()),
+  ])
+  const rows = buildBurnRows(deposits, classes, { ownVaults, journalled, times })
+  field('rows', `${rows.length} (account ${account ? account.slice(0, 18) + '…' : 'none'}, ${journalled.size} journalled here)`)
+  const counts = new Map<string, number>()
+  for (const r of rows) {
+    const title = burnTitle(r)
+    counts.set(title, (counts.get(title) ?? 0) + 1)
+    const at = r.at === null ? '(no time)          ' : new Date(r.at).toISOString().slice(0, 16).replace('T', ' ') + (r.estimated ? '~' : ' ')
+    console.log(`    ${r.txId.slice(0, 10)}…  ${at}  ${timeLabel(r.at, r.estimated).padEnd(8)} ${title.padEnd(19)} ${(burnDetail(r) ?? '—').padEnd(12)} ${amt(r.amount)}${classes.get(r.txId)?.appTemplates.length ? `  [apps ${classes.get(r.txId)!.appTemplates.map(t => t.slice(0, 8)).join(',')}]` : ''}`)
+  }
+  field('labels', [...counts].map(([k, v]) => `${k} ×${v}`).join(' · '))
+  printNet(mark)
+}
+
+/** READ-ONLY. The market as the Trade page will see it (crypto/market.MarketReader — what useMarket feeds). */
+async function cmdMarket(h: Harnessed): Promise<void> {
+  rule('market  (crypto/market.MarketReader — book, my orders, recent trades)  ·  READ-ONLY')
+  const mark = net.length
+  const reader = new MarketReader({ walletAddress: h.address, tradeRoot: h.purposeKeys.tradeRoot })
+  const d = await reader.refresh()
+  const px = (p: { micro: bigint; exact: boolean }) => `${p.micro < 0n ? '−' : ''}${formatUnits(p.micro < 0n ? -p.micro : p.micro, 6)}${p.exact ? '' : '…'} cUSD/tTARI`
+  const leg = (l: { resource: string; amount: bigint }) => (l.resource === CUSD_ASSET.resource ? cusdFmt(l.amount) : amt(l.amount))
+  const row = (e: BookEntry) => `    ${e.orderId.slice(0, 18)}…  ${px(e.price).padEnd(22)} N=${e.n} P=${e.p}  taker pays ${leg(e.pays)} · receives ${leg(e.receives)}${e.yours ? `  ◀ YOURS (cancel key ${e.cancelIndex})` : ''}`
+  field('discovered', `${d.discovered} orders on the Board · ${d.book.sells.length + d.book.buys.length} on the book · ${d.hidden.length} hidden`)
+  console.log('\n  SELLS (cheapest first)'); for (const e of d.book.sells) console.log(row(e))
+  if (!d.book.sells.length) console.log('    (none)')
+  console.log(`\n  SPREAD  ${d.book.spread ? px(d.book.spread) : '— (needs both sides)'}`)
+  console.log('\n  BUYS (dearest first)'); for (const e of d.book.buys) console.log(row(e))
+  if (!d.book.buys.length) console.log('    (none)')
+  console.log('\n  MY ORDERS')
+  for (const m of d.mine) console.log(`    ${m.state.padEnd(9)} ${m.side === SELL ? 'SELL' : 'BUY '} ${m.orderId.slice(0, 18)}…  N=${m.n} P=${m.p} ${px(m.price)}  key ${m.cancelIndex}  placed ${m.placedAt === null ? '?' : new Date(m.placedAt).toISOString().slice(0, 19).replace('T', ' ') + (m.placedEstimated ? '~' : '')}${m.state === 'open' ? '' : `  ${m.state} ${m.closedAt === null ? '?' : new Date(m.closedAt).toISOString().slice(0, 19).replace('T', ' ') + (m.closedEstimated ? '~' : '')}`}${m.confirmed ? '' : '  (checking — not readable verified right now)'}`)
+  if (!d.mine.length) console.log('    (none)')
+  console.log('\n  RECENT TRADES (newest first)')
+  for (const t of (d.recent ?? []).slice(0, 40)) console.log(`    ${t.at === null ? '(time unknown)     ' : new Date(t.at).toISOString().slice(0, 19).replace('T', ' ')}${t.atEstimated ? '~' : ' '} ${t.side === SELL ? 'bought' : 'sold  '} ${amt(t.n)} for ${cusdFmt(t.p)} @ ${px(t.price)}${t.yours ? `  ◀ yours (${t.yours})` : ''}`)
+  if (d.recent === null) console.log('    (could not be read this time)')
+  if (d.hidden.length) { console.log('\n  HIDDEN'); for (const x of d.hidden) console.log(`    ${x.orderId.slice(0, 18)}…  ${x.reason}`) }
+  printNet(mark)
+}
+
+/**
+ * THE TRADE PAGE'S REFRESH, as hooks/useFullRescan runs it: the market first (book, My orders, recent
+ * trades — and this wallet's filled orders recorded from their fill events), then the full wallet scan
+ * (own orders re-checked, then TARI private + public and cUSD). Printed: the book, My orders, balances.
+ */
+async function fullRescanOnce(h: Harnessed, account: string | null, reader: MarketReader): Promise<{ market: string; balances: TradeBalances | null }> {
+  let market = ''
+  try {
+    const d = await reader.refresh()
+    const yours = [...d.book.sells, ...d.book.buys].filter(e => e.yours).map(e => e.orderId.slice(0, 18) + '…')
+    market = `book ${d.book.sells.length} sells / ${d.book.buys.length} buys (yours: ${yours.join(', ') || 'none'}) · my orders ${d.mine.map(m => `${m.orderId.slice(10, 18)}=${m.state}${m.confirmed ? '' : '(unconfirmed)'}`).join(' ') || 'none'} · hidden ${d.hidden.map(x => `${x.orderId.slice(10, 18)}: ${x.reason}`).join('; ') || 'none'}`
+  } catch (e) {
+    market = `UNREACHABLE — ${e instanceof Error ? e.message : String(e)}`
+  }
+  try {
+    await refreshOwnOrders(h.address)
+    return { market, balances: await tradeBalances(h, account) }
+  } catch (e) {
+    console.log(`  wallet scan failed: ${e instanceof Error ? e.message : String(e)}`)
+    return { market, balances: null }
+  }
+}
+
+async function cmdTradeRescan(h: Harnessed): Promise<void> {
+  rule('trade-rescan  (hooks/useFullRescan: market read, then the full wallet scan) · READ-ONLY')
+  const account = await primeAccount(h)
+  const r = await fullRescanOnce(h, account, new MarketReader({ walletAddress: h.address, tradeRoot: h.purposeKeys.tradeRoot }))
+  field('market', r.market)
+  if (r.balances) printBalances(r.balances)
+}
+
+/** Offline, then "Try again" — the same function both times; the second must bring everything back. */
+async function cmdTradeOfflineCheck(h: Harnessed): Promise<void> {
+  rule('trade-offline-check  (the network cut, then Try again)  ·  READ-ONLY')
+  const account = await primeAccount(h)
+  const reader = new MarketReader({ walletAddress: h.address, tradeRoot: h.purposeKeys.tradeRoot })
+  harnessNet.offline = true
+  const down = await fullRescanOnce(h, account, reader)
+  field('offline: market', down.market)
+  field('offline: wallet', down.balances === null ? 'no figures (scan failed — nothing invented)' : 'FIGURES SHOWN WHILE OFFLINE ✗')
+  harnessNet.offline = false
+  const up = await fullRescanOnce(h, account, reader)
+  field('Try again: market', up.market)
+  if (up.balances) printBalances(up.balances)
+}
+
 const USAGE = `
 CARAVEL TERMINAL HARNESS — the real crypto/tx paths against the live Esmeralda indexer.
 
@@ -2272,6 +2824,8 @@ READ-ONLY — safe to run freely, costs nothing:
   scan                        Full balance trace: rows, pages, owned, spendable, private + public.
   faucet-status               Caravel's faucet as this wallet sees it (open / paused / empty /
                               claimed, from the chain) plus the claim's DRY RUN: verdict and fee.
+  cusd-status                 The wallet's cUSD (private + public, verified reads only), the cUSD
+                              faucet's claim status for it, and the claim's DRY RUN (verdict + fee).
   resolve <txid>              Fetch and print one transaction result in full, with its verdict.
   prove-recovery [substateId] Proof that a coin absent from every listing is still found by id,
                               counted, and spendable. Submits nothing.
@@ -2310,6 +2864,8 @@ WRITE — MOVES REAL TESTNET FUNDS. Builds and prices without --yes; submits wit
   faucet-claim [--fresh]      Claim from Caravel's faucet (once per key, ever) — the way to get a
                               wallet into a state prove-spend can work against. --fresh claims for
                               a NEW wallet; its phrase is written to a 600 file, never printed.
+  cusd-claim                  Claim 10,000 test cUSD (once per key, ever). The fee is paid from this
+                              wallet's own tTARI, so the wallet must already hold a little tTARI.
   make-private <amount|all>   conceal: revealed vault  →  private stealth output. The fee goes on
                               top; 'all' (MAX) moves the whole public balance, fee out of it.
   make-public  <amount>       reveal:  private outputs →  revealed vault balance.
@@ -2328,6 +2884,30 @@ WRITE — MOVES REAL TESTNET FUNDS. Builds and prices without --yes; submits wit
 Amounts are TARI ("12.5") or raw µtTARI ("12500000u").
 
 Environment:
+  trade-status                Caravel Trade: this wallet's orders (status re-read), trades, balances
+                              (tTARI + cUSD, private + public), the fee account and Burn Wallet, and
+                              the trade Activity rows. READ-ONLY.
+  activity                    The wallet's Activity list as WalletModal builds it (journal, trades, cUSD
+                              claims, reconciled receives; no chat), with the indexer's trade times. READ-ONLY.
+  trade-book                  Every order on the Board, read verified: status, legitimacy, payout
+                              check (a private payout's output must not exist on either indexer).
+  trade-place sell|buy N P    Place an order: N tTARI (12.5 = TARI, 12500000u = µtTARI), P cUSD.
+              [--escrow private|public] [--payout private|public] [--yes]
+  trade-fill ORDER            Fill a whole order (safety check, version pinned, N and P passed).
+              [--pay private|public] [--recv private|public] [--n N --p P to test a mismatch] [--yes]
+  trade-cancel ORDER          Cancel an order of this wallet's (seed-derived cancel key; escrow back,
+              [--to private|public] [--yes]   no trade fee).
+  trade-recover               Find this wallet's orders from the seed alone (a restore). Run it with
+                              no CARAVEL_HARNESS_STATE to start from an empty store.
+  trade-rescan                The Trade page's refresh (market read, then the full wallet scan). READ-ONLY.
+  trade-offline-check         The same refresh with the network cut, then again (Try again). READ-ONLY.
+  market                      The market as the Trade page sees it: the book (sorted, spread, taker
+                              legs after the 1% fee, YOURS flags), my orders, recent trades. READ-ONLY.
+  burn-list                   The Burn page's list: each burn's label (Burn / Burned by you / Caravel
+                              Trade burn / App burn), detail and time, as the page builds it. READ-ONLY.
+  trade-cbor-check            crypto/statementCbor against the Rust statement-cbor tool: fresh payouts,
+                              and every payout stored on the Board (STATEMENT_CBOR_TOOL to override).
+
   CARAVEL_TEST_MNEMONIC   required. The wallet. Never printed, never written to disk.
   CARAVEL_TEST_SCHEME     'cipherseed' | 'bip39'. Only needed for a phrase valid under both.
   CARAVEL_TEST_ACCOUNT    skip the account probe and use this component address.
@@ -2440,6 +3020,48 @@ export async function main(argv: string[]): Promise<void> {
         break
       case 'faucet-claim':
         await cmdFaucetClaim(h, yes)
+        break
+      case 'cusd-status':
+        await cmdCusdStatus(h)
+        break
+      case 'cusd-claim':
+        await cmdCusdClaim(h, yes)
+        break
+      case 'trade-status':
+        await cmdTradeStatus(h)
+        break
+      case 'activity':
+        await cmdActivity(h)
+        break
+      case 'trade-book':
+        await cmdTradeBook()
+        break
+      case 'trade-place':
+        await cmdTradePlace(h, args, yes)
+        break
+      case 'trade-fill':
+        await cmdTradeFill(h, args, yes)
+        break
+      case 'trade-cancel':
+        await cmdTradeCancel(h, args, yes)
+        break
+      case 'trade-recover':
+        await cmdTradeRecover(h)
+        break
+      case 'trade-rescan':
+        await cmdTradeRescan(h)
+        break
+      case 'trade-offline-check':
+        await cmdTradeOfflineCheck(h)
+        break
+      case 'market':
+        await cmdMarket(h)
+        break
+      case 'burn-list':
+        await cmdBurnList(h)
+        break
+      case 'trade-cbor-check':
+        await cmdTradeCborCheck(h)
         break
       case 'make-private':
         if (!args[1]) throw new Error('make-private needs an amount.')

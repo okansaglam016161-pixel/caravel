@@ -38,6 +38,8 @@ import { loadContacts, setContactState, removeContact, type ContactMap } from '.
 import { loadTariAddresses, setTariAddress, type TariAddressMap } from '../messaging/tariAddressStore'
 import { recoverAccountAddress } from '../crypto/accountRecovery'
 import { fetchRevealedBalance } from '../crypto/revealedBalance'
+import { addCusdOutput, scanCusd, cusdTotal, type CusdBalances } from '../crypto/cusdScan'
+import { syncOwnOrders } from '../crypto/tradeActions'
 import {
   advanceAll, anySettling, acknowledged, isAccountedFor, withSettle,
   type PendingSettle, type SettleEvidence, type SideBalances,
@@ -137,6 +139,27 @@ export interface RevealedState {
 
 const REVEALED_IDLE: RevealedState = { status: 'idle', amount: null, generation: 0 }
 
+// ── cUSD balance state (T3a) ───────────────────────────────────────────────────
+//
+// A SECOND asset, read the same way and on the same triggers as the TARI scan, but kept entirely
+// separate: TARI's balance and spend paths are 41 sites of hardwired resource, and folding a second
+// currency into ScanState would couple them. The hero and every TARI figure are untouched — this is
+// a parallel read whose only consumer is the Assets list and the cUSD faucet panel. See crypto/cusdScan.
+//
+// `null` balance is "not established" (a scan still running, or any owned output the chain would not
+// verify) and renders as `···`, never a figure that might be short — the same honesty rule the TARI
+// hero follows. Private and public are summed only when both are established (cusdScan.cusdTotal).
+export interface CusdState {
+  status: 'idle' | 'scanning' | 'done' | 'error'
+  /** The whole position (private + public), or null while either half is unestablished. */
+  units: bigint | null
+  balances: CusdBalances | null
+  error: string
+  generation: number
+}
+
+const CUSD_IDLE: CusdState = { status: 'idle', units: null, balances: null, error: '', generation: 0 }
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 // The outcome of editMessage (M4). Widened from a bare boolean when group editing landed: a group
@@ -190,6 +213,8 @@ export interface WalletCtx {
   held: HeldSummary
   /** The REVEALED (public) balance — read-only in M1. Independent of `scan`; see RevealedState. */
   revealed: RevealedState
+  /** The wallet's cUSD position (T3a) — private + public. Display-only; independent of `scan`. */
+  cusd: CusdState
   txHistory: SentEntry[]
   /**
    * Committed transactions whose effect has not shown up in the balances yet.
@@ -237,7 +262,10 @@ export interface WalletCtx {
   /** Decrypt and return the stored mnemonic — requires the user's password. */
   getMnemonic: (password: string) => Promise<string>
   /** Re-run the UTXO scan (cancels any in-progress scan). */
-  rescan: () => void
+  /** The full wallet scan: TARI private, public, and cUSD. Resolves once all three have settled. */
+  rescan: () => Promise<void>
+  /** Count an own, just-created cUSD output (a faucet claim) in the balance immediately. */
+  addOwnCusdOutput: (outputId: string, units: bigint) => void
   /** Record a sent transaction in persisted history. */
   recordSent: (params: NewSentParams) => void
   /** Auto-managed messaging status, updated as relay connections change. */
@@ -331,6 +359,10 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const [walletExists, setWalletExists] = useState(() => hasStoredWallet())
   const [scan, setScan] = useState<ScanState>(SCAN_IDLE)
   const [revealed, setRevealed] = useState<RevealedState>(REVEALED_IDLE)
+  const [cusd, setCusd] = useState<CusdState>(CUSD_IDLE)
+  const cusdAbortRef = useRef<AbortController | null>(null)
+  /** The unlocked wallet's trade root (PurposeKeys.tradeRoot), for the refresh to find its own orders. */
+  const tradeRootRef = useRef<Uint8Array | null>(null)
   // Generation counter, the revealed-read equivalent of scanAbortRef: a read that resolves after a
   // lock or a newer read must not write its result into state.
   const revealedGenRef = useRef(0)
@@ -403,7 +435,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     scanAbortRef.current = ctrl
 
     const viewSecret = w.getViewOnlySecret()
-    if (!viewSecret) return  // no view key — can't scan
+    if (!viewSecret) return Promise.resolve()  // no view key — can't scan
 
     // Clean slate — do NOT carry over the previous scan's balance/utxos. Carrying them produced the
     // misleading "N owned" against a stale/zero balance; a fresh scan starts blank and fills in.
@@ -417,7 +449,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     // the last one is excluded immediately rather than at the next unlock. See crypto/spentOutputs.
     const excluded = loadExcludedIds(walletAddress)
 
-    scanWallet(
+    // Returned so a caller can wait for the whole refresh (rescan's promise); nothing else awaits it.
+    return scanWallet(
       viewSecret,
       (progress) => {
         if (ctrl.signal.aborted) return
@@ -466,7 +499,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     // Same rule as the scan: the previous reading's generation is kept while a newer read runs,
     // because until it resolves there is no reading of this generation to describe.
     setRevealed(prev => ({ status: 'loading', amount: null, generation: prev.generation }))
-    fetchRevealedBalance(walletAddress)
+    return fetchRevealedBalance(walletAddress)
       .then(amount => {
         if (revealedGenRef.current !== gen) return
         setRevealed({ status: 'done', amount, generation })
@@ -476,6 +509,34 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         // Network/indexer failure only — structural absence already resolved to 0n upstream. We do
         // not know the balance, so we say so; drawing 0 here would be a confident lie.
         setRevealed({ status: 'unavailable', amount: null, generation })
+      })
+  }, [])
+
+  /**
+   * Scan cUSD — private outputs and the public account vault — alongside the TARI scan, on the same
+   * generation, entirely independently. It never blocks or fails the TARI balance: a thrown cUSD
+   * scan sets `error` and leaves every TARI figure untouched. See crypto/cusdScan.
+   */
+  const startCusdScan = useCallback((w: SecretKeyWallet, walletAddress: string, generation: number) => {
+    cusdAbortRef.current?.abort()
+    const ctrl = new AbortController()
+    cusdAbortRef.current = ctrl
+    const viewSecret = w.getViewOnlySecret()
+    if (!viewSecret) return Promise.resolve()
+    setCusd(prev => ({ ...CUSD_IDLE, status: 'scanning', generation: prev.generation }))
+    // This wallet's own Caravel Trade orders first (crypto/tradeActions): any placed elsewhere are
+    // found, and one somebody filled becomes "Order filled", its private cUSD payout then asked for by
+    // id in the scan below. Best-effort — an unreadable order is simply checked again next refresh.
+    const tradeRoot = tradeRootRef.current
+    return (tradeRoot ? syncOwnOrders({ address: walletAddress, tradeRoot }) : Promise.resolve(0)).catch(() => 0)
+      .then(() => scanCusd(viewSecret, walletAddress, ctrl.signal))
+      .then(balances => {
+        if (ctrl.signal.aborted) return
+        setCusd({ status: 'done', units: cusdTotal(balances), balances, error: '', generation })
+      })
+      .catch((err: unknown) => {
+        if (ctrl.signal.aborted) return
+        setCusd({ ...CUSD_IDLE, status: 'error', error: err instanceof Error ? err.message : String(err) })
       })
   }, [])
 
@@ -512,8 +573,13 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     // short-circuits without touching the network when an address is already known, so this is a
     // no-op for every wallet after its first unlock. It cannot fail the read: recovery resolving to
     // null simply leaves the balance at 0, which is what it would have been anyway.
-    void recoverAccountAddress(w, addr).finally(() => startRevealedRead(addr, generation))
-  }, [startScan, startRevealedRead])
+    // Both the revealed TARI read and the cUSD public read need the account address, so both wait
+    // on the same recovery.
+    void recoverAccountAddress(w, addr).finally(() => {
+      startRevealedRead(addr, generation)
+      startCusdScan(w, addr, generation)
+    })
+  }, [startScan, startRevealedRead, startCusdScan])
 
   // Async now: CipherSeed encipherment runs Argon2d before the words exist. Callers show a busy
   // state over it — the phrase-reveal screen cannot render until this resolves.
@@ -748,6 +814,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const adoptIdentity = useCallback(async (identity: WalletIdentity) => {
     const { wallet: w, nostr } = identity
     setPurposeKeys(identity.purposeKeys)
+    tradeRootRef.current = identity.purposeKeys.tradeRoot
     nostrSecretKeyRef.current = nostr.privateKeyHex
     setNostrNpub(nostr.npub)
     setNostrPubkeyHex(nostr.publicKeyHex)
@@ -876,8 +943,11 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     // Bump the generation so an in-flight read cannot land on the locked (or next) identity.
     revealedGenRef.current++
     setRevealed(REVEALED_IDLE)
+    cusdAbortRef.current?.abort()
+    setCusd(CUSD_IDLE)
     setWallet(null)
     setPurposeKeys(null)
+    tradeRootRef.current = null
     setAddress(null)
     setTxHistory([])
     setNostrNpub(null)
@@ -895,15 +965,34 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     return decryptMnemonic(stored, password)
   }, [])
 
-  const rescan = useCallback(() => {
+  const rescan = useCallback(async () => {
     if (wallet && address) {
       // Both reads carry the SAME generation. That is what lets the total tell "these two figures
       // describe one moment" from "one of them has moved on and the other has not yet".
       const generation = ++readGenRef.current
-      startScan(wallet, address, generation)
-      startRevealedRead(address, generation)
+      // Resolves when all three reads have settled — success or failure — so a caller can show a
+      // refresh as running until it really is done (hooks/useFullRescan). Callers that only kick it
+      // off ignore the promise, as before.
+      await Promise.all([
+        startScan(wallet, address, generation),
+        startRevealedRead(address, generation),
+        startCusdScan(wallet, address, generation),
+      ])
     }
-  }, [wallet, address, startScan, startRevealedRead])
+  }, [wallet, address, startScan, startRevealedRead, startCusdScan])
+
+  /**
+   * Count a cUSD output this wallet just created — the cUSD faucet claim's — in the balance AT ONCE,
+   * the way the TARI faucet's output is (by its id, which Caravel built). Only onto an established
+   * balance (a scan that finished); the next scan recovers the same id and keeps it (crypto/cusdScan).
+   */
+  const addOwnCusdOutput = useCallback((outputId: string, units: bigint) => {
+    setCusd(prev => {
+      if (prev.status !== 'done' || !prev.balances) return prev
+      const balances = addCusdOutput(prev.balances, outputId, units)
+      return balances === prev.balances ? prev : { ...prev, balances, units: cusdTotal(balances) }
+    })
+  }, [])
 
   // ══ SETTLE — one list, one loop ═════════════════════════════════════════════
   //
@@ -1413,10 +1502,10 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
   return (
     <Ctx.Provider value={{
-      walletExists, wallet, purposeKeys, address, nostrNpub, nostrPubkeyHex, scan, held, revealed, txHistory,
+      walletExists, wallet, purposeKeys, address, nostrNpub, nostrPubkeyHex, scan, held, revealed, cusd, txHistory,
       settles, isSettling, settleLagged, beginSettle, acknowledgeSettle,
       messagingStatus, messages, historyUnreadable,
-      createRecoveryPhrase, createWallet, unlock, restore, lock, getMnemonic, rescan, recordSent,
+      createRecoveryPhrase, createWallet, unlock, restore, lock, getMnemonic, rescan, addOwnCusdOutput, recordSent,
       recordSentMessage, contacts, acceptContact, contactAddresses, setManualTariAddress,
       deleteConversation, editMessage, reactMessage, createMessagingProvider, getRelayStates, reconnectAll,
       balanceHidden, setBalanceHidden,

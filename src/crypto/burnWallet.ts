@@ -30,8 +30,17 @@
 //   private  no vault was withdrawn from, and stealth outputs were spent: `utxo_` substates in
 //            `diff_summary.downed`.
 //
-// "BURNED BY YOU" is a public burn whose withdraw vault is one of this wallet's own account vaults
-// — readable on any device — or a private burn this device journalled. A private burn made on
+// ── A PERSON, OR AN APP ──────────────────────────────────────────────────────
+//
+// Also from the receipt. Every event names the template of the code that emitted it, and the
+// engine sets that field: it cannot be forged. A person burning calls the burn wallet straight from
+// an account, so the receipt holds events from the burn wallet and the engine's built-in templates
+// (the account) only. When a contract deposits — a Caravel Trade order paying its 0.3% fee — its
+// own template shows up too (the Order's `Filled` and the withdraw from its vault): `appTemplates`.
+// Which app that is, is the Burn page's small list (components/burn/burnApps).
+//
+// "BURNED BY YOU" is a direct burn (no app) that is public from one of this wallet's own account
+// vaults — readable on any device — or private and journalled on this device. A private burn made on
 // another device is deliberately not recognisable: that is what private means.
 
 import { iterVaultIdsInState } from '@tari-project/ootle'
@@ -136,17 +145,35 @@ export interface BurnClassification {
   withdrawVaults: string[]
   /** The epoch it committed in. */
   epoch: number | null
+  /**
+   * The templates of any contract other than the burn wallet (and the engine's built-ins) that
+   * emitted an event in the transaction, sorted. Empty for a person burning directly.
+   */
+  appTemplates: string[]
 }
 
-/** Public or private, from a `/transaction-receipts/<tx>` body. See the header for the rule. */
+/**
+ * The engine's built-in templates (the account, and the testnet faucets beside it) live at
+ * addresses that are zero but for the last byte or two. Their events are a person's, not an app's.
+ */
+export function isBuiltinTemplate(template: string): boolean {
+  return /^0{60}[0-9a-f]{4}$/.test(template)
+}
+
+/** Public or private, and by whom, from a `/transaction-receipts/<tx>` body. See the header for the rules. */
 export function classifyBurnReceipt(body: unknown): BurnClassification {
   const r = (body as { receipt?: unknown } | null)?.receipt as {
-    events?: { substate_id?: unknown; topic?: unknown }[]
+    events?: { substate_id?: unknown; topic?: unknown; template_address?: unknown }[]
     diff_summary?: { downed?: { substate_id?: unknown }[] }
     epoch?: unknown
   } | undefined
   const epoch = typeof r?.epoch === 'number' ? r.epoch : null
-  if (!r) return { source: 'unknown', withdrawVaults: [], epoch }
+  if (!r) return { source: 'unknown', withdrawVaults: [], epoch, appTemplates: [] }
+
+  const appTemplates = [...new Set((r.events ?? [])
+    .map(e => e.template_address)
+    .filter((t): t is string => typeof t === 'string' && t !== BURN_WALLET_TEMPLATE && !isBuiltinTemplate(t)))]
+    .sort()
 
   const withdrawVaults = [...new Set((r.events ?? [])
     .filter(e => e.topic === 'std.vault.withdraw'
@@ -154,11 +181,11 @@ export function classifyBurnReceipt(body: unknown): BurnClassification {
       && e.substate_id.startsWith('vault_')
       && e.substate_id !== BURN_WALLET_VAULT)
     .map(e => e.substate_id as string))]
-  if (withdrawVaults.length > 0) return { source: 'public', withdrawVaults, epoch }
+  if (withdrawVaults.length > 0) return { source: 'public', withdrawVaults, epoch, appTemplates }
 
   const spentStealth = (r.diff_summary?.downed ?? [])
     .some(d => typeof d.substate_id === 'string' && d.substate_id.startsWith('utxo_'))
-  return { source: spentStealth ? 'private' : 'unknown', withdrawVaults: [], epoch }
+  return { source: spentStealth ? 'private' : 'unknown', withdrawVaults: [], epoch, appTemplates }
 }
 
 // ── Network ───────────────────────────────────────────────────────────────────
@@ -212,7 +239,6 @@ export async function listDeposits(): Promise<BurnDeposit[]> {
 
 // Receipts are immutable once a transaction commits, so each is fetched once per session.
 const receiptCache = new Map<string, BurnClassification>()
-const createdCache = new Map<string, number | null>()
 
 /** Classify one burn. A receipt that cannot be read yet is `unknown` and is NOT cached. */
 export async function classifyBurn(txId: string): Promise<BurnClassification> {
@@ -226,7 +252,7 @@ export async function classifyBurn(txId: string): Promise<BurnClassification> {
 
 /**
  * When the transaction was made, in epoch-ms, from the indexer's `transaction.created_at`. Null
- * when the body is gone or the field is not a time; the caller then estimates from the epoch.
+ * when the body is gone or the field is not a time; crypto/txTimes then estimates from the epoch.
  *
  * NOT `summary.finalized_at`: that is when THIS indexer stored the transaction. After a resync it
  * jumps to the resync — on 2026-10-14 both public indexers put the previous evening's burns at
@@ -234,33 +260,6 @@ export async function classifyBurn(txId: string): Promise<BurnClassification> {
  */
 export function parseTxCreatedAt(body: unknown): number | null {
   return parseIndexerTime((body as { transaction?: { created_at?: unknown } } | null)?.transaction?.created_at)
-}
-
-/** {@link parseTxCreatedAt} for one transaction, read once per session while the indexer has it. */
-export async function burnCreatedAt(txId: string): Promise<number | null> {
-  if (createdCache.has(txId)) return createdCache.get(txId)!
-  const read = await pointRead(`/transactions/${txId}`)
-  const at = parseTxCreatedAt(read.body)
-  if (read.answered) createdCache.set(txId, at)
-  return at
-}
-
-/** The network's current epoch, or null when no indexer answers. */
-export async function currentEpoch(): Promise<number | null> {
-  const read = await pointRead('/epoch-manager/stats')
-  const e = (read.body as { current_epoch?: unknown } | null)?.current_epoch
-  return typeof e === 'number' ? e : null
-}
-
-/**
- * Roughly how long one epoch lasts on esmeralda: 29 epochs between 19:18 UTC on 2026-10-08 (epoch
- * 12015) and 11:51 UTC on 2026-10-09 (epoch 12044). Good for "about a day ago", nothing finer.
- */
-export const EPOCH_MS_APPROX = 34 * 60_000
-
-/** An estimated time for something that committed in `epoch`. */
-export function estimateEpochTime(epoch: number, current: number, now = Date.now()): number {
-  return now - Math.max(0, current - epoch) * EPOCH_MS_APPROX
 }
 
 /** The vaults an account component holds, for recognising this wallet's own public burns. */

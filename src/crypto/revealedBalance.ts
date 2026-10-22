@@ -174,6 +174,11 @@ export async function readRevealedBalance(
   provider: Provider,
   accountAddress: string | null,
   resolveVaultIds: VaultIdResolver = getAccountVaultIds,
+  /**
+   * Which resource to total. TARI by default — every existing caller. The cUSD read passes cUSD;
+   * an account keys one vault per resource, and decodeRevealedAmount skips every other one.
+   */
+  resourceAddress: string = TARI_RESOURCE_ADDRESS,
 ): Promise<bigint> {
   if (!accountAddress) return 0n
 
@@ -205,7 +210,7 @@ export async function readRevealedBalance(
     const res = await withBusyRetry(() => provider.getSubstate(vaultId), { attempts: SDK_READ_ATTEMPTS })
     // Only a vault genuinely of another resource is skipped. One that cannot be read throws, so
     // the UI says "unavailable" rather than counting it as nothing.
-    const holding = vaultHolding(substateValueOf(res) as SubstateValue | undefined, TARI_RESOURCE_ADDRESS)
+    const holding = vaultHolding(substateValueOf(res) as SubstateValue | undefined, resourceAddress)
     if (holding.kind === 'unreadable') throw new Error(`Could not read ${vaultId}: ${holding.reason}`)
     if (holding.kind === 'amount') total += holding.amount
   }

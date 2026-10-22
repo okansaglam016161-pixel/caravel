@@ -13,7 +13,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { loadAccountAddress, saveAccountAddress } from './accountStore'
-import { recoverAccountAddress } from './accountRecovery'
+import { accountOnChain, recoverAccountAddress } from './accountRecovery'
 
 const OWNER_PK = 'b2d65c3ff962cb4fab2e7f25d1a87e029670b01843ca6e50a129bc2232d40314'
 const ACCOUNT = 'component_7dd87bc0dbc611e694ef5468b539c07d99de2e6866eb512ec160161b942888a2'
@@ -104,5 +104,24 @@ describe('recoverAccountAddress — what it does with a probe result', () => {
   it('propagates nothing when the probe throws — recovery is never fatal', async () => {
     const probe = vi.fn(async () => { throw new Error('boom') })
     await expect(recoverAccountAddress(walletStub, WALLET, probe)).rejects.toThrow('boom')
+  })
+})
+
+// The stored address is DERIVED (a dry-run CreateAccount names it), so it is stored for a wallet whose
+// account has never been created — every wallet funded only privately. Treating "an address is stored"
+// as "an account exists" is what sent the 0.47 matrix's wallet C into a fill that declared a component
+// that is not there. accountOnChain is the question to ask instead.
+describe('accountOnChain — a stored address is not an existing account', () => {
+  it('exists only on a verified read of the component', async () => {
+    await expect(accountOnChain(ACCOUNT, async () => ({ kind: 'verified', body: {} }))).resolves.toBe(true)
+  })
+
+  it('a derived address every indexer says is absent is NOT an account yet', async () => {
+    saveAccountAddress(WALLET, ACCOUNT)
+    await expect(accountOnChain(ACCOUNT, async () => ({ kind: 'absent' }))).resolves.toBe(false)
+  })
+
+  it('nobody vouching either way is an error, never a guess', async () => {
+    await expect(accountOnChain(ACCOUNT, async () => ({ kind: 'unknown' }))).rejects.toThrow(/could not/i)
   })
 })

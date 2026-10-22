@@ -79,9 +79,28 @@ export function exactFee(costMicrotari: bigint): bigint {
 }
 
 /**
- * THE @NAME BUFFER: a flat 200 µtTARI over the measured cost, for registration only.
+ * THE MAIN-INTENT BUFFER: a flat 200 µtTARI over the measured cost, for every PRIVATE fee whose
+ * action runs in the MAIN intent — @name registration, and Caravel Trade's private place / fill /
+ * cancel. One constant, so the two cannot drift apart.
  *
- * Registration is the one action that cannot pay exactly. Its register calls sit in the MAIN intent
+ * Such a fee is a revealed bucket spent WHOLE, and the action sits after it in the main intent, so a
+ * fee that turns out short when it executes is not a free reject: the engine commits the fee intent
+ * alone and the action does not happen (see ONS_FEE_BUFFER for the measured drift). The buffer
+ * absorbs a small rise; a bigger one is caught at confirm (the final transaction re-simulated at this
+ * exact budget) and re-quoted. The whole budget is spent, so the figure shown is the figure charged.
+ */
+export const MAIN_INTENT_FEE_BUFFER = 200n
+
+/** A main-intent private fee: the measured cost plus MAIN_INTENT_FEE_BUFFER. Shown, and charged. */
+export function mainIntentBudget(costMicrotari: bigint): bigint {
+  return costMicrotari + MAIN_INTENT_FEE_BUFFER
+}
+
+/**
+ * THE @NAME BUFFER: MAIN_INTENT_FEE_BUFFER, as @name registration applies it. Registration was the
+ * first main-intent action, and its measurements are why the buffer exists:
+ *
+ * Registration cannot pay exactly. Its register calls sit in the MAIN intent
  * and its fee is a revealed bucket that is spent whole, so a fee that turns out short when it
  * executes is not a free reject: the engine falls back to committing the fee intent alone
  * (tari-ootle 0.46 runtime/tracker.rs select_finalized_state). The fee is charged and nothing is
@@ -99,11 +118,11 @@ export function exactFee(costMicrotari: bigint): bigint {
  * Parked: putting the register calls in the fee intent would make a short fee free, and this buffer
  * unnecessary (ONS Option 1).
  */
-export const ONS_FEE_BUFFER = 200n
+export const ONS_FEE_BUFFER = MAIN_INTENT_FEE_BUFFER
 
 /** Registration's budget: the measured cost plus ONS_FEE_BUFFER. Exactly what is shown and charged. */
 export function onsRegistrationBudget(costMicrotari: bigint): bigint {
-  return costMicrotari + ONS_FEE_BUFFER
+  return mainIntentBudget(costMicrotari)
 }
 
 /** Measured cost plus the margin: max(FEE_MARGIN_PERCENT of it, FEE_MARGIN_FLOOR). Exact bigint. */

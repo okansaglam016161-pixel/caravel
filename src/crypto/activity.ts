@@ -18,6 +18,7 @@ import { sortKey, type CaravelMessage } from '../messaging/types'
 import type { SentEntry } from './txHistory'
 import type { JournalEntry, JournalOutcome } from './journal'
 import type { ReconciledReceive } from './reconcile'
+import { cancelOutputIdsOf, payoutIdsOf, type TradeRecord } from './tradeStore'
 import * as nip19 from 'nostr-tools/nip19'
 
 // npub1abcd…wxyz — never throws (blank/invalid hex falls back to a raw prefix).
@@ -113,6 +114,23 @@ export type ActivityRow =
       source: ActivitySource
       txId: string | null
     }
+  /**
+   * A cUSD faucet claim (T3a). A real inflow of cUSD, so it reads as good news — but the figure is
+   * cUSD, not TARI, so it carries its OWN units and the renderer formats them as cUSD. `feeMicrotari`
+   * is still the TARI fee the claim paid. The claimed amount comes from crypto/cusdStore, keyed by
+   * the journal entry; `null` when that record is absent (a restore on another device).
+   */
+  | {
+      kind: 'cusd-faucet'
+      id: string
+      timestamp: number
+      /** cUSD base units claimed, or null if unknown here. */
+      cusdUnits: bigint | null
+      feeMicrotari: bigint | null
+      outcome: ActivityOutcome
+      source: ActivitySource
+      txId: string | null
+    }
   | {
       kind: 'faucet'
       id: string
@@ -138,6 +156,7 @@ export type ActivityRow =
    * the two can be days apart — see firstSeenLabel, which renders it without a time of day for
    * exactly that reason.
    */
+  | TradeActivityRow
   | {
       kind: 'received-unattributed'
       id: string
@@ -152,6 +171,37 @@ export type ActivityRow =
       source: ActivitySource
     }
 
+/**
+ * A Caravel Trade event (T3b). Six of them, named for what the user did or saw:
+ *
+ *   placed-sell / placed-buy   this wallet placed an order (its escrow left for the order)
+ *   sold / bought              this wallet FILLED someone's order: a BUY order (it sold tTARI) or a
+ *                              SELL order (it bought tTARI)
+ *   order-filled               somebody filled an order of OURS — no transaction of ours, so it comes
+ *                              from crypto/tradeStore (first seen filled), not the journal
+ *   cancelled                  this wallet cancelled its own order; the escrow came back
+ *
+ * Two currencies, so it carries each signed delta in its own units (µtTARI, cUSD base units) — `null`
+ * when that token did not move — and the renderer formats each. `feeMicrotari` is the network fee
+ * (none for order-filled: the taker paid it). `trade` is a journalled trade whose record is missing
+ * here (a store loss): it says a trade happened and nothing it cannot know.
+ */
+export type TradeActivityKind = 'placed-sell' | 'placed-buy' | 'sold' | 'bought' | 'order-filled' | 'cancelled' | 'trade'
+
+export type TradeActivityRow = {
+  kind: 'trade'
+  id: string
+  tradeKind: TradeActivityKind
+  timestamp: number
+  tariDelta: bigint | null
+  cusdDelta: bigint | null
+  feeMicrotari: bigint | null
+  outcome: ActivityOutcome
+  source: ActivitySource
+  txId: string | null
+  orderId: string | null
+}
+
 /** txHistory's outcome vocabulary, normalised onto the journal's. One table, one direction. */
 const LEGACY_OUTCOME: Record<'Commit' | 'Reject' | 'Timeout', JournalOutcome> = {
   Commit: 'committed',
@@ -159,8 +209,9 @@ const LEGACY_OUTCOME: Record<'Commit' | 'Reject' | 'Timeout', JournalOutcome> = 
   Timeout: 'timeout',
 }
 
-/** One journalled action, projected into a row. Returns null for kinds the list does not show. */
-function fromJournal(e: JournalEntry): ActivityRow | null {
+/** One journalled action, projected into a row. Returns null for kinds the list does not show.
+ *  `cusdUnits` maps a cUSD-claim journal id to its claimed amount (crypto/cusdStore). */
+function fromJournal(e: JournalEntry, cusdUnits: ReadonlyMap<string, bigint>, trades: ReadonlyMap<string, TradeRecord>, txTimes: ReadonlyMap<string, number>): ActivityRow | null {
   const common = {
     id: e.id,
     timestamp: e.timestamp,
@@ -189,6 +240,13 @@ function fromJournal(e: JournalEntry): ActivityRow | null {
       return { kind: 'swap', ...common, to: 'public' }
     case 'faucet':
       return { kind: 'faucet', ...common }
+    case 'cusd-faucet':
+      return {
+        kind: 'cusd-faucet', id: e.id, timestamp: e.timestamp,
+        cusdUnits: cusdUnits.get(e.id) ?? null,
+        feeMicrotari: e.feeMicrotari, outcome: e.outcome as ActivityOutcome,
+        source: 'local-journal', txId: e.txId,
+      }
     // NOT PRODUCED FROM THE JOURNAL. A reconciled receive is DERIVED — recomputed from the current
     // scan, journal, ledger and epoch on every render — rather than written down, because a stored
     // one would go stale the moment its UTXO is spent or a guard changes. It reaches the list via
@@ -206,6 +264,89 @@ function fromJournal(e: JournalEntry): ActivityRow | null {
       return null
     case 'burn':
       return { kind: 'burn', ...common, from: e.from === 'public' ? 'public' : 'private' }
+    case 'trade-place':
+    case 'trade-fill':
+    case 'trade-cancel':
+      return tradeRow(e, trades.get(e.id), txTimes)
+  }
+}
+
+/** The signed tTARI / cUSD a trade moved for this wallet, by what the user did. */
+export function tradeDeltas(kind: TradeActivityKind, r: Pick<TradeRecord, 'side' | 'n' | 'p' | 'tradeFee'>): { tari: bigint | null; cusd: bigint | null } {
+  const sell = r.side === 0
+  switch (kind) {
+    case 'placed-sell': return { tari: -r.n, cusd: null }
+    case 'placed-buy': return { tari: null, cusd: -r.p }
+    case 'sold': return { tari: -r.n, cusd: r.p }                      // filled a BUY order
+    case 'bought': return { tari: r.n - r.tradeFee, cusd: -r.p }       // filled a SELL order
+    case 'order-filled': return sell ? { tari: null, cusd: r.p } : { tari: r.n - r.tradeFee, cusd: null }
+    case 'cancelled': return sell ? { tari: r.n, cusd: null } : { tari: null, cusd: r.p }
+    case 'trade': return { tari: null, cusd: null }
+  }
+}
+
+function tradeRow(e: JournalEntry, r: TradeRecord | undefined, txTimes: ReadonlyMap<string, number>): TradeActivityRow {
+  const tradeKind: TradeActivityKind = !r ? 'trade'
+    : r.action === 'place' ? (r.side === 0 ? 'placed-sell' : 'placed-buy')
+    : r.action === 'fill' ? (r.side === 0 ? 'bought' : 'sold')
+    : 'cancelled'
+  const d = r ? tradeDeltas(tradeKind, r) : { tari: null, cusd: null }
+  return {
+    // THE INDEXER'S TIME of the transaction (the same on every device); this device's own clock only
+    // until that answer arrives.
+    kind: 'trade', id: e.id, tradeKind, timestamp: (e.txId !== null ? txTimes.get(e.txId) : undefined) ?? e.timestamp,
+    tariDelta: d.tari, cusdDelta: d.cusd, feeMicrotari: e.feeMicrotari,
+    outcome: e.outcome as ActivityOutcome, source: 'local-journal', txId: e.txId, orderId: r?.orderId ?? null,
+  }
+}
+
+/**
+ * Owned outputs another row already explains, for reconcile's `knownReceiveUtxoIds`: a chat payment's
+ * (the message names the sender), a filled order's private payout (its "Order filled" row), and what a
+ * cancel of ours created (its "Cancelled" row). Without them each would ALSO show as "Received · Sender
+ * unknown" — a maker's payout is made by the taker's transaction, and a cancel made on another device
+ * is in no journal here.
+ */
+export function knownReceiveIds(messages: readonly CaravelMessage[], trades: readonly TradeRecord[]): string[] {
+  return [
+    ...messages.filter(m => m.direction === 'received' && m.payment?.utxoId).map(m => m.payment!.utxoId),
+    ...payoutIdsOf(trades),
+    ...cancelOutputIdsOf(trades),
+  ]
+}
+
+/**
+ * An order of ours that was cancelled, from the trade store: its "Cancelled" row on a device whose
+ * journal does not hold the cancel. Dated by the cancelling transaction on the indexer only — no row
+ * until that time is known. Yields to the journal's row for the same transaction (which carries the fee).
+ */
+function orderCancelledRow(r: TradeRecord, txTimes: ReadonlyMap<string, number>): TradeActivityRow | null {
+  if (r.action !== 'place' || r.orderState !== 'cancelled' || !r.orderId || !r.closedTxId) return null
+  const at = txTimes.get(r.closedTxId)
+  if (at === undefined) return null
+  const d = tradeDeltas('cancelled', r)
+  return {
+    kind: 'trade', id: `cancelled-${r.orderId}`, tradeKind: 'cancelled', timestamp: at,
+    tariDelta: d.tari, cusdDelta: d.cusd, feeMicrotari: null,
+    outcome: 'committed', source: 'chain', txId: r.closedTxId, orderId: r.orderId,
+  }
+}
+
+/** A maker's order that somebody filled: the "Order filled" row, from the trade store. */
+function orderFilledRow(r: TradeRecord, txTimes: ReadonlyMap<string, number>): TradeActivityRow | null {
+  if (r.action !== 'place' || r.orderState !== 'filled' || !r.orderId) return null
+  // WHEN IT WAS FILLED, FROM THE CHAIN ONLY: the filling transaction's indexer time (crypto/txTimes:
+  // exact, or estimated from its receipt's epoch once the indexer forgets the body). If that cannot
+  // be had, the placement transaction's time, which a fill can only follow. Never this device's clock
+  // (`filledSeenAt`): that is when this device NOTICED the fill, which put a fill minutes late and every
+  // fill a restore recovered at the moment of the restore. With no chain time at all, no row yet.
+  const at = (r.closedTxId ? txTimes.get(r.closedTxId) : undefined) ?? (r.txId ? txTimes.get(r.txId) : undefined)
+  if (at === undefined) return null
+  const d = tradeDeltas('order-filled', r)
+  return {
+    kind: 'trade', id: `filled-${r.orderId}`, tradeKind: 'order-filled', timestamp: at,
+    tariDelta: d.tari, cusdDelta: d.cusd, feeMicrotari: null,
+    outcome: 'committed', source: 'chain', txId: r.closedTxId ?? null, orderId: r.orderId,
   }
 }
 
@@ -239,19 +380,41 @@ export function buildActivity(
    * receive has no txId to dedupe on anyway; it is a UTXO, not a transaction we made.
    */
   reconciled: readonly ReconciledReceive[] = [],
+  /** cUSD claimed per journal id — see crypto/cusdStore. Empty is fine; those rows show `···`. */
+  cusdUnits: ReadonlyMap<string, bigint> = new Map(),
+  /** This wallet's Caravel Trade records (crypto/tradeStore): trade terms, and its orders seen filled. */
+  trades: readonly TradeRecord[] = [],
+  /** The indexer's time of each trade transaction (crypto/txTimes) — what trade rows are dated by. */
+  txTimes: ReadonlyMap<string, number> = new Map(),
 ): ActivityRow[] {
   const rows: ActivityRow[] = []
   const claimedTxIds = new Set<string>()
+  const tradeByJournal = new Map(trades.map(t => [t.journalId, t]))
+
+  // A maker's filled order is nobody's journal entry here — the taker's transaction did it.
+  for (const t of trades) {
+    const row = orderFilledRow(t, txTimes)
+    if (row) rows.push(row)
+  }
 
   // FIRST, so it wins every collision below.
   for (const e of journal) {
-    const row = fromJournal(e)
+    const row = fromJournal(e, cusdUnits, tradeByJournal, txTimes)
     // ORDER MATTERS: a kind that renders nothing claims nothing either. A `chat-payment` entry is
     // recorded only so its change output can be subtracted later, and it names the same txId the
     // chat message does — so claiming it here would silently delete the chat row that legitimately
     // renders that payment. A non-displayed entry must never suppress a displayed one.
     if (!row) continue
     if (e.txId !== null) claimedTxIds.add(e.txId)
+    rows.push(row)
+  }
+
+  // A cancel of ours this journal does not hold (made on another device): its row from the trade
+  // store. After the journal, so a cancel made HERE is the journal's row alone.
+  for (const t of trades) {
+    const row = orderCancelledRow(t, txTimes)
+    if (!row || claimedTxIds.has(row.txId!)) continue
+    claimedTxIds.add(row.txId!)
     rows.push(row)
   }
 
@@ -359,6 +522,9 @@ export function buildActivity(
   // come from the chain and from our own local cache, never from the label. Ordering follows the
   // chat thread deliberately: a payment the user finds by scrolling to a message must sit where
   // that message sits, and two views of the same event disagreeing would be its own bug.
-  rows.sort((a, b) => b.timestamp - a.timestamp)
+  // Newest first; a tie (same time, or the same estimate) broken by transaction id, then row id, so
+  // every device lists the same rows in the same order.
+  const tie = (r: ActivityRow) => ('txId' in r && r.txId) || r.id
+  rows.sort((a, b) => b.timestamp - a.timestamp || (tie(a) < tie(b) ? -1 : tie(a) > tie(b) ? 1 : 0))
   return rows
 }

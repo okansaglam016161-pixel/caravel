@@ -1,7 +1,8 @@
 // The Burn page's arithmetic and wording — pure, so it can be tested without a network or a DOM.
 
 import type { BurnClassification, BurnDeposit } from '../../crypto/burnWallet'
-import { EPOCH_MS_APPROX } from '../../crypto/burnWallet'
+import type { TxTime } from '../../crypto/txTimes'
+import { burnAppOf, type BurnApp } from './burnApps'
 
 const MICRO = 1_000_000n
 
@@ -28,33 +29,37 @@ export interface BurnRow {
   txId: string
   amount: bigint
   source: 'public' | 'private' | 'unknown'
-  /** A public burn from this wallet's own account, or a private burn this device journalled. */
+  /** The app that burned (a contract deposited), or null for a person burning directly. */
+  app: BurnApp | null
+  /** A DIRECT burn by this wallet: public from its own account, or private and journalled here. */
   byYou: boolean
   /** When it happened, in epoch-ms, or null when not even an estimate is possible. */
   at: number | null
-  /** False when `at` is estimated from the epoch it committed in. */
-  exact: boolean
+  /** True when `at` is estimated from the epoch it committed in. */
+  estimated: boolean
 }
 
 export interface RowContext {
-  /** Every vault of this wallet's account — a public burn from one of them is ours. */
+  /** Every vault of this wallet's account — a direct public burn from one of them is ours. */
   ownVaults: ReadonlySet<string>
-  /** Burns this device journalled, by transaction id, with when they were made. */
-  journalled: ReadonlyMap<string, number>
-  /** When each transaction was made (its `created_at`), while the indexer still has its body. */
-  createdAt: ReadonlyMap<string, number | null>
-  currentEpoch: number | null
-  now: number
+  /** Direct burns this device journalled, by transaction id. */
+  journalled: ReadonlySet<string>
+  /** Each transaction's time from crypto/txTimes: the indexer's, else the deterministic epoch estimate. */
+  times: ReadonlyMap<string, TxTime>
 }
 
 /**
  * Deposits and their receipts → rows, NEWEST FIRST by each row's time.
  *
- * The time is this device's own record of the burn, else the transaction's `created_at`, else an
- * estimate from the epoch it committed in. The list is sorted here rather than trusted in the
- * indexer's order: that order is the order the indexer stored the events, which after a resync is
- * not the order they happened in. Rows with no time at all go last. Ties break by transaction id,
- * and one transaction's deposits keep their order (the sort is stable), so a refresh never shuffles.
+ * The time is the Trade page's rule (crypto/txTimes): the transaction's `created_at` while the
+ * indexer has it, else the deterministic estimate from its epoch — the same on every device, and
+ * never this device's own record. The list is sorted here rather than trusted in the indexer's
+ * order: that order is the order the indexer stored the events, which after a resync is not the
+ * order they happened in. Rows with no time at all go last. Ties break by transaction id, and one
+ * transaction's deposits keep their order (the sort is stable), so a refresh never shuffles.
+ *
+ * An app's burn is NEVER "by you", even when this wallet was in the trade that paid it: the app
+ * burned, not the person.
  */
 export function buildBurnRows(
   deposits: readonly BurnDeposit[],
@@ -67,17 +72,14 @@ export function buildBurnRows(
     seen.set(d.txId, nth + 1)
     const c = classes.get(d.txId)
     const source = c?.source ?? 'unknown'
-    const mine = ctx.journalled.get(d.txId)
-    const byYou = mine !== undefined
-      || (source === 'public' && (c?.withdrawVaults ?? []).some(v => ctx.ownVaults.has(v)))
-    const created = ctx.createdAt.get(d.txId) ?? null
-    let at: number | null = mine ?? created
-    let exact = at !== null
-    if (at === null && c?.epoch != null && ctx.currentEpoch !== null) {
-      at = ctx.now - Math.max(0, ctx.currentEpoch - c.epoch) * EPOCH_MS_APPROX
-      exact = false
+    const app = burnAppOf(c?.appTemplates ?? [])
+    const byYou = app === null && (ctx.journalled.has(d.txId)
+      || (source === 'public' && (c?.withdrawVaults ?? []).some(v => ctx.ownVaults.has(v))))
+    const t = ctx.times.get(d.txId)
+    return {
+      key: `${d.txId}:${nth}`, txId: d.txId, amount: d.amount, source, app, byYou,
+      at: t?.at ?? null, estimated: t?.at != null && t.estimated,
     }
-    return { key: `${d.txId}:${nth}`, txId: d.txId, amount: d.amount, source, byYou, at, exact }
   })
   return rows.sort(newestFirst)
 }
@@ -91,41 +93,19 @@ function newestFirst(a: BurnRow, b: BurnRow): number {
   return a.txId < b.txId ? -1 : a.txId > b.txId ? 1 : 0
 }
 
-/** The row's title — the only thing it says about who burned. */
+/** The row's title — the only thing it says about who burned: an app by name, you, or a person. */
 export function burnTitle(row: BurnRow): string {
+  if (row.app) return row.app.name
   if (row.byYou) return 'Burned by you'
-  if (row.source === 'public') return 'Public burn'
-  if (row.source === 'private') return 'Private burn'
   return 'Burn'
 }
 
-/**
- * When, in words. Exact times read like the rest of the app — "Today 14:32", "Yesterday 09:10",
- * "Mon 18:04", "3 Oct". An ESTIMATE says so and never carries a time of day it does not have.
- */
-export function burnTimeLabel(at: number | null, exact: boolean, now = Date.now()): string {
-  if (at === null) return 'Time unknown'
-  if (!exact) {
-    const hours = Math.max(0, Math.round((now - at) / 3_600_000))
-    if (hours < 1) return 'Within the hour'
-    if (hours < 36) return `About ${hours} hour${hours === 1 ? '' : 's'} ago`
-    const days = Math.round(hours / 24)
-    return `About ${days} days ago`
-  }
-  const d = new Date(at)
-  const today = new Date(now)
-  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
-  const dayDiff = Math.round((startOfDay(today) - startOfDay(d)) / 86_400_000)
-  if (dayDiff === 0) return `Today ${time}`
-  if (dayDiff === 1) return `Yesterday ${time}`
-  if (dayDiff > 1 && dayDiff < 7) return `${d.toLocaleDateString([], { weekday: 'short' })} ${time}`
-  return d.toLocaleDateString([], d.getFullYear() === today.getFullYear()
-    ? { day: 'numeric', month: 'short' }
-    : { day: 'numeric', month: 'short', year: 'numeric' })
-}
-
-function startOfDay(d: Date): number {
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
+/** The row's detail: the app's ("Trading fee", "Unknown app"), or how a person burned. */
+export function burnDetail(row: BurnRow): string | null {
+  if (row.app) return row.app.detail
+  if (row.source === 'public') return 'Public'
+  if (row.source === 'private') return 'Private'
+  return null
 }
 
 /**

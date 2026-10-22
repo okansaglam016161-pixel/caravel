@@ -3,8 +3,9 @@
 // Its own section of the shell, laid out like the wallet page — the same column, header cluster,
 // dark hero and list card — so it reads as part of the same app.
 //
-// NO ADDRESSES ANYWHERE. A burn row says how TARI was burned (public or private) and whether it was
-// you, never who. The burn wallet's own address lives behind "Verify it yourself".
+// NO ADDRESSES ANYWHERE. A burn row says who burned only as a kind — a person ("Burn"), you
+// ("Burned by you"), or an app ("Caravel Trade burn", "App burn") — and how (Private / Public, or
+// the app's reason). The burn wallet's own address lives behind "Verify it yourself".
 
 import { useState } from 'react'
 import { useWallet } from '../../context/WalletContext'
@@ -12,12 +13,12 @@ import { BURN_WALLET_COMPONENT, BURN_WALLET_REPO_URL } from '../../crypto/burnWa
 import { explorerSubstateUrl, explorerTxUrl } from '../../crypto/explorer'
 import { useBurnWallet, type HeroState, type ListState } from '../../hooks/useBurnWallet'
 import ThemeToggle from '../primitives/ThemeToggle'
-import { TICKER, fmt6 } from '../wallet/v2/format'
+import { TICKER, fmt6, timeLabel } from '../wallet/v2/format'
 import { Flame, Refresh, Spinner } from '../wallet/v2/icons'
 import { Body, HeaderIcon, ModalShell, RootHeader } from '../wallet/v2/primitives'
 import { C, MONO, PAGE_MAX_WIDTH } from '../wallet/v2/tokens'
 import BurnSheet from './BurnSheet'
-import { burnTimeLabel, burnTitle, compactSupply, formatSupplyPercent, shortTx, type BurnRow } from './burnModel'
+import { burnDetail, burnTitle, compactSupply, formatSupplyPercent, shortTx, type BurnRow } from './burnModel'
 
 export default function BurnPage({ active }: { active: boolean }) {
   const { address } = useWallet()
@@ -125,7 +126,7 @@ function Hero({ hero, refreshing, onBurn, onRetry }: { hero: HeroState; refreshi
               fontSize: 56, fontWeight: 600, letterSpacing: '-0.025em', fontFeatureSettings: "'tnum'",
               marginTop: 30, lineHeight: 1, color: dim ? 'var(--vault-label)' : C.bright,
             }}>{reading ? fmtBurned(reading.balance) : '—'}</div>
-            <div style={{ fontFamily: MONO, fontSize: 13, color: 'var(--vault-label)', marginTop: 12 }}>tTARI burned forever</div>
+            <div style={{ fontFamily: MONO, fontSize: 13, color: 'var(--vault-label)', marginTop: 12 }}>{TICKER} burned forever</div>
             {/* Of the VERIFIED total only — the same reading as the figure, dimmed with it. */}
             {reading && (
               <div style={{ fontFamily: MONO, fontSize: 11.5, color: 'var(--vault-label)', marginTop: 6, opacity: dim ? 0.6 : 0.8 }}>
@@ -161,12 +162,8 @@ function Hero({ hero, refreshing, onBurn, onRetry }: { hero: HeroState; refreshi
   )
 }
 
-/** The headline figure: whole TARI grouped, decimals only when there are any. "1,000" / "1,000.2". */
-function fmtBurned(microtari: bigint): string {
-  const [whole, frac] = fmt6(microtari).split('.')
-  const trimmed = frac.replace(/0+$/, '')
-  return trimmed ? `${whole}.${trimmed}` : whole
-}
+/** The headline figure — the shared exact form: "1,000" / "1,000.2". */
+const fmtBurned = fmt6
 
 // ── Lotto teaser ──────────────────────────────────────────────────────────────
 
@@ -256,8 +253,7 @@ function Tab({ on, onClick, children }: { on: boolean; onClick: () => void; chil
 }
 
 function BurnRowView({ row }: { row: BurnRow }) {
-  const how = row.source === 'public' ? 'Public' : row.source === 'private' ? 'Private' : null
-  const sub = [row.byYou ? how : null, burnTimeLabel(row.at, row.exact)].filter(Boolean).join(' · ')
+  const sub = [burnDetail(row), timeLabel(row.at, row.estimated)].filter(Boolean).join(' · ')
   return (
     <div className="cv-activity-row" style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 10px', borderRadius: 9 }}>
       <span style={{

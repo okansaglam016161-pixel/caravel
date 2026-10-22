@@ -18,12 +18,15 @@ describe('plainError — no base units reach the screen', () => {
   it('collapses a figure that already carries its own TARI gloss', () => {
     // reveal.ts: the MIN_REVEAL refusal.
     expect(plainError('The smallest amount that can be made public is 100000 µtTARI (0.10 TARI).'))
-      .toBe('The smallest amount that can be made public is 0.10 TARI.')
+      .toBe('The smallest amount that can be made public is 0.1 TARI.')
   })
 
   it('collapses conceal.ts’s minimum the same way', () => {
     expect(plainError('The smallest amount that can be made private is 100000 µtTARI (0.10 TARI).'))
-      .toBe('The smallest amount that can be made private is 0.10 TARI.')
+      .toBe('The smallest amount that can be made private is 0.1 TARI.')
+    // The figure comes from the exact µtTARI, never the module's hand-written "0.10".
+    expect(plainError('The smallest amount you can burn is 100000 µtTARI (0.10 TARI).'))
+      .toBe('The smallest amount you can burn is 0.1 TARI.')
   })
 
   it('converts bare base units, and the output count with them', () => {

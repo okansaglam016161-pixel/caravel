@@ -31,6 +31,7 @@ import { MIN_CONCEAL_MICROTARI, maxConcealTyped, prepareConceal, type PreparedCo
 import { MIN_REVEAL_MICROTARI, maxRevealable, prepareReveal, type PreparedReveal } from '../../crypto/reveal'
 import { loadAccountAddress } from '../../crypto/accountStore'
 import FaucetClaimPanel from './FaucetClaimPanel'
+import CusdFaucetClaimPanel from './CusdFaucetClaimPanel'
 import { prepareConfidentialSend, tariToMicrotari, maxStealthSend, MAX_FEE, type PreparedConfidentialSend, type SendOutcome } from '../../crypto/confidentialSend'
 import { reachableTotal } from '../../crypto/stealthUtxos'
 import {
@@ -38,7 +39,7 @@ import {
   type PreparedPublicSend,
 } from '../../crypto/publicSend'
 import { parseOotleAddress } from '@tari-project/ootle-wasm'
-import { buildActivity, type ActivityOutcome, type ActivityRow } from '../../crypto/activity'
+import { buildActivity, knownReceiveIds, type ActivityOutcome, type ActivityRow, type TradeActivityKind, type TradeActivityRow } from '../../crypto/activity'
 import { beginEntry, settleEntry } from '../../crypto/journalStore'
 import type { JournalOutcome } from '../../crypto/journal'
 import { createActionLock, guarded } from '../../crypto/actionLock'
@@ -51,6 +52,10 @@ import type { EntryProps } from './v2/move'
 import type { Dir } from './v2/moveCopy'
 import { ActivityRowShell, type ActivityStatus, type SendSource, type SendView } from './v2/panels'
 import { useJournal } from '../../hooks/useJournal'
+import { useCusdClaims } from '../../hooks/useCusdClaims'
+import { useTrades } from '../../hooks/useTrades'
+import { useTxTimes } from '../../hooks/useTxTimes'
+import { CUSD_ASSET, TARI_ASSET, formatUnits } from '../../crypto/assets'
 import { useUtxoLedger } from '../../hooks/useUtxoLedger'
 import { useJournalCoverage } from '../../hooks/useJournalCoverage'
 import { useSpentOutputs } from '../../hooks/useSpentOutputs'
@@ -159,6 +164,17 @@ function FaucetRowV2({ row, hidden }: { row: Extract<ActivityRow, { kind: 'fauce
   }} />
 }
 
+/** A cUSD faucet claim (T3a). A real cUSD inflow — its own ticker, formatted as cUSD, not TARI. */
+function CusdFaucetRowV2({ row, hidden }: { row: Extract<ActivityRow, { kind: 'cusd-faucet' }>; hidden: boolean }) {
+  return <ActivityRowShell hidden={hidden} row={{
+    id: row.id, direction: 'in', title: 'Received', note: 'cUSD faucet claim',
+    status: row.outcome === 'committed' ? 'received' : STATUS_FOR[row.outcome],
+    amountMicrotari: null,
+    // The figure is cUSD, so it is formatted here and passed as text — the shell formats TARI.
+    amountText: row.cusdUnits === null ? undefined : `+${formatUnits(row.cusdUnits, CUSD_ASSET.decimals)} ${CUSD_ASSET.ticker}`,
+  }} />
+}
+
 /**
  * An inflow. Its amount is resolved lazily and cache-first — which is why this is a component
  * rather than a mapped object: the hook is per row, exactly as it was before.
@@ -224,13 +240,53 @@ function BurnRowV2({ row, hidden }: { row: Extract<ActivityRow, { kind: 'burn' }
   }} />
 }
 
+const TARI_DECIMALS = TARI_ASSET.decimals
+
+/** A Caravel Trade signed figure in its own units — `+2 cUSD`, `−1 TARI`. */
+function tradeFigure(delta: bigint, decimals: number, ticker: string): string {
+  const sign = delta < 0n ? '−' : '+'
+  return `${sign}${formatUnits(delta < 0n ? -delta : delta, decimals)} ${ticker}`
+}
+
+const TRADE_TITLE: Record<TradeActivityKind, string> = {
+  'placed-sell': 'Placed sell order', 'placed-buy': 'Placed buy order', sold: 'Sold', bought: 'Bought',
+  'order-filled': 'Order filled', cancelled: 'Cancelled', trade: 'Trade',
+}
+const TRADE_NOTE: Record<TradeActivityKind, string> = {
+  'placed-sell': 'Caravel Trade · escrowed until filled or cancelled',
+  'placed-buy': 'Caravel Trade · escrowed until filled or cancelled',
+  sold: 'Caravel Trade · filled a buy order', bought: 'Caravel Trade · filled a sell order',
+  'order-filled': 'Caravel Trade · your order was filled', cancelled: 'Caravel Trade · escrow returned',
+  trade: 'Caravel Trade',
+}
+
+/**
+ * A Caravel Trade event (T3b). Two currencies can move in one row, so both signed figures are
+ * formatted here — each in its own units — and passed as text; the shell formats TARI only. The
+ * direction follows the tTARI: out when it left (an order placed, a sale), in when it arrived.
+ */
+function TradeRowV2({ row, hidden }: { row: TradeActivityRow; hidden: boolean }) {
+  const parts: string[] = []
+  if (row.tariDelta !== null) parts.push(tradeFigure(row.tariDelta, TARI_DECIMALS, TICKER))
+  if (row.cusdDelta !== null) parts.push(tradeFigure(row.cusdDelta, CUSD_ASSET.decimals, CUSD_ASSET.ticker))
+  const out = row.tariDelta !== null ? row.tariDelta < 0n : row.cusdDelta !== null && row.cusdDelta < 0n
+  return <ActivityRowShell hidden={hidden} row={{
+    id: row.id, direction: out ? 'out' : 'in', title: TRADE_TITLE[row.tradeKind], note: TRADE_NOTE[row.tradeKind],
+    status: row.tradeKind === 'order-filled' ? 'received' : STATUS_FOR[row.outcome],
+    amountMicrotari: null,
+    amountText: parts.length ? parts.join(' · ') : undefined,
+  }} />
+}
+
 /** One row, whichever kind it is. */
 function ActivityRowFor({ row, hidden }: { row: ActivityRow; hidden: boolean }) {
   switch (row.kind) {
     case 'sent': return <SentRowV2 row={row} hidden={hidden} />
     case 'swap': return <SwapRowV2 row={row} hidden={hidden} />
     case 'faucet': return <FaucetRowV2 row={row} hidden={hidden} />
+    case 'cusd-faucet': return <CusdFaucetRowV2 row={row} hidden={hidden} />
     case 'burn': return <BurnRowV2 row={row} hidden={hidden} />
+    case 'trade': return <TradeRowV2 row={row} hidden={hidden} />
     case 'received': return <ReceivedRowV2 row={row} hidden={hidden} />
     case 'received-unattributed': return <UnattributedReceiveRowV2 row={row} hidden={hidden} />
   }
@@ -247,7 +303,7 @@ type Chrome = 'modal' | 'page'
 
 export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: () => void; chrome?: Chrome }) {
   const {
-    wallet, address, scan, revealed, rescan, txHistory, messages, recordSent,
+    wallet, address, scan, revealed, cusd, rescan, txHistory, messages, recordSent,
     balanceHidden, setBalanceHidden,
     settles, isSettling, settleLagged, beginSettle, acknowledgeSettle,
   } = useWallet()
@@ -1277,22 +1333,38 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
   // reasoned from, and suppressed UTXOs are deliberately NOT surfaced — a balance that is already
   // correct needs no apology, and "you may have hidden receives" would be noise.
   //
-  // `knownReceiveUtxoIds` is what stops a chat payment appearing twice: those UTXOs are owned and
-  // are not our own outputs, so without this they would be classified as unattributed receives and
-  // shown beside the chat row that already names the sender.
+  // `knownReceiveUtxoIds` is what stops a payment appearing twice: those UTXOs are owned and are not
+  // our own outputs, so without this they would be classified as unattributed receives and shown
+  // beside the row that already says what they are — a chat payment's, which names the sender, and a
+  // filled order's private payout, whose "Order filled" row comes from the trade store (made by the
+  // TAKER's transaction, so no journal entry of ours holds it).
+  const trades = useTrades(address)
   const reconciled = useMemo(() => reconcile({
     owned: scan.utxos,
     journal,
     ledger: loadLedger(address ?? ''),
     epoch: loadEpoch(address ?? ''),
-    knownReceiveUtxoIds: messages
-      .filter(m => m.direction === 'received' && m.payment?.utxoId)
-      .map(m => m.payment!.utxoId),
-  }).receives, [scan.utxos, journal, address, messages])
+    knownReceiveUtxoIds: knownReceiveIds(messages, trades),
+  }).receives, [scan.utxos, journal, address, messages, trades])
 
   // Live, without a reload: the journal is written straight to localStorage by the send, move and
   // faucet paths, and useJournal subscribes to it. See hooks/useJournal.
-  const activity = buildActivity(journal, txHistory, messages, reconciled)
+  // The cUSD claim amounts come from their own store (crypto/cusdStore), keyed by journal id — the
+  // journal holds only the TARI side of a cUSD claim. See hooks/useCusdClaims.
+  const cusdClaims = useCusdClaims(address)
+  const cusdUnitsByJournal = useMemo(
+    () => new Map(cusdClaims.map(c => [c.journalId, c.units] as const)),
+    [cusdClaims],
+  )
+  // Trade rows are dated by the INDEXER's time of their transaction — the same on every device.
+  const tradeTxIds = [
+    ...journal.filter(e => e.kind.startsWith('trade-') && e.txId).map(e => e.txId!),
+    ...trades.filter(t => t.closedTxId).map(t => t.closedTxId!),
+    // A placed order's own transaction: the fallback time of its "Order filled" row (crypto/activity).
+    ...trades.filter(t => t.action === 'place' && t.txId).map(t => t.txId!),
+  ]
+  const txTimes = useTxTimes(tradeTxIds)
+  const activity = buildActivity(journal, txHistory, messages, reconciled, cusdUnitsByJournal, trades, txTimes)
 
   const body = (
     <WalletModalV2
@@ -1300,6 +1372,8 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
       privateBalance={privateBalance}
       publicBalance={publicBalance}
       total={total}
+      // cUSD (T3a): display only. null while a scan runs or an owned output is unverified — shows `···`.
+      cusdUnits={cusd.status === 'done' ? cusd.units : null}
       hidden={balanceHidden}
       networkChip="ESMERALDA TESTNET"
       refreshing={refreshing}
@@ -1357,7 +1431,7 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
       // is funded or the prompt has been dismissed. The @name card left the overview, then left the
       // wallet: names are a property of the identity you message with, so CNS lives in chat, opened
       // by the [@] on the conversation list's search row.
-      overviewNotice={<FaucetClaimPanel />}
+      overviewNotice={<><FaucetClaimPanel /><CusdFaucetClaimPanel /></>}
       send={{
         view: sendView, hidden: balanceHidden,
         onSource: s => { setSendSource(s); setSendExact(null); setSendAll(false); setSendValidationError('') },

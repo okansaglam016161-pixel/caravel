@@ -44,6 +44,7 @@ import { IndexerProvider } from '@tari-project/ootle-indexer'
 import { nextMaxEpoch } from './epoch'
 import { dryRunFee, exactFee, simulateFee, type FeeSimulation } from './feeProbe'
 import { readOutputSubstateIds } from './outputIds'
+import { formatUnits } from './assets'
 // The owned-UTXO scan lives in stealthUtxos.ts so the send and reveal paths share ONE input
 // discovery. It was moved out of this file unchanged; nothing about the behaviour here differs.
 import {
@@ -51,7 +52,7 @@ import {
 } from './stealthUtxos'
 import type { SecretKeyWallet } from '@tari-project/ootle-secret-key-wallet'
 import { awaitFinality } from './finality'
-import { markLocked, promoteToSpent, release } from './spentOutputs'
+import { markLocked, settleLocks } from './spentOutputs'
 import { loadSelectionExcludedIds, newReservationToken, releaseCoins, reserveCoins } from './coinReservations'
 import { confirmer } from './quote'
 import { INDEXER_URL } from './indexerConfig'
@@ -438,8 +439,8 @@ export async function prepareConfidentialSend(
       const feeMicrotari = feePaid != null ? BigInt(feePaid) : undefined
       provider.stopWatcher?.()
 
-      if (outcome === 'Commit') promoteToSpent(senderAddress, txId)
-      else if (outcome === 'Reject') release(senderAddress, txId)
+      // Commit spends, a reject releases, a fee-only commit settles coin by coin, a timeout keeps.
+      settleLocks(senderAddress, txId, outcome, body)
 
       return { txId, outcome, reason, recipientUtxoId: real.recipientUtxoId, feeMicrotari, selfOutputIds: real.selfOutputIds, spentInputIds }
     },
@@ -581,10 +582,9 @@ export function maxStealthSend(outputValues: readonly bigint[]): bigint {
  *
  * String arithmetic, no float anywhere: whole part, then six padded fractional digits.
  */
+/** A tTARI amount in words — the shared formatter (assets.formatUnits): exact, no trailing zeros. */
 export function describeMicrotari(microtari: bigint): string {
-  const whole = microtari / MICROTARI_PER_TARI
-  const frac = (microtari % MICROTARI_PER_TARI).toString().padStart(6, '0')
-  return `${whole}.${frac}`
+  return formatUnits(microtari, 6)
 }
 
 function toHex(bytes: Uint8Array): string {

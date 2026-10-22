@@ -138,6 +138,8 @@ export interface WalletModalV2Props {
    * preview — a second balance layout that nobody could see and no test could reach, drifting.
    */
   total: TotalView
+  /** cUSD in base units, or null when not established; undefined hides the cUSD asset row (T3a). */
+  cusdUnits?: bigint | null
   hidden: boolean
   networkChip?: string
   move: MoveView
@@ -317,7 +319,7 @@ export default function WalletModalV2(p: WalletModalV2Props) {
               {/* The portfolio. One real asset today — see assets.tsx for why that is a
                   presentation and not a model. */}
               <SectionHead title="Assets" flush />
-              <AssetsPanel bare total={p.total} hidden={p.hidden} onOpen={p.onOpenAsset} />
+              <AssetsPanel bare total={p.total} cusdUnits={p.cusdUnits} hidden={p.hidden} onOpen={p.onOpenAsset} />
               {/* THE DIVIDER IS GATED WITH THE SECTION IT INTRODUCES. Activity is conditional, and
                   a hairline with nothing under it would be the card announcing a section that
                   never arrives — worse than the missing section, because it looks like a bug. */}

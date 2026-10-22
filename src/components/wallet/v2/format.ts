@@ -9,6 +9,8 @@
 // on a large balance, and the M2 lesson was that a rounded figure fed back into an amount field
 // asks the network for a number that does not exist. Nothing here converts to Number.
 
+import { TARI_ASSET, formatUnits } from '../../../crypto/assets'
+
 const MICRO = 1_000_000n
 
 /**
@@ -17,21 +19,21 @@ const MICRO = 1_000_000n
  * DISPLAY ONLY. Nothing stored, sent or keyed carries it: amounts travel and persist as µtTARI
  * bigints, and the SDK's own symbols (TARI_RESOURCE_ADDRESS and the like) are not this.
  */
-export const TICKER = 'TARI'
+export const TICKER = TARI_ASSET.ticker
 
-/** Full-precision display: grouped whole part, always six decimals. "12,847.503210" */
+/**
+ * A tTARI amount for display: EXACT, grouped, trailing zeros dropped — "12,847.50321", "0.015194",
+ * "1". The shared formatter (crypto/assets.formatUnits) at tTARI's six decimals; never padded, never
+ * rounded. The name stays for its many callers; "6" is the precision kept, not a width.
+ */
 export function fmt6(microtari: bigint): string {
-  const neg = microtari < 0n
-  const v = neg ? -microtari : microtari
-  const whole = (v / MICRO).toLocaleString('en-US')
-  const frac = (v % MICRO).toString().padStart(6, '0')
-  return `${neg ? '-' : ''}${whole}.${frac}`
+  return formatUnits(microtari, 6)
 }
 
 /**
  * Amount-ENTRY form: full precision, no grouping, trailing zeros trimmed. "999.997686"
  *
- * Distinct from fmt6, which always pads to six places for column alignment. Grouping separators
+ * Distinct from fmt6, which groups thousands for reading. Grouping separators
  * would have to be stripped before parsing, and that round-trip is exactly where M2's MAX bug
  * lived — so the entry form never has any.
  */
@@ -39,25 +41,6 @@ export function toInput(microtari: bigint): string {
   const whole = microtari / MICRO
   const frac = (microtari % MICRO).toString().padStart(6, '0').replace(/0+$/, '')
   return frac ? `${whole}.${frac}` : `${whole}`
-}
-
-/**
- * Rounded display for prose — "12,847.50". Two decimals, grouped, BIGINT ONLY.
- *
- * Exists because the faucet had its own `Number(µt) / 1_000_000` doing this, which is the same
- * silent-rounding bug as any other float on an amount and was missed once already because it lived
- * in a panel rather than in crypto. There is now one place to do it.
- *
- * Rounds HALF-UP on the third decimal, in integer arithmetic: scale to hundredths, add half a
- * hundredth's worth of µtTARI, truncate.
- */
-export function fmt2(microtari: bigint): string {
-  const neg = microtari < 0n
-  const v = neg ? -microtari : microtari
-  const hundredths = (v + 5_000n) / 10_000n          // 12_847_503_210 → 1_284_750
-  const whole = (hundredths / 100n).toLocaleString('en-US')
-  const frac = (hundredths % 100n).toString().padStart(2, '0')
-  return `${neg ? '-' : ''}${whole}.${frac}`
 }
 
 /** Masked stand-in used when the hide toggle is on. Width roughly matches a real figure. */
@@ -83,4 +66,20 @@ export function firstSeenLabel(ts: number, now = Date.now()): string {
   return d.toLocaleDateString([], sameYear
     ? { day: 'numeric', month: 'short' }
     : { day: 'numeric', month: 'short', year: 'numeric' })
+}
+
+/**
+ * When a transaction happened on chain, in a list: HH:MM for a time today, "Oct 14" otherwise; "~"
+ * when estimated from the epoch (crypto/txTimes); "—" when unknown. ONE rule for the Trade and
+ * Burn pages, fed only by the indexer's time or the deterministic epoch estimate — never a device's
+ * own record — so every device shows the same label.
+ */
+export function timeLabel(at: number | null, estimated = false, now = Date.now()): string {
+  if (at === null) return '—'
+  const d = new Date(at), today = new Date(now)
+  const same = d.toDateString() === today.toDateString()
+  const s = same
+    ? d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
+    : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+  return `${estimated ? '~' : ''}${s}`
 }

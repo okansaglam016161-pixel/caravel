@@ -68,12 +68,22 @@ export interface WalletIdentity {
  *            claim and to the private coin it pays out.
  *   names    owns @names. A name records its owner key publicly (the ONS registry), so naming the
  *            owner key would tie a public name to the account.
+ *   trade    the root of the per-order cancel keys (cancelKeyFor). Each Caravel Trade order names
+ *            its cancel key in public, so the owner key there would link every order to the account.
  *
  * Neither is a spending key: their only authority is the faucet claim and the names they own.
  */
 export interface PurposeKeys {
   faucet: SecretKeyWallet
   names: SecretKeyWallet
+  /**
+   * The root every Caravel Trade CANCEL KEY is derived from (see cancelKeyFor). An order names its
+   * cancel key publicly (its `cancel` access rule), so with the owner key every order would be tied to
+   * the account — and the rule must name a key the wallet can re-derive after a restore, or an order
+   * placed before a restore could never be cancelled. One fresh key per order, by index, from here.
+   * Not a key itself: a secret that is only ever hashed.
+   */
+  tradeRoot: Uint8Array
 }
 
 /**
@@ -158,6 +168,11 @@ const NAMES_DOMAIN = 'com.caravel.names'
 const PURPOSE_DOMAIN_VERSION = 1
 const FAUCET_LABEL = 'faucet_key'
 const NAMES_LABEL = 'names_key'
+/** The trade root, and the per-order cancel keys hashed from it with the order's index. FROZEN alike. */
+const TRADE_DOMAIN = 'com.caravel.trade'
+const TRADE_LABEL = 'trade_root'
+const CANCEL_DOMAIN = 'com.caravel.trade.cancel'
+const CANCEL_LABEL = 'cancel_key'
 const PURPOSE_WIDE_BYTES = 64
 /** Ristretto255 group order. A secret key is a scalar in [0, L). */
 const GROUP_ORDER = (1n << 252n) + 27742317777372353535851937790883648493n
@@ -378,7 +393,24 @@ export function purposeKeysFromSeedMaterial(material: Uint8Array): PurposeKeys {
   return {
     faucet: SecretKeyWallet.fromSecretKey(purposeSecret(FAUCET_DOMAIN, FAUCET_LABEL, material), Network.Esmeralda),
     names: SecretKeyWallet.fromSecretKey(purposeSecret(NAMES_DOMAIN, NAMES_LABEL, material), Network.Esmeralda),
+    tradeRoot: purposeSecret(TRADE_DOMAIN, TRADE_LABEL, material),
   }
+}
+
+/**
+ * The cancel key of this wallet's `index`-th Caravel Trade order (0, 1, 2, …).
+ *
+ * Deterministic from the seed, so a restored phrase gets every cancel key back: a wallet that lost its
+ * local record finds its orders by deriving keys in index order and matching them against the key each
+ * open order's `cancel` rule names (crypto/tradeRead). Each order has its own key, so two orders by one
+ * wallet share nothing on chain.
+ */
+export function cancelKeyFor(tradeRoot: Uint8Array, index: number): SecretKeyWallet {
+  if (!Number.isSafeInteger(index) || index < 0 || index > 0xffffffff) throw new Error(`Bad cancel key index ${index}`)
+  const material = new Uint8Array(tradeRoot.length + 4)
+  material.set(tradeRoot)
+  new DataView(material.buffer).setUint32(tradeRoot.length, index, true)
+  return SecretKeyWallet.fromSecretKey(purposeSecret(CANCEL_DOMAIN, CANCEL_LABEL, material), Network.Esmeralda)
 }
 
 /** One domain-separated wide hash, reduced mod the group order to a canonical 32-byte LE scalar. */

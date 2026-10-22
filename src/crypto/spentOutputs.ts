@@ -51,7 +51,7 @@
 
 import { getStoreKey } from './sessionKey'
 import { open, seal } from './storeCrypto'
-import type { TxVerdict } from './txResult'
+import { readFinalizedVerdict, type TxVerdict } from './txResult'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -315,9 +315,9 @@ export function promoteToSpent(
  * strength of it would put a genuinely spent coin back into the spendable set, which is the one
  * outcome worse than over-counting.
  *
- * A FEE-ONLY COMMIT IS A REJECT HERE. `AcceptFeeRejectRest` takes the fee and moves nothing, so
- * the inputs are untouched and must be released — see txResult.ts, whose verdict is what callers
- * pass this on.
+ * NOT FOR A FEE-ONLY COMMIT. `AcceptFeeRejectRest` committed the fee intent, so the coins IT spent
+ * (a private fee's coin) are gone: releasing them would count a spent coin and offer it to the next
+ * spend. A fee-only verdict is settled coin by coin instead — settleCoins / settleLocks.
  */
 export function release(
   walletAddress: string,
@@ -337,6 +337,56 @@ export function release(
   const ok = save(walletAddress, { ...current, records })
   if (!ok) markDegraded(walletAddress, now)
   return { ok, released }
+}
+
+/**
+ * Settle a transaction's locks COIN BY COIN: those in `spentIds` become spent, the rest are released.
+ *
+ * For a transaction that consumed some of its inputs and not others — a fee-only commit, whose fee
+ * intent spent its fee coin and whose rejected main intent spent nothing. Like promote and release,
+ * it touches only `locked` records of this transaction.
+ */
+export function settleCoins(
+  walletAddress: string,
+  txId: string,
+  spentIds: ReadonlySet<string>,
+  now = Date.now(),
+): { ok: boolean; promoted: number; released: number } {
+  const current = loadSpentOutputs(walletAddress)
+  const records = { ...current.records }
+  let promoted = 0, released = 0
+  for (const [id, rec] of Object.entries(records)) {
+    if (rec.txId !== txId || rec.status !== 'locked') continue
+    if (spentIds.has(id)) { records[id] = { ...rec, status: 'spent' }; promoted++ }
+    else { delete records[id]; released++ }
+  }
+  if (promoted === 0 && released === 0) return { ok: true, promoted, released }
+  const ok = save(walletAddress, { ...current, records })
+  if (!ok) markDegraded(walletAddress, now)
+  return { ok, promoted, released }
+}
+
+/**
+ * THE ONE RULE every submit path applies once its transaction is decided — and the sweep applies
+ * later to anything left locked: Accept spends the inputs, a plain reject releases them, a fee-only
+ * commit settles them coin by coin from its fee diff, and a timeout (or an unreadable result) keeps
+ * the lock for the sweep. `body` is the finality body.
+ */
+export function settleLocks(
+  walletAddress: string,
+  txId: string,
+  outcome: 'Commit' | 'Reject' | 'Timeout',
+  body: unknown,
+  now = Date.now(),
+): LockAction {
+  if (outcome === 'Timeout') return 'keep'
+  if (outcome === 'Commit') { promoteToSpent(walletAddress, txId, now); return 'promote' }
+  // A Reject from finality covers both a plain reject and a fee-only commit: the body says which.
+  const verdict = readFinalizedVerdict(body)
+  const action = verdict?.kind === 'fee-only' ? resolveLockAction(verdict) : 'release'
+  if (action === 'settle' && verdict?.kind === 'fee-only') settleCoins(walletAddress, txId, new Set(verdict.consumed), now)
+  else if (action === 'release') release(walletAddress, txId, now)
+  return action
 }
 
 /**
@@ -437,7 +487,7 @@ export function lockedTxIds(spent: SpentOutputs): string[] {
  * arrives here as `null` — KEEPS the lock. Only a verdict that positively says the transaction
  * failed releases it.
  */
-export type LockAction = 'promote' | 'release' | 'keep'
+export type LockAction = 'promote' | 'release' | 'settle' | 'keep'
 
 export function resolveLockAction(verdict: TxVerdict | null): LockAction {
   // No answer yet, or no answer we could obtain. Genuinely pending and unreachable are the same
@@ -447,10 +497,15 @@ export function resolveLockAction(verdict: TxVerdict | null): LockAction {
     // The coins ARE spent. The change this transaction created is a different commitment, which
     // nothing excludes, so the scan picks it up as an ordinary owned row.
     case 'accept': return 'promote'
-    // Nothing was consumed. `fee-only` belongs here and not with `accept`: AcceptFeeRejectRest
-    // takes the fee and rejects the body, so the inputs are untouched and must come back.
-    case 'reject':
-    case 'fee-only': return 'release'
+    // Nothing was consumed.
+    case 'reject': return 'release'
+    // THE FEE COMMITTED, so whatever the fee intent spent IS spent — a private fee's coin above all —
+    // while what only the rejected main intent would have spent is not. Settled coin by coin from the
+    // fee diff (settleCoins). Releasing the lot, as this once did, put a spent fee coin back into the
+    // balance and into coin selection: every later spend of it is refused after its own fee. Never
+    // knowable without the diff, so a diff that could not be read KEEPS the lock (the coin probe in
+    // lockSweep settles it later), rather than guessing in either direction.
+    case 'fee-only': return verdict.consumed === null ? 'keep' : 'settle'
     // Decided, in terms this code cannot read. Keep excluding — see the asymmetry above.
     case 'unreadable': return 'keep'
   }

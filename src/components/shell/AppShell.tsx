@@ -1,6 +1,6 @@
 //   The signed-in shell: a permanent service rail, and whichever service is selected.
 //
-//   ── ALL THREE SERVICES STAY MOUNTED ──────────────────────────────────────────
+//   ── WALLET, CHAT AND BURN STAY MOUNTED (Trade mounts while shown — see its Pane) ──
 //
 //   Switching services toggles VISIBILITY, not mounting, and that is deliberate on three counts:
 //
@@ -24,6 +24,7 @@
 
 import { useState } from 'react'
 import BurnPage from '../burn/BurnPage'
+import TradePage from '../trade/TradePage'
 import ChatApp from '../chat/ChatApp'
 import ProfilePanel from '../wallet/ProfilePanel'
 import WalletPage from '../wallet/WalletPage'
@@ -56,6 +57,10 @@ export default function AppShell() {
       <Pane show={service === 'chat'}><ChatApp onOpenWallet={() => setService('wallet')} /></Pane>
       {/* Its own section. `active` lets it load the chain only once it is first shown. */}
       <Pane show={service === 'burn'}><BurnPage active={service === 'burn'} /></Pane>
+      {/* Caravel Trade. Mounted only while shown: its market feed polls the indexers while it is
+          subscribed, and a hidden pane should not keep asking. Half-typed order forms live in a
+          sheet that closes with the page anyway. */}
+      {service === 'trade' && <Pane show><TradePage /></Pane>}
 
       {profileOpen && (
         <ProfilePanel onClose={() => setProfileOpen(false)} />

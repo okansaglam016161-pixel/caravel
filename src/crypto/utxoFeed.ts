@@ -111,7 +111,7 @@ function mergeSignals(a: AbortSignal, b: AbortSignal): AbortSignal {
  * below lets this throw rather than returning the pages it already has, because a truncated set
  * reported as complete is exactly the bug this module was written to end.
  */
-async function fetchPage(indexerUrl: string, fromId: string | null, signal: AbortSignal): Promise<UtxoRow[]> {
+async function fetchPage(indexerUrl: string, fromId: string | null, signal: AbortSignal, resourceHex: string): Promise<UtxoRow[]> {
   let lastErr: unknown
   let busyWaitMs: number | null = null
   for (let attempt = 1; attempt <= FETCH_RETRIES; attempt++) {
@@ -125,7 +125,7 @@ async function fetchPage(indexerUrl: string, fromId: string | null, signal: Abor
     try {
       const cursor = fromId === null ? '' : `&from_id=${encodeURIComponent(fromId)}`
       const resp = await fetch(
-        `${indexerUrl}/utxos?resource_address=${RESOURCE_HEX}&limit=${UTXO_PAGE_LIMIT}${cursor}`,
+        `${indexerUrl}/utxos?resource_address=${resourceHex}&limit=${UTXO_PAGE_LIMIT}${cursor}`,
         { signal: reqSignal },
       )
       clearTimeout(reqTimer)
@@ -173,6 +173,7 @@ async function walkOne(
   indexerUrl: string,
   signal: AbortSignal,
   onPage: () => void,
+  resourceHex: string,
 ): Promise<{ rows: UtxoRow[]; incomplete: boolean; pages: number }> {
   const rows: UtxoRow[] = []
   const seen = new Set<string>()
@@ -180,7 +181,7 @@ async function walkOne(
   let pages = 0
 
   while (pages < MAX_UTXO_PAGES) {
-    const page: UtxoRow[] = await fetchPage(indexerUrl, cursor, signal)
+    const page: UtxoRow[] = await fetchPage(indexerUrl, cursor, signal, resourceHex)
     pages++
 
     for (const row of page) {
@@ -253,6 +254,12 @@ export async function fetchAllUtxoRows(opts: {
   signal?: AbortSignal
   /** Called as pages land, for a scan that wants to show progress. Totals across all nodes. */
   onPage?: (pages: number, rows: number) => void
+  /**
+   * Which resource's outputs to list, without `resource_`. Defaults to TARI, which is what every
+   * balance and spend path reads. The cUSD scan (crypto/cusdScan) is the only other caller — same
+   * walk, same union, same termination rules, a different `resource_address`.
+   */
+  resourceHex?: string
 }): Promise<UtxoFeed> {
   const signal = opts.signal ?? new AbortController().signal
   const urls = opts.indexerUrls ?? INDEXER_URLS
@@ -265,7 +272,7 @@ export async function fetchAllUtxoRows(opts: {
 
   const settled = await Promise.all(urls.map(async (url): Promise<UtxoSource & { rows_: UtxoRow[] }> => {
     try {
-      const out = await walkOne(url, signal, bump)
+      const out = await walkOne(url, signal, bump, opts.resourceHex ?? RESOURCE_HEX)
       return { url, rows: out.rows.length, pages: out.pages, ok: true, rows_: out.rows, ...(out.incomplete ? { error: 'walk hit its page bound' } : {}) }
     } catch (e) {
       // An intentional abort is the caller cancelling, not a node being bad — rethrow it whole so

@@ -5,7 +5,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   BURN_WALLET_COMPONENT, BURN_WALLET_TEMPLATE, BURN_WALLET_VAULT,
-  classifyBurnReceipt, estimateEpochTime, EPOCH_MS_APPROX, parseBurnComponent, parseBurnVault,
+  classifyBurnReceipt, isBuiltinTemplate, parseBurnComponent, parseBurnVault,
   parseDepositEvents, parseIndexerTime, parseTxCreatedAt,
 } from './burnWallet'
 
@@ -114,11 +114,12 @@ describe('classifyBurnReceipt — the two real burns', () => {
       source: 'public',
       withdrawVaults: ['vault_ef58a6de5f8a0a3bb545f7b3f3f8a0e34dd44db37355d7b831e92afc6cca82d9'],
       epoch: 12044,
+      appTemplates: [],
     })
   })
 
   it('spent stealth outputs and no withdraw is a private burn', () => {
-    expect(classifyBurnReceipt(privateBurn)).toEqual({ source: 'private', withdrawVaults: [], epoch: 12044 })
+    expect(classifyBurnReceipt(privateBurn)).toEqual({ source: 'private', withdrawVaults: [], epoch: 12044, appTemplates: [] })
   })
 
   it('a withdraw from the burn wallet’s own vault never counts', () => {
@@ -126,9 +127,39 @@ describe('classifyBurnReceipt — the two real burns', () => {
     expect(classifyBurnReceipt(odd).source).toBe('unknown')
   })
 
+  // aadee0ae… (epoch 12313): a Caravel Trade fill paying its 0.3% — taken publicly from the same
+  // account vault as the public burn above. The Order withdrew the fee from its escrow and deposited it.
+  const ZERO = '0'.repeat(64)
+  const ORDER = '73aae2b35810bd46f471986baf797517a00b6a45e9eef924156b2edc4ae8d6d7'
+  const fillBurn = { receipt: { epoch: 12313, events: [
+    { substate_id: 'vault_ef58a6de5f8a0a3bb545f7b3f3f8a0e34dd44db37355d7b831e92afc6cca82d9', topic: 'std.vault.pay_fee', template_address: ZERO },
+    { substate_id: 'vault_efa2aaf45ed1b535a10b5e16949349c21545c9c39eed6b647dd5536677f36096', topic: 'std.vault.withdraw', template_address: ZERO },
+    { substate_id: 'vault_a05da7d9756f39f7cfa3a6fa7836844b9b09e51ab39e4926ec2f85ba3c68f94b', topic: 'std.vault.withdraw', template_address: ORDER },
+    { substate_id: BURN_WALLET_VAULT, topic: 'std.vault.deposit', template_address: BURN_WALLET_TEMPLATE },
+    { substate_id: BURN_WALLET_COMPONENT, topic: 'CaravelBurnWallet.Deposit', template_address: BURN_WALLET_TEMPLATE },
+    { substate_id: 'component_a0e8302e3892bc68d0cca3ee3cb3bb93292676544a79a7fd575a89e947390e49', topic: 'CaravelTradeOrder.Filled', template_address: ORDER },
+  ], diff_summary: { downed: [] } } }
+
+  it('names the contract that deposited: the Order template on a trade fill; built-ins and the burn wallet never count', () => {
+    expect(classifyBurnReceipt(fillBurn).appTemplates).toEqual([ORDER])
+    // A person's burn: account (built-in) and burn wallet events only.
+    const direct = { receipt: { epoch: 1, events: [
+      { substate_id: 'vault_x', topic: 'std.vault.withdraw', template_address: ZERO },
+      { substate_id: BURN_WALLET_COMPONENT, topic: 'CaravelBurnWallet.Deposit', template_address: BURN_WALLET_TEMPLATE },
+    ] } }
+    expect(classifyBurnReceipt(direct).appTemplates).toEqual([])
+  })
+
+  it('built-in templates are the zero addresses with at most a low suffix', () => {
+    expect(isBuiltinTemplate('0'.repeat(64))).toBe(true)
+    expect(isBuiltinTemplate('0'.repeat(63) + '1')).toBe(true)
+    expect(isBuiltinTemplate(ORDER)).toBe(false)
+    expect(isBuiltinTemplate('1' + '0'.repeat(63))).toBe(false)
+  })
+
   it('no receipt is unknown, not a guess', () => {
-    expect(classifyBurnReceipt(null)).toEqual({ source: 'unknown', withdrawVaults: [], epoch: null })
-    expect(classifyBurnReceipt({ error: 'not found' })).toEqual({ source: 'unknown', withdrawVaults: [], epoch: null })
+    expect(classifyBurnReceipt(null)).toEqual({ source: 'unknown', withdrawVaults: [], epoch: null, appTemplates: [] })
+    expect(classifyBurnReceipt({ error: 'not found' })).toEqual({ source: 'unknown', withdrawVaults: [], epoch: null, appTemplates: [] })
   })
 })
 
@@ -148,11 +179,6 @@ describe('times', () => {
     expect(parseTxCreatedAt({})).toBeNull()
   })
 
-  it('estimates from the epoch, never into the future', () => {
-    const now = Date.UTC(2026, 9, 9, 12, 0, 0)
-    expect(estimateEpochTime(12040, 12044, now)).toBe(now - 4 * EPOCH_MS_APPROX)
-    expect(estimateEpochTime(12050, 12044, now)).toBe(now)
-  })
 })
 
 // Ootle 0.47 serves the value at `state.up.substate`, with `verified` where it was.

@@ -1,5 +1,6 @@
 import { TICKER } from './format'
 import { NETWORK_BUSY_MESSAGE } from '../../../crypto/indexerRetry'
+import { formatUnits } from '../../../crypto/assets'
 // Turning the fund modules' internal error strings into something a person can act on.
 //
 // WHY THIS EXISTS RATHER THAN EDITING THE MESSAGES AT SOURCE. conceal.ts and reveal.ts speak in
@@ -13,20 +14,17 @@ import { NETWORK_BUSY_MESSAGE } from '../../../crypto/indexerRetry'
 // else in the product. This is the fix for all three, plus anything future code adds: the generic
 // pass catches any `N µtTARI` a new message introduces.
 
-const MICRO = 1_000_000n
 
-/** µtTARI → a trimmed TARI decimal. Bigint throughout; 100000 → "0.1", 16138 → "0.016138". */
+/** µtTARI → the shared exact form (assets.formatUnits); 100000 → "0.1", 16138 → "0.016138". */
 function toTari(micro: bigint): string {
-  const whole = micro / MICRO
-  const frac = (micro % MICRO).toString().padStart(6, '0').replace(/0+$/, '')
-  return frac ? `${whole}.${frac}` : `${whole}`
+  return formatUnits(micro, 6)
 }
 
 /**
  * Rewrite a fund-module error for display.
  *
  * Two passes, and the ORDER MATTERS. Several messages already carry their own parenthesised TARI
- * gloss — "100000 µtTARI (0.10 TARI)" — so that shape is collapsed to just the gloss first.
+ * gloss — "100000 µtTARI (0.10 TARI)" — so that shape is collapsed to one figure first.
  * Whatever bare `N µtTARI` remains is then converted. Doing it the other way round would produce
  * "0.1 TARI (0.10 TARI)".
  *
@@ -44,8 +42,12 @@ export function plainError(message: string): string {
 
   let out = message
 
-  // 1 — "N µtTARI (X TARI)" → "X TARI". The module already did the conversion; keep only that.
-  out = out.replace(/[\d_]+\s*µtTARI\s*\((\d[\d.,]*)\s*TARI\)/gi, `$1 ${TICKER}`)
+  // 1 — "N µtTARI (X TARI)" → one figure in TARI. The module's own gloss is dropped and the figure
+  //     is rebuilt from the exact N with the shared formatter: a hand-written "0.10" would put a
+  //     trailing zero on screen.
+  out = out.replace(/([\d_]+)\s*µtTARI\s*\(\d[\d.,]*\s*TARI\)/gi, (_m, digits: string) => {
+    try { return `${toTari(BigInt(digits.replace(/_/g, '')))} ${TICKER}` } catch { return _m }
+  })
 
   // 2 — a bare "N µtTARI" → the same figure in TARI.
   out = out.replace(/([\d_]+)\s*µtTARI/gi, (_m, digits: string) => {

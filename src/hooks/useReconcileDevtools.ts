@@ -12,6 +12,8 @@ import { useEffect } from 'react'
 import { reconcile, type ReconcileResult } from '../crypto/reconcile'
 import { loadEpoch, loadJournal } from '../crypto/journalStore'
 import { loadLedger } from '../crypto/utxoLedger'
+import { loadTradeState } from '../crypto/tradeStore'
+import { knownReceiveIds } from '../crypto/activity'
 import type { ScanState } from '../context/WalletContext'
 import type { CaravelMessage } from '../messaging/types'
 
@@ -36,10 +38,8 @@ export function useReconcileDevtools(
         journal: loadJournal(walletAddress),
         ledger: loadLedger(walletAddress),
         epoch: loadEpoch(walletAddress),
-        // Receives chat has already attributed, so they are not re-reported as unattributed.
-        knownReceiveUtxoIds: messages
-          .filter(m => m.direction === 'received' && m.payment?.utxoId)
-          .map(m => m.payment!.utxoId),
+        // Receives chat or a filled order of ours already attributes, as WalletModal passes them.
+        knownReceiveUtxoIds: knownReceiveIds(messages, loadTradeState(walletAddress).records),
       })
       return {
         ...result,

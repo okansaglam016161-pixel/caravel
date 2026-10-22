@@ -304,31 +304,22 @@ describe('send all — MAX spends the reachable set and sends its total minus th
   })
 })
 
-describe('describeMicrotari', () => {
-  it('formats a plain amount to six places', () => {
+describe('describeMicrotari — the shared exact form', () => {
+  it('keeps every real decimal', () => {
     expect(describeMicrotari(1_014_537n)).toBe('1.014537')
-  })
-
-  it('pads the fraction — a dropped zero moves the decimal point', () => {
     expect(describeMicrotari(1_000_001n)).toBe('1.000001')
-    expect(describeMicrotari(50_000n)).toBe('0.050000')
-  })
-
-  it('keeps trailing zeros, so the width is stable while a spend is reported', () => {
-    expect(describeMicrotari(2_500_000n)).toBe('2.500000')
-  })
-
-  it('handles zero and a bare sub-microtari boundary', () => {
-    expect(describeMicrotari(0n)).toBe('0.000000')
     expect(describeMicrotari(1n)).toBe('0.000001')
   })
-
-  it('is EXACT past 2^53, where the float version silently rounded', () => {
-    const huge = 9_007_199_254_740_993n           // 2^53 + 1 µtTARI
-    expect(BigInt(Number(huge))).not.toBe(huge)   // the old path really does lose the last unit
-    expect(describeMicrotari(huge)).toBe('9007199254.740993')
+  it('drops only trailing zeros', () => {
+    expect(describeMicrotari(50_000n)).toBe('0.05')
+    expect(describeMicrotari(2_500_000n)).toBe('2.5')
+    expect(describeMicrotari(0n)).toBe('0')
   })
-
+  it('is EXACT past 2^53, where the float version silently rounded — grouped', () => {
+    const huge = 9_007_199_254_740_993n
+    expect(BigInt(Number(huge))).not.toBe(huge)
+    expect(describeMicrotari(huge)).toBe('9,007,199,254.740993')
+  })
   it('never emits an exponent, however large the amount', () => {
     expect(describeMicrotari(10n ** 24n)).not.toMatch(/e/i)
   })

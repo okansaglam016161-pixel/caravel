@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest'
 import { DomainSeparatedHasher, importWalletSeed } from 'tari-cipherseed'
 import {
+  cancelKeyFor,
   type DerivationScheme,
   detectScheme,
   deriveIdentity,
@@ -430,6 +431,42 @@ describe('purpose keys (faucet, names)', () => {
     expect(await pk(b.purposeKeys.faucet)).toBe(await pk(a.purposeKeys.faucet))
     expect(await pk(b.purposeKeys.names)).toBe(await pk(a.purposeKeys.names))
   }, 30_000)
+})
+
+describe('trade cancel keys (seed-derived, one per order)', () => {
+  // ── FROZEN VECTORS ────────────────────────────────────────────────────────
+  //
+  // These pin "com.caravel.trade" / "trade_root" and "com.caravel.trade.cancel" / "cancel_key",
+  // version 1, the u32-LE index, the 64-byte wide hash and its reduction. A drift strands every open
+  // order: its cancel rule names a key the wallet can no longer derive, so its escrow can never be
+  // taken back. IF ONE FAILS, THE DERIVATION DRIFTED — DO NOT UPDATE IT.
+  const pk = async (w: { getPublicKey(): Promise<Uint8Array> }) => hex(await w.getPublicKey())
+
+  it('derives the pinned cancel keys for a known CipherSeed phrase', async () => {
+    const id = await deriveIdentity(CIPHERSEED, 'cipherseed')
+    expect(await pk(cancelKeyFor(id.purposeKeys.tradeRoot, 0))).toBe('ec512fdc20e77565f151da42052346841f6308751bcef8bf3ff078a76701e366')
+    expect(await pk(cancelKeyFor(id.purposeKeys.tradeRoot, 1))).toBe('e4890c4cf8ff12624755e26999613c664161800bd27eb2877dd3c509d7390765')
+  }, 30_000)
+
+  it('derives the pinned cancel keys for a known legacy BIP-39 phrase', async () => {
+    const id = await deriveIdentity(BIP39, 'bip39')
+    expect(await pk(cancelKeyFor(id.purposeKeys.tradeRoot, 0))).toBe('2a7b273c3c3005579a63c91c9eb56793eb4dc5c4eca4c95901fdf80c3932e048')
+    expect(await pk(cancelKeyFor(id.purposeKeys.tradeRoot, 7))).toBe('f6c1b64a5c8245fd003f2d95f92cd029ab6755b8834ad702794973b42e046a48')
+  }, 30_000)
+
+  it('are distinct per index and from every other key, and come back from the same phrase', async () => {
+    const a = await deriveIdentity(CIPHERSEED, 'cipherseed')
+    const b = await deriveIdentity(`  ${CIPHERSEED.toUpperCase()}\n`, 'cipherseed')
+    const cancels = await Promise.all([0, 1, 2, 3].map(i => pk(cancelKeyFor(a.purposeKeys.tradeRoot, i))))
+    const others = [await pk(a.wallet), await pk(a.purposeKeys.faucet), await pk(a.purposeKeys.names), a.nostr.publicKeyHex]
+    expect(new Set([...cancels, ...others]).size).toBe(8)
+    expect(await pk(cancelKeyFor(b.purposeKeys.tradeRoot, 2))).toBe(cancels[2])
+  }, 30_000)
+
+  it('refuses an index outside u32', () => {
+    expect(() => cancelKeyFor(new Uint8Array(32), -1)).toThrow()
+    expect(() => cancelKeyFor(new Uint8Array(32), 2 ** 32)).toThrow()
+  })
 })
 
 describe('deriveIdentity hands back the store key', () => {

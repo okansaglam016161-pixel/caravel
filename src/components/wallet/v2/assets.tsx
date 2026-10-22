@@ -36,10 +36,17 @@ import { fiatForTotal } from './fiat'
 import { fmt6, TICKER } from './format'
 import { totalPillValue } from './TotalHero'
 import type { TotalView } from './total'
+import { CUSD_ASSET, formatUnits, formatUsd } from '../../../crypto/assets'
 
 export interface AssetsPanelProps {
   /** The row's right-hand figure. Same union, same rules, as the hero's. */
   total: TotalView
+  /**
+   * The wallet's cUSD, in base units, or null when it is not established yet (a scan still running,
+   * or an owned output the chain would not verify). DISPLAY ONLY — there is no cUSD send, burn or
+   * chat (crypto/assets). Undefined hides the row entirely; null shows it as `···`.
+   */
+  cusdUnits?: bigint | null
   hidden: boolean
   /**
    * Opens the asset's own page.
@@ -59,7 +66,7 @@ export interface AssetsPanelProps {
   bare?: boolean
 }
 
-export function AssetsPanel({ total, hidden, onOpen, bare = false }: AssetsPanelProps) {
+export function AssetsPanel({ total, cusdUnits, hidden, onOpen, bare = false }: AssetsPanelProps) {
   const live = !!onOpen
 
   const row = (
@@ -112,11 +119,44 @@ export function AssetsPanel({ total, hidden, onOpen, bare = false }: AssetsPanel
       </div>
   )
 
-  if (bare) return <RowBleed>{row}</RowBleed>
+  // ── cUSD, a SECOND row, display only ────────────────────────────────────────
+  //
+  // No chevron, no pointer, no hover, whatever TARI has — cUSD has no page because it has no send,
+  // burn or chat (crypto/assets). "cUSD · X ≈ $X": the exact dollar figure, because cUSD is $1 by
+  // definition. `···` muted while the balance is not established, the same honesty rule as the TARI
+  // row above. Hidden entirely when `cusdUnits` is undefined (cUSD not wired on this surface).
+  const known = cusdUnits !== null && cusdUnits !== undefined
+  const cusdRow = cusdUnits === undefined ? null : (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 13px', borderRadius: 9 }}>
+      <div style={{
+        width: 32, height: 32, borderRadius: 10, flexShrink: 0,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        border: '1px solid var(--border)', background: 'var(--surface-2, var(--surface))',
+        fontSize: 13, fontWeight: 700, color: C.primary, fontFeatureSettings: "'tnum'",
+      }}>$</div>
+      <span style={{ flex: 1, minWidth: 0, fontSize: 13.5, fontWeight: 600, color: C.primary }}>{CUSD_ASSET.ticker}</span>
+      <span style={{ textAlign: 'right', flexShrink: 0 }}>
+        <span style={{
+          display: 'block', fontSize: 13, fontWeight: 600, fontFeatureSettings: "'tnum'",
+          color: hidden || known ? C.primary : C.mutedDim,
+        }}>
+          {hidden ? '••••' : known ? `≈ ${formatUsd(cusdUnits, CUSD_ASSET)}` : '···'}
+        </span>
+        {!hidden && known && (
+          <span style={{
+            display: 'block', fontFamily: MONO, fontSize: 11, color: C.mutedDim, marginTop: 2, whiteSpace: 'nowrap',
+          }}>{formatUnits(cusdUnits, CUSD_ASSET.decimals)} {CUSD_ASSET.ticker}</span>
+        )}
+      </span>
+    </div>
+  )
+
+  const rows = <>{row}{cusdRow}</>
+  if (bare) return <RowBleed>{rows}</RowBleed>
   return (
     <div style={{
       background: 'var(--surface)', border: '1px solid var(--border)',
       borderRadius: 14, padding: 5, boxShadow: 'var(--e1)',
-    }}>{row}</div>
+    }}>{rows}</div>
   )
 }

@@ -33,7 +33,7 @@
  */
 export type JournalKind =
   | 'send' | 'receive' | 'make-private' | 'make-public'
-  | 'chat-payment' | 'ons-register'
+  | 'chat-payment'
 
 /**
  * How it ended.
@@ -163,8 +163,6 @@ export const OUTPUT_CREATING_ACTIONS = [
   'make-public',
   /** A payment sent from chat. Recorded for subtraction only, never displayed in wallet Activity. */
   'chat-payment',
-  /** An @name registration. Spends one UTXO and returns exactly one change output to us. */
-  'ons-register',
 ] as const
 
 export type OutputCreatingAction = (typeof OUTPUT_CREATING_ACTIONS)[number]

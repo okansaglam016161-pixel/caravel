@@ -73,16 +73,11 @@ import { useNavigate } from 'react-router-dom'
 import { useWallet } from '../../context/WalletContext'
 import LogoTile from '../primitives/LogoTile'
 
-// ── THERE IS NO @ ROW ────────────────────────────────────────────────────────
+// ── WHAT EARNS A ROW ─────────────────────────────────────────────────────────
 //
-// Names were never a service in the way the wallet and chat are — they are a property of the
-// identity you message with, so CNS moved inside chat, opened by the [@] beside the two list
-// actions, and the glyph that used to sit here went with it. A rail row for a thing you touch
-// twice a year, beside ones you live in, was the spine spending its scarcest space badly.
-//
-// THAT ARGUMENT IS ABOUT WHAT EARNS A ROW, NOT ABOUT HOW MANY THERE ARE. A row is for a destination
-// you open rather than a property of something else, and for one you can actually use: a rail row
-// standing in for work not yet built is a door that opens onto a description of a door.
+// A row is for a destination you open rather than a property of something else, and for one you
+// can actually use: a rail row standing in for work not yet built is a door that opens onto a
+// description of a door.
 //
 // ORDER IS RENDER ORDER — the map below walks this array — so a new service appends rather than
 // displacing the two anyone already has muscle memory for.

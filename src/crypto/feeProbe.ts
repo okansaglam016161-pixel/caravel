@@ -71,58 +71,9 @@ export const FEE_MARGIN_FLOOR = 200n
  * tx 8191c003…): paying 15 198 against 15 199 → Reject, fees paid 0, inputs unspent, balance
  * unchanged. So the margin buys nothing but overcharge; a cost that moved is caught at confirm
  * (crypto/quote) or, rarer, by that free reject — and either way the user is asked again.
- *
- * @names cannot: see ONS_FEE_BUFFER.
  */
 export function exactFee(costMicrotari: bigint): bigint {
   return costMicrotari
-}
-
-/**
- * THE MAIN-INTENT BUFFER: a flat 200 µtTARI over the measured cost, for every PRIVATE fee whose
- * action runs in the MAIN intent — @name registration. One constant, so a second such action cannot
- * drift from it.
- *
- * Such a fee is a revealed bucket spent WHOLE, and the action sits after it in the main intent, so a
- * fee that turns out short when it executes is not a free reject: the engine commits the fee intent
- * alone and the action does not happen (see ONS_FEE_BUFFER for the measured drift). The buffer
- * absorbs a small rise; a bigger one is caught at confirm (the final transaction re-simulated at this
- * exact budget) and re-quoted. The whole budget is spent, so the figure shown is the figure charged.
- */
-export const MAIN_INTENT_FEE_BUFFER = 200n
-
-/** A main-intent private fee: the measured cost plus MAIN_INTENT_FEE_BUFFER. Shown, and charged. */
-export function mainIntentBudget(costMicrotari: bigint): bigint {
-  return costMicrotari + MAIN_INTENT_FEE_BUFFER
-}
-
-/**
- * THE @NAME BUFFER: MAIN_INTENT_FEE_BUFFER, as @name registration applies it. Registration was the
- * first main-intent action, and its measurements are why the buffer exists:
- *
- * Registration cannot pay exactly. Its register calls sit in the MAIN intent
- * and its fee is a revealed bucket that is spent whole, so a fee that turns out short when it
- * executes is not a free reject: the engine falls back to committing the fee intent alone
- * (tari-ootle 0.46 runtime/tracker.rs select_finalized_state). The fee is charged and nothing is
- * registered.
- *
- * And the cost does move between the confirm check and execution: every name added grows the
- * registry, and with it the cost of the next registration (a nine-character name measured 12 463,
- * 12 623, then 12 806 µtTARI across 2026-10-13/14). The buffer covers that drift. A rise bigger than
- * the buffer is caught at confirm (crypto/quote: the final transaction is re-simulated at this
- * exact budget) and the user is asked again at the new price; it is never absorbed silently.
- *
- * Flat rather than a percentage: the drift comes from registry growth, not from the size of the fee.
- * The whole budget is spent, so the figure shown is the figure charged.
- *
- * Parked: putting the register calls in the fee intent would make a short fee free, and this buffer
- * unnecessary (ONS Option 1).
- */
-export const ONS_FEE_BUFFER = MAIN_INTENT_FEE_BUFFER
-
-/** Registration's budget: the measured cost plus ONS_FEE_BUFFER. Exactly what is shown and charged. */
-export function onsRegistrationBudget(costMicrotari: bigint): bigint {
-  return mainIntentBudget(costMicrotari)
 }
 
 /** Measured cost plus the margin: max(FEE_MARGIN_PERCENT of it, FEE_MARGIN_FLOOR). Exact bigint. */

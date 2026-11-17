@@ -4,7 +4,6 @@ import { describe, expect, it, vi } from 'vitest'
 import { createActionLock, guarded } from './actionLock'
 import walletModalSrc from '../components/wallet/WalletModal.tsx?raw'
 import chatAppSrc from '../components/chat/ChatApp.tsx?raw'
-import cnsSrc from '../components/chat/CnsCommitView.tsx?raw'
 
 const tick = () => new Promise(r => setTimeout(r, 0))
 
@@ -71,7 +70,6 @@ const BUTTONS = [
   { name: 'Send (wallet)', file: walletModalSrc, entry: 'confirmSend', inner: 'handleConfirmSend', lock: 'sendLock', call: 'onConfirm: () => void confirmSend()', announce: false },
   { name: 'Make public / make private', file: walletModalSrc, entry: 'confirmMove', inner: 'handleConfirmMove', lock: 'moveLock', call: 'onConfirm={() => void confirmMove()}', announce: false },
   { name: 'Chat payment', file: chatAppSrc, entry: 'submitPayment', inner: 'submitPaymentNow', lock: 'payLock', call: 'void submitPayment()', announce: true },
-  { name: '@name register', file: cnsSrc, entry: 'submit', inner: 'submitNow', lock: 'submitLock', call: 'void a.submit(state.prepared)', announce: false },
 ] as const
 
 describe.each(BUTTONS)('$name', ({ file, entry, inner, lock, call, announce }) => {

@@ -17,9 +17,8 @@
     "jsx": "react-jsx",
 
     /* The Tari SDK resolves from node_modules like any dependency (0.39 bump — see vite.config.ts).
-       Only the ONS client is still Vite-aliased to a vendored dist. */
+       Only tari-cipherseed is aliased, to its vendored source. */
     "paths": {
-      "@ootle/name-service": ["./vendor/ons/dist/index.d.ts"],
       "tari-cipherseed": ["./vendor/tari-cipherseed/src/index.ts"]
     },
 

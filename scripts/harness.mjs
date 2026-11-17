@@ -46,8 +46,6 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 /** Kept in step with the aliases in vite.config.ts / vitest*.config.ts. */
 const ALIASES = new Map([
   ['tari-cipherseed', path.join(ROOT, 'vendor/tari-cipherseed/src/index.ts')],
-  // The vendored ONS client (vendor/ons/dist), for prove-cns-fee — ons.ts imports it by this name.
-  ['@ootle/name-service', path.join(ROOT, 'vendor/ons/dist/index.js')],
 ])
 
 /** What a bundler tries when a relative import has no extension, in the order it tries them. */

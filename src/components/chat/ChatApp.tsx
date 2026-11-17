@@ -10,7 +10,6 @@ import { compareMessages, sortKey, type CaravelMessage, type Group } from '../..
 import GroupThread from './GroupThread'
 import CreateGroupModal, { type GroupContactOption } from './CreateGroupModal'
 import ModalCard from './ModalCard'
-import CnsOverlay from './CnsOverlay'
 import ReinviteModal, { type ReinviteMemberOption } from './ReinviteModal'
 import { useScrollToBottom } from './useScrollToBottom'
 import { useJumpToMessage } from './useJumpToMessage'
@@ -23,7 +22,6 @@ import { createActionLock, guarded } from '../../crypto/actionLock'
 import { dedupePaymentMessages, disputedUtxos, isOwnOutputClaim, ownOutputIds, receivedPaymentVisible } from '../../messaging/paymentDedupe'
 import { useJournal } from '../../hooks/useJournal'
 import { beginEntry, settleEntry } from '../../crypto/journalStore'
-import { resolveOnsNameToHex, toOnsName, type OnsResolveErrorKind } from '../../crypto/ons'
 import { ConnectionIndicator, RelayHealthPanel } from './ConnectionStatus'
 import { usePaymentResolution } from '../../hooks/usePaymentResolution'
 import { balanceIsLowerBound, isInsufficientBalance } from './paymentGuard'
@@ -208,14 +206,12 @@ function PayPanelHeader({ onClose }: { onClose: () => void }) {
 }
 
 
-// Compose-modal resolution state (Flag 1b). `ok` carries the resolved peer; `name` is the ONS name
-// (null for a raw npub), `existing` true when it is already an accepted conversation.
+// Compose-modal input state. `ok` carries the decoded peer; `invalid` says why the typed text is
+// not an npub — not one at all, or one whose checksum fails.
 type ComposeRes =
   | { s: 'idle' }
   | { s: 'invalid'; kind: 'not-npub' | 'bad-npub' }
-  | { s: 'resolving'; name: string }
-  | { s: 'ok'; hex: string; name: string | null }
-  | { s: 'fail'; kind: OnsResolveErrorKind; name: string }
+  | { s: 'ok'; hex: string }
 
 // Decimal µTari string → TARI display string. Defensive; never throws.
 //
@@ -372,11 +368,7 @@ function PaymentMessageCard({ message, lid, flashed, disputed }: { message: Cara
 
 // ── Component ────────────────────────────────────────────────────────────────────
 
-export default function ChatApp({ onOpenWallet }: {
-  /** Switch the shell to the Wallet service. Chat cannot reach it otherwise — the service lives in
-   *  AppShell — and CNS's timeout screen sends people to Activity to check a transaction. */
-  onOpenWallet: () => void
-}) {
+export default function ChatApp() {
   const { wallet, address, scan, messages, historyUnreadable, nostrPubkeyHex, messagingStatus, contacts, acceptContact, contactAddresses, setManualTariAddress, createMessagingProvider, recordSentMessage, deleteConversation, editMessage, reactMessage, getRelayStates, reconnectAll, groups, createGroup, acceptGroup, declineGroup, leaveGroup, reinviteGroup, balanceHidden } = useWallet()
   // Payment claims this wallet must not credit — see messaging/paymentDedupe: claims on our own
   // outputs (our change) get no card, and an output two contacts claim credits neither.
@@ -394,9 +386,6 @@ export default function ChatApp({ onOpenWallet }: {
   const [selectedPeer, setSelectedPeer] = useState<string | null>(null)
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null)
   const [createGroupOpen, setCreateGroupOpen] = useState(false)
-  // CNS lives in chat rather than in the spine: the [@] beside the two list actions opens it as
-  // an overlay over this view, which is why it is a boolean here and not a fourth service.
-  const [cnsOpen, setCnsOpen] = useState(false)
   // C-M2 re-invite picker, keyed on the group it was opened for.
   const [reinviteFor, setReinviteFor] = useState<string | null>(null)
 
@@ -407,10 +396,8 @@ export default function ChatApp({ onOpenWallet }: {
   // Compose-new-conversation modal.
   const [composeOpen, setComposeOpen] = useState(false)
   const [composeNpub, setComposeNpub] = useState('')
-  // Compose resolution state machine — driven by an eager, debounced resolve of the input (Flag 1b).
+  // Compose input state — decoded as the user types.
   const [composeRes, setComposeRes] = useState<ComposeRes>({ s: 'idle' })
-  // Bumped by the "Try again" button on an unreachable failure to re-fire resolution unchanged.
-  const [composeRetry, setComposeRetry] = useState(0)
   // Per-request in-flight guard (Flag 2) — disables both buttons + shows a spinner while accepting/
   // declining. Local UI only; acceptRequest/declineRequest are unchanged.
   const [busyRequest, setBusyRequest] = useState<{ peerHex: string; kind: 'accept' | 'decline' } | null>(null)
@@ -825,34 +812,20 @@ export default function ChatApp({ onOpenWallet }: {
     setComposeRes({ s: 'idle' })
   }
 
-  // Eager, debounced resolution of the compose input (Flag 1b). Resolution logic is unchanged
-  // (nip19.decode for npub, resolveOnsNameToHex for @names) — only WHEN it runs moved from the old
-  // Start click to on-type (~350ms debounce). A token guards against stale async writes.
-  const composeToken = useRef(0)
+  // The compose input, decoded as the user types. npub only: nip19.decode, and nothing else is
+  // accepted. Synchronous — there is no lookup, so nothing to debounce or race.
   useEffect(() => {
     if (!composeOpen) return
     const raw = composeNpub.trim()
-    const token = ++composeToken.current
-    if (!raw) { setComposeRes({ s: 'idle' }); return }
-    if (raw.startsWith('npub1')) {
-      try {
-        const decoded = nip19.decode(raw)
-        if (decoded.type !== 'npub') { setComposeRes({ s: 'invalid', kind: 'bad-npub' }); return }
-        setComposeRes({ s: 'ok', hex: decoded.data as string, name: null })
-      } catch { setComposeRes({ s: 'invalid', kind: 'bad-npub' }) }
-      return
-    }
-    const name = toOnsName(raw)
-    if (!/^[a-z0-9_-]+$/.test(name)) { setComposeRes({ s: 'invalid', kind: 'not-npub' }); return }
-    setComposeRes({ s: 'resolving', name })
-    const timer = setTimeout(async () => {
-      const res = await resolveOnsNameToHex(raw)
-      if (composeToken.current !== token) return   // input changed while resolving — drop stale result
-      if (res.ok && res.hex) setComposeRes({ s: 'ok', hex: res.hex, name })
-      else setComposeRes({ s: 'fail', kind: res.errorKind ?? 'not-found', name })
-    }, 350)
-    return () => clearTimeout(timer)
-  }, [composeNpub, composeOpen, composeRetry])
+    // Empty, or still typing the prefix ("n", "np", …): nothing to say yet.
+    if (!raw || 'npub1'.startsWith(raw)) { setComposeRes({ s: 'idle' }); return }
+    if (!raw.startsWith('npub1')) { setComposeRes({ s: 'invalid', kind: 'not-npub' }); return }
+    try {
+      const decoded = nip19.decode(raw)
+      if (decoded.type !== 'npub') { setComposeRes({ s: 'invalid', kind: 'bad-npub' }); return }
+      setComposeRes({ s: 'ok', hex: decoded.data as string })
+    } catch { setComposeRes({ s: 'invalid', kind: 'bad-npub' }) }
+  }, [composeNpub, composeOpen])
 
   // Accept a pending request → promotes to a normal conversation and opens it. Sends my Tari
   // address (M9.0d); accept still does NOT do anything else (no auto-reply).
@@ -1728,30 +1701,6 @@ export default function ChatApp({ onOpenWallet }: {
             >
               <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx={9} cy={7} r={4} /><path d="M19 8v6M22 11h-6" /></svg>
             </button>
-            {/* @ — YOUR NAMES. The third list action, and the glyph is the spine's own `name` icon:
-                CNS stops being a service beside Wallet and Chat and becomes a thing you open from
-                inside chat, so the mark moves with it rather than being redrawn.
-
-                IT SHOWS WHEN IT IS OPEN, unlike its two neighbours. They fire and forget — a modal
-                opens and the button behind it is irrelevant — but this one sits under a 520px
-                overlay the user can dismiss by clicking the ground, and a control that had no idea
-                whether its own panel was up would be the odd one out of three. */}
-            <button
-              onClick={() => setCnsOpen(true)}
-              title="Your @names"
-              aria-label="Your @names"
-              aria-expanded={cnsOpen}
-              className="cv-icon-btn"
-              style={{
-                display: 'flex', alignItems: 'center', justifyContent: 'center', width: 34, height: 34,
-                flexShrink: 0, borderRadius: 10, cursor: 'pointer', padding: 0,
-                border: `1px solid ${cnsOpen ? 'var(--accent-400)' : 'var(--border)'}`,
-                background: cnsOpen ? 'var(--accent-wash)' : 'var(--surface)',
-                color: cnsOpen ? 'var(--accent-ink)' : 'var(--text-muted-dim)',
-              }}
-            >
-              <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round"><circle cx={12} cy={12} r={4} /><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8" /></svg>
-            </button>
           </div>
 
           {/* Ambient connection strip — click opens the relay-health panel. BELOW the search now,
@@ -1984,7 +1933,7 @@ export default function ChatApp({ onOpenWallet }: {
                 <svg width={34} height={34} viewBox="0 0 24 24" fill="none" stroke="var(--accent-400)" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.4 }}><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg>
                 <div style={{ textAlign: 'center' }}>
                   <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-muted)', marginBottom: 6 }}>No conversations yet</div>
-                  <div style={{ fontSize: 13, color: 'var(--text-faint)', lineHeight: 1.55, maxWidth: 240 }}>Start one with an @name, or share yours so people can find you.</div>
+                  <div style={{ fontSize: 13, color: 'var(--text-faint)', lineHeight: 1.55, maxWidth: 240 }}>Start one with an npub, or share yours so people can find you.</div>
                 </div>
                 <button onClick={() => { setComposeNpub(''); setComposeRes({ s: 'idle' }); setComposeOpen(true) }} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '10px 18px', borderRadius: 10, background: 'var(--accent-400)', color: 'var(--ink-on-accent)', fontSize: 13, fontWeight: 600, cursor: 'pointer', border: 'none', fontFamily: 'inherit' }} className="cv-btn-primary">
                   <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="var(--ink-on-accent)" strokeWidth={2.2} strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>New conversation
@@ -2693,7 +2642,6 @@ export default function ChatApp({ onOpenWallet }: {
       />
     )}
 
-    {cnsOpen && <CnsOverlay onClose={() => setCnsOpen(false)} onOpenWallet={onOpenWallet} />}
 
     {createGroupOpen && (
       <CreateGroupModal
@@ -2722,30 +2670,28 @@ export default function ChatApp({ onOpenWallet }: {
         THE INPUT NO LONGER CARRIES THE STATE. It used to: a leading icon that tinted four ways, a
         trailing spinner/check/cross, and a border that went red or amber. Three indicators saying
         one thing, and on a failure the field turned red about text that was perfectly well typed.
-        Now the border says only "is this being worked on" (accent while resolving or resolved,
-        danger only when the TEXT itself is wrong), and everything else is said once, underneath.
+        Now the border says only "is this good to go" (accent once decoded, danger only when the
+        TEXT itself is wrong), and everything else is said once, underneath.
 
         NO CANCEL BUTTON. ModalCard's ×, Escape and the backdrop all close this, and in six of the
         nine states the primary is disabled — so Cancel beside it was a second inert button. One
         full-width CTA instead.
 
-        Everything here is presentational. The debounced resolver fills composeRes, the input feeds
-        composeNpub, and Start/Open call startWith(hex); this reads all of it and writes none of
-        it except composeRetry, which the "Try again" link carries. */}
+        Everything here is presentational. The decoder fills composeRes, the input feeds
+        composeNpub, and Start/Open call startWith(hex); this reads all of it and writes none of it. */}
     {composeOpen && (() => {
       const r = composeRes
       const okHex = r.s === 'ok' ? r.hex : null
       const existing = okHex ? conversations.some(c => c.peerHex === okHex) : false
       const canStart = r.s === 'ok'
-      // The field is accent while something is happening to it, danger only when the TYPED TEXT is
-      // the problem, and neutral otherwise — including on a resolution failure, where the card below
-      // carries the news and the text is not at fault.
+      // The field is accent once the npub decodes, danger only when the TYPED TEXT is the problem,
+      // and neutral otherwise.
       const typedIsWrong = r.s === 'invalid'
-      const fieldActive = r.s === 'resolving' || r.s === 'ok'
+      const fieldActive = r.s === 'ok'
       const av = okHex ? avatarFor(okHex) : null
       return (
       <ModalCard title="New conversation" onClose={() => setComposeOpen(false)} maxWidth={420}>
-        <div style={{ fontSize: 12.5, color: 'var(--text-muted-dim)', marginTop: -6 }}>Enter an npub or an @name</div>
+        <div style={{ fontSize: 12.5, color: 'var(--text-muted-dim)', marginTop: -6 }}>Enter their npub</div>
 
         <div style={{
           display: 'flex', alignItems: 'center', padding: '11px 13px', borderRadius: 11,
@@ -2757,7 +2703,7 @@ export default function ChatApp({ onOpenWallet }: {
             value={composeNpub}
             onChange={e => setComposeNpub(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') { if (canStart) startWith(okHex!) } else if (e.key === 'Escape') setComposeOpen(false) }}
-            placeholder="npub or @name"
+            placeholder="npub1…"
             spellCheck={false}
             className="cv-composer"
             style={{ flex: 1, minWidth: 0, background: 'transparent', border: 'none', outline: 'none', color: 'var(--text-body)', fontSize: 13.5, fontFamily: composeNpub.startsWith('npub') ? MONO : 'inherit', padding: 0 }}
@@ -2767,14 +2713,7 @@ export default function ChatApp({ onOpenWallet }: {
         {/* The text itself is malformed — the one case the field is right to go red about. */}
         {r.s === 'invalid' && (
           <div style={{ fontSize: 12, color: 'var(--danger-500)', marginTop: -4 }}>
-            {r.kind === 'not-npub' ? 'That is not an npub or an @name' : 'Invalid npub. The checksum doesn’t match.'}
-          </div>
-        )}
-
-        {r.s === 'resolving' && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 9, fontSize: 12.5, color: 'var(--text-body-dim)' }}>
-            <span style={{ width: 13, height: 13, borderRadius: 99, border: '2px solid var(--border)', borderTopColor: 'var(--accent-400)', animation: 'cv-spin 0.8s linear infinite', flexShrink: 0 }} />
-            Resolving @{r.name} on the Tari network…
+            {r.kind === 'not-npub' ? 'That is not an npub. It starts with npub1.' : 'Invalid npub. The checksum doesn’t match.'}
           </div>
         )}
 
@@ -2783,61 +2722,20 @@ export default function ChatApp({ onOpenWallet }: {
             {/* THE GENERATED COLOUR, not the design's flat blue. The avatar's job here is the same
                 as everywhere else in chat: telling you which person this is. */}
             <span style={{ width: 32, height: 32, borderRadius: 99, flexShrink: 0, background: av!.grad, color: av!.color, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 600 }}>
-              {/* r.name WITHOUT its @ — initialsFor takes the first two characters, so "@haci" would
-                  render "@H" where "haci" gives "HA". */}
-              {initialsFor(nicknames[okHex!] ?? r.name ?? undefined)}
+              {initialsFor(nicknames[okHex!])}
             </span>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--accent-ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {nicknames[okHex!] ?? (r.name ? `@${r.name}` : truncNpub(okHex!))}
+                {nicknames[okHex!] ?? truncNpub(okHex!)}
               </div>
-              {/* THE KEY AN @NAME RESOLVED TO, in mono, not the design's flat "Ready to message".
-                  This is the one moment before you message someone where you can check that the
-                  name you typed points at the key you were given out of band — the same reason the
-                  unreachable copy stays ours. A raw npub needs no such check: you already have the
-                  key, so that case says "Ready to message" as the design draws it.
-                  `existing` still wins the line, and is said twice over: the CTA below reads
-                  "Open conversation" rather than "Start conversation". */}
-              <div style={{ fontFamily: existing || !r.name ? undefined : MONO, fontSize: 11.5, color: 'var(--text-body-dim)', marginTop: 1, lineHeight: 1.45, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {existing ? 'You already have a conversation' : r.name ? truncNpub(okHex!) : 'Ready to message'}
+              {/* `existing` wins the line, and is said twice over: the CTA below reads "Open
+                  conversation" rather than "Start conversation". */}
+              <div style={{ fontSize: 11.5, color: 'var(--text-body-dim)', marginTop: 1, lineHeight: 1.45, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {existing ? 'You already have a conversation' : 'Ready to message'}
               </div>
             </div>
           </div>
         )}
-
-        {r.s === 'fail' && (() => {
-          const bad = r.kind === 'not-found'
-          return (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '12px 13px', borderRadius: 12, background: bad ? 'var(--card-danger)' : 'var(--card-warn)' }}>
-              <span style={{ width: 32, height: 32, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: bad ? 'var(--danger-500)' : 'var(--warn)' }}>
-                <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round">
-                  <circle cx={12} cy={12} r={9} />
-                  {bad ? <path d="M15 9l-6 6M9 9l6 6" /> : <path d="M12 8v4M12 16h.01" />}
-                </svg>
-              </span>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: bad ? 'var(--danger-500)' : 'var(--warn)' }}>
-                  {bad ? `@${r.name} was not found` : r.kind === 'unreachable' ? `Could not check @${r.name}` : `@${r.name} cannot receive messages yet`}
-                </div>
-                {/* UNREACHABLE KEEPS OUR WORDING, against the design's "The network is unreachable
-                    right now." A lookup that failed is not a name that is missing, and letting a
-                    reader conclude the second from the first is the one wrong belief this screen
-                    can leave behind. */}
-                <div style={{ fontSize: 11.5, color: 'var(--text-body-dim)', marginTop: 1, lineHeight: 1.45, textWrap: 'pretty' }}>
-                  {bad ? 'No one has registered this name.'
-                    : r.kind === 'unreachable' ? `This is a network problem, not a missing name. @${r.name} may well exist.`
-                    : 'The name is registered but has no messaging key. Ask them to open Caravel Chat once.'}
-                </div>
-              </div>
-              {r.kind === 'unreachable' && (
-                <button
-                  onClick={() => setComposeRetry(n => n + 1)}
-                  style={{ flexShrink: 0, padding: 0, border: 'none', background: 'transparent', fontSize: 12.5, fontWeight: 600, color: 'var(--accent-ink)', cursor: 'pointer', fontFamily: 'inherit' }}
-                >Try again</button>
-              )}
-            </div>
-          )
-        })()}
 
         <button
           onClick={() => { if (canStart) startWith(okHex!) }}

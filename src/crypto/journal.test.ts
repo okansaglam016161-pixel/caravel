@@ -115,11 +115,10 @@ describe('coverageComplete', () => {
     expect(coverageComplete([...OUTPUT_CREATING_ACTIONS])).toBe(true)
   })
 
-  it('names chat payments and @name registrations — the two that were missing', () => {
-    // Both create an owned change output and neither was journalled before Phase 3. Naming them
+  it('names chat payments — the one that was missing', () => {
+    // A chat payment creates an owned change output and was not journalled before Phase 3. Naming it
     // here is what stops a healthy-but-blind journal claiming completeness.
     expect(OUTPUT_CREATING_ACTIONS).toContain('chat-payment')
-    expect(OUTPUT_CREATING_ACTIONS).toContain('ons-register')
   })
 })
 
@@ -189,8 +188,8 @@ describe('unresolvedOutputs — the hole the data shows by itself', () => {
   })
 
   it('flags a committed entry that never recorded what it created', () => {
-    // The @name capture that failed, or a tab closed before the read finished.
-    const hole = committed({ kind: 'ons-register', selfOutputIds: null })
+    // An output capture that failed, or a tab closed before the read finished.
+    const hole = committed({ kind: 'chat-payment', selfOutputIds: null })
     expect(unresolvedOutputs([committed(), hole])).toEqual([hole])
     expect(outputsFullyAccounted([committed(), hole])).toBe(false)
   })
@@ -215,7 +214,7 @@ describe('unresolvedOutputs — the hole the data shows by itself', () => {
   it('clears once the entry is repaired', () => {
     // Why this is derived instead of degrading the epoch: the transaction result stays fetchable,
     // so the failure is a network blip rather than a lost fact, and a retry fixes it.
-    const hole = committed({ kind: 'ons-register', selfOutputIds: null })
+    const hole = committed({ kind: 'chat-payment', selfOutputIds: null })
     expect(outputsFullyAccounted([hole])).toBe(false)
     expect(outputsFullyAccounted([{ ...hole, selfOutputIds: ['utxo_change'] }])).toBe(true)
   })

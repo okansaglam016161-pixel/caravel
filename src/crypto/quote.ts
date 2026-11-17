@@ -54,7 +54,7 @@ export const QUOTE_CHANGED_MESSAGES: Record<QuoteChangedReason, string> = {
   'rejected': 'The network would no longer accept it as priced, so it was worked out again. Nothing was sent. Check it and confirm.',
 }
 
-/** The verdict shape the check needs from a simulation — FeeSimulation and the ONS writer's both fit. */
+/** The verdict shape the check needs from a simulation — FeeSimulation fits it. */
 export type SimulationVerdict =
   | { accepted: true }
   | { accepted: false; kind?: string; reason?: string }

@@ -81,7 +81,7 @@ describe('the subtraction', () => {
   })
 
   it('subtracts self-outputs from every kind of action, not just sends', () => {
-    for (const kind of ['make-private', 'make-public', 'chat-payment', 'ons-register'] as const) {
+    for (const kind of ['make-private', 'make-public', 'chat-payment'] as const) {
       const { receives } = reconcile(base({ journal: [entry({ kind, selfOutputIds: [CHANGE] })] }))
       expect(ids(receives)).not.toContain(CHANGE)
     }
@@ -144,7 +144,7 @@ describe('every guard fails toward suppression', () => {
     // The derived hole. That action made an output whether or not we wrote it down, so there is one
     // of ours in the owned set with nothing to subtract it.
     const r = reconcile(base({
-      journal: [entry(), entry({ kind: 'ons-register', selfOutputIds: null })],
+      journal: [entry(), entry({ kind: 'chat-payment', selfOutputIds: null })],
     }))
     expect(r.receives).toEqual([])
     expect(r.reason).toBe('unresolved-outputs')

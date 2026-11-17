@@ -35,7 +35,7 @@
 //                         instructions, and stop one step short of submitting — which is where
 //                         most of the interesting failures live anyway.
 
-import { deriveIdentity, detectScheme, type DerivationScheme, type PurposeKeys } from '../src/crypto/derivation'
+import { deriveIdentity, detectScheme, type DerivationScheme } from '../src/crypto/derivation'
 import { recoverAccountAddress } from '../src/crypto/accountRecovery'
 import { loadAccountAddress, saveAccountAddress } from '../src/crypto/accountStore'
 import { scanWallet } from '../src/crypto/walletScanner'
@@ -62,8 +62,6 @@ import {
   advanceSettle, settleAction, type PendingSettle, type SettleEvidence,
 } from '../src/context/settle'
 import { setStoreKey } from '../src/crypto/sessionKey'
-import { ons, estimateOnsRegistration, checkOnsAvailable } from '../src/crypto/ons'
-import { createWalletSeed } from 'tari-cipherseed'
 import {
   scanRecentReceives, advanceIndexer, loadReceiveScan, discoveredReceives, carriedOutputs,
   FIRST_SCAN_PAGE_BUDGET, SCAN_PAGE_BUDGET, RECENT_PAGE_LIMIT, PROBE_PAGE_LIMIT,
@@ -367,8 +365,6 @@ function printInstructions(build: RecordedBuild | undefined): void {
 
 interface Harnessed {
   wallet: SecretKeyWallet
-  /** The names key, from the same derivation the app runs (derivation.PurposeKeys). */
-  purposeKeys: PurposeKeys
   address: string
   ownerPkHex: string
   viewSecret: Uint8Array
@@ -405,7 +401,7 @@ async function identity(): Promise<Harnessed> {
   }
   const scheme: DerivationScheme = override ?? (detected === 'ambiguous' || detected === 'invalid' ? 'cipherseed' : detected)
 
-  const { wallet, nostr, storeKey, purposeKeys } = await deriveIdentity(phrase, scheme)
+  const { wallet, nostr, storeKey } = await deriveIdentity(phrase, scheme)
   // EXACTLY WHAT UNLOCK DOES (WalletContext: `setStoreKey(identity.storeKey)`). Every per-identity
   // store — the journal, the first-seen ledger, and now the spend record — is sealed under this
   // key, so without it loadExcludedIds would read as empty and the harness would silently test the
@@ -419,7 +415,6 @@ async function identity(): Promise<Harnessed> {
   field('scheme', scheme + (override ? '  (from CARAVEL_TEST_SCHEME)' : detected === 'ambiguous' ? '  (phrase is valid under BOTH — default taken; set CARAVEL_TEST_SCHEME to override)' : `  (detected)`))
   field('address', address)
   field('owner pubkey', ownerPkHex)
-  field('names pubkey', hex(await purposeKeys.names.getPublicKey()))
   field('npub', nostr.npub)
   // The secret itself is never printed. Its LENGTH and the agreement between the two accessors are
   // worth stating: walletScanner is given `getViewOnlySecret()` by the app and stealthUtxos calls
@@ -430,7 +425,7 @@ async function identity(): Promise<Harnessed> {
   field('view secret', `${viewSecret.length} bytes (not printed) · getViewOnlySecret ≡ getViewSecret: ${agree ? 'yes' : 'NO — THE TWO SCANS USE DIFFERENT KEYS'}`)
   field('resource', RESOURCE_HEX)
 
-  return { wallet, purposeKeys, address, ownerPkHex, viewSecret, npub: nostr.npub, scheme }
+  return { wallet, address, ownerPkHex, viewSecret, npub: nostr.npub, scheme }
 }
 
 /**
@@ -1808,142 +1803,6 @@ async function cmdProveReceiveScan(h: Harnessed, targetId?: string): Promise<voi
 }
 
 
-// ── register-name ────────────────────────────────────────────────────────────
-
-/**
- * WRITE with --yes. Register an @name for this wallet, through the app's own path: the same
- * estimateOnsRegistration the CNS screen calls, its confirm check, and its prepared submit. Owned by
- * the wallet's NAMES key. Without --yes it is priced and confirm-checked (dry runs) and stops.
- */
-async function cmdRegisterName(h: Harnessed, name: string | undefined, yes: boolean): Promise<void> {
-  if (!name) throw new Error('register-name needs a name.')
-  rule(`register-name  (crypto/ons.estimateOnsRegistration → prepared.submit)  ·  @${name}`)
-  console.log(yes
-    ? '  \u26a0  WRITE COMMAND, --yes GIVEN. This WILL register the name and spend a real fee.'
-    : '  Add --yes to register for real. Without it the registration is PRICED and CHECKED (dry runs), never sent.')
-  field('owner', `${hex(await h.purposeKeys.names.getPublicKey())}  (names key)`)
-  const avail = await checkOnsAvailable(name)
-  field('available', avail.ok ? String(avail.available) : `(unreadable — ${avail.error})`)
-
-  const est = await estimateOnsRegistration(h.wallet, h.address, name, h.npub, h.purposeKeys.names)
-  if (!est.ok || !est.prepared) {
-    field('estimate', `FAILED — ${est.errorKind}: ${est.error}`)
-    process.exitCode = 1
-    return
-  }
-  const prepared = est.prepared
-  field('fee', `${amt(prepared.feeMicroTari)}   [what the confirm screen shows: the whole revealed budget]`)
-  field('fee input', prepared.feeInputId)
-  await prepared.confirm()
-  field('confirm check', 'PASSES — quote fresh, fee coin unspent, final transaction accepted at this fee')
-  if (!yes) {
-    prepared.release()
-    console.log('\n  STOPPED BEFORE SUBMIT. Nothing was sent.')
-    return
-  }
-
-  const mark = net.length
-  const r = await prepared.submit()
-  field('outcome', r.outcome ?? '(none)')
-  field('tx id', r.txId ?? '(none)')
-  if (r.error) console.log(`\n  ${r.error}\n`)
-  if (r.fee !== undefined) {
-    field('quoted', amt(prepared.feeMicroTari))
-    field('charged', amt(r.fee))
-    field('shown − charged', `${prepared.feeMicroTari - r.fee} µtTARI   ${prepared.feeMicroTari === r.fee ? '✓ shown fee = charged fee' : '✗ MISMATCH'}`)
-  }
-  printNet(mark)
-  if (!r.ok) process.exitCode = 1
-}
-
-
-// ── prove-cns-fee ────────────────────────────────────────────────────────────
-
-/**
- * The CNS fee-input proof. The SAME vendored writer, the SAME dry-run, twice: once as it shipped
- * (its own one-page scan of indexer-a's 1000 oldest rows) and once as ons.ts now drives it (fed
- * Caravel's scanOwnedUtxos). Then a wallet with no private outputs, which must get the honest
- * "make funds private" kind rather than a false "no balance".
- *
- * READ-ONLY. Both estimates are dry-runs: simulated by the network, never committed, nothing spent.
- */
-async function cmdProveCnsFee(h: Harnessed): Promise<void> {
-  let failures = 0
-  const check = (label: string, ok: boolean, detail: string) => {
-    if (!ok) failures++
-    console.log(`  ${ok ? 'PASS' : '◀ FAIL'}  ${label.padEnd(58)} ${detail}`)
-  }
-  // Never registered, so the dry-run's register instruction has nothing to collide with.
-  const name = `cvh${Date.now().toString(36)}`
-  rule(`prove-cns-fee  ·  READ-ONLY, dry-runs only  ·  name "${name}"`)
-
-  // ── What each scan can see ──
-  const crypto = new WasmStealthCrypto(Network.Esmeralda)
-  const owned = await scanOwnedUtxos(crypto, h.viewSecret, { excluded: loadExcludedIds(h.address), walletAddress: h.address })
-  const privateTotal = owned.reduce((s, u) => s + u.value, 0n)
-  // The vendored scan's window, reproduced as its own request: one page, limit 1000, indexer-a.
-  const res = await fetch(`${INDEXER_URLS[0]}/utxos?resource_address=${RESOURCE_HEX}&limit=1000`)
-  const body = await res.json() as unknown
-  const windowRows = (Array.isArray(body) ? body : (body as { utxos?: unknown[] }).utxos ?? []) as [string, unknown][]
-  const inWindow = new Set(windowRows.map(r => r[0]))
-  const visibleToOld = owned.filter(u => inWindow.has(u.substateId.slice(u.substateId.lastIndexOf('_') + 1)))
-  rule('1 · what each scan can see')
-  field('Caravel scanOwnedUtxos', `${owned.length} spendable private output(s), ${amt(privateTotal)}`)
-  field('vendored window', `${windowRows.length} rows (the 1000 oldest on ${new URL(INDEXER_URLS[0]!).host})`)
-  field('ours inside it', `${visibleToOld.length} of ${owned.length}`)
-
-  // ── The writer as it shipped ──
-  rule('2 · the vendored writer\'s built-in scan (no ownedUtxos)')
-  let oldError: string | null = null
-  try {
-    const writer = await ons.withBrowserSigner({ wallet: h.wallet, senderAddress: h.address })
-    const r = await writer.estimateRegisterWithNostr(name, h.npub)
-    field('result', `estimated ${r.feeMicroTari} µtTARI`)
-  } catch (e) {
-    oldError = e instanceof Error ? e.message : String(e)
-    field('result', `THREW: ${oldError}`)
-  }
-  if (visibleToOld.length === 0 && owned.length > 0) {
-    check('reproduces the bug: "No confidential UTXOs found"', oldError?.includes('No confidential UTXOs found') === true, 'with private funds present')
-  } else {
-    console.log(`      (this wallet has ${visibleToOld.length} output(s) inside the old window, so the old path can work here;\n` +
-                '       the bug needs a wallet whose private outputs are all newer than those 1000 rows)')
-  }
-
-  // ── The writer as ons.ts now drives it ──
-  rule('3 · estimateOnsRegistration — the writer fed Caravel\'s owned set')
-  const now = await estimateOnsRegistration(h.wallet, h.address, name, h.npub, h.purposeKeys.names)
-  field('result', now.ok ? `ok — budget ${now.feeMicroTari} µtTARI (dry-run estimate + the flat @name buffer, feeProbe.onsRegistrationBudget)` : `${now.errorKind}: ${now.error}`)
-  if (owned.length > 0) {
-    check('the fee input is found and the estimate succeeds', now.ok && (now.feeMicroTari ?? 0n) > 0n, now.ok ? `${now.feeMicroTari} µtTARI` : String(now.errorKind))
-  } else {
-    check('no private outputs: the honest kind, not "no-balance"', now.errorKind === 'no-private' || now.errorKind === 'private-settling', String(now.errorKind))
-  }
-
-  // ── A wallet with no private outputs ──
-  rule('4 · a wallet with NO private outputs')
-  const phrase = process.env.CARAVEL_PUBLIC_ONLY_MNEMONIC?.trim() || (await createWalletSeed()).mnemonic
-  const fromEnv = !!process.env.CARAVEL_PUBLIC_ONLY_MNEMONIC?.trim()
-  const scheme = detectScheme(phrase)
-  const other = await deriveIdentity(phrase, scheme === 'bip39' ? 'bip39' : 'cipherseed')
-  const otherAddr = await other.wallet.getAddress()
-  const otherOwned = await scanOwnedUtxos(crypto, await other.wallet.getViewSecret(), { walletAddress: otherAddr })
-  field('wallet', `${otherAddr.slice(0, 24)}… ${fromEnv ? '(CARAVEL_PUBLIC_ONLY_MNEMONIC)' : '(fresh, generated for this run — set CARAVEL_PUBLIC_ONLY_MNEMONIC for a funded public-only one)'}`)
-  if (fromEnv) {
-    const acct = await recoverAccountAddress(other.wallet, otherAddr)
-    const provider = await IndexerProvider.connect({ url: INDEXER, network: Network.Esmeralda })
-    field('public balance', amt(await readRevealedBalance(provider, acct)))
-    provider.stopWatcher?.()
-  }
-  field('private outputs', `${otherOwned.length}`)
-  const empty = await estimateOnsRegistration(other.wallet, otherAddr, name, other.nostr.npub, other.purposeKeys.names)
-  field('result', empty.ok ? 'ok?!' : `${empty.errorKind}: ${empty.error}`)
-  check('gets "no-private" (→ "make some funds private first")', otherOwned.length === 0 && empty.errorKind === 'no-private', String(empty.errorKind))
-
-  rule(failures === 0 ? 'PROVEN — CNS funds its fee from the same set the wallet spends from' : `${failures} CHECK(S) FAILED`)
-  if (failures > 0) process.exitCode = 1
-}
-
 // ── Entry point ──────────────────────────────────────────────────────────────
 
 /**
@@ -2094,9 +1953,6 @@ READ-ONLY — safe to run freely, costs nothing:
                               Proof that a receive absent from every /utxos listing is found by
                               walking recent transactions, recovered by id, counted and spendable;
                               plus the spent, dedup and cursor guards. Submits nothing.
-  prove-cns-fee               Proof that CNS finds its fee input through Caravel's own scan where
-                              the vendored one-page scan finds none, and that a wallet with no
-                              private outputs gets the honest message. Dry-runs only.
   indexers                    What each indexer holds, what the union recovers, and how much of
                               THIS wallet is invisible reading a single node.
   spent                       Show the local spend record (crypto/spentOutputs).
@@ -2120,8 +1976,6 @@ READ-ONLY — safe to run freely, costs nothing:
                               and releases what it locked.
 
 WRITE — MOVES REAL TESTNET FUNDS. Builds and prices without --yes; submits with it:
-  register-name <name>        Register @name, owned by this wallet's names key, through the CNS
-                              screen's own estimate → confirm → submit. Priced and checked without --yes.
   make-private <amount|all>   conceal: revealed vault  →  private stealth output. The fee goes on
                               top; 'all' (MAX) moves the whole public balance, fee out of it.
   make-public  <amount>       reveal:  private outputs →  revealed vault balance.
@@ -2203,12 +2057,6 @@ export async function main(argv: string[]): Promise<void> {
         break
       case 'prove-recovery':
         await cmdProveRecovery(h, args[1])
-        break
-      case 'prove-cns-fee':
-        await cmdProveCnsFee(h)
-        break
-      case 'register-name':
-        await cmdRegisterName(h, args[1], yes)
         break
       case 'prove-receive-scan':
         await cmdProveReceiveScan(h, args[1])

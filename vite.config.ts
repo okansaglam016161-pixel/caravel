@@ -34,8 +34,6 @@ const V = (p: string) => path.join(ROOT, 'vendor', p)
 // Current pairing (Ootle 0.42): SDK 0.6.0 on ootle-wasm ^0.42.0, with ootle-ts-bindings ^1.55.0
 // declared directly (the version the SDK depends on) since our code imports its types.
 //
-// The ONS client stays vendored — see vendor/README.md; it is our own unpublished package.
-//
 // tari-cipherseed is vendored too, but as SOURCE rather than a built dist: it derives the keys
 // that control funds, so the reviewed bytes belong in-tree where every future diff re-exposes
 // them. See vendor/tari-cipherseed/README.md for the pinned version and re-vendor procedure.
@@ -47,11 +45,10 @@ export default defineConfig({
   optimizeDeps: {
     // Don't pre-bundle these — they contain WASM and TLA that esbuild
     // can't handle in the deps pre-bundling step.
-    exclude: ['@tari-project/ootle-wasm', '@tari-project/ootle', '@tari-project/ootle-secret-key-wallet', '@tari-project/ootle-indexer', '@ootle/name-service'],
+    exclude: ['@tari-project/ootle-wasm', '@tari-project/ootle', '@tari-project/ootle-secret-key-wallet', '@tari-project/ootle-indexer'],
   },
   resolve: {
     alias: {
-      '@ootle/name-service': V('ons/dist/index.js'),
       'tari-cipherseed': V('tari-cipherseed/src/index.ts'),
     },
   },

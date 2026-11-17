@@ -59,7 +59,7 @@ function obj(v: unknown): Record<string, unknown> | null {
 /**
  * The substates a transaction CREATED, as `[substateId, substate]` pairs.
  *
- * Exported so txOutputs.ts can read created UTXOs out of the same structure rather than
+ * Exported so any other reader of created substates uses the same structure rather than
  * re-implementing the two nestings below — the committed and dry-run shapes differ, and one parser
  * getting that wrong while the other stays right is how they would drift.
  */

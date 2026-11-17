@@ -13,7 +13,6 @@
 import { describe, expect, it, afterEach, vi } from 'vitest'
 import {
   compareToShownFee, dryRunFee, priceAtBudget, simulateFee, withFeeMargin, FEE_MARGIN_FLOOR, FEE_MARGIN_PERCENT,
-  MAIN_INTENT_FEE_BUFFER, ONS_FEE_BUFFER, mainIntentBudget, onsRegistrationBudget,
 } from './feeProbe'
 import { QuoteChanged, confirmQuote } from './quote'
 import { NETWORK_BUSY_MESSAGE, retryTiming } from './indexerRetry'
@@ -361,14 +360,5 @@ describe('compareToShownFee — the confirm check holds the cost to the fee SHOW
   it('leaves a rejection as it is', () => {
     const rejected = { accepted: false as const, kind: 'reject' as const, reason: 'x', message: 'y' }
     expect(compareToShownFee(rejected, 2_402n)).toBe(rejected)
-  })
-})
-
-describe('the main-intent buffer — one constant for every main-intent private fee', () => {
-  it('is 200 µtTARI, and ONS_FEE_BUFFER IS it (they cannot drift apart)', () => {
-    expect(MAIN_INTENT_FEE_BUFFER).toBe(200n)
-    expect(ONS_FEE_BUFFER).toBe(MAIN_INTENT_FEE_BUFFER)
-    expect(mainIntentBudget(21_756n)).toBe(21_956n)
-    expect(onsRegistrationBudget(12_463n)).toBe(mainIntentBudget(12_463n))
   })
 })

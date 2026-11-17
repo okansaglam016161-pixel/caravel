@@ -123,7 +123,7 @@ export interface PendingSettle {
   expectOutputs: string[] | null
   /** The on-chain transaction id. Also the identity: consumers match their own tx against it. */
   txId: string
-  kind: 'move' | 'send' | 'faucet'
+  kind: 'move' | 'send'
   watches: SettleWatch[]
   /** Absolute epoch-ms cutoff, after which we stop waiting and report the lag. */
   deadlineAt: number

@@ -343,7 +343,7 @@ export function assertWorkspaceLayout(accountSlotId: number, bucketSlotId: numbe
 /**
  * The instruction recipe, lifted out so the pricing build and the real build are provably the same
  * transaction shape and can only differ in the fee threaded through them — the same discipline
- * conceal.ts and faucet.ts use, for the same reason.
+ * conceal.ts uses, for the same reason.
  *
  * `split.amount` appears exactly once, in TakeFromBucket; `split.revealedOutput` appears only in the
  * statement the caller passes in. Neither is recomputed here.

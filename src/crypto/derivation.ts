@@ -63,16 +63,12 @@ export interface WalletIdentity {
 /**
  * Seed-derived keys for one job each, so the chain never sees the wallet's owner key doing that job.
  *
- *   faucet   claims the testnet faucet. The claim names a key and is signed by it, and its receipt is
- *            keyed by it — so with the owner key, the receipt would tie this wallet's account to the
- *            claim and to the private coin it pays out.
  *   names    owns @names. A name records its owner key publicly (the ONS registry), so naming the
  *            owner key would tie a public name to the account.
  *
- * Neither is a spending key: their only authority is the faucet claim and the names they own.
+ * Not a spending key: its only authority is the names it owns.
  */
 export interface PurposeKeys {
-  faucet: SecretKeyWallet
   names: SecretKeyWallet
 }
 
@@ -146,17 +142,14 @@ const STORE_KEY_BYTES = 32
  * Caravel's own hashing domains for the PURPOSE KEYS (see PurposeKeys).
  *
  * FROZEN, like the two above. A changed string, version, label or width derives a different key from
- * the same phrase: the faucet would be offered again to a wallet that has claimed (to a new key the
- * receipt check does not know), and every name registered under the old names key would stop showing
- * as this wallet's. Pinned by golden vectors in derivation.test.ts — do not update them.
+ * the same phrase: every name registered under the old names key would stop showing as this
+ * wallet's. Pinned by golden vectors in derivation.test.ts — do not update them.
  *
  * 64 bytes so the reduction mod the group order is uniform, exactly as tari-cipherseed derives the
  * account's own keys (scalarFromWideBytes there).
  */
-const FAUCET_DOMAIN = 'com.caravel.faucet'
 const NAMES_DOMAIN = 'com.caravel.names'
 const PURPOSE_DOMAIN_VERSION = 1
-const FAUCET_LABEL = 'faucet_key'
 const NAMES_LABEL = 'names_key'
 const PURPOSE_WIDE_BYTES = 64
 /** Ristretto255 group order. A secret key is a scalar in [0, L). */
@@ -376,7 +369,6 @@ export function storeKeyFromSeedMaterial(material: Uint8Array): Uint8Array {
  */
 export function purposeKeysFromSeedMaterial(material: Uint8Array): PurposeKeys {
   return {
-    faucet: SecretKeyWallet.fromSecretKey(purposeSecret(FAUCET_DOMAIN, FAUCET_LABEL, material), Network.Esmeralda),
     names: SecretKeyWallet.fromSecretKey(purposeSecret(NAMES_DOMAIN, NAMES_LABEL, material), Network.Esmeralda),
   }
 }

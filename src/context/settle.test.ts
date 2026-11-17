@@ -437,7 +437,7 @@ describe('an unknown reading blocks a two-sided settle', () => {
   })
 })
 
-describe('sends and faucet claims stay SINGLE-sided', () => {
+describe('sends stay SINGLE-sided', () => {
   it('a send moves one balance, so one watch settles it', () => {
     // The recipient's output is theirs, not ours — there is no second side of ours to wait for,
     // and adding one would make every send wait out the full deadline.
@@ -448,12 +448,6 @@ describe('sends and faucet claims stay SINGLE-sided', () => {
   it('a public send watches the vault fall, and ignores the private side entirely', () => {
     const send = entry({ kind: 'send', watches: [{ side: 'public', direction: 'fall', before: 149n }] })
     expect(advanceSettle(send, E(974n, 100n), NOW).status).toBe('settled')
-  })
-
-  it('a faucet claim settles on the private rise alone', () => {
-    const claim = entry({ kind: 'faucet', watches: [{ side: 'private', direction: 'rise', before: 0n }] })
-    expect(advanceSettle(claim, E(1_000n, null), NOW).status).toBe('settled')
-    expect(advanceSettle(claim, E(1_000n, null), NOW).delta).toBe(1_000n)
   })
 })
 

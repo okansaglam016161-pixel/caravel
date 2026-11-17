@@ -218,7 +218,7 @@ export async function prepareConfidentialSend(
     excluded: loadSelectionExcludedIds(senderAddress),
     walletAddress: senderAddress,
   })
-  if (utxos.length === 0) throw new Error('No owned UTXOs found. Your wallet may need a balance from the faucet.')
+  if (utxos.length === 0) throw new Error('No owned UTXOs found. This wallet has no private funds yet.')
 
   // SELECTED ONCE, AGAINST THE CEILING, AND PINNED — the same discipline reveal.ts uses. The fee is
   // not known until the dry run, so selection is made against MAX_FEE and the SAME inputs are used

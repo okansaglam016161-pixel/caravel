@@ -1,7 +1,7 @@
 // CONCEAL — move revealed (public) TARI into stealth (private) outputs. M2.
 //
 // The safe direction: value ends up MORE private than it started, and nothing about it is
-// irreversible in the way revealing is. Structurally it is the shape faucet.ts's claim also uses:
+// irreversible in the way revealing is. Structurally:
 //
 //     createAccount(ownerPk)                            → 'account'   [idempotent — reuses existing]
 //     callMethod(account, 'pay_fee', [budget])          the fee, from the vault — REFUNDED down to cost
@@ -16,11 +16,6 @@
 // return vault; working_state.rs finalize_fees_and_refunds withdraws only what is required and
 // deposits the rest back). So the budget can carry a buffer and the user is still charged exactly
 // the cost. The money is public on this path anyway, so paying from the vault reveals nothing new.
-//
-// The claim takes its revealed bucket from the faucet's `claim()` instead of from an account, so it
-// needs no account at all; a conceal withdraws a balance that is already in one. Everything else —
-// the statement construction, the zero input mask, the dry-run-then-rebuild fee discovery — is the
-// same in both.
 //
 // ── THE INVARIANT THAT MATTERS ────────────────────────────────────────────────
 //
@@ -197,7 +192,7 @@ export function assertConcealSplit(split: ConcealSplit): void {
 /**
  * The instruction recipe, lifted out so the pricing build and the real build are provably the same
  * transaction shape and can only differ in the fee threaded through them — the same discipline
- * faucet.ts's buildClaim uses, for the same reason.
+ * reveal.ts uses, for the same reason.
  *
  * `withdrawAmount` appears exactly once here, and the caller passes the same value into
  * buildInputsStatement. That single-use is what upholds the engine's equality check.

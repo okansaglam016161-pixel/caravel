@@ -166,7 +166,7 @@ export interface WalletCtx {
   walletExists: boolean
   wallet: SecretKeyWallet | null
   /**
-   * The wallet's faucet and names keys (derivation.PurposeKeys). Present exactly when `wallet` is:
+   * The wallet's names key (derivation.PurposeKeys). Present exactly when `wallet` is:
    * set with the identity, cleared on lock.
    */
   purposeKeys: PurposeKeys | null

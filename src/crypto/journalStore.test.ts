@@ -290,13 +290,13 @@ describe('the React snapshot', () => {
 
 describe('recordCoverage — the writer stage D will call', () => {
   it('accumulates action types rather than replacing them', () => {
-    recordCoverage(ADDR, ['send', 'faucet'], 1_000)
+    recordCoverage(ADDR, ['send', 'make-public'], 1_000)
     const epoch = recordCoverage(ADDR, ['make-private'], 2_000)
-    expect(epoch.covers).toEqual(expect.arrayContaining(['send', 'faucet', 'make-private']))
+    expect(epoch.covers).toEqual(expect.arrayContaining(['send', 'make-public', 'make-private']))
   })
 
   it('does not stamp a completion moment while the set is partial', () => {
-    const epoch = recordCoverage(ADDR, ['send', 'faucet'], 1_000)
+    const epoch = recordCoverage(ADDR, ['send', 'make-public'], 1_000)
     expect(epoch.coverageCompleteAt).toBeNull()
     expect(journalCovers(epoch, 9_999)).toBe(false)
   })
@@ -480,7 +480,7 @@ describe('refusing to write — the no-key and never-clobber guards', () => {
     // Pins the envelope boundary: journalStore must read anything storeCrypto sealed, not just what
     // journalStore itself wrote.
     localStorage.setItem(JOURNAL_KEY, seal(STORE_KEY, JSON.stringify([{
-      id: 'external-1', kind: 'faucet', timestamp: 5, txId: null, outcome: 'pending',
+      id: 'external-1', kind: 'make-private', timestamp: 5, txId: null, outcome: 'pending',
       amountMicrotari: null, feeMicrotari: null, from: null, to: 'private',
       counterparty: null, note: null, source: 'local-journal', selfOutputIds: null,
     }])))

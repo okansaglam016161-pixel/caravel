@@ -81,7 +81,7 @@ describe('the subtraction', () => {
   })
 
   it('subtracts self-outputs from every kind of action, not just sends', () => {
-    for (const kind of ['make-private', 'make-public', 'faucet', 'chat-payment', 'ons-register'] as const) {
+    for (const kind of ['make-private', 'make-public', 'chat-payment', 'ons-register'] as const) {
       const { receives } = reconcile(base({ journal: [entry({ kind, selfOutputIds: [CHANGE] })] }))
       expect(ids(receives)).not.toContain(CHANGE)
     }

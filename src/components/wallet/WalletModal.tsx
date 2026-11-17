@@ -30,7 +30,6 @@ import { useWallet } from '../../context/WalletContext'
 import { MIN_CONCEAL_MICROTARI, maxConcealTyped, prepareConceal, type PreparedConceal } from '../../crypto/conceal'
 import { MIN_REVEAL_MICROTARI, maxRevealable, prepareReveal, type PreparedReveal } from '../../crypto/reveal'
 import { loadAccountAddress } from '../../crypto/accountStore'
-import FaucetClaimPanel from './FaucetClaimPanel'
 import { prepareConfidentialSend, tariToMicrotari, maxStealthSend, MAX_FEE, type PreparedConfidentialSend, type SendOutcome } from '../../crypto/confidentialSend'
 import { reachableTotal } from '../../crypto/stealthUtxos'
 import {
@@ -150,15 +149,6 @@ function SwapRowV2({ row, hidden }: { row: Extract<ActivityRow, { kind: 'swap' }
   }} />
 }
 
-/** A faucet claim. A real inflow — value the wallet did not hold before — so it keeps its `+`. */
-function FaucetRowV2({ row, hidden }: { row: Extract<ActivityRow, { kind: 'faucet' }>; hidden: boolean }) {
-  return <ActivityRowShell hidden={hidden} row={{
-    id: row.id, direction: 'in', title: 'Received', note: 'Testnet faucet claim',
-    status: row.outcome === 'committed' ? 'received' : STATUS_FOR[row.outcome],
-    amountMicrotari: row.amountMicrotari,
-  }} />
-}
-
 /**
  * An inflow. Its amount is resolved lazily and cache-first — which is why this is a component
  * rather than a mapped object: the hook is per row, exactly as it was before.
@@ -220,7 +210,6 @@ function ActivityRowFor({ row, hidden }: { row: ActivityRow; hidden: boolean }) 
   switch (row.kind) {
     case 'sent': return <SentRowV2 row={row} hidden={hidden} />
     case 'swap': return <SwapRowV2 row={row} hidden={hidden} />
-    case 'faucet': return <FaucetRowV2 row={row} hidden={hidden} />
     case 'received': return <ReceivedRowV2 row={row} hidden={hidden} />
     case 'received-unattributed': return <UnattributedReceiveRowV2 row={row} hidden={hidden} />
   }
@@ -1340,12 +1329,6 @@ export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: (
       // THE ROW GOES INERT BY ITSELF. AssetsPanel keys its chevron, pointer, hover, focus and
       // click on whether `onOpen` was passed, so withholding it removes every affordance at once
       // rather than leaving a control that looks live and does nothing.
-      // The faucet, and it decides its own shape and whether it is there at all — a thin prompt
-      // above the balance while it is offering, a card while a claim runs, nothing once the wallet
-      // is funded or the prompt has been dismissed. The @name card left the overview, then left the
-      // wallet: names are a property of the identity you message with, so CNS lives in chat, opened
-      // by the [@] on the conversation list's search row.
-      overviewNotice={<FaucetClaimPanel />}
       send={{
         view: sendView, hidden: balanceHidden,
         onSource: s => { setSendSource(s); setSendExact(null); setSendAll(false); setSendValidationError('') },

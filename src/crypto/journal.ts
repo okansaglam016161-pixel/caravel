@@ -32,7 +32,7 @@
  * we are deliberately not making. See activity.ts, which returns no row for it.
  */
 export type JournalKind =
-  | 'send' | 'receive' | 'make-private' | 'make-public' | 'faucet'
+  | 'send' | 'receive' | 'make-private' | 'make-public'
   | 'chat-payment' | 'ons-register'
 
 /**
@@ -45,7 +45,7 @@ export type JournalKind =
  */
 export type JournalOutcome = 'pending' | 'committed' | 'rejected' | 'timeout' | 'failed'
 
-/** Which balance a value moved out of or into. `external` is somebody else's wallet, or the faucet. */
+/** Which balance a value moved out of or into. `external` is somebody else's wallet. */
 export type Side = 'private' | 'public' | 'external'
 
 /**
@@ -56,7 +56,7 @@ export type Side = 'private' | 'public' | 'external'
  * and the address in it was already truncated beyond use. Truncation is a render concern.
  */
 export interface Counterparty {
-  kind: 'address' | 'npub' | 'faucet' | 'self'
+  kind: 'address' | 'npub' | 'self'
   value: string
 }
 
@@ -120,8 +120,8 @@ export interface JournalEntry {
    * journal says what it spent as well as what it created.
    *
    * `[]` AND `null` ARE NOT THE SAME, exactly as above:
-   *   []    this action provably consumed no stealth input — a conceal, a public send, a faucet
-   *         claim. They spend the revealed vault, which is keyed and consensus-fresh.
+   *   []    this action provably consumed no stealth input — a conceal or a public send. They
+   *         spend the revealed vault, which is keyed and consensus-fresh.
    *   null  not determined. A hole; nothing may be concluded from its absence.
    */
   spentInputIds: string[] | null
@@ -161,7 +161,6 @@ export const OUTPUT_CREATING_ACTIONS = [
   'send',
   'make-private',
   'make-public',
-  'faucet',
   /** A payment sent from chat. Recorded for subtraction only, never displayed in wallet Activity. */
   'chat-payment',
   /** An @name registration. Spends one UTXO and returns exactly one change output to us. */

@@ -1,7 +1,7 @@
 // Derives the wallet Activity list from the THREE authoritative sources of payment knowledge:
 //
 //   1. the activity JOURNAL — every action the user took here, recorded as it happened: sends,
-//      make-private, make-public, faucet claims. Richest of the three; it alone carries the fee,
+//      make-private, make-public. Richest of the three; it alone carries the fee,
 //      the structured direction and the full counterparty address.
 //   2. wallet-modal sends (SentEntry) — the journal's predecessor. Sends only, no fee. Still read
 //      because it holds every send made before the journal existed.
@@ -97,16 +97,6 @@ export type ActivityRow =
       source: ActivitySource
       txId: string | null
     }
-  | {
-      kind: 'faucet'
-      id: string
-      timestamp: number
-      amountMicrotari: bigint | null
-      feeMicrotari: bigint | null
-      outcome: ActivityOutcome
-      source: ActivitySource
-      txId: string | null
-    }
   /**
    * Money that arrived from somebody this wallet cannot name.
    *
@@ -171,8 +161,6 @@ function fromJournal(e: JournalEntry): ActivityRow | null {
       return { kind: 'swap', ...common, to: 'private' }
     case 'make-public':
       return { kind: 'swap', ...common, to: 'public' }
-    case 'faucet':
-      return { kind: 'faucet', ...common }
     // NOT PRODUCED FROM THE JOURNAL. A reconciled receive is DERIVED — recomputed from the current
     // scan, journal, ledger and epoch on every render — rather than written down, because a stored
     // one would go stale the moment its UTXO is spent or a guard changes. It reaches the list via

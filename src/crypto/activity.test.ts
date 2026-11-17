@@ -42,14 +42,13 @@ function legacySend(over: Partial<SentEntry> = {}): SentEntry {
 const kinds = (rows: ActivityRow[]) => rows.map(r => r.kind)
 
 describe('the journalled kinds reach the list', () => {
-  it('renders a send, both swaps and a faucet claim', () => {
+  it('renders a send and both swaps', () => {
     const rows = buildActivity([
       journalled({ id: 'a', kind: 'send', timestamp: 4 }),
       journalled({ id: 'b', kind: 'make-private', timestamp: 3 }),
       journalled({ id: 'c', kind: 'make-public', timestamp: 2 }),
-      journalled({ id: 'd', kind: 'faucet', timestamp: 1 }),
     ], [], [])
-    expect(kinds(rows)).toEqual(['sent', 'swap', 'swap', 'faucet'])
+    expect(kinds(rows)).toEqual(['sent', 'swap', 'swap'])
   })
 
   it('takes a swap’s direction from the structured record, not a label', () => {
@@ -127,10 +126,10 @@ describe('amounts are never invented', () => {
     expect(row).toMatchObject({ amountMicrotari: null })
   })
 
-  it('keeps a null amount null on a swap and a faucet claim too', () => {
+  it('keeps a null amount null on both swaps too', () => {
     const rows = buildActivity([
       journalled({ id: 'x', kind: 'make-public', amountMicrotari: null }),
-      journalled({ id: 'y', kind: 'faucet', amountMicrotari: null }),
+      journalled({ id: 'y', kind: 'make-private', amountMicrotari: null }),
     ], [], [])
     for (const r of rows) expect(r).toMatchObject({ amountMicrotari: null })
   })

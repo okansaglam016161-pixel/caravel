@@ -395,39 +395,35 @@ describe('store key derivation', () => {
 // the same bytes. These tests bind the two together, so the frozen vectors above pin the path the
 // app runs and not merely the one the tests run.
 
-describe('purpose keys (faucet, names)', () => {
+describe('purpose keys (names)', () => {
   // ── FROZEN VECTORS ────────────────────────────────────────────────────────
   //
-  // These pin "com.caravel.faucet" / "com.caravel.names", version 1, the labels "faucet_key" /
-  // "names_key", the 64-byte wide hash, the reduction, and which seed material each scheme feeds in.
-  // A drift re-offers the faucet to wallets that have claimed and drops every name registered under
-  // the old names key from "Your @names". IF ONE FAILS, THE DERIVATION DRIFTED — DO NOT UPDATE IT.
+  // These pin "com.caravel.names", version 1, the label "names_key", the 64-byte wide hash, the
+  // reduction, and which seed material each scheme feeds in. A drift drops every name registered
+  // under the old names key from "Your @names". IF ONE FAILS, THE DERIVATION DRIFTED — DO NOT UPDATE IT.
   const pk = async (w: { getPublicKey(): Promise<Uint8Array> }) => hex(await w.getPublicKey())
 
-  it('derives the pinned faucet and names keys for a known CipherSeed phrase', async () => {
+  it('derives the pinned names key for a known CipherSeed phrase', async () => {
     const id = await deriveIdentity(CIPHERSEED, 'cipherseed')
-    expect(await pk(id.purposeKeys.faucet)).toBe('d8b42f09bff009739447dce08d3e5dc03e0e30a6a5ab8cd3122a264d06209f09')
     expect(await pk(id.purposeKeys.names)).toBe('cc00ca65eee6052c2ecfe9349c8e8ebb1e392903ccda9bafc338574d7d59e116')
   }, 30_000)
 
-  it('derives the pinned faucet and names keys for a known legacy BIP-39 phrase', async () => {
+  it('derives the pinned names key for a known legacy BIP-39 phrase', async () => {
     const id = await deriveIdentity(BIP39, 'bip39')
-    expect(await pk(id.purposeKeys.faucet)).toBe('d419c32e437d0d4fc256eabe9ed1c2c777395fcb9fafaafef73e3a67c6df6557')
     expect(await pk(id.purposeKeys.names)).toBe('0248e04b6dd8e7eaea309fa906098623b3196f1692fc797f5029c669680b6430')
   }, 30_000)
 
-  it('are three different keys: owner, faucet, names — and none is the Nostr key', async () => {
+  it('are different keys: owner and names — and neither is the Nostr key', async () => {
     for (const [phrase, scheme] of [[CIPHERSEED, 'cipherseed'], [BIP39, 'bip39']] as const) {
       const id = await deriveIdentity(phrase, scheme)
-      const keys = [await pk(id.wallet), await pk(id.purposeKeys.faucet), await pk(id.purposeKeys.names), id.nostr.publicKeyHex]
-      expect(new Set(keys).size).toBe(4)
+      const keys = [await pk(id.wallet), await pk(id.purposeKeys.names), id.nostr.publicKeyHex]
+      expect(new Set(keys).size).toBe(3)
     }
   }, 30_000)
 
   it('come back the same from the same phrase — a restore recovers them', async () => {
     const a = await deriveIdentity(CIPHERSEED, 'cipherseed')
     const b = await deriveIdentity(`  ${CIPHERSEED.toUpperCase()}\n`, 'cipherseed')
-    expect(await pk(b.purposeKeys.faucet)).toBe(await pk(a.purposeKeys.faucet))
     expect(await pk(b.purposeKeys.names)).toBe(await pk(a.purposeKeys.names))
   }, 30_000)
 })
@@ -496,9 +492,10 @@ describe('the wallet keys a restore depends on — frozen byte for byte', () => 
   //
   // Captured from the derivation as it stood before the Trade key was dropped (trim/wallet-chat), and
   // kept as the proof that removing a purpose key moved nothing else: the spend (owner) key, the view
-  // secret, the address built from them, the Nostr keypair, the store key, and the faucet and names
-  // keys. Every one of them is what a restored phrase must reproduce exactly — a drift here opens a
-  // different, empty wallet, or a different chat identity. IF ONE FAILS, THE DERIVATION DRIFTED — DO
+  // secret, the address built from them, the Nostr keypair, the store key, and the names key. (The
+  // faucet key was pinned here too until it was dropped; only that entry was removed.) Every one of
+  // them is what a restored phrase must reproduce exactly — a drift here opens a different, empty
+  // wallet, or a different chat identity. IF ONE FAILS, THE DERIVATION DRIFTED — DO
   // NOT UPDATE IT.
   const VECTORS = {
     cipherseed: {
@@ -509,7 +506,6 @@ describe('the wallet keys a restore depends on — frozen byte for byte', () => 
       nostrPublic: '4b577830381a2be783c1e436c3e73bbe361f5784ca87949432a00ff3ed74238a',
       nostrPrivate: '893f7b0e8883f659c763ee7a67ba93da8866516a828d2541bcbb32e679fb4652',
       storeKey: '517fd91a7236b8cb4b3dcd7f2dbe0a997a3baea620b88dd603d578c7840b246d',
-      faucet: 'd8b42f09bff009739447dce08d3e5dc03e0e30a6a5ab8cd3122a264d06209f09',
       names: 'cc00ca65eee6052c2ecfe9349c8e8ebb1e392903ccda9bafc338574d7d59e116',
     },
     bip39: {
@@ -520,7 +516,6 @@ describe('the wallet keys a restore depends on — frozen byte for byte', () => 
       nostrPublic: '1ca7e48a33d62063f25d79f18617cc892ef064628aaf80af485e41849343ca52',
       nostrPrivate: '132f7c29e20fea96e9d11f221b0cf8a126d9f0966ed4963e1e00dae1d73ce855',
       storeKey: 'dd39a38b31cc950f917243e686c64b7633ec70a847830f0d5c8e85c40fdeeeb0',
-      faucet: 'd419c32e437d0d4fc256eabe9ed1c2c777395fcb9fafaafef73e3a67c6df6557',
       names: '0248e04b6dd8e7eaea309fa906098623b3196f1692fc797f5029c669680b6430',
     },
   } as const
@@ -536,7 +531,6 @@ describe('the wallet keys a restore depends on — frozen byte for byte', () => 
         nostrPublic: id.nostr.publicKeyHex,
         nostrPrivate: id.nostr.privateKeyHex,
         storeKey: hex(id.storeKey),
-        faucet: hex(await id.purposeKeys.faucet.getPublicKey()),
         names: hex(await id.purposeKeys.names.getPublicKey()),
       }).toEqual(pinned)
     }, 30_000)

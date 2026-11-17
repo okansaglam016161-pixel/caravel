@@ -1,32 +1,19 @@
 import { describe, expect, it } from 'vitest'
-import {
-  APPROVED_ASSETS, CUSD_ASSET, TARI_ASSET, approvedAsset, formatUnits, formatUsd, CUSD_RESOURCE_ADDRESS,
-} from './assets'
+import { APPROVED_ASSETS, TARI_ASSET, approvedAsset, formatUnits } from './assets'
 import { RATE_NUM, RATE_DEN } from '../components/wallet/v2/fiat'
 
 describe('the approved-asset allowlist', () => {
-  it('is TARI and cUSD, both 6 decimals', () => {
-    expect(APPROVED_ASSETS.map(a => a.id)).toEqual(['tari', 'cusd'])
+  it('is TARI alone, at 6 decimals', () => {
+    expect(APPROVED_ASSETS.map(a => a.id)).toEqual(['tari'])
     expect(TARI_ASSET.decimals).toBe(6)
-    expect(CUSD_ASSET.decimals).toBe(6)
   })
 
   it('identifies an asset ONLY by its exact resource address', () => {
-    expect(approvedAsset(CUSD_RESOURCE_ADDRESS)?.id).toBe('cusd')
+    expect(approvedAsset(TARI_ASSET.resource)?.id).toBe('tari')
     // Accepts the bare hex form too (the `/utxos` shape).
-    expect(approvedAsset(CUSD_RESOURCE_ADDRESS.replace('resource_', ''))?.id).toBe('cusd')
+    expect(approvedAsset(TARI_ASSET.resourceHex)?.id).toBe('tari')
     // A look-alike — same symbol/decimals, different address — is NOT on the list.
     expect(approvedAsset('resource_' + 'f'.repeat(64))).toBeNull()
-  })
-
-  it('makes cUSD display-only and TARI fully actionable', () => {
-    expect(CUSD_ASSET.actions).toEqual({ send: false, chat: false })
-    expect(TARI_ASSET.actions.send).toBe(true)
-  })
-
-  it('cUSD is a testnet dollar at exactly $1', () => {
-    expect(CUSD_ASSET.usdPrice).toBe(1)
-    expect(CUSD_ASSET.name).toBe('Caravel Test Dollar')
   })
 
   it('keeps TARI’s rate pinned to v2/fiat so the two cannot drift', () => {
@@ -37,7 +24,7 @@ describe('the approved-asset allowlist', () => {
 })
 
 describe('formatUnits', () => {
-  it('renders 10,000 cUSD from base units with grouping', () => {
+  it('renders 10,000 TARI from base units with grouping', () => {
     expect(formatUnits(10_000_000_000n, 6)).toBe('10,000')
   })
   it('keeps significant decimals and trims trailing zeros', () => {
@@ -47,15 +34,5 @@ describe('formatUnits', () => {
   })
   it('groups large whole parts', () => {
     expect(formatUnits(1_234_567_000_000n, 6)).toBe('1,234,567')
-  })
-})
-
-describe('formatUsd', () => {
-  it('is exact for cUSD at $1 — 10,000 cUSD is $10,000.00, never a float short', () => {
-    expect(formatUsd(10_000_000_000n, CUSD_ASSET)).toBe('$10,000.00')
-  })
-  it('rounds to the cent', () => {
-    expect(formatUsd(1_505_000n, CUSD_ASSET)).toBe('$1.50') // 1.505 → floor to cent
-    expect(formatUsd(0n, CUSD_ASSET)).toBe('$0.00')
   })
 })

@@ -7,7 +7,7 @@
 // and a transport failure is never an absence at all.
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { INDEXER_URL, INDEXER_URLS, pointRead } from './indexerConfig'
+import { INDEXER_URL, INDEXER_URLS, pointRead, verifiedRead } from './indexerConfig'
 import { retryTiming } from './indexerRetry'
 
 const [A, B] = INDEXER_URLS as [string, string]
@@ -145,5 +145,25 @@ describe('pointRead — both indexer shapes of a substate read', () => {
     const result = { state: { down: {} }, result: { Finalized: {} } }
     vi.stubGlobal('fetch', nodes({ [A]: ok(result), [B]: ok(result) }))
     expect((await pointRead('/transactions/tx1/result')).body).toEqual(result)
+  })
+})
+
+describe('verifiedRead — one node at a time, in either shape', () => {
+  const okRes = (body: unknown) => new Response(JSON.stringify(body), { status: 200 })
+
+  it('a verified 0.47 body comes back with `substate` lifted out', async () => {
+    const value = { Vault: {} }
+    vi.stubGlobal('fetch', vi.fn(async () => okRes({ version: 0, state: { up: { substate: value } }, verified: true })))
+    const r = await verifiedRead('/substates/vault_x')
+    vi.unstubAllGlobals()
+    expect(r.kind).toBe('verified')
+    expect((r as { body: { substate: unknown } }).body.substate).toEqual(value)
+  })
+
+  it('a 0.47 down on every node is absent, the same as a 404 everywhere', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => okRes({ version: 2, state: { down: {} }, verified: true })))
+    const r = await verifiedRead('/substates/utxo_x')
+    vi.unstubAllGlobals()
+    expect(r).toEqual({ kind: 'absent' })
   })
 })

@@ -46,10 +46,9 @@ export function utxoSubstateIdFromCommitment(commitmentHex: string): string {
 export function readOutputSubstateIds(
   outputsStatement: { parsed(): unknown },
   /**
-   * The resource the statement's outputs hold. TARI by default — every TARI path. A cUSD statement
-   * MUST pass cUSD's: the id names the resource, and a cUSD output under TARI's prefix is an id the
-   * cUSD scan never asks for (the T3a claim recorded exactly that, so its output was only found
-   * once a listing had it).
+   * The resource the statement's outputs hold. TARI by default — every current path. A statement for
+   * another resource MUST pass that resource's: the id names the resource, and an output recorded
+   * under the wrong prefix is an id nothing that reads by id ever asks for.
    */
   resourceHex: string = RESOURCE_HEX,
 ): string[] | null {

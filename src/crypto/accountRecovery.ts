@@ -41,9 +41,8 @@ import type { SecretKeyWallet } from '@tari-project/ootle-secret-key-wallet'
 import { extractAccountAddress } from './accountAddress'
 import { loadAccountAddress, saveAccountAddress } from './accountStore'
 import { nextMaxEpoch } from './epoch'
-import { INDEXER_URL, INDEXER_URLS } from './indexerConfig'
+import { INDEXER_URL, INDEXER_URLS, verifiedRead, type VerifiedReader } from './indexerConfig'
 import { fetchWithRetry } from './indexerRetry'
-import { verifiedRead, type VerifiedReader } from './cusdScan'
 
 
 /** A dry run is one round trip; this bounds it so a hung request cannot stall an unlock. */

@@ -171,3 +171,43 @@ export async function pointRead(path: string): Promise<PointRead> {
   // Nobody answered at all.
   return { body: null, answered: false, source: null }
 }
+
+// ── Verified point reads ─────────────────────────────────────────────────────
+//
+// Stricter than pointRead: only a body an indexer marks `verified: true` is believed. Used where an
+// unverified (possibly stale, just-after-an-epoch-change) answer must never decide anything.
+
+export type VerifiedRead =
+  /** An indexer answered 200 with `verified: true`. */
+  | { kind: 'verified'; body: unknown }
+  /** Every indexer that answered said 404 — a real absence. */
+  | { kind: 'absent' }
+  /** Nothing verified could be established (unreachable, busy, or only unverified answers). */
+  | { kind: 'unknown' }
+
+export type VerifiedReader = (path: string) => Promise<VerifiedRead>
+
+/**
+ * `path` from each indexer in turn, believing only a verified body. A 404 is believed only when no
+ * node returned a body at all — one node's 404 and another's unverified 200 is `unknown`.
+ */
+export const verifiedRead: VerifiedReader = async (path) => {
+  let notFound = 0
+  let other = 0
+  for (const base of INDEXER_URLS) {
+    let res: Response
+    try {
+      res = await fetchWithRetry([base], path, {}, { attempts: 2, timeoutMs: POINT_READ_TIMEOUT_MS })
+    } catch { other++; continue }
+    if (res.status === 404) { notFound++; continue }
+    if (!res.ok) { other++; continue }
+    try {
+      // Either indexer shape (crypto/substateShape); a 0.47 `down` is this node's 404.
+      const body = upgradeSubstateBody(await res.json()) as { verified?: unknown } | null
+      if (body === null) { notFound++; continue }
+      if (body?.verified === true) return { kind: 'verified', body }
+    } catch { /* unparseable is not an answer */ }
+    other++
+  }
+  return notFound > 0 && other === 0 ? { kind: 'absent' } : { kind: 'unknown' }
+}

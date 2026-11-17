@@ -175,8 +175,8 @@ export async function readRevealedBalance(
   accountAddress: string | null,
   resolveVaultIds: VaultIdResolver = getAccountVaultIds,
   /**
-   * Which resource to total. TARI by default — every existing caller. The cUSD read passes cUSD;
-   * an account keys one vault per resource, and decodeRevealedAmount skips every other one.
+   * Which resource to total. TARI by default — every existing caller. An account keys one vault per
+   * resource, and decodeRevealedAmount skips every other one.
    */
   resourceAddress: string = TARI_RESOURCE_ADDRESS,
 ): Promise<bigint> {

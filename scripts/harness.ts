@@ -77,11 +77,6 @@ import {
 import { IndexerProvider } from '@tari-project/ootle-indexer'
 import { Network, WasmStealthCrypto } from '@tari-project/ootle'
 import { SecretKeyWallet } from '@tari-project/ootle-secret-key-wallet'
-import { CUSD_ASSET, formatUnits } from '../src/crypto/assets'
-import { CUSD_FAUCET_COMPONENT_ADDRESS, cusdFaucetReceiptId } from '../src/crypto/cusdFaucetConfig'
-import { prepareCusdClaim, claimCusd, readCusdClaimed, CusdClaimRefused, type PreparedCusdClaim } from '../src/crypto/cusdFaucet'
-import { scanCusdPrivate, readCusdPublic, viewKeyOpener, cusdTotal } from '../src/crypto/cusdScan'
-import { loadCusdClaims, recordCusdClaim } from '../src/crypto/cusdStore'
 import { reconcile } from '../src/crypto/reconcile'
 import { loadLedger } from '../src/crypto/utxoLedger'
 import { buildActivity, knownReceiveIds } from '../src/crypto/activity'
@@ -1176,96 +1171,6 @@ async function cmdFaucetClaim(h: Harnessed, yes: boolean): Promise<void> {
   console.log('  The claim receipt can take as long to appear on the indexers; re-run faucet-status after.')
 }
 
-// ── cUSD (T3a) ─────────────────────────────────────────────────────────────────
-
-const cusdAmt = (units: bigint) => `${formatUnits(units, CUSD_ASSET.decimals)} cUSD  (${units.toLocaleString('en-US')} base units)`
-
-/** READ-ONLY. The wallet's cUSD position and the faucet's status for it, with the claim dry run. */
-async function cmdCusdStatus(h: Harnessed): Promise<void> {
-  rule('cusd-status  (crypto/cusdScan + crypto/cusdFaucet.prepareCusdClaim)  ·  READ-ONLY, nothing is submitted')
-  await primeAccount(h)
-  const faucetPkHex = hex(await h.purposeKeys.faucet.getPublicKey())
-  field('cUSD resource', CUSD_ASSET.resource)
-  field('faucet', CUSD_FAUCET_COMPONENT_ADDRESS)
-  field('receipt id', cusdFaucetReceiptId(faucetPkHex))
-
-  const mark = net.length
-  const claimed = await readCusdClaimed(faucetPkHex)
-  field('claimed?', claimed)
-
-  rule('cUSD balance  (verified reads only)')
-  const priv = await scanCusdPrivate({ walletAddress: h.address, open: viewKeyOpener(h.viewSecret) })
-  const pub = await readCusdPublic(loadAccountAddress(h.address))
-  field('private', `${cusdAmt(priv.units)}${priv.incomplete ? '  (INCOMPLETE — some owned output unverified; not a figure to trust)' : ''}`)
-  field('  outputs', `${priv.outputs.length} counted · ${priv.listed} listed · recovered ${priv.recovered.length} · gone ${priv.gone.length} · unverified ${priv.unverified.length}`)
-  field('public', pub.kind === 'ok' ? cusdAmt(pub.units) : `unknown — ${pub.reason}`)
-  const total = cusdTotal({ private: priv, public: pub })
-  field('TOTAL', total === null ? '··· (not established)' : cusdAmt(total))
-
-  rule('claim dry run  (prepareCusdClaim — simulation only)')
-  try {
-    const pc = await prepareCusdClaim(h.wallet, h.address, h.purposeKeys.faucet, stage)
-    field('verdict', 'Accept')
-    field('claim', cusdAmt(pc.claimUnits))
-    field('fee (tTARI)', `${amt(pc.fee)}  (paid from this wallet's tTARI — the cUSD payout cannot cover it)`)
-  } catch (e) {
-    if (e instanceof CusdClaimRefused) field('verdict', `REFUSED — ${e.refusal}: ${e.message}`)
-    else field('verdict', `FAILED — ${e instanceof Error ? e.message : String(e)}`)
-  }
-  printNet(mark)
-}
-
-/** WRITE. Claim 10,000 cUSD; fee from this wallet's own tTARI. One per key, ever. */
-async function cmdCusdClaim(h: Harnessed, yes: boolean): Promise<void> {
-  rule('cusd-claim  (crypto/cusdFaucet.claimCusd)')
-  await primeAccount(h)
-  console.log(yes
-    ? '  ⚠  WRITE COMMAND. Submits a real cUSD claim. One per key, ever. Fee comes from your tTARI.'
-    : '  Add --yes to actually claim. Without it the claim is PRICED and CHECKED (dry runs), never sent.')
-  if (!yes) {
-    rule('price + confirm check  (prepareCusdClaim → confirm — dry runs only)')
-    let pc: PreparedCusdClaim
-    try {
-      pc = await prepareCusdClaim(h.wallet, h.address, h.purposeKeys.faucet, stage)
-    } catch (e) {
-      if (e instanceof CusdClaimRefused) { field('verdict', `REFUSED — ${e.refusal}: ${e.message}`); return }
-      throw e
-    }
-    field('banner', `You receive ${cusdAmt(pc.claimUnits)}, fee ${amt(pc.fee)} from your tTARI`)
-    await pc.confirm()
-    field('confirm check', 'PASSES — fresh, receipt absent, final claim accepted at the exact fee')
-    console.log('\n  STOPPED BEFORE SUBMIT. Nothing was sent.')
-    return
-  }
-
-  const mark = net.length
-  const result = await claimCusd(h.wallet, h.address, h.purposeKeys.faucet, stage)
-  field('tx id', result.txId)
-  field('outcome', result.outcome)
-  if (result.reason) console.log(`\n  ${result.reason}\n`)
-  field('cUSD added', result.outcome === 'Commit' ? cusdAmt(result.units) : '(not committed)')
-  field('fee (tTARI)', result.feeMicrotari === undefined ? '(not reported)' : amt(result.feeMicrotari))
-  field('cUSD output', result.cusdOutputIds ? JSON.stringify(result.cusdOutputIds) : 'undefined')
-  field('tTARI change', result.tariChangeOutputIds ? JSON.stringify(result.tariChangeOutputIds) : 'undefined')
-  field('tTARI spent', JSON.stringify(result.spentInputIds))
-  printNet(mark)
-  if (result.outcome === 'Commit') {
-    // What the app does on commit (CusdFaucetClaimPanel): record the output, add it at once
-    // (cusdScan.addCusdOutput), then the full scan — which must KEEP it (an own, fresh output).
-    rule('right after the claim  (the immediate figure, then a scan at once)')
-    const outputId = result.cusdOutputIds?.[0] ?? ''
-    recordCusdClaim(h.address, { journalId: `harness-${result.txId}`, txId: result.txId, outputId, units: result.units, at: Date.now() })
-    const t0 = performance.now()
-    const scan = await scanCusdPrivate({ walletAddress: h.address, open: viewKeyOpener(h.viewSecret) })
-    field('scan at once', `${cusdAmt(scan.units)}${scan.incomplete ? '  (INCOMPLETE)' : ''} in ${((performance.now() - t0) / 1000).toFixed(1)}s`)
-    field('  claim output', scan.outputs.some(o => o.id === outputId)
-      ? `counted${scan.ownUnverified.includes(outputId) ? ' (served unverified — counted as our own output)' : ' (verified)'}`
-      : 'NOT COUNTED ✗')
-  }
-  console.log('\n  The cUSD output takes 60-90s to appear in /utxos; the cUSD scan recovers it by id before then.')
-  console.log('  Re-run cusd-status to see the 10,000 cUSD, then again after a minute to see it from the listing.')
-}
-
 /** A brand-new wallet for `faucet-claim --fresh`. Its phrase goes to a 600 file, never to stdout. */
 async function freshIdentity(): Promise<Harnessed> {
   const { mnemonic } = await createWalletSeed()
@@ -2273,9 +2178,6 @@ async function cmdProveShortFee(h: Harnessed, dest: string, amount: bigint, yes:
 
 // ══ ACTIVITY ═══════════════════════════════════════════════════════════════════
 
-const cusdFmt = (u: bigint) => `${formatUnits(u, CUSD_ASSET.decimals)} cUSD  (${u.toLocaleString('en-US')} units)`
-const signedCusd = (d: bigint) => `${d < 0n ? '−' : '+'}${cusdFmt(d < 0n ? -d : d)}`
-
 async function cmdActivity(h: Harnessed): Promise<void> {
   rule('activity  (crypto/activity.buildActivity, the wallet’s Activity list)  ·  READ-ONLY')
   const journal = loadJournal(h.address)
@@ -2284,18 +2186,15 @@ async function cmdActivity(h: Harnessed): Promise<void> {
   const scan = await scanWallet(h.viewSecret, () => {}, new AbortController().signal, { excluded: loadExcludedIds(h.address), walletAddress: h.address })
   const rec = reconcile({ owned: scan.utxos, journal, ledger: loadLedger(h.address), epoch: loadEpoch(h.address), knownReceiveUtxoIds: knownReceiveIds([]) })
   field('reconcile', rec.reason === null ? `${rec.receives.length} receive(s), ${rec.suppressed.length} suppressed` : `nothing classified: ${rec.reason}`)
-  const cusdUnits = new Map(loadCusdClaims(h.address).map(c => [c.journalId, c.units] as const))
-  const rows = buildActivity(journal, [], [], rec.receives, cusdUnits)
+  const rows = buildActivity(journal, [], [], rec.receives)
     .sort((a, b) => b.timestamp - a.timestamp)
   if (rows.length === 0) console.log('    (none)')
   for (const r of rows) {
     const title = r.kind === 'sent' || r.kind === 'received' ? r.counterparty
       : r.kind === 'swap' ? (r.to === 'private' ? 'Made private' : 'Made public')
       : r.kind === 'faucet' ? 'Received · Testnet faucet claim'
-      : r.kind === 'cusd-faucet' ? 'Received · cUSD faucet claim'
       : 'Received'
-    const value = r.kind === 'cusd-faucet' ? (r.cusdUnits !== null ? signedCusd(r.cusdUnits) : '···')
-      : 'amountMicrotari' in r && r.amountMicrotari !== null ? amt(r.amountMicrotari) : '···'
+    const value = 'amountMicrotari' in r && r.amountMicrotari !== null ? amt(r.amountMicrotari) : '···'
     const fee = 'feeMicrotari' in r && r.feeMicrotari !== null ? `  · fee ${r.feeMicrotari} µT` : ''
     const outcome = 'outcome' in r ? r.outcome : ''
     const tx = 'txId' in r && r.txId ? `  tx ${r.txId.slice(0, 10)}` : ''
@@ -2313,8 +2212,6 @@ READ-ONLY — safe to run freely, costs nothing:
   scan                        Full balance trace: rows, pages, owned, spendable, private + public.
   faucet-status               Caravel's faucet as this wallet sees it (open / paused / empty /
                               claimed, from the chain) plus the claim's DRY RUN: verdict and fee.
-  cusd-status                 The wallet's cUSD (private + public, verified reads only), the cUSD
-                              faucet's claim status for it, and the claim's DRY RUN (verdict + fee).
   resolve <txid>              Fetch and print one transaction result in full, with its verdict.
   prove-recovery [substateId] Proof that a coin absent from every listing is still found by id,
                               counted, and spendable. Submits nothing.
@@ -2353,8 +2250,6 @@ WRITE — MOVES REAL TESTNET FUNDS. Builds and prices without --yes; submits wit
   faucet-claim [--fresh]      Claim from Caravel's faucet (once per key, ever) — the way to get a
                               wallet into a state prove-spend can work against. --fresh claims for
                               a NEW wallet; its phrase is written to a 600 file, never printed.
-  cusd-claim                  Claim 10,000 test cUSD (once per key, ever). The fee is paid from this
-                              wallet's own tTARI, so the wallet must already hold a little tTARI.
   make-private <amount|all>   conceal: revealed vault  →  private stealth output. The fee goes on
                               top; 'all' (MAX) moves the whole public balance, fee out of it.
   make-public  <amount>       reveal:  private outputs →  revealed vault balance.
@@ -2368,7 +2263,7 @@ WRITE — MOVES REAL TESTNET FUNDS. Builds and prices without --yes; submits wit
 Amounts are TARI ("12.5") or raw µtTARI ("12500000u").
 
 Environment:
-  activity                    The wallet's Activity list as WalletModal builds it (journal, cUSD claims,
+  activity                    The wallet's Activity list as WalletModal builds it (journal and
                               reconciled receives; no chat). READ-ONLY.
 
   CARAVEL_TEST_MNEMONIC   required. The wallet. Never printed, never written to disk.
@@ -2479,12 +2374,6 @@ export async function main(argv: string[]): Promise<void> {
         break
       case 'faucet-claim':
         await cmdFaucetClaim(h, yes)
-        break
-      case 'cusd-status':
-        await cmdCusdStatus(h)
-        break
-      case 'cusd-claim':
-        await cmdCusdClaim(h, yes)
         break
       case 'activity':
         await cmdActivity(h)

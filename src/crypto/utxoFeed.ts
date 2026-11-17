@@ -256,8 +256,7 @@ export async function fetchAllUtxoRows(opts: {
   onPage?: (pages: number, rows: number) => void
   /**
    * Which resource's outputs to list, without `resource_`. Defaults to TARI, which is what every
-   * balance and spend path reads. The cUSD scan (crypto/cusdScan) is the only other caller — same
-   * walk, same union, same termination rules, a different `resource_address`.
+   * balance and spend path reads; another resource gets the same walk, union and termination rules.
    */
   resourceHex?: string
 }): Promise<UtxoFeed> {

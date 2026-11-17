@@ -70,8 +70,8 @@ export function firstSeenLabel(ts: number, now = Date.now()): string {
 
 /**
  * When a transaction happened on chain, in a list: HH:MM for a time today, "Oct 14" otherwise; "~"
- * when estimated from the epoch (crypto/txTimes); "—" when unknown. ONE rule for the Trade and
- * Burn pages, fed only by the indexer's time or the deterministic epoch estimate — never a device's
+ * when estimated from the epoch (crypto/txTimes); "—" when unknown. ONE rule for the Trade
+ * page, fed only by the indexer's time or the deterministic epoch estimate — never a device's
  * own record — so every device shows the same label.
  */
 export function timeLabel(at: number | null, estimated = false, now = Date.now()): string {

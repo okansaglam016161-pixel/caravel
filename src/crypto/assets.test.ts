@@ -20,7 +20,7 @@ describe('the approved-asset allowlist', () => {
   })
 
   it('makes cUSD display-only and TARI fully actionable', () => {
-    expect(CUSD_ASSET.actions).toEqual({ send: false, burn: false, chat: false })
+    expect(CUSD_ASSET.actions).toEqual({ send: false, chat: false })
     expect(TARI_ASSET.actions.send).toBe(true)
   })
 

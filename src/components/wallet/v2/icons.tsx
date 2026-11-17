@@ -84,7 +84,7 @@ export const Refresh = ({ size = 14, color, width = 2 }: I) => (
   </svg>
 )
 
-/** The flame — a burn. The design's own path, the one the Burn page and its rows wear. */
+/** The flame — a burn. The design's own path; the Trade page wears it beside its fee split. */
 export const Flame = ({ size = 14, color, width = 1.8 }: I) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={width} strokeLinejoin="round" style={{ flexShrink: 0 }}>
     <path d="M12 2c1 4 5 5.5 5 10a5 5 0 0 1-10 0c0-2 1-3.5 2-4.5 0 2 1 3 2 3 0-3 .5-6 1-8.5z" />

@@ -33,7 +33,7 @@
  */
 export type JournalKind =
   | 'send' | 'receive' | 'make-private' | 'make-public' | 'faucet'
-  | 'chat-payment' | 'ons-register' | 'burn'
+  | 'chat-payment' | 'ons-register'
   // A cUSD faucet claim (T3a). Its `amountMicrotari`/`feeMicrotari` are the TARI side (the fee paid
   // from the wallet's own tTARI), and `selfOutputIds`/`spentInputIds` are TARI — the tTARI change
   // and the fee coins. The cUSD amount lives in crypto/cusdStore, never here, because every
@@ -179,15 +179,9 @@ export const OUTPUT_CREATING_ACTIONS = [
   /** An @name registration. Spends one UTXO and returns exactly one change output to us. */
   'ons-register',
   /**
-   * A burn into the Caravel Burn Wallet. The private path returns change to us; the public one
-   * creates nothing for us. Added after coverage first shipped, which useJournalCoverage handles:
-   * no burn existed before this was recorded, so the original threshold still holds.
-   */
-  'burn',
-  /**
-   * A cUSD faucet claim: its tTARI fee coin's change comes back to us (T3a). Added with the trades, as
-   * 'burn' was added after coverage first shipped — useJournalCoverage re-declares and keeps the original
-   * threshold, which is truthful: neither could happen before the code that records it shipped.
+   * A cUSD faucet claim: its tTARI fee coin's change comes back to us (T3a). Added with the trades, after
+   * coverage first shipped — useJournalCoverage re-declares and keeps the original threshold, which is
+   * truthful: neither could happen before the code that records it shipped.
    */
   'cusd-faucet',
   /** Caravel Trade: tTARI change, a private tTARI receive, a cancel's returned escrow, a maker's payout. */
@@ -202,7 +196,7 @@ export type OutputCreatingAction = (typeof OUTPUT_CREATING_ACTIONS)[number]
  * Should coverage be (re-)declared for this epoch?
  *
  * Yes when there is none, when it never completed, AND when it completed against an older set —
- * an action added to OUTPUT_CREATING_ACTIONS after the stamp (as 'burn' was). Re-declaring keeps
+ * an action added to OUTPUT_CREATING_ACTIONS after the stamp (as 'cusd-faucet' was). Re-declaring keeps
  * the original threshold (recordCoverage never moves it), which is truthful: the new action could
  * not happen before the code that records it shipped. Without this, every existing wallet's epoch
  * would stay incomplete for good and classification would be off for all of them.

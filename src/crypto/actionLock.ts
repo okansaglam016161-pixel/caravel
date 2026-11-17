@@ -1,7 +1,7 @@
 // One action, one run — however fast its button is pressed.
 //
 // Every button that confirms and submits a transaction (Send, make public/private, the chat
-// payment, the faucet claim, @name register; Burn has its own, burnConfirm) runs an async sequence:
+// payment, the faucet claim, @name register) runs an async sequence:
 // the confirm-time check, a journal row, the submit and — for a chat payment — the message that
 // announces it. React only re-renders after a handler returns, and some of these buttons stay on
 // screen through the confirm check's network round trip, so a second press used to start a second

@@ -99,22 +99,6 @@ export type ActivityRow =
       txId: string | null
     }
   /**
-   * TARI locked in the Caravel Burn Wallet. Value left this wallet for good, so it is an outflow —
-   * with its own kind because "sent to" names a recipient, and a burn has none.
-   */
-  | {
-      kind: 'burn'
-      id: string
-      /** Which balance it was burned from. */
-      from: 'private' | 'public'
-      timestamp: number
-      amountMicrotari: bigint | null
-      feeMicrotari: bigint | null
-      outcome: ActivityOutcome
-      source: ActivitySource
-      txId: string | null
-    }
-  /**
    * A cUSD faucet claim (T3a). A real inflow of cUSD, so it reads as good news — but the figure is
    * cUSD, not TARI, so it carries its OWN units and the renderer formats them as cUSD. `feeMicrotari`
    * is still the TARI fee the claim paid. The claimed amount comes from crypto/cusdStore, keyed by
@@ -262,8 +246,6 @@ function fromJournal(e: JournalEntry, cusdUnits: ReadonlyMap<string, bigint>, tr
     // not a wallet money-movement the user would look for in Activity.
     case 'ons-register':
       return null
-    case 'burn':
-      return { kind: 'burn', ...common, from: e.from === 'public' ? 'public' : 'private' }
     case 'trade-place':
     case 'trade-fill':
     case 'trade-cancel':

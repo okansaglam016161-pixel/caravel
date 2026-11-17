@@ -51,13 +51,6 @@ import { prepareReveal, MIN_REVEAL_MICROTARI, maxRevealable } from '../src/crypt
 import { prepareConfidentialSend, sendConfidential, describeMicrotari, maxStealthSend, MAX_FEE } from '../src/crypto/confidentialSend'
 import { claimFaucet, prepareClaim, FaucetClaimRefused, type PreparedClaim } from '../src/crypto/faucet'
 import { preparePublicSend } from '../src/crypto/publicSend'
-import { preparePrivateBurn, preparePublicBurn, type BurnSource } from '../src/crypto/burn'
-import {
-  BURN_WALLET_COMPONENT, accountVaultIds, classifyBurn, listDeposits, readBurnWallet,
-  type BurnClassification,
-} from '../src/crypto/burnWallet'
-import { buildBurnRows, burnDetail, burnTitle } from '../src/components/burn/burnModel'
-import { timeLabel } from '../src/components/wallet/v2/format'
 import { txTime, type TxTime } from '../src/crypto/txTimes'
 import { parseOotleAddress } from '@tari-project/ootle-wasm'
 import { FAUCET_COMPONENT_ADDRESS, FAUCET_VAULT_ADDRESS, faucetReceiptId } from '../src/crypto/faucetConfig'
@@ -948,91 +941,6 @@ async function cmdSendPublic(h: Harnessed, dest: string, amount: bigint, yes: bo
   const result = await prepared.submit(stage)
   printSettlement(markSubmit, performance.now() - t0, result.outcome)
   await printSubmitted(result.txId, prepared.feeMicrotari, result.outcome, result.reason)
-  printNet(markSubmit)
-}
-
-/**
- * WRITE. A burn into the Caravel Burn Wallet, from the public balance or from private funds.
- *
- * Without --yes: build, price, and the confirm check, then stop. With it: submit, then check what
- * the burn page relies on — the fee shown is the fee charged, the receipt classifies as the source
- * it came from, the owner key appears nowhere in a private burn, the burn shows up in the list,
- * and the verified total moved by exactly the amount.
- */
-async function cmdBurn(h: Harnessed, source: BurnSource, amount: bigint, yes: boolean): Promise<void> {
-  writeBanner(`burn ${source}  (crypto/burn.prepare${source === 'public' ? 'Public' : 'Private'}Burn)`, amount, yes)
-  const account = await primeAccount(h)
-  if (source === 'public' && !account) console.log('\n  ▶ No account address. preparePublicBurn refuses before building — see below.')
-
-  rule('burn wallet before')
-  const before = await readBurnWallet()
-  field('read', before.kind === 'verified' ? `${amt(before.reading.balance)}   [verified]` : before.kind)
-
-  rule('build + price')
-  const mark = net.length
-  const prepared = source === 'public'
-    ? await preparePublicBurn(h.wallet, h.address, { amountMicrotari: amount, onProgress: stage })
-    : await preparePrivateBurn(h.wallet, h.address, { amountMicrotari: amount, onProgress: stage })
-  field('burns', amt(prepared.amountMicrotari) + '   [exactly what was asked for]')
-  field('fee', amt(prepared.feeMicrotari) + '   [the exact cost — what the UI shows]')
-  printDryRun(mark)
-  printNet(mark)
-
-  if (!yes) {
-    rule('confirm check  (crypto/quote — what Confirm runs before anything is sent)')
-    await prepared.confirm()
-    field('confirm check', 'PASSES — fresh, inputs unchanged, final transaction accepted at the exact fee')
-    prepared.release()
-    console.log('\n  STOPPED BEFORE SUBMIT. Nothing was sent. Re-run with --yes to submit.')
-    return
-  }
-
-  rule('submit')
-  const markSubmit = net.length
-  const t0 = performance.now()
-  const result = await prepared.submit(stage)
-  printSettlement(markSubmit, performance.now() - t0, result.outcome)
-  await printSubmitted(result.txId, prepared.feeMicrotari, result.outcome, result.reason)
-  field('self outputs', result.selfOutputIds ? JSON.stringify(result.selfOutputIds) : 'null')
-  field('spent inputs', JSON.stringify(result.spentInputIds))
-  if (result.outcome !== 'Commit') return
-
-  rule('who appears in it')
-  const tx = await (await fetch(`${INDEXER}/transactions/${result.txId}`)).text()
-  const ownerSeen = tx.toLowerCase().includes(h.ownerPkHex.toLowerCase())
-  const accountSeen = account !== null && tx.includes(account)
-  field('owner key in tx', ownerSeen ? 'YES' + (source === 'private' ? '   ◀ PRIVACY FAILURE' : '   [expected: a public burn is account-tied]') : 'no' + (source === 'private' ? '   ✓ the owner key appears nowhere' : ''))
-  field('account in tx', accountSeen ? 'YES' + (source === 'private' ? '   ◀ PRIVACY FAILURE' : '') : 'no')
-
-  rule('receipt classification  (crypto/burnWallet.classifyBurn)')
-  let cls = await classifyBurn(result.txId)
-  for (let i = 0; i < 10 && cls.source === 'unknown'; i++) {
-    await new Promise(r => setTimeout(r, 3000))
-    cls = await classifyBurn(result.txId)
-  }
-  const mine = source === 'public' && account ? await accountVaultIds(account) : new Set<string>()
-  field('classified as', cls.source + (cls.source === source ? '   ✓ matches how it was made' : '   ◀ MISMATCH'))
-  field('withdraw vaults', JSON.stringify(cls.withdrawVaults))
-  if (source === 'public') field('burned by you', cls.withdrawVaults.some(v => mine.has(v)) ? 'yes   ✓ an own account vault' : 'no   ◀')
-  field('epoch', String(cls.epoch))
-
-  rule('burns list and verified total')
-  let after = await readBurnWallet()
-  let listed = (await listDeposits()).find(d => d.txId === result.txId)
-  for (let i = 0; i < 20 && (!listed || after.kind !== 'verified' || before.kind !== 'verified' || after.reading.balance === before.reading.balance); i++) {
-    await new Promise(r => setTimeout(r, 3000))
-    after = await readBurnWallet()
-    listed = (await listDeposits()).find(d => d.txId === result.txId)
-  }
-  field('in the list', listed ? `yes, ${amt(listed.amount)}` + (listed.amount === amount ? '   ✓ the amount burned' : '   ◀ MISMATCH') : 'not yet  ◀')
-  if (after.kind === 'verified' && before.kind === 'verified') {
-    const delta = after.reading.balance - before.reading.balance
-    field('total after', `${amt(after.reading.balance)}   [verified]`)
-    field('moved by', amt(delta) + (delta === amount ? '   ✓ exactly the amount burned' : '   (other burns may have landed too)'))
-  } else {
-    field('total after', after.kind)
-  }
-  field('component', BURN_WALLET_COMPONENT)
   printNet(markSubmit)
 }
 
@@ -2411,7 +2319,7 @@ function parseCusd(s: string): bigint {
   return BigInt(m[1]) * 1_000_000n + BigInt((m[2] ?? '').padEnd(6, '0') || '0')
 }
 
-interface TradeBalances { privTari: bigint; pubTari: bigint; privCusd: bigint | null; pubCusd: bigint | null; caravelFee: bigint; burnTotal: bigint | null }
+interface TradeBalances { privTari: bigint; pubTari: bigint; privCusd: bigint | null; pubCusd: bigint | null; caravelFee: bigint }
 
 /** Every figure a trade moves, read through the app's own code (scanWallet, readRevealedBalance, scanCusd). */
 async function tradeBalances(h: Harnessed, account: string | null): Promise<TradeBalances> {
@@ -2421,12 +2329,11 @@ async function tradeBalances(h: Harnessed, account: string | null): Promise<Trad
   const caravelFee = await readRevealedBalance(provider, TRADE_CARAVEL_FEE_ACCOUNT)
   provider.stopWatcher?.()
   const cusd = await scanCusd(h.viewSecret, h.address)
-  const burn = await readBurnWallet()
   return {
     privTari: scan.balance, pubTari,
     privCusd: cusd.private.incomplete ? null : cusd.private.units,
     pubCusd: cusd.public.kind === 'ok' ? cusd.public.units : null,
-    caravelFee, burnTotal: burn.kind === 'verified' ? burn.reading.totalDeposited : null,
+    caravelFee,
   }
 }
 
@@ -2436,7 +2343,6 @@ function printBalances(b: TradeBalances): void {
   field('private cUSD', b.privCusd === null ? '··· (not established)' : cusdFmt(b.privCusd))
   field('public cUSD', b.pubCusd === null ? '··· (not established)' : cusdFmt(b.pubCusd))
   field('Caravel fee acct', amt(b.caravelFee))
-  field('Burn Wallet total', b.burnTotal === null ? '··· (not verified)' : amt(b.burnTotal))
 }
 
 /** The public keys that signed `txId`, read back from the chain (both indexers tried). */
@@ -2519,7 +2425,6 @@ async function runTradeCmd(h: Harnessed, trader: Trader, account: string | null,
   if (after.privCusd !== null && before.privCusd !== null) field('private cUSD', signedCusd(after.privCusd - before.privCusd))
   if (after.pubCusd !== null && before.pubCusd !== null) field('public cUSD', signedCusd(after.pubCusd - before.pubCusd))
   field('Caravel fee acct', `${signedTari(after.caravelFee - before.caravelFee)}  (expected +${pt.details.action === 'fill' ? pt.details.caravelCut : 0n} µtTARI)`)
-  if (after.burnTotal !== null && before.burnTotal !== null) field('Burn Wallet', `${signedTari(after.burnTotal - before.burnTotal)}  (expected +${pt.details.action === 'fill' ? pt.details.burnCut : 0n} µtTARI)`)
 }
 
 async function cmdTradeStatus(h: Harnessed): Promise<void> {
@@ -2594,7 +2499,6 @@ async function cmdActivity(h: Harnessed): Promise<void> {
       : r.kind === 'swap' ? (r.to === 'private' ? 'Made private' : 'Made public')
       : r.kind === 'faucet' ? 'Received · Testnet faucet claim'
       : r.kind === 'cusd-faucet' ? 'Received · cUSD faucet claim'
-      : r.kind === 'burn' ? `Burned (${r.from})`
       : r.kind === 'trade' ? ACTIVITY_TRADE_TITLE[r.tradeKind]
       : 'Received'
     const value = r.kind === 'trade'
@@ -2713,34 +2617,6 @@ async function cmdTradeCborCheck(h: Harnessed): Promise<void> {
     field(`on-chain payout`, `${id.slice(0, 18)}…  ${stored.length / 2} bytes  ${same ? 'decode→encode = stored, TS decode = Rust decode ✓' : '✗ MISMATCH'}`)
   }
   field('result', `${ok} match, ${bad} mismatch`)
-}
-
-/**
- * READ-ONLY. The Burn page's list, as hooks/useBurnWallet builds it: every deposit, its receipt's
- * classification (person / you / app), its time from crypto/txTimes, labelled by burnModel.
- */
-async function cmdBurnList(h: Harnessed): Promise<void> {
-  rule('burn-list  (hooks/useBurnWallet → components/burn/burnModel)  ·  READ-ONLY')
-  const mark = net.length
-  const deposits = (await listDeposits()).slice(0, 50)
-  const account = loadAccountAddress(h.address)
-  const journalled = new Set(loadJournal(h.address).filter(e => e.kind === 'burn' && e.txId).map(e => e.txId!))
-  const [classes, times, ownVaults] = await Promise.all([
-    Promise.all(deposits.map(async d => [d.txId, await classifyBurn(d.txId)] as const)).then(p => new Map<string, BurnClassification>(p)),
-    Promise.all([...new Set(deposits.map(d => d.txId))].map(async id => [id, await txTime(id)] as const)).then(p => new Map<string, TxTime>(p)),
-    account ? accountVaultIds(account) : Promise.resolve(new Set<string>()),
-  ])
-  const rows = buildBurnRows(deposits, classes, { ownVaults, journalled, times })
-  field('rows', `${rows.length} (account ${account ? account.slice(0, 18) + '…' : 'none'}, ${journalled.size} journalled here)`)
-  const counts = new Map<string, number>()
-  for (const r of rows) {
-    const title = burnTitle(r)
-    counts.set(title, (counts.get(title) ?? 0) + 1)
-    const at = r.at === null ? '(no time)          ' : new Date(r.at).toISOString().slice(0, 16).replace('T', ' ') + (r.estimated ? '~' : ' ')
-    console.log(`    ${r.txId.slice(0, 10)}…  ${at}  ${timeLabel(r.at, r.estimated).padEnd(8)} ${title.padEnd(19)} ${(burnDetail(r) ?? '—').padEnd(12)} ${amt(r.amount)}${classes.get(r.txId)?.appTemplates.length ? `  [apps ${classes.get(r.txId)!.appTemplates.map(t => t.slice(0, 8)).join(',')}]` : ''}`)
-  }
-  field('labels', [...counts].map(([k, v]) => `${k} ×${v}`).join(' · '))
-  printNet(mark)
 }
 
 /** READ-ONLY. The market as the Trade page will see it (crypto/market.MarketReader — what useMarket feeds). */
@@ -2872,11 +2748,6 @@ WRITE — MOVES REAL TESTNET FUNDS. Builds and prices without --yes; submits wit
   send-public <ootle-address> <amount>
                               publicSend: account vault → the recipient's private balance. The fee
                               is paid from the vault and refunded down to the exact cost.
-  burn <public|private> <amount>
-                              Burn into the Caravel Burn Wallet (crypto/burn). Public spends the
-                              account vault; private spends stealth outputs, signed only by their
-                              one-time keys. With --yes it also checks the receipt's classification,
-                              owner-key absence, the burns list and the verified total.
   send <ootle-address> <amount|all> [memo]
                               prepareConfidentialSend → submit. 'all' is MAX: everything reachable,
                               the exact fee out of it, no change. Builds and prices without --yes.
@@ -2885,7 +2756,7 @@ Amounts are TARI ("12.5") or raw µtTARI ("12500000u").
 
 Environment:
   trade-status                Caravel Trade: this wallet's orders (status re-read), trades, balances
-                              (tTARI + cUSD, private + public), the fee account and Burn Wallet, and
+                              (tTARI + cUSD, private + public), the fee account, and
                               the trade Activity rows. READ-ONLY.
   activity                    The wallet's Activity list as WalletModal builds it (journal, trades, cUSD
                               claims, reconciled receives; no chat), with the indexer's trade times. READ-ONLY.
@@ -2903,8 +2774,6 @@ Environment:
   trade-offline-check         The same refresh with the network cut, then again (Try again). READ-ONLY.
   market                      The market as the Trade page sees it: the book (sorted, spread, taker
                               legs after the 1% fee, YOURS flags), my orders, recent trades. READ-ONLY.
-  burn-list                   The Burn page's list: each burn's label (Burn / Burned by you / Caravel
-                              Trade burn / App burn), detail and time, as the page builds it. READ-ONLY.
   trade-cbor-check            crypto/statementCbor against the Rust statement-cbor tool: fresh payouts,
                               and every payout stored on the Board (STATEMENT_CBOR_TOOL to override).
 
@@ -2999,10 +2868,6 @@ export async function main(argv: string[]): Promise<void> {
         if (!args[1] || !args[2]) throw new Error('prove-settle needs a recipient address and an amount.')
         await cmdProveSettle(h, args[1], parseAmount(args[2]), yes)
         break
-      case 'burn':
-        if ((args[1] !== 'public' && args[1] !== 'private') || !args[2]) throw new Error('burn needs public|private and an amount.')
-        await cmdBurn(h, args[1], parseAmount(args[2]), yes)
-        break
       case 'send-public':
         if (!args[1] || !args[2]) throw new Error('send-public needs a recipient address and an amount.')
         await cmdSendPublic(h, args[1], parseAmount(args[2]), yes)
@@ -3056,9 +2921,6 @@ export async function main(argv: string[]): Promise<void> {
         break
       case 'market':
         await cmdMarket(h)
-        break
-      case 'burn-list':
-        await cmdBurnList(h)
         break
       case 'trade-cbor-check':
         await cmdTradeCborCheck(h)

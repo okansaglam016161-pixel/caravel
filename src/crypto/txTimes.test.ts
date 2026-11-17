@@ -28,7 +28,7 @@ vi.mock('./indexerConfig', async (importActual) => ({
   },
 }))
 
-const { EPOCH_ANCHOR, EPOCH_MS, estimateFromEpoch, txTime, __resetTxTimesForTests } = await import('./txTimes')
+const { EPOCH_ANCHOR, EPOCH_MS, estimateFromEpoch, parseIndexerTime, parseTxCreatedAt, txTime, __resetTxTimesForTests } = await import('./txTimes')
 const { sortRecent } = await import('./market')
 import type { RecentTrade } from './market'
 
@@ -81,4 +81,22 @@ describe('two devices, independently, give the SAME order', () => {
     // Newest epoch first; the two in epoch 12274 by transaction id.
     expect(a).toEqual(['f_77', 'f_a9', 'f_c3', 'f_02'])
   })
+})
+
+describe('times', () => {
+  it('reads the indexer’s UTC timestamps', () => {
+    expect(parseIndexerTime('2026-10-09 12:01:55.0')).toBe(Date.UTC(2026, 9, 9, 12, 1, 55))
+    expect(parseIndexerTime(null)).toBeNull()
+    expect(parseIndexerTime('yesterday')).toBeNull()
+  })
+
+  it('takes a transaction’s time from created_at, never from finalized_at (the indexer’s storage time)', () => {
+    // cccbb79e as indexer-a served it after the 2026-10-14 resync.
+    const body = { transaction: { created_at: '2026-10-13 19:42:19.0', summary: { finalized_at: '2026-10-14 05:25:04.0' } } }
+    expect(parseTxCreatedAt(body)).toBe(Date.UTC(2026, 9, 13, 19, 42, 19))
+    expect(parseTxCreatedAt({ transaction: { summary: { finalized_at: '2026-10-14 05:25:04.0' } } })).toBeNull()
+    expect(parseTxCreatedAt(null)).toBeNull()
+    expect(parseTxCreatedAt({})).toBeNull()
+  })
+
 })

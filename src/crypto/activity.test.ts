@@ -67,13 +67,6 @@ describe('the journalled kinds reach the list', () => {
     expect(row).toMatchObject({ kind: 'cusd-faucet', cusdUnits: null })
   })
 
-  it('renders a burn as its own outflow kind, with the balance it came from', () => {
-    const [priv] = buildActivity([journalled({ kind: 'burn', from: 'private', counterparty: null, note: null, txId: 'tx_burn' })], [], [])
-    const [pub] = buildActivity([journalled({ kind: 'burn', from: 'public', counterparty: null, note: null })], [], [])
-    expect(priv).toMatchObject({ kind: 'burn', from: 'private', amountMicrotari: 8_000_000n, feeMicrotari: 14_457n, txId: 'tx_burn' })
-    expect(pub).toMatchObject({ kind: 'burn', from: 'public' })
-  })
-
   it('takes a swap’s direction from the structured record, not a label', () => {
     const [toPrivate] = buildActivity([journalled({ kind: 'make-private' })], [], [])
     const [toPublic] = buildActivity([journalled({ kind: 'make-public' })], [], [])

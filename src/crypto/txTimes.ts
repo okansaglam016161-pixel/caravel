@@ -1,6 +1,6 @@
 // When a transaction happened, from the INDEXER — the same answer on every device and after a restore.
 //
-// `transaction.created_at` (crypto/burnWallet.parseTxCreatedAt: not `finalized_at`, which jumps when an
+// `transaction.created_at` (parseTxCreatedAt below: not `finalized_at`, which jumps when an
 // indexer resyncs). The indexer forgets old transaction bodies, so when it no longer has one the time is
 // ESTIMATED from the epoch its receipt names — marked `estimated`, and shown with "~". Nothing local
 // (a clock on this device, a journal) is ever used as the time of a trade.
@@ -8,8 +8,27 @@
 // Fetched once per transaction per session and cached; subscribers hear about each new answer, so a
 // list re-sorts as times arrive.
 
-import { parseTxCreatedAt } from './burnWallet'
 import { pointRead } from './indexerConfig'
+
+/** The indexer writes times as "2026-10-08 19:18:45.0", in UTC. */
+export function parseIndexerTime(v: unknown): number | null {
+  if (typeof v !== 'string') return null
+  const m = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})/.exec(v)
+  if (!m) return null
+  return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6])
+}
+
+/**
+ * When the transaction was made, in epoch-ms, from the indexer's `transaction.created_at`. Null
+ * when the body is gone or the field is not a time; `txTime` then estimates from the epoch.
+ *
+ * NOT `summary.finalized_at`: that is when THIS indexer stored the transaction. After a resync it
+ * jumps to the resync — on 2026-10-14 both public indexers put the previous evening's transactions at
+ * 05:25 and 05:29 the next morning, each a different time — while `created_at` kept the evening.
+ */
+export function parseTxCreatedAt(body: unknown): number | null {
+  return parseIndexerTime((body as { transaction?: { created_at?: unknown } } | null)?.transaction?.created_at)
+}
 
 /**
  * THE EPOCH ESTIMATE, FROM ON-CHAIN DATA ONLY — the same on every device.

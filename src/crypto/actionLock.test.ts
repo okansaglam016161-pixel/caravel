@@ -6,7 +6,6 @@ import walletModalSrc from '../components/wallet/WalletModal.tsx?raw'
 import chatAppSrc from '../components/chat/ChatApp.tsx?raw'
 import faucetSrc from '../components/wallet/FaucetClaimPanel.tsx?raw'
 import cnsSrc from '../components/chat/CnsCommitView.tsx?raw'
-import burnSheetSrc from '../components/burn/BurnSheet.tsx?raw'
 
 const tick = () => new Promise(r => setTimeout(r, 0))
 
@@ -94,13 +93,5 @@ describe.each(BUTTONS)('$name', ({ file, entry, inner, lock, call, announce }) =
     const press = guarded(createActionLock(), () => run(announce))
     await hammer(press)
     expect(calls).toEqual({ confirm: 1, journal: 1, submit: 1, message: announce ? 1 : 0 })
-  })
-})
-
-describe('Burn', () => {
-  it('has its own synchronous lock, hammer-tested in components/burn/burnConfirm.test.ts', () => {
-    const sheet: string = burnSheetSrc
-    expect(sheet).toContain('createBurnConfirm(')
-    expect(sheet).toContain('void gate.current!.confirm(view.prepared)')
   })
 })

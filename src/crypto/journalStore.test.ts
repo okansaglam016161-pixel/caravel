@@ -330,8 +330,8 @@ describe('recordCoverage — the writer stage D will call', () => {
   })
 
   it('an action added after completion is declared again, and the original stamp holds', () => {
-    // An epoch stamped complete before 'burn' existed.
-    const stale = { covers: OUTPUT_CREATING_ACTIONS.filter(a => a !== 'burn'), coverageCompleteAt: 5_000 }
+    // An epoch stamped complete before 'cusd-faucet' existed.
+    const stale = { covers: OUTPUT_CREATING_ACTIONS.filter(a => a !== 'cusd-faucet'), coverageCompleteAt: 5_000 }
     expect(needsCoverageDeclaration(stale)).toBe(true)
     expect(needsCoverageDeclaration({ covers: [...OUTPUT_CREATING_ACTIONS], coverageCompleteAt: 5_000 })).toBe(false)
     expect(needsCoverageDeclaration({ covers: [...OUTPUT_CREATING_ACTIONS], coverageCompleteAt: null })).toBe(true)

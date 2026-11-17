@@ -16,7 +16,7 @@
 //   usdPrice   a FIXED display rate. TARI's is the app's placeholder rate (v2/fiat); cUSD is a
 //              testnet dollar shown at $1 by definition. Neither is a market price.
 //   actions    what the wallet may DO with it. cUSD is display-only until the Trade page: no
-//              sends, burns or chat payments, because every one of those paths is TARI-specific
+//              sends or chat payments, because every one of those paths is TARI-specific
 //              (fee probes, change, reconciliation) and has not been built for a second resource.
 //
 // The cUSD addresses are caravel-trade's live deployment (README, 2026-10-14, Ootle 0.46.1):
@@ -37,7 +37,7 @@ export interface ApprovedAsset {
   decimals: number
   /** Fixed display rate in USD per whole token. Not a market price. */
   usdPrice: number
-  actions: { send: boolean; burn: boolean; chat: boolean }
+  actions: { send: boolean; chat: boolean }
 }
 
 /** caravel-trade's live cUSD (Caravel Test Dollar), created by the cUSD faucet on 2026-10-14. */
@@ -55,7 +55,7 @@ export const TARI_ASSET: ApprovedAsset = {
   // v2/fiat's placeholder (RATE_NUM / RATE_DEN = $0.0004). The hero still prices TARI through
   // fiat.ts; assets.test pins the two together so they cannot drift.
   usdPrice: 0.0004,
-  actions: { send: true, burn: true, chat: true },
+  actions: { send: true, chat: true },
 }
 
 export const CUSD_ASSET: ApprovedAsset = {
@@ -66,7 +66,7 @@ export const CUSD_ASSET: ApprovedAsset = {
   name: 'Caravel Test Dollar',
   decimals: 6,
   usdPrice: 1,
-  actions: { send: false, burn: false, chat: false },
+  actions: { send: false, chat: false },
 }
 
 /** Every asset the wallet will show, in display order. */

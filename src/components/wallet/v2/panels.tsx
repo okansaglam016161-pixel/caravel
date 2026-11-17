@@ -1102,8 +1102,6 @@ export interface ActivityRowView {
   amountText?: string
   /** Full address/npub, for hover. The title line is abbreviated; this is not. */
   titleAttr?: string
-  /** A glyph in place of the direction arrow — a burn's flame. The tile keeps its direction's colours. */
-  glyph?: 'flame'
 }
 
 /**
@@ -1196,15 +1194,13 @@ const TILE: Record<ActivityRowView['direction'], { bg: string; ink: string; bord
 }
 
 /** The glyph in the row's tile. Direction only — the pill carries state. */
-function RowGlyph({ direction, glyph }: { direction: ActivityRowView['direction']; glyph?: ActivityRowView['glyph'] }) {
+function RowGlyph({ direction }: { direction: ActivityRowView['direction'] }) {
   const t = TILE[direction]
   const icon =
     // TWO ARROWS, NOT ONE. The in/out arrows say value crossed the wallet's boundary; a swap moves
     // it between two balances inside. Reusing either would say the wrong thing before a single
     // word is read.
-    glyph === 'flame'
-      ? <path d="M12 2c1 4 5 5.5 5 10a5 5 0 0 1-10 0c0-2 1-3.5 2-4.5 0 2 1 3 2 3 0-3 .5-6 1-8.5z" />
-    : direction === 'internal'
+    direction === 'internal'
       ? <><path d="M4 7h13M14 4l3 3-3 3" /><path d="M20 17H7M10 14l-3 3 3 3" /></>
     : direction === 'in'
       ? <><path d="M17 7L7 17" /><path d="M15 17H7V9" /></>
@@ -1264,7 +1260,7 @@ export function ActivityRowShell({ row, hidden }: { row: ActivityRowView; hidden
       display: 'flex', alignItems: 'center', gap: 12,
       padding: '11px 13px', borderRadius: 9,
     }}>
-      <RowGlyph direction={row.direction} glyph={row.glyph} />
+      <RowGlyph direction={row.direction} />
       <div style={{ flex: 1, minWidth: 0 }}>
         {/* THE PILL SITS BESIDE THE TITLE, not out by the amount. V3 moved it here and it reads
             better for the reason it exists: it qualifies what this row IS, so it belongs with the

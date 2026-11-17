@@ -3,7 +3,7 @@
 // `transaction.created_at` (parseTxCreatedAt below: not `finalized_at`, which jumps when an
 // indexer resyncs). The indexer forgets old transaction bodies, so when it no longer has one the time is
 // ESTIMATED from the epoch its receipt names — marked `estimated`, and shown with "~". Nothing local
-// (a clock on this device, a journal) is ever used as the time of a trade.
+// (a clock on this device, a journal) is ever used as the time of a transaction.
 //
 // Fetched once per transaction per session and cached; subscribers hear about each new answer, so a
 // list re-sorts as times arrive.

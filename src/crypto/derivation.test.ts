@@ -7,7 +7,6 @@
 import { describe, expect, it } from 'vitest'
 import { DomainSeparatedHasher, importWalletSeed } from 'tari-cipherseed'
 import {
-  cancelKeyFor,
   type DerivationScheme,
   detectScheme,
   deriveIdentity,
@@ -433,42 +432,6 @@ describe('purpose keys (faucet, names)', () => {
   }, 30_000)
 })
 
-describe('trade cancel keys (seed-derived, one per order)', () => {
-  // ── FROZEN VECTORS ────────────────────────────────────────────────────────
-  //
-  // These pin "com.caravel.trade" / "trade_root" and "com.caravel.trade.cancel" / "cancel_key",
-  // version 1, the u32-LE index, the 64-byte wide hash and its reduction. A drift strands every open
-  // order: its cancel rule names a key the wallet can no longer derive, so its escrow can never be
-  // taken back. IF ONE FAILS, THE DERIVATION DRIFTED — DO NOT UPDATE IT.
-  const pk = async (w: { getPublicKey(): Promise<Uint8Array> }) => hex(await w.getPublicKey())
-
-  it('derives the pinned cancel keys for a known CipherSeed phrase', async () => {
-    const id = await deriveIdentity(CIPHERSEED, 'cipherseed')
-    expect(await pk(cancelKeyFor(id.purposeKeys.tradeRoot, 0))).toBe('ec512fdc20e77565f151da42052346841f6308751bcef8bf3ff078a76701e366')
-    expect(await pk(cancelKeyFor(id.purposeKeys.tradeRoot, 1))).toBe('e4890c4cf8ff12624755e26999613c664161800bd27eb2877dd3c509d7390765')
-  }, 30_000)
-
-  it('derives the pinned cancel keys for a known legacy BIP-39 phrase', async () => {
-    const id = await deriveIdentity(BIP39, 'bip39')
-    expect(await pk(cancelKeyFor(id.purposeKeys.tradeRoot, 0))).toBe('2a7b273c3c3005579a63c91c9eb56793eb4dc5c4eca4c95901fdf80c3932e048')
-    expect(await pk(cancelKeyFor(id.purposeKeys.tradeRoot, 7))).toBe('f6c1b64a5c8245fd003f2d95f92cd029ab6755b8834ad702794973b42e046a48')
-  }, 30_000)
-
-  it('are distinct per index and from every other key, and come back from the same phrase', async () => {
-    const a = await deriveIdentity(CIPHERSEED, 'cipherseed')
-    const b = await deriveIdentity(`  ${CIPHERSEED.toUpperCase()}\n`, 'cipherseed')
-    const cancels = await Promise.all([0, 1, 2, 3].map(i => pk(cancelKeyFor(a.purposeKeys.tradeRoot, i))))
-    const others = [await pk(a.wallet), await pk(a.purposeKeys.faucet), await pk(a.purposeKeys.names), a.nostr.publicKeyHex]
-    expect(new Set([...cancels, ...others]).size).toBe(8)
-    expect(await pk(cancelKeyFor(b.purposeKeys.tradeRoot, 2))).toBe(cancels[2])
-  }, 30_000)
-
-  it('refuses an index outside u32', () => {
-    expect(() => cancelKeyFor(new Uint8Array(32), -1)).toThrow()
-    expect(() => cancelKeyFor(new Uint8Array(32), 2 ** 32)).toThrow()
-  })
-})
-
 describe('deriveIdentity hands back the store key', () => {
   it('agrees with the standalone derivation, on both schemes', async () => {
     const cs = await deriveIdentity(CIPHERSEED, 'cipherseed')
@@ -526,4 +489,56 @@ describe('deriveIdentity hands back the store key', () => {
     const theirs = await deriveIdentity(BIP39, 'bip39')
     expect(open(theirs.storeKey, seal(mine.storeKey, '{"a":1}')).status).toBe('unreadable')
   }, 30_000)
+})
+
+describe('the wallet keys a restore depends on — frozen byte for byte', () => {
+  // ── FROZEN VECTORS ────────────────────────────────────────────────────────
+  //
+  // Captured from the derivation as it stood before the Trade key was dropped (trim/wallet-chat), and
+  // kept as the proof that removing a purpose key moved nothing else: the spend (owner) key, the view
+  // secret, the address built from them, the Nostr keypair, the store key, and the faucet and names
+  // keys. Every one of them is what a restored phrase must reproduce exactly — a drift here opens a
+  // different, empty wallet, or a different chat identity. IF ONE FAILS, THE DERIVATION DRIFTED — DO
+  // NOT UPDATE IT.
+  const VECTORS = {
+    cipherseed: {
+      phrase: CIPHERSEED,
+      spendPublic: 'e692325a4528d687ad7b6ff9efed43c98f794be1979f56558d8f90681d6fe771',
+      viewSecret: 'b30d0ba8627107efefd795db0a6f021e04f6a290974b1f97bc2e7ca78f36fe00',
+      address: 'otl_esm_1u6frykj99rtg0ttmdlu7lm2rex8hjjlpj704v4vd37gxs8t0uace4lvs6q9rz374nhq9nudflxjzg2cfdn4q894vkz5anpzfgzg86ngha863h',
+      nostrPublic: '4b577830381a2be783c1e436c3e73bbe361f5784ca87949432a00ff3ed74238a',
+      nostrPrivate: '893f7b0e8883f659c763ee7a67ba93da8866516a828d2541bcbb32e679fb4652',
+      storeKey: '517fd91a7236b8cb4b3dcd7f2dbe0a997a3baea620b88dd603d578c7840b246d',
+      faucet: 'd8b42f09bff009739447dce08d3e5dc03e0e30a6a5ab8cd3122a264d06209f09',
+      names: 'cc00ca65eee6052c2ecfe9349c8e8ebb1e392903ccda9bafc338574d7d59e116',
+    },
+    bip39: {
+      phrase: BIP39,
+      spendPublic: 'fa672bd2d2b0137e0813102c154e7415768a4256bafa33c497cd0ff36a64545a',
+      viewSecret: '19dcc5f16a310a14440d08a4cc2803ae6f759a061023ab8535d3742dd69ec302',
+      address: 'otl_esm_1lfnjh5kjkqfhuzqnzqkp2nn5z4mg5sjkhtar83yhe58lx6ny23dzy5vt2n4q2tn5c3mrgug96dxlpfkj0wcdjw0t9erc5n0fr8msqjcrn209v',
+      nostrPublic: '1ca7e48a33d62063f25d79f18617cc892ef064628aaf80af485e41849343ca52',
+      nostrPrivate: '132f7c29e20fea96e9d11f221b0cf8a126d9f0966ed4963e1e00dae1d73ce855',
+      storeKey: 'dd39a38b31cc950f917243e686c64b7633ec70a847830f0d5c8e85c40fdeeeb0',
+      faucet: 'd419c32e437d0d4fc256eabe9ed1c2c777395fcb9fafaafef73e3a67c6df6557',
+      names: '0248e04b6dd8e7eaea309fa906098623b3196f1692fc797f5029c669680b6430',
+    },
+  } as const
+
+  for (const scheme of ['cipherseed', 'bip39'] as const) {
+    it(`reproduces every pinned key for the ${scheme} phrase`, async () => {
+      const { phrase, ...pinned } = VECTORS[scheme]
+      const id = await deriveIdentity(phrase, scheme)
+      expect({
+        spendPublic: hex(await id.wallet.getPublicKey()),
+        viewSecret: hex(await id.wallet.getViewSecret()),
+        address: await id.wallet.getAddress(),
+        nostrPublic: id.nostr.publicKeyHex,
+        nostrPrivate: id.nostr.privateKeyHex,
+        storeKey: hex(id.storeKey),
+        faucet: hex(await id.purposeKeys.faucet.getPublicKey()),
+        names: hex(await id.purposeKeys.names.getPublicKey()),
+      }).toEqual(pinned)
+    }, 30_000)
+  }
 })

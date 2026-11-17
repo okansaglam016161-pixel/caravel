@@ -174,11 +174,11 @@ export default function CusdFaucetClaimPanel() {
       setPhase('done')
       setMsg(`Added ${CLAIM_LABEL} to your wallet.`)
       // IN THE BALANCE AT ONCE, by its id — Caravel built this output, so it knows it and its value,
-      // as the TARI faucet knows its own. Then the full rescan (wallet + market), whose cUSD scan
+      // as the TARI faucet knows its own. Then the full rescan, whose cUSD scan
       // recovers the same id and keeps it even before the indexer serves it verified.
       const outputId = r.cusdOutputIds?.[0]
       if (outputId) addOwnCusdOutput(outputId, r.units)
-      void runFullRescan(rescan, address)
+      void runFullRescan(rescan)
       return
     }
     if (r.outcome === 'Reject') {

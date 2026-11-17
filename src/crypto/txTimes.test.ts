@@ -29,8 +29,6 @@ vi.mock('./indexerConfig', async (importActual) => ({
 }))
 
 const { EPOCH_ANCHOR, EPOCH_MS, estimateFromEpoch, parseIndexerTime, parseTxCreatedAt, txTime, __resetTxTimesForTests } = await import('./txTimes')
-const { sortRecent } = await import('./market')
-import type { RecentTrade } from './market'
 
 beforeEach(() => {
   __resetTxTimesForTests()
@@ -59,10 +57,8 @@ describe('two devices, independently, give the SAME order', () => {
   const fills = [
     { txId: 'f_c3', epoch: 12274 }, { txId: 'f_a9', epoch: 12274 }, { txId: 'f_77', epoch: 12280 }, { txId: 'f_02', epoch: 12100 },
   ]
-  const trade = (txId: string, at: number | null): RecentTrade =>
-    ({ orderId: 'o', txId, side: 0, n: 1n, p: 1n, price: { micro: 1n, exact: true }, at, atEstimated: true, yours: null })
-
-  async function device(clock: number, fetchOrder: string[], delays: Record<string, number>): Promise<string[]> {
+  /** Each transaction's time as one device reads it, newest first, ties by transaction id. */
+  async function device(clock: number, fetchOrder: string[], delays: Record<string, number>): Promise<[string, number | null][]> {
     __resetTxTimesForTests()
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(clock)
@@ -70,7 +66,8 @@ describe('two devices, independently, give the SAME order', () => {
     const times = new Map<string, number | null>()
     await Promise.all(fetchOrder.map(async id => { times.set(id, (await txTime(id)).at) }))
     vi.useRealTimers()
-    return sortRecent(fills.map(f => trade(f.txId, times.get(f.txId)!))).map(t => t.txId)
+    return fills.map(f => [f.txId, times.get(f.txId)!] as [string, number | null])
+      .sort(([ia, a], [ib, b]) => (b ?? 0) - (a ?? 0) || (ia < ib ? -1 : ia > ib ? 1 : 0))
   }
 
   it('different clocks, different fetch order, different arrival order — identical times and order', async () => {
@@ -78,8 +75,8 @@ describe('two devices, independently, give the SAME order', () => {
     const a = await device(Date.UTC(2026, 9, 16, 9, 0), ['f_c3', 'f_a9', 'f_77', 'f_02'], { f_c3: 5, f_a9: 0 })
     const b = await device(Date.UTC(2026, 9, 19, 23, 59), ['f_02', 'f_77', 'f_a9', 'f_c3'], { f_a9: 5, f_c3: 0 })
     expect(a).toEqual(b)
-    // Newest epoch first; the two in epoch 12274 by transaction id.
-    expect(a).toEqual(['f_77', 'f_a9', 'f_c3', 'f_02'])
+    // Newest epoch first; the two in epoch 12274 share one estimate, and fall back to transaction id.
+    expect(a.map(([id]) => id)).toEqual(['f_77', 'f_a9', 'f_c3', 'f_02'])
   })
 })
 

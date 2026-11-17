@@ -34,7 +34,7 @@ import { openOwnedUtxo } from './openUtxo'
 import { substateValueOf, upgradeSubstateBody } from './substateShape'
 import { CUSD_ASSET } from './assets'
 import { loadAccountAddress } from './accountStore'
-import { knownCusdIds, spentCusdIds } from './tradeStore'
+import { loadCusdClaims } from './cusdStore'
 import { INDEXER_URLS, POINT_READ_TIMEOUT_MS, pointRead } from './indexerConfig'
 import { fetchWithRetry } from './indexerRetry'
 import { vaultHolding } from './revealedBalance'
@@ -122,6 +122,16 @@ export function viewKeyOpener(viewSecret: Uint8Array): CusdOpener {
 const cusdId = (commitment: string) => `utxo_${CUSD_ASSET.resourceHex}_${commitment}`
 
 /**
+ * Every cUSD output this wallet made for itself — its faucet claims — for recovery by id. Claims recorded
+ * before the id fix carry TARI's prefix (the id was built with the wrong resource), so the commitment is
+ * re-keyed to cUSD's — the same output.
+ */
+function claimedCusdIds(walletAddress: string): string[] {
+  const prefix = `utxo_${CUSD_ASSET.resourceHex}_`
+  return [...new Set(loadCusdClaims(walletAddress).map(c => `${prefix}${c.outputId.split('_').pop()}`))]
+}
+
+/**
  * Every private cUSD output this wallet owns, each confirmed by a verified read.
  *
  * `listRows`, `read` and `open` are seams for the tests; the defaults are the network and the wasm.
@@ -132,9 +142,9 @@ export async function scanCusdPrivate(opts: {
   signal?: AbortSignal
   listRows?: () => Promise<{ rows: UtxoRow[]; incomplete: boolean }>
   read?: VerifiedReader
-  /** Output ids to ask for even if unlisted. Defaults to this wallet's own cUSD outputs (claims, trades). */
+  /** Output ids to ask for even if unlisted. Defaults to this wallet's own cUSD outputs (its claims). */
   knownIds?: readonly string[]
-  /** Coins already spent by this wallet (tradeStore.spentCusdIds by default) — never counted. */
+  /** Coins already spent by this wallet — never counted. None by default: the wallet spends no cUSD. */
   spentIds?: ReadonlySet<string>
   /**
    * A plain (unverified) read of one substate, for this wallet's OWN outputs only: the body, `null`
@@ -147,8 +157,8 @@ export async function scanCusdPrivate(opts: {
     ? opts.listRows()
     : fetchAllUtxoRows({ resourceHex: CUSD_ASSET.resourceHex, signal: opts.signal }))
 
-  // Coins this wallet has spent in a trade: never counted, whatever a lagging indexer still says.
-  const spent = opts.spentIds ?? (opts.walletAddress ? spentCusdIds(opts.walletAddress) : new Set<string>())
+  // Coins this wallet has spent: never counted, whatever a lagging indexer still says.
+  const spent = opts.spentIds ?? new Set<string>()
 
   // Owned per the listing — a hint that something of ours exists at this id.
   const candidates = new Set<string>()
@@ -161,8 +171,8 @@ export async function scanCusdPrivate(opts: {
 
   // Our own outputs the listing does not have yet.
   const listed = new Set(feed.rows.map(([c]) => cusdId(c)))
-  // Our own cUSD outputs — the faucet claim's and every trade's (crypto/tradeStore includes the claims).
-  const known = opts.knownIds ?? (opts.walletAddress ? knownCusdIds(opts.walletAddress) : [])
+  // Our own cUSD outputs — the faucet claims'.
+  const known = opts.knownIds ?? (opts.walletAddress ? claimedCusdIds(opts.walletAddress) : [])
   const recovered: string[] = []
   for (const id of known) {
     if (!id.startsWith(`utxo_${CUSD_ASSET.resourceHex}_`)) continue   // only ever cUSD ids
@@ -171,7 +181,7 @@ export async function scanCusdPrivate(opts: {
     recovered.push(id)
   }
 
-  // OUR OWN OUTPUTS — a claim's, a trade's change or receive, a filled order's payout: built by this
+  // OUR OWN OUTPUTS — a claim's: built by this
   // wallet, in a transaction that committed. A freshly written substate is served `verified: false`
   // for a while (measured: ~40-50 s after commit), and treating that as "unknown" left a just-claimed
   // 10,000 cUSD as "···". So for these ids only, a live body any indexer serves — that our view key

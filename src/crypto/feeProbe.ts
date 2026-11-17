@@ -80,8 +80,8 @@ export function exactFee(costMicrotari: bigint): bigint {
 
 /**
  * THE MAIN-INTENT BUFFER: a flat 200 µtTARI over the measured cost, for every PRIVATE fee whose
- * action runs in the MAIN intent — @name registration, and Caravel Trade's private place / fill /
- * cancel. One constant, so the two cannot drift apart.
+ * action runs in the MAIN intent — @name registration. One constant, so a second such action cannot
+ * drift from it.
  *
  * Such a fee is a revealed bucket spent WHOLE, and the action sits after it in the main intent, so a
  * fee that turns out short when it executes is not a free reject: the engine commits the fee intent

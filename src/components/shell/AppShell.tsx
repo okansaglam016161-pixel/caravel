@@ -1,6 +1,6 @@
 //   The signed-in shell: a permanent service rail, and whichever service is selected.
 //
-//   ── WALLET AND CHAT STAY MOUNTED (Trade mounts while shown — see its Pane) ──
+//   ── WALLET AND CHAT STAY MOUNTED ──
 //
 //   Switching services toggles VISIBILITY, not mounting, and that is deliberate on three counts:
 //
@@ -23,7 +23,6 @@
 //   abstraction. The hidden subtree keeps its state and its effects, and pays no layout or paint.
 
 import { useState } from 'react'
-import TradePage from '../trade/TradePage'
 import ChatApp from '../chat/ChatApp'
 import ProfilePanel from '../wallet/ProfilePanel'
 import WalletPage from '../wallet/WalletPage'
@@ -54,10 +53,6 @@ export default function AppShell() {
           follows the app theme like every other service — and so does the wallet modal inside it,
           which used to inherit the pin. */}
       <Pane show={service === 'chat'}><ChatApp onOpenWallet={() => setService('wallet')} /></Pane>
-      {/* Caravel Trade. Mounted only while shown: its market feed polls the indexers while it is
-          subscribed, and a hidden pane should not keep asking. Half-typed order forms live in a
-          sheet that closes with the page anyway. */}
-      {service === 'trade' && <Pane show><TradePage /></Pane>}
 
       {profileOpen && (
         <ProfilePanel onClose={() => setProfileOpen(false)} />

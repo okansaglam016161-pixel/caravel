@@ -364,7 +364,7 @@ describe('compareToShownFee — the confirm check holds the cost to the fee SHOW
   })
 })
 
-describe('the main-intent buffer — one constant for @names and private trades', () => {
+describe('the main-intent buffer — one constant for every main-intent private fee', () => {
   it('is 200 µtTARI, and ONS_FEE_BUFFER IS it (they cannot drift apart)', () => {
     expect(MAIN_INTENT_FEE_BUFFER).toBe(200n)
     expect(ONS_FEE_BUFFER).toBe(MAIN_INTENT_FEE_BUFFER)

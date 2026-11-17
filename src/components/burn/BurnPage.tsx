@@ -44,7 +44,6 @@ export default function BurnPage({ active }: { active: boolean }) {
           </>} />
           <Body gap={14} pageGap={12} chrome="page">
             <Hero hero={hero} refreshing={refreshing} onBurn={() => setSheetOpen(true)} onRetry={() => { void refresh() }} />
-            <LottoTeaser />
             <BurnList list={list} tab={tab} onTab={setTab} />
           </Body>
         </ModalShell>
@@ -164,38 +163,6 @@ function Hero({ hero, refreshing, onBurn, onRetry }: { hero: HeroState; refreshi
 
 /** The headline figure — the shared exact form: "1,000" / "1,000.2". */
 const fmtBurned = fmt6
-
-// ── Lotto teaser ──────────────────────────────────────────────────────────────
-
-/** A teaser, not a door: the Lotto gets its own page later, and this card will link there. */
-function LottoTeaser() {
-  return (
-    <div style={{
-      display: 'flex', alignItems: 'center', gap: 14, padding: '16px 18px',
-      background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 14, boxShadow: 'var(--e1)',
-    }}>
-      <span style={{
-        width: 38, height: 38, borderRadius: 11, flexShrink: 0, background: 'var(--accent-wash)', color: 'var(--accent-ink)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-      }}>
-        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round">
-          <rect x="3" y="3" width="18" height="18" rx="4" />
-          <circle cx="8.5" cy="8.5" r="1.3" fill="currentColor" /><circle cx="15.5" cy="8.5" r="1.3" fill="currentColor" />
-          <circle cx="12" cy="12" r="1.3" fill="currentColor" />
-          <circle cx="8.5" cy="15.5" r="1.3" fill="currentColor" /><circle cx="15.5" cy="15.5" r="1.3" fill="currentColor" />
-        </svg>
-      </span>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 14, fontWeight: 600, color: C.primary }}>Caravel Lotto</div>
-        <div style={{ fontSize: 12.5, color: C.mutedDim, marginTop: 2 }}>The Ootle’s first burn game. Coming soon.</div>
-      </div>
-      <span style={{
-        padding: '4px 10px', borderRadius: 999, border: '1px solid var(--border)',
-        fontFamily: MONO, fontSize: 10, letterSpacing: '0.1em', color: C.mutedDim, flexShrink: 0,
-      }}>SOON</span>
-    </div>
-  )
-}
 
 // ── Burns list ────────────────────────────────────────────────────────────────
 

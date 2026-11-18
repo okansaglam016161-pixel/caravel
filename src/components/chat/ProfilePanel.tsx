@@ -25,131 +25,20 @@
 
 import { useEffect, useState } from 'react'
 import { useChat, type ChatBackup } from '../../context/ChatContext'
-import { useSapient } from '../../context/SapientContext'
-import { SAPIENT_INSTALL_URL, networkLabel } from '../../sapient/provider'
 import { MIN_CHAT_PASSWORD, newPasswordProblem } from '../../crypto/chatIdentityStore'
+import { CopyRow, ListCard, NavRow } from './listRows'
+import SapientCard from './SapientCard'
 
 const MONO = 'var(--font-mono)'
 
-const CopyIcon = () => (
-  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-    <rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-  </svg>
-)
-const CheckIcon = () => (
-  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--accent-400)" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-    <path d="M20 6L9 17l-5-5" />
-  </svg>
-)
 const eyeOpen = (c: string) => (<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" /><circle cx="12" cy="12" r="3" /></svg>)
 const eyeOff = (c: string) => (<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" /><circle cx="12" cy="12" r="3" /><path d="M4 4l16 16" /></svg>)
-
-// ── The list cards ───────────────────────────────────────────────────────────
-//
-// Each section of the main step is ONE card of rows split by hairlines. Every row has the same
-// padding, the same height and the same label column (LABEL_W), so the values of every row — npub,
-// Status, Address, Network, View access — start at one x. Rows that DO something (open a step,
-// copy) take the quiet hover wash; rows that only state a fact do not.
-
-const LABEL_W = 84
-const ROW_PAD = '12px 14px'
-const ROW_MIN_H = 44
-const HAIRLINE = '1px solid var(--border)'
-
-function ListCard({ children }: { children: React.ReactNode }) {
-  return (
-    <div style={{ marginTop: 8, borderRadius: 10, border: HAIRLINE, background: 'var(--surface)', overflow: 'hidden' }}>
-      {children}
-    </div>
-  )
-}
-
-const rowBase = (first: boolean, clickable: boolean): React.CSSProperties => ({
-  display: 'flex', alignItems: 'center', gap: 10, padding: ROW_PAD, minHeight: ROW_MIN_H, boxSizing: 'border-box',
-  borderTop: first ? 'none' : HAIRLINE, cursor: clickable ? 'pointer' : 'default',
-})
-
-const labelStyle: React.CSSProperties = { width: LABEL_W, flexShrink: 0, fontSize: 12, fontWeight: 600, color: 'var(--text-muted-dim)' }
-const valueStyle: React.CSSProperties = { flex: 1, minWidth: 0, fontSize: 12.5, color: 'var(--text-body-dim)', display: 'flex', alignItems: 'center', gap: 10 }
-
-const Chevron = () => (
-  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-    <path d="M9 18l6-6-6-6" />
-  </svg>
-)
-
-/** A label and a value that is just stated. `note` is a second line under the value, in its column. */
-function FactRow({ label, children, note, first = false }: { label: string; children: React.ReactNode; note?: React.ReactNode; first?: boolean }) {
-  return (
-    <div style={{ ...rowBase(first, false), flexWrap: 'wrap', rowGap: 4 }}>
-      <span style={labelStyle}>{label}</span>
-      <span style={valueStyle}>{children}</span>
-      {note && <div style={{ flexBasis: '100%', paddingLeft: LABEL_W + 10, fontSize: 11.5, lineHeight: 1.45, color: 'var(--text-muted-dim)' }}>{note}</div>}
-    </div>
-  )
-}
-
-/**
- * A label, a middle-truncated preview and a copy control. IT COPIES THE FULL VALUE, ALWAYS — a
- * partially-copied address is an unrecoverable payment. Copy state is per row, so two rows can never
- * both claim "Copied".
- */
-function CopyRow({ label, value, missing, first = false }: { label: string; value: string | null; missing: string; first?: boolean }) {
-  const [copied, setCopied] = useState(false)
-  function copy() {
-    if (!value) return
-    void navigator.clipboard?.writeText(value)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 1800)
-  }
-  const shown = value ? (value.length > 30 ? `${value.slice(0, 14)}…${value.slice(-10)}` : value) : missing
-  return (
-    <div
-      role={value ? 'button' : undefined} tabIndex={value ? 0 : undefined}
-      aria-label={value ? `Copy ${label}` : undefined}
-      onClick={value ? copy : undefined}
-      onKeyDown={value ? e => { if (e.key === 'Enter') copy() } : undefined}
-      className={value ? 'cv-quiet-btn' : undefined}
-      style={rowBase(first, !!value)}
-    >
-      <span style={labelStyle}>{label}</span>
-      <span style={{
-        flex: 1, minWidth: 0, fontFamily: MONO, fontSize: 11.5,
-        color: value ? 'var(--text-body-dim)' : 'var(--text-faint)',
-        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-      }}>{copied ? 'Copied' : shown}</span>
-      {value && (copied ? <CheckIcon /> : <CopyIcon />)}
-    </div>
-  )
-}
-
-/** A row that opens another step: its title where the label column starts, a quiet hint, a chevron. */
-function NavRow({ title, hint, onOpen, first = false }: { title: string; hint?: string; onOpen: () => void; first?: boolean }) {
-  return (
-    <div
-      role="button" tabIndex={0}
-      onClick={onOpen}
-      onKeyDown={e => { if (e.key === 'Enter') onOpen() }}
-      className="cv-quiet-btn"
-      style={rowBase(first, true)}
-    >
-      <span style={{ flex: 1, fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>{title}</span>
-      {hint && <span style={{ fontSize: 11.5, color: 'var(--text-muted-dim)' }}>{hint}</span>}
-      <Chevron />
-    </div>
-  )
-}
 
 const CARD: React.CSSProperties = { padding: 32 }
 
 /** A section heading. Every section — and the Lock button after them — starts SECTION_GAP below the last. */
 const SECTION_GAP = 24
 const SECTION: React.CSSProperties = { marginTop: SECTION_GAP, fontSize: 11, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-muted-dim)' }
-
-const linkBtn: React.CSSProperties = {
-  background: 'none', border: 'none', padding: 0, cursor: 'pointer',
-  fontSize: 12.5, fontWeight: 600, color: 'var(--accent-400)', fontFamily: 'inherit',
-}
 
 function CloseButton({ onClose }: { onClose: () => void }) {
   return (
@@ -190,18 +79,6 @@ function PanelButton({ tone, onClick, children, mt, disabled = false }: {
   )
 }
 
-/** What the Sapient connection is, in a few words. */
-function sapientStatusText(status: string): string {
-  switch (status) {
-    case 'detecting': return 'Looking for Sapient…'
-    case 'missing': return 'Not installed'
-    case 'connecting': return 'Connecting… approve in Sapient'
-    case 'connected': return 'Connected'
-    case 'locked': return 'Locked'
-    default: return 'Not connected'
-  }
-}
-
 /** A password input with its show/hide toggle — the shape the backup gate uses. */
 function PassField({ label, value, onChange, onEnter, invalid, autoFocus, mt }: {
   label: string; value: string; onChange: (v: string) => void; onEnter?: () => void; invalid?: boolean; autoFocus?: boolean; mt: number
@@ -240,7 +117,6 @@ type Step = 'main' | 'auth' | 'backup' | 'changePass'
 
 export default function ProfilePanel({ onClose }: { onClose: () => void }) {
   const { nostrNpub, revealChatBackup, changeChatPassword, lockChat } = useChat()
-  const sapient = useSapient()
   const [step, setStep] = useState<Step>('main')
   const [backup, setBackup] = useState<ChatBackup | null>(null)
   const [pass, setPass] = useState('')
@@ -309,8 +185,6 @@ export default function ProfilePanel({ onClose }: { onClose: () => void }) {
 
   function handleLock() { lockChat(); onClose() }
 
-  const { status } = sapient
-  const sessionLive = status === 'connected' || status === 'locked'
 
   return (
     <>
@@ -352,41 +226,7 @@ export default function ProfilePanel({ onClose }: { onClose: () => void }) {
 
               {/* ── Sapient ── */}
               <div style={SECTION}>Wallet · Sapient</div>
-              <ListCard>
-                {sessionLive ? (
-                  <>
-                    <FactRow first label="Status"
-                      note={status === 'locked' ? 'Or click the Sapient icon in your browser toolbar.' : undefined}>
-                      <span>{sapientStatusText(status)}</span>
-                      {status === 'locked' && (sapient.unlocking
-                        ? <span style={{ color: 'var(--text-muted-dim)' }}>Unlock in Sapient…</span>
-                        : <button onClick={() => void sapient.unlock()} style={linkBtn}>Unlock</button>)}
-                    </FactRow>
-                    <CopyRow label="Address" value={sapient.walletAddress} missing={status === 'locked' ? 'Unlock Sapient to see' : 'Reading account…'} />
-                    <FactRow label="Network">{networkLabel(sapient.network)}</FactRow>
-                    <FactRow label="View access">
-                      {sapient.viewAccess === 'granted' ? 'Granted'
-                        : sapient.viewAccess === 'requesting' ? 'Approve in Sapient…'
-                        // Not yet read (a locked wallet on load): unknown is not "Off".
-                        : sapient.viewAccess === 'unknown' ? (status === 'locked' ? 'Unlock Sapient to see' : 'Checking…')
-                        : <>Off {status === 'connected' && <button onClick={() => void sapient.grantViewAccess()} style={linkBtn}>Grant</button>}</>}
-                    </FactRow>
-                    {/* A quiet text action, not a button: disconnecting is rare and undoable (Connect). */}
-                    <div style={{ borderTop: HAIRLINE, padding: '9px 14px' }}>
-                      <button onClick={() => void sapient.disconnect()} style={{ ...linkBtn, fontSize: 12, fontWeight: 500, color: 'var(--text-muted-dim)' }}>Disconnect</button>
-                    </div>
-                  </>
-                ) : (
-                  // Not connected: ONE row — what is going on, and the way forward when there is one.
-                  <FactRow first label="Status">
-                    <span>{sapientStatusText(status)}</span>
-                    {status === 'missing' && (
-                      <a href={SAPIENT_INSTALL_URL} target="_blank" rel="noopener noreferrer" title="Sapient runs in Chrome, Brave or Edge" style={{ ...linkBtn, textDecoration: 'none' }}>Install</a>
-                    )}
-                    {status === 'disconnected' && <button onClick={() => void sapient.connect()} style={linkBtn}>Connect</button>}
-                  </FactRow>
-                )}
-              </ListCard>
+              <SapientCard />
 
               <PanelButton tone="quiet" mt={SECTION_GAP} onClick={handleLock}>
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">

@@ -3,13 +3,16 @@
 //   ITS OWN ROW, above the search row, so the new-conversation and new-group buttons keep the space
 //   they had. Full width of the list: one line in every state — "Looking for Sapient…", "Install
 //   Sapient", "Connect wallet", "Connecting…", or the connected account's short address with its
-//   network. The connected pill opens a small menu: the full address (copy), the network, view access
-//   (with Grant when it is off) and Disconnect.
+//   network. The connected pill opens a small menu — the Profile panel's Sapient card (SapientCard,
+//   same rows): Address (shortened, copy), Network, Private and Public balances, View access (Grant
+//   when off), and a quiet Disconnect.
 //
 //   Payments themselves (send, claim) live in ChatApp, sapient/payments and hooks/usePaymentClaimer.
 
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { useSapient } from '../../context/SapientContext'
+import SapientCard from './SapientCard'
+import { FactRow } from './listRows'
 import {
   SAPIENT_INSTALL_URL, formatBalance, getPrivateTariBalance, getPublicTariBalance, isMainnet, networkLabel, shortAddress,
   type RawBalance,
@@ -42,19 +45,12 @@ function NetworkChip({ network }: { network: string | null }) {
   )
 }
 
-function MenuRow({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0' }}>
-      <span style={{ width: 78, flexShrink: 0, fontSize: 12, color: 'var(--text-muted-dim)' }}>{label}</span>
-      <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: 'var(--text-body)' }}>{children}</span>
-    </div>
-  )
-}
-
 /** One balance line in the menu. `no-access`: private TARI needs view access to read. */
 type BalanceView = { s: 'loading' } | { s: 'ok'; text: string } | { s: 'error' } | { s: 'no-access' }
 
-function BalanceText({ view }: { view: BalanceView }) {
+function BalanceText({ view, locked }: { view: BalanceView; locked: boolean }) {
+  // Locked: nothing can be read, and the last figure may be stale — say so instead.
+  if (locked) return <span style={{ color: 'var(--text-muted-dim)' }}>Unlock Sapient to see</span>
   if (view.s === 'loading') return <span style={{ color: 'var(--text-muted-dim)' }}>…</span>
   if (view.s === 'no-access') return <span style={{ color: 'var(--text-muted-dim)' }}>Grant view access to see</span>
   if (view.s === 'error') return <span style={{ color: 'var(--text-muted-dim)' }}>Couldn’t read</span>
@@ -63,17 +59,11 @@ function BalanceText({ view }: { view: BalanceView }) {
 
 const shown = (b: RawBalance): BalanceView => ({ s: 'ok', text: formatBalance(b) })
 
-const linkBtn: CSSProperties = {
-  padding: 0, border: 'none', background: 'transparent', cursor: 'pointer',
-  fontSize: 12.5, fontWeight: 600, fontFamily: 'inherit', color: 'var(--accent-ink)',
-}
-
 export default function WalletConnectBar() {
-  const { status, network, walletAddress, viewAccess, error, provider, connect, disconnect, grantViewAccess, unlock, unlocking } = useSapient()
+  const { status, network, walletAddress, viewAccess, error, provider, connect, unlock, unlocking } = useSapient()
   const [menuOpen, setMenuOpen] = useState(false)
   const [privateBalance, setPrivateBalance] = useState<BalanceView>({ s: 'loading' })
   const [publicBalance, setPublicBalance] = useState<BalanceView>({ s: 'loading' })
-  const [copied, setCopied] = useState(false)
   const boxRef = useRef<HTMLDivElement>(null)
 
   // Close the menu on an outside click or Escape.
@@ -107,15 +97,8 @@ export default function WalletConnectBar() {
     return () => { live = false }
   }, [menuOpen, status, provider, viewAccess])
 
-  // A connection that ends closes its menu.
-  useEffect(() => { if (status !== 'connected') setMenuOpen(false) }, [status])
-
-  function copyAddress() {
-    if (!walletAddress) return
-    void navigator.clipboard?.writeText(walletAddress)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 1800)
-  }
+  // An open menu STAYS open through a lock or a disconnect and shows it — the same card the Profile
+  // panel draws (SapientCard): Unlock + the toolbar hint, or a single Connect / Install row.
 
   let pill: ReactNode
   if (status === 'detecting') {
@@ -195,29 +178,12 @@ export default function WalletConnectBar() {
         </div>
       )}
 
-      {menuOpen && status === 'connected' && (
-        <div role="menu" style={{
-          position: 'absolute', left: 12, right: 12, top: 52, zIndex: 30,
-          padding: '8px 14px 12px', borderRadius: 12, background: 'var(--surface)',
-          border: '1px solid var(--border)', boxShadow: 'var(--e3)',
-        }}>
-          <MenuRow label="Address">
-            <span style={{ display: 'block', fontFamily: MONO, fontSize: 11, wordBreak: 'break-all', color: 'var(--text-body-dim)' }}>{walletAddress ?? '…'}</span>
-            {walletAddress && <button onClick={copyAddress} style={{ ...linkBtn, marginTop: 4 }}>{copied ? 'Copied' : 'Copy address'}</button>}
-          </MenuRow>
-          <MenuRow label="Network"><NetworkChip network={network} /></MenuRow>
-          <MenuRow label="Private"><BalanceText view={privateBalance} /></MenuRow>
-          <MenuRow label="Public"><BalanceText view={publicBalance} /></MenuRow>
-          <MenuRow label="View access">
-            {viewAccess === 'granted' ? 'Granted'
-              : viewAccess === 'requesting' ? 'Approve in Sapient…'
-              : <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>Off <button onClick={() => void grantViewAccess()} style={linkBtn}>Grant</button></span>}
-          </MenuRow>
-          <button
-            onClick={() => { setMenuOpen(false); void disconnect() }}
-            className="cv-quiet-btn"
-            style={{ ...ROW, height: 32, marginTop: 8, justifyContent: 'center', cursor: 'pointer', fontWeight: 600 }}
-          >Disconnect</button>
+      {menuOpen && (
+        <div role="menu" style={{ position: 'absolute', left: 12, right: 12, top: 52, zIndex: 30, borderRadius: 10, boxShadow: 'var(--e3)' }}>
+          <SapientCard mt={0} hideStatusWhenConnected onDisconnect={() => setMenuOpen(false)} extraRows={<>
+            <FactRow label="Private"><BalanceText view={privateBalance} locked={status === 'locked'} /></FactRow>
+            <FactRow label="Public"><BalanceText view={publicBalance} locked={status === 'locked'} /></FactRow>
+          </>} />
         </div>
       )}
     </div>

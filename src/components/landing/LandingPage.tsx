@@ -159,9 +159,10 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* ── Backers ── */}
+      {/* ── Ecosystem: the backers. Heading styled like FAQs; 32px to the cards, the FAQs row gap. ── */}
       <section className="cv-lp-wrap cv-lp-section">
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 18 }}>
+        <h2 className="cv-lp-h2">Ecosystem</h2>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 18, marginTop: 32 }}>
           <BackerCard tag="BACKER" title="Digital Node Capital"
             logo={<PartnerLogo src="/partner-dnc.png" alt="Digital Node Capital" plate="#FFFFFF" />}>
             &ldquo;We back builders making privacy usable. Caravel does exactly that.&rdquo;

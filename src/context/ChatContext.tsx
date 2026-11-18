@@ -30,7 +30,7 @@ import { loadTariAddresses, setTariAddress, type TariAddressMap } from '../messa
 import { DEFAULT_RELAYS } from '../config/relays'
 import { clearStoreKey, setStoreKey } from '../crypto/sessionKey'
 import { classifyBackup, identityFromPhrase, identityFromSecretHex, newChatStoreKey, type BackupInput } from '../crypto/chatIdentity'
-import { hasChatHistory, hasChatIdentity, loadChatRecord, openChatIdentity, removeChatHistory, saveChatIdentity } from '../crypto/chatIdentityStore'
+import { changeChatPassword as rekeyChatRecord, hasChatHistory, hasChatIdentity, loadChatRecord, openChatIdentity, removeChatHistory, saveChatIdentity } from '../crypto/chatIdentityStore'
 import type { NostrIdentity } from '../crypto/nostrCrypto'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -100,6 +100,11 @@ export interface ChatCtx {
   lockChat: () => void
   /** Re-open the record with the password and return the backup to show. Never cached. */
   revealChatBackup: (password: string) => Promise<ChatBackup>
+  /**
+   * Re-encrypt the chat record under a new password. The keys inside are unchanged, so history stays
+   * readable and the session carries on. Throws "Wrong password." (nothing changes) on a bad current.
+   */
+  changeChatPassword: (current: string, next: string) => Promise<void>
   /** Auto-managed messaging status, updated as relay connections change. */
   messagingStatus: MessagingConnectionStatus
   /** Sent + received messages for the current identity, persisted per-pubkey in localStorage
@@ -518,6 +523,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     return { npub: identity.npub, nsec: identity.nsec, phrase: secrets.phrase }
   }, [])
 
+  const changeChatPassword = useCallback((current: string, next: string) => rekeyChatRecord(current, next), [])
+
   const lockChat = useCallback(() => {
     messagingProviderRef.current?.disconnect()
     messagingProviderRef.current = null
@@ -886,7 +893,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   return (
     <Ctx.Provider value={{
       chatExists, chatUnlocked: nostrPubkeyHex !== null, nostrNpub, nostrPubkeyHex,
-      createChatIdentity, checkImport, importChatIdentity, unlockChat, lockChat, revealChatBackup,
+      createChatIdentity, checkImport, importChatIdentity, unlockChat, lockChat, revealChatBackup, changeChatPassword,
       messagingStatus, messages, historyUnreadable, recordSentMessage,
       contacts, acceptContact, contactAddresses, setManualTariAddress,
       deleteConversation, editMessage, reactMessage, createMessagingProvider, getRelayStates, reconnectAll,

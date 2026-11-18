@@ -3,8 +3,8 @@
 
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
-  chatHistoryKeys, hasChatHistory, hasChatIdentity, loadChatRecord, openChatIdentity, removeChatHistory, saveChatIdentity,
-  type ChatSecrets,
+  changeChatPassword, chatHistoryKeys, hasChatHistory, hasChatIdentity, loadChatRecord, newPasswordProblem, openChatIdentity,
+  removeChatHistory, saveChatIdentity, type ChatSecrets,
 } from './chatIdentityStore'
 
 function memoryStorage(): Storage {
@@ -80,5 +80,42 @@ describe('chat history on this device', () => {
     expect(hasChatHistory(A)).toBe(false)
     expect(localStorage.getItem(`caravel.messages.v1.${B}`)).toBe('x')
     expect(localStorage.getItem('caravel.journal.v1.otl_esm_1wallet')).toBe('x')
+  })
+})
+
+describe('changing the chat password', () => {
+  it('re-encrypts the record: the new password opens it, the old one no longer does, and the keys inside are unchanged', async () => {
+    await saveChatIdentity(secrets(), 'old password')
+    const before = loadChatRecord()!
+    await changeChatPassword('old password', 'new password')
+    const after = loadChatRecord()!
+    expect(after.envelope.ciphertext).not.toBe(before.envelope.ciphertext)
+    await expect(openChatIdentity(after, 'old password')).rejects.toThrow('Wrong password.')
+    const opened = await openChatIdentity(after, 'new password')
+    expect(opened.nostrSecretHex).toBe(SECRET)
+    expect(opened.phrase).toBe(PHRASE)
+    expect([...opened.storeKey]).toEqual(new Array(32).fill(9))   // same storage key: history stays readable
+  }, 60_000)
+
+  it('a wrong current password changes nothing', async () => {
+    await saveChatIdentity(secrets(), 'old password')
+    const stored = localStorage.getItem('caravel.chat.v1')
+    await expect(changeChatPassword('not it at all', 'new password')).rejects.toThrow('Wrong password.')
+    expect(localStorage.getItem('caravel.chat.v1')).toBe(stored)
+    expect((await openChatIdentity(loadChatRecord()!, 'old password')).nostrSecretHex).toBe(SECRET)
+  }, 60_000)
+
+  it('the new password follows the creation rule, checked before anything is opened or written', async () => {
+    await saveChatIdentity(secrets(), 'old password')
+    const stored = localStorage.getItem('caravel.chat.v1')
+    await expect(changeChatPassword('old password', 'short')).rejects.toThrow('at least 8')
+    expect(localStorage.getItem('caravel.chat.v1')).toBe(stored)
+    expect(newPasswordProblem('short', 'short')).toMatch(/at least 8/)
+    expect(newPasswordProblem('long enough', 'long enougj')).toBe("Passwords don't match.")
+    expect(newPasswordProblem('long enough', 'long enough')).toBeNull()
+  }, 30_000)
+
+  it('there must be a record to change', async () => {
+    await expect(changeChatPassword('old password', 'new password')).rejects.toThrow('No chat identity')
   })
 })

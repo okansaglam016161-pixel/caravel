@@ -67,6 +67,36 @@ export async function saveChatIdentity(secrets: ChatSecrets, password: string): 
   localStorage.setItem(STORAGE_KEY, JSON.stringify(record))
 }
 
+/** The chat password rule — the same for create, import and change. */
+export const MIN_CHAT_PASSWORD = 8
+
+/** What is wrong with a new password and its confirmation, or null when it is acceptable. */
+export function newPasswordProblem(pass: string, confirm: string): string | null {
+  if (pass.length < MIN_CHAT_PASSWORD) return `Password must be at least ${MIN_CHAT_PASSWORD} characters.`
+  if (pass !== confirm) return "Passwords don't match."
+  return null
+}
+
+/**
+ * Re-seal the stored record under a new password. ONLY the envelope changes: the Nostr key, the
+ * phrase and the storage key inside are the same bytes, so every store sealed with that key (all
+ * chat history) stays readable.
+ *
+ * Throws "Wrong password." when `current` does not open the record — and then nothing is written.
+ * The write is one localStorage.setItem of the whole record, so there is no half-changed state.
+ */
+export async function changeChatPassword(current: string, next: string): Promise<void> {
+  if (next.length < MIN_CHAT_PASSWORD) throw new Error(`Password must be at least ${MIN_CHAT_PASSWORD} characters.`)
+  const record = loadChatRecord()
+  if (!record) throw new Error('No chat identity on this device.')
+  const secrets = await openChatIdentity(record, current)
+  try {
+    await saveChatIdentity(secrets, next)
+  } finally {
+    secrets.storeKey.fill(0)   // this copy only; the live session holds its own
+  }
+}
+
 /** Decrypt. Throws "Wrong password." when the envelope does not open, and on a malformed payload. */
 export async function openChatIdentity(record: StoredChatIdentity, password: string): Promise<ChatSecrets> {
   let plain: string

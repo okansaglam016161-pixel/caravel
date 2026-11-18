@@ -14,6 +14,7 @@
 import { useEffect, useState } from 'react'
 import { useChat, type ImportCheck } from '../../../context/ChatContext'
 import { createChatPhrase } from '../../../crypto/chatIdentity'
+import { MIN_CHAT_PASSWORD, newPasswordProblem } from '../../../crypto/chatIdentityStore'
 import { CryptoBusy } from '../../primitives'
 import {
   CustodyLine, EntryBlurb, EntryButton, EntryCard, EntryError, EntryField, EntryLink, EntrySpinner,
@@ -23,7 +24,6 @@ import {
 /** Positions quizzed after the phrase is shown, 1-indexed — one from each third of the 12. */
 const QUIZ_POSITIONS = [3, 7, 11]
 
-const MIN_PASSWORD = 8
 
 // ── Welcome ──────────────────────────────────────────────────────────────────
 
@@ -108,11 +108,11 @@ function SetPassword({ busyTitle, onSubmit, onBack }: {
   const [confirm, setConfirm] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const canSubmit = pass.length >= MIN_PASSWORD && pass === confirm && !loading
+  const canSubmit = pass.length >= MIN_CHAT_PASSWORD && pass === confirm && !loading
 
   async function submit() {
-    if (pass.length < MIN_PASSWORD) { setError(`Password must be at least ${MIN_PASSWORD} characters.`); return }
-    if (pass !== confirm) { setError("Passwords don't match."); return }
+    const problem = newPasswordProblem(pass, confirm)
+    if (problem) { setError(problem); return }
     setError('')
     setLoading(true)
     try {

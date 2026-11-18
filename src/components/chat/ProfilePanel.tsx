@@ -18,11 +18,16 @@
 //
 //   `backup` is assigned in exactly one place, after `revealChatBackup` resolves, and the reveal
 //   renders on `step === 'backup' && backup`. Going back drops it. Keep it that way.
+//
+//   CHANGE PASSWORD re-encrypts the chat record (crypto/chatIdentityStore.changeChatPassword): the
+//   current password must open it first, and the keys inside stay the same, so history stays readable
+//   and the session carries on. Same rule as creating an identity (newPasswordProblem).
 
 import { useEffect, useState } from 'react'
 import { useChat, type ChatBackup } from '../../context/ChatContext'
 import { useSapient } from '../../context/SapientContext'
 import { SAPIENT_INSTALL_URL, networkLabel } from '../../sapient/provider'
+import { MIN_CHAT_PASSWORD, newPasswordProblem } from '../../crypto/chatIdentityStore'
 
 const MONO = 'var(--font-mono)'
 
@@ -144,10 +149,44 @@ function sapientStatusText(status: string): string {
   }
 }
 
-type Step = 'main' | 'auth' | 'backup'
+/** A password input with its show/hide toggle — the shape the backup gate uses. */
+function PassField({ label, value, onChange, onEnter, invalid, autoFocus, mt }: {
+  label: string; value: string; onChange: (v: string) => void; onEnter?: () => void; invalid?: boolean; autoFocus?: boolean; mt: number
+}) {
+  const [show, setShow] = useState(false)
+  return (
+    <div style={{ marginTop: mt }}>
+      <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-body-dim)' }}>{label}</div>
+      <div className="cv-field" style={{
+        display: 'flex', alignItems: 'center', gap: 10, marginTop: 8,
+        border: `1px solid ${invalid ? 'var(--danger-500)' : 'var(--border-strong)'}`,
+        borderRadius: 10, padding: '12px 14px',
+      }}>
+        <input
+          type={show ? 'text' : 'password'} value={value} autoFocus={autoFocus}
+          onChange={e => onChange(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') onEnter?.() }}
+          aria-label={label}
+          style={{
+            flex: 1, minWidth: 0, background: 'none', border: 'none', outline: 'none', padding: 0,
+            fontFamily: MONO, fontSize: 13.5, color: 'var(--text-primary)',
+          }}
+        />
+        <span
+          role="button" tabIndex={0} aria-label={show ? 'Hide password' : 'Show password'}
+          onClick={() => setShow(v => !v)}
+          onKeyDown={e => e.key === 'Enter' && setShow(v => !v)}
+          style={{ cursor: 'pointer', flexShrink: 0, display: 'flex' }}
+        >{show ? eyeOpen('var(--text-faint-dim)') : eyeOff('var(--text-faint-dim)')}</span>
+      </div>
+    </div>
+  )
+}
+
+type Step = 'main' | 'auth' | 'backup' | 'changePass'
 
 export default function ProfilePanel({ onClose }: { onClose: () => void }) {
-  const { nostrNpub, revealChatBackup, lockChat } = useChat()
+  const { nostrNpub, revealChatBackup, changeChatPassword, lockChat } = useChat()
   const sapient = useSapient()
   const [step, setStep] = useState<Step>('main')
   const [backup, setBackup] = useState<ChatBackup | null>(null)
@@ -155,6 +194,13 @@ export default function ProfilePanel({ onClose }: { onClose: () => void }) {
   const [showPass, setShowPass] = useState(false)
   const [passError, setPassError] = useState('')
   const [loading, setLoading] = useState(false)
+  // Change password: all three fields leave state with the screen, like the backup does.
+  const [curPass, setCurPass] = useState('')
+  const [newPass, setNewPass] = useState('')
+  const [newPass2, setNewPass2] = useState('')
+  const [changeError, setChangeError] = useState('')
+  const [changing, setChanging] = useState(false)
+  const [notice, setNotice] = useState<string | null>(null)
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) { if (e.key === 'Escape') onClose() }
@@ -178,7 +224,29 @@ export default function ProfilePanel({ onClose }: { onClose: () => void }) {
     }
   }
 
+  async function submitChange() {
+    if (changing || !curPass) return
+    const problem = newPasswordProblem(newPass, newPass2)
+    if (problem) { setChangeError(problem); return }
+    setChangeError('')
+    setChanging(true)
+    try {
+      await changeChatPassword(curPass, newPass)
+      backToMain()
+      setNotice('Chat password changed.')
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      setChangeError(msg === 'Wrong password.' ? 'Incorrect password.' : msg)
+    } finally {
+      setChanging(false)
+    }
+  }
+
   function backToMain() {
+    setCurPass('')
+    setNewPass('')
+    setNewPass2('')
+    setChangeError('')
     setStep('main')
     setPass('')
     setPassError('')
@@ -238,6 +306,25 @@ export default function ProfilePanel({ onClose }: { onClose: () => void }) {
                   <path d="M9 18l6-6-6-6" />
                 </svg>
               </div>
+              <div
+                role="button" tabIndex={0}
+                onClick={() => { setNotice(null); setStep('changePass') }}
+                onKeyDown={e => { if (e.key === 'Enter') { setNotice(null); setStep('changePass') } }}
+                className="cv-quiet-btn"
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 10, marginTop: 8,
+                  padding: '12px 14px', borderRadius: 10,
+                  border: '1px solid var(--border)', cursor: 'pointer',
+                }}
+              >
+                <span style={{ flex: 1, fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>Change password</span>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                  <path d="M9 18l6-6-6-6" />
+                </svg>
+              </div>
+              {notice && (
+                <div role="status" style={{ fontSize: 12, color: 'var(--positive)', marginTop: 8, padding: '0 14px' }}>{notice}</div>
+              )}
 
               {/* ── Sapient ── */}
               <div style={{ ...SECTION, marginTop: 24 }}>Wallet · Sapient</div>
@@ -277,6 +364,37 @@ export default function ProfilePanel({ onClose }: { onClose: () => void }) {
                 </svg>
                 Lock
               </PanelButton>
+            </div>
+          )}
+
+          {/* ── CHANGE PASSWORD ── */}
+          {step === 'changePass' && (
+            <div style={CARD}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <span style={{ flex: 1, fontSize: 21, fontWeight: 600, letterSpacing: '-0.015em', color: 'var(--text-primary)' }}>Change password</span>
+                <CloseButton onClose={onClose} />
+              </div>
+              <div style={{ fontSize: 13, color: 'var(--text-muted-dim)', marginTop: 6, lineHeight: 1.5 }}>
+                Unlocks Chat on this device. Your messages and backup stay the same.
+              </div>
+
+              <PassField label="Current password" value={curPass} autoFocus mt={24}
+                onChange={v => { setCurPass(v); setChangeError('') }} invalid={changeError === 'Incorrect password.'} />
+              <PassField label="New password" value={newPass} mt={14}
+                onChange={v => { setNewPass(v); setChangeError('') }} />
+              <PassField label="Confirm new password" value={newPass2} mt={14}
+                onChange={v => { setNewPass2(v); setChangeError('') }} onEnter={() => void submitChange()}
+                invalid={!!newPass2 && newPass2 !== newPass} />
+              <div style={{ fontSize: 12, color: 'var(--text-muted-dim)', marginTop: 8 }}>At least {MIN_CHAT_PASSWORD} characters.</div>
+              {changeError && (
+                <div role="alert" style={{ fontSize: 12, color: 'var(--danger-300)', marginTop: 10, lineHeight: 1.5 }}>{changeError}</div>
+              )}
+
+              <PanelButton tone="primary" mt={24} disabled={!curPass || !newPass || !newPass2 || changing} onClick={() => void submitChange()}>
+                {changing && <span style={{ width: 15, height: 15, borderRadius: '50%', border: '2px solid rgba(255,255,255,0.35)', borderTopColor: '#FFFFFF', animation: 'cv-spin 0.8s linear infinite' }} />}
+                {changing ? 'Changing…' : 'Change password'}
+              </PanelButton>
+              <PanelButton tone="quiet" mt={10} onClick={backToMain}>Cancel</PanelButton>
             </div>
           )}
 

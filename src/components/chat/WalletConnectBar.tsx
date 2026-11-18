@@ -69,7 +69,7 @@ const linkBtn: CSSProperties = {
 }
 
 export default function WalletConnectBar() {
-  const { status, network, walletAddress, viewAccess, error, provider, connect, disconnect, grantViewAccess, refresh } = useSapient()
+  const { status, network, walletAddress, viewAccess, error, provider, connect, disconnect, grantViewAccess, unlock, unlocking } = useSapient()
   const [menuOpen, setMenuOpen] = useState(false)
   const [privateBalance, setPrivateBalance] = useState<BalanceView>({ s: 'loading' })
   const [publicBalance, setPublicBalance] = useState<BalanceView>({ s: 'loading' })
@@ -136,14 +136,15 @@ export default function WalletConnectBar() {
       </div>
     )
   } else if (status === 'locked') {
-    // Connected, but the wallet is locked: nothing can be read or paid until it is unlocked in Sapient.
-    // Sapient sends no unlock event — SapientContext checks every few seconds; a click checks now.
+    // Connected, but the wallet is locked: nothing can be read or paid until it is unlocked. A click
+    // opens Sapient's unlock window (SapientContext.unlock); its unlock is noticed within seconds.
     pill = (
-      <button onClick={() => void refresh()} className="cv-quiet-btn" title="Unlock Sapient, then click to check again"
-        style={{ ...ROW, cursor: 'pointer' }}>
+      <button onClick={() => void unlock()} disabled={unlocking} className="cv-quiet-btn"
+        title="Opens Sapient to unlock. Or click the Sapient icon in your browser toolbar."
+        style={{ ...ROW, cursor: unlocking ? 'default' : 'pointer' }}>
         <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="var(--warn)" strokeWidth={2} strokeLinecap="round" style={{ flexShrink: 0 }}><rect x={5} y={11} width={14} height={9} rx={2} /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></svg>
-        <span style={{ flex: 1, textAlign: 'left', fontWeight: 600 }}>Sapient is locked</span>
-        <span style={{ fontSize: 11, color: 'var(--text-muted-dim)' }}>Unlock to use</span>
+        <span style={{ flex: 1, textAlign: 'left', fontWeight: 600 }}>{unlocking ? 'Unlock in Sapient…' : 'Sapient is locked'}</span>
+        {!unlocking && <span style={{ fontSize: 11, color: 'var(--text-muted-dim)' }}>Unlock to use</span>}
       </button>
     )
   } else if (status === 'connected') {
@@ -172,6 +173,14 @@ export default function WalletConnectBar() {
   return (
     <div ref={boxRef} style={{ position: 'relative', padding: '14px 12px 0' }}>
       {pill}
+
+      {status === 'locked' && (
+        <div style={{ fontSize: 11.5, color: 'var(--text-muted-dim)', marginTop: 6, lineHeight: 1.45 }}>
+          {unlocking
+            ? 'Unlock, then approve the connection (and view access) in Sapient’s window.'
+            : 'Or unlock from the Sapient icon in your browser toolbar.'}
+        </div>
+      )}
 
       {status === 'disconnected' && error && (
         <div role="alert" style={{ fontSize: 11.5, color: 'var(--danger-500)', marginTop: 6, lineHeight: 1.45 }}>{error}</div>

@@ -139,7 +139,7 @@ function sapientStatusText(status: string): string {
     case 'missing': return 'Not installed'
     case 'connecting': return 'Connecting… approve in Sapient'
     case 'connected': return 'Connected'
-    case 'locked': return 'Locked — unlock it in Sapient'
+    case 'locked': return 'Locked'
     default: return 'Not connected'
   }
 }
@@ -247,14 +247,24 @@ export default function ProfilePanel({ onClose }: { onClose: () => void }) {
                   <a href={SAPIENT_INSTALL_URL} target="_blank" rel="noopener noreferrer" title="Sapient runs in Chrome, Brave or Edge" style={{ ...linkBtn, textDecoration: 'none' }}>Install</a>
                 )}
                 {status === 'disconnected' && <button onClick={() => void sapient.connect()} style={linkBtn}>Connect</button>}
+                {status === 'locked' && (sapient.unlocking
+                  ? <span style={{ color: 'var(--text-muted-dim)' }}>Unlock in Sapient…</span>
+                  : <button onClick={() => void sapient.unlock()} style={linkBtn}>Unlock</button>)}
               </FactRow>
+              {status === 'locked' && (
+                <div style={{ fontSize: 11.5, color: 'var(--text-muted-dim)', marginTop: 4, padding: '0 14px 0 78px', lineHeight: 1.45 }}>
+                  Or click the Sapient icon in your browser toolbar.
+                </div>
+              )}
               {sessionLive && (
                 <>
-                  <IdRow label="Address" value={sapient.walletAddress} missing="Reading account…" mt={8} />
+                  <IdRow label="Address" value={sapient.walletAddress} missing={status === 'locked' ? 'Unlock Sapient to see' : 'Reading account…'} mt={8} />
                   <FactRow label="Network" mt={8}>{networkLabel(sapient.network)}</FactRow>
                   <FactRow label="View" mt={4}>
                     {sapient.viewAccess === 'granted' ? 'Granted'
                       : sapient.viewAccess === 'requesting' ? 'Approve in Sapient…'
+                      // Not yet read (a locked wallet on load): unknown is not "Off".
+                      : sapient.viewAccess === 'unknown' ? (status === 'locked' ? 'Unlock Sapient to see' : 'Checking…')
                       : <>Off {status === 'connected' && <button onClick={() => void sapient.grantViewAccess()} style={linkBtn}>Grant</button>}</>}
                   </FactRow>
                   <PanelButton tone="quiet" mt={12} onClick={() => void sapient.disconnect()}>Disconnect Sapient</PanelButton>

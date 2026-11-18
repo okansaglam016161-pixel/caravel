@@ -248,6 +248,8 @@ type PayCardState = {
   tone?: 'dim' | 'danger'
   spin?: boolean
   retry?: () => void
+  /** The retry button's label — "Retry" unless the way forward is something else ("Unlock"). */
+  retryLabel?: string
   /** "Amount hidden on chain" — shown only where an amount actually is. */
   pill?: boolean
 }
@@ -298,7 +300,7 @@ function PaymentCard({ sent, state, timestamp, plaintext, lid, flashed }: {
             {state.spin && <span style={{ width: 12, height: 12, borderRadius: '50%', border: '2px solid var(--vault-hairline)', borderTopColor: 'var(--accent-300)', animation: 'cv-spin 1s linear infinite', flexShrink: 0, marginTop: 2 }} />}
             <span style={{ flex: 1 }}>{state.status}</span>
             {state.retry && (
-              <button type="button" onClick={state.retry} style={{ flexShrink: 0, padding: '3px 9px', borderRadius: 7, background: 'transparent', border: `1px solid ${retryEdge}`, fontSize: 11.5, fontWeight: 600, color: retryInk, cursor: 'pointer', fontFamily: 'inherit' }}>Retry</button>
+              <button type="button" onClick={state.retry} style={{ flexShrink: 0, padding: '3px 9px', borderRadius: 7, background: 'transparent', border: `1px solid ${retryEdge}`, fontSize: 11.5, fontWeight: 600, color: retryInk, cursor: 'pointer', fontFamily: 'inherit' }}>{state.retryLabel ?? 'Retry'}</button>
             )}
           </div>
         )}
@@ -338,8 +340,8 @@ function SentPaymentCard({ message, lid, flashed }: { message: CaravelMessage; l
  * cannot be confirmed — and none of them credits anybody without that match. Every state short of
  * verified has a small Retry (re-check Sapient, claim again).
  */
-function ReceivedPaymentCard({ message, lid, flashed, disputed, view, onRetry }: {
-  message: CaravelMessage; lid?: string; flashed?: boolean; disputed?: boolean; view: ClaimView; onRetry: () => void
+function ReceivedPaymentCard({ message, lid, flashed, disputed, view, onRetry, onUnlock }: {
+  message: CaravelMessage; lid?: string; flashed?: boolean; disputed?: boolean; view: ClaimView; onRetry: () => void; onUnlock: () => void
 }) {
   let state: PayCardState
   switch (view.s) {
@@ -368,9 +370,11 @@ function ReceivedPaymentCard({ message, lid, flashed, disputed, view, onRetry }:
       break
     case 'needs-sapient':
       state = {
-        dir: 'RECEIVED', masked: true, tone: 'dim', retry: onRetry,
+        dir: 'RECEIVED', masked: true, tone: 'dim',
+        // Locked: the way forward is Sapient's unlock window, not another claim attempt.
+        ...(view.why === 'unlock' ? { retry: onUnlock, retryLabel: 'Unlock' } : { retry: onRetry }),
         status: view.why === 'install' ? 'Install Sapient to confirm this payment.'
-          : view.why === 'unlock' ? 'Unlock Sapient to confirm this payment.'
+          : view.why === 'unlock' ? 'Unlock Sapient to confirm this payment (or use the Sapient icon in your toolbar).'
           : view.why === 'view' ? 'Grant view access in Sapient to confirm this payment.'
           : view.why === 'network' ? `Sent on ${networkLabel(view.network ?? null)} — switch Sapient to confirm.`
           : 'Connect Sapient to confirm this payment.',
@@ -380,12 +384,12 @@ function ReceivedPaymentCard({ message, lid, flashed, disputed, view, onRetry }:
   return <PaymentCard sent={false} state={state} timestamp={message.timestamp} plaintext={message.plaintext} lid={lid} flashed={flashed} />
 }
 
-function PaymentMessageCard({ message, lid, flashed, disputed, view, onRetry }: {
-  message: CaravelMessage; lid?: string; flashed?: boolean; disputed?: boolean; view: ClaimView | null; onRetry: () => void
+function PaymentMessageCard({ message, lid, flashed, disputed, view, onRetry, onUnlock }: {
+  message: CaravelMessage; lid?: string; flashed?: boolean; disputed?: boolean; view: ClaimView | null; onRetry: () => void; onUnlock: () => void
 }) {
   return message.direction === 'sent' || !view
     ? <SentPaymentCard message={message} lid={lid} flashed={flashed} />
-    : <ReceivedPaymentCard message={message} lid={lid} flashed={flashed} disputed={disputed} view={view} onRetry={onRetry} />
+    : <ReceivedPaymentCard message={message} lid={lid} flashed={flashed} disputed={disputed} view={view} onRetry={onRetry} onUnlock={onUnlock} />
 }
 
 // ── Component ────────────────────────────────────────────────────────────────────
@@ -1244,7 +1248,7 @@ export default function ChatApp() {
   function sapientGate(): string | null {
     if (sapient.status === 'missing') return 'Install Sapient to send payments.'
     if (sapient.status === 'detecting') return 'Looking for Sapient…'
-    if (sapient.status === 'locked') return 'Sapient is locked. Unlock it to send payments.'
+    if (sapient.status === 'locked') return 'Sapient is locked. Unlock it to send payments (or use the Sapient icon in your toolbar).'
     if (sapient.status !== 'connected') return 'Connect your wallet (Sapient) to send payments — or unlock it if it is locked.'
     return null
   }
@@ -2189,7 +2193,7 @@ export default function ChatApp() {
                   view={m.direction !== 'received' ? null
                     : m.payment.nonce ? claimView(m.payment, claims[m.payment.utxoId], claimBusy[m.payment.utxoId], sapient)
                     : { s: 'unconfirmed' }}
-                  onRetry={() => retryClaim(m.payment!.utxoId)} />
+                  onRetry={() => retryClaim(m.payment!.utxoId)} onUnlock={() => void sapient.unlock()} />
                 /* Encrypted image (images M4): resolves itself — cache first, then the host. */
                 if (m.media) return <MediaMessageCard key={m.id} message={m} lid={m.logicalId} flashed={!!m.logicalId && flashedId === m.logicalId} />
                 const flight = flightFor(m, editFlights)
@@ -2429,7 +2433,8 @@ export default function ChatApp() {
                         <span style={{ flex: 1, minWidth: 0 }}>{gate}</span>
                         {sapient.status === 'missing'
                           ? <a href={SAPIENT_INSTALL_URL} target="_blank" rel="noopener noreferrer" title="Sapient runs in Chrome, Brave or Edge" style={{ flexShrink: 0, fontWeight: 600, color: 'var(--accent-ink)' }}>Install</a>
-                          : sapient.status === 'disconnected' && <button onClick={() => void sapient.connect()} style={{ flexShrink: 0, padding: 0, border: 'none', background: 'transparent', cursor: 'pointer', fontSize: 12, fontWeight: 600, fontFamily: 'inherit', color: 'var(--accent-ink)' }}>Connect wallet</button>}
+                          : sapient.status === 'disconnected' ? <button onClick={() => void sapient.connect()} style={{ flexShrink: 0, padding: 0, border: 'none', background: 'transparent', cursor: 'pointer', fontSize: 12, fontWeight: 600, fontFamily: 'inherit', color: 'var(--accent-ink)' }}>Connect wallet</button>
+                          : sapient.status === 'locked' && <button onClick={() => void sapient.unlock()} disabled={sapient.unlocking} style={{ flexShrink: 0, padding: 0, border: 'none', background: 'transparent', cursor: sapient.unlocking ? 'default' : 'pointer', fontSize: 12, fontWeight: 600, fontFamily: 'inherit', color: 'var(--accent-ink)' }}>{sapient.unlocking ? 'Unlock in Sapient…' : 'Unlock'}</button>}
                       </div>
                     )
                   })()}

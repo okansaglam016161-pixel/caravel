@@ -81,6 +81,11 @@ describe('locked (Sapient sends no event — SapientContext checks)', () => {
     expect(run([{ type: 'detected', present: true }, { type: 'locked' }]).status).toBe('locked')
   })
 
+  it('the grant is read while locked (tari_getViewAccess needs no unlock), so it never shows as "Off" by mistake', () => {
+    const s = run([{ type: 'detected', present: true }, { type: 'locked' }, { type: 'view', viewAccess: 'granted' }])
+    expect(s).toMatchObject({ status: 'locked', viewAccess: 'granted', walletAddress: null })
+  })
+
   it('locked never overrides missing or a connect in progress; an empty accountsChanged still ends it', () => {
     expect(run([{ type: 'detected', present: false }, { type: 'locked' }]).status).toBe('missing')
     expect(run([{ type: 'detected', present: true }, { type: 'connect-start' }, { type: 'locked' }]).status).toBe('connecting')

@@ -21,6 +21,15 @@
 // call reports "Wallet is locked." (`reportLocked`). Unlocking is noticed the same way, and everything
 // waiting on it resumes.
 //
+// UNLOCKING FROM HERE. A page cannot open Sapient's toolbar popup, and only ONE request opens a
+// window while the wallet is locked: tari_requestAccounts. Its window shows the unlock screen, then a
+// Connect approval (tari-wallet background/index.ts + popup renderApprovalFlow). That has a cost:
+// approving re-records the connection, which DROPS view access (storage.addConnectedSite keeps no
+// grant), so `unlock` asks for view access again right after. Unlocking and then pressing Cancel
+// leaves the wallet unlocked with the old connection and its grant intact — so a failed unlock is
+// never treated as a disconnect: the session check decides what happened. The toolbar icon unlocks
+// with no reconnect at all, which is why the screens mention it too.
+//
 // ── STALE ANSWERS ────────────────────────────────────────────────────────────
 //
 // Every reset (disconnect, accounts → [], a switch, a new connect) bumps `genRef`, and async work
@@ -47,6 +56,10 @@ export interface SapientCtx extends SapientState {
   refresh: () => Promise<void>
   /** A call just answered "Wallet is locked.": show it at once, and keep checking for the unlock. */
   reportLocked: () => void
+  /** Open Sapient's unlock screen (via tari_requestAccounts — see the header note). Never throws. */
+  unlock: () => Promise<void>
+  /** An unlock window is open. */
+  unlocking: boolean
 }
 
 const Ctx = createContext<SapientCtx | null>(null)
@@ -70,8 +83,10 @@ function connectError(e: unknown): string {
 export function SapientProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(sapientReducer, SAPIENT_INITIAL)
   const [provider, setProvider] = useState<TariProvider | null>(null)
+  const [unlocking, setUnlocking] = useState(false)
   const providerRef = useRef<TariProvider | null>(null)
   const genRef = useRef(0)
+  const unlockingRef = useRef(false)
   // The latest state, for the event handlers (registered once, so their closure would be stale).
   const stateRef = useRef(state)
   useEffect(() => { stateRef.current = state }, [state])
@@ -156,7 +171,13 @@ export function SapientProvider({ children }: { children: ReactNode }) {
       try {
         const session = await checkSession(p)
         if (cancelled) return
-        if (session.s === 'locked') { dispatch({ type: 'locked' }); return }
+        if (session.s === 'locked') {
+          // Locked on load: the grant is still readable (tari_getViewAccess needs no unlock), so
+          // read it rather than show "Off" for a site that has it.
+          dispatch({ type: 'locked' })
+          void ensureView(p, genRef.current, false)
+          return
+        }
         if (session.s !== 'unlocked') return
         const gen = ++genRef.current
         if (await loadAccount(p, session.account, gen)) await ensureView(p, gen, false)
@@ -201,7 +222,10 @@ export function SapientProvider({ children }: { children: ReactNode }) {
     const cur = stateRef.current
     if (cur.status === 'connecting') return   // a connect is under way; it owns the state
     if (r.s === 'locked') {
-      if (cur.status !== 'locked') dispatch({ type: 'locked' })
+      if (cur.status !== 'locked') {
+        dispatch({ type: 'locked' })
+        void ensureView(p, genRef.current, false)
+      }
       return
     }
     if (r.s === 'disconnected') {
@@ -227,6 +251,28 @@ export function SapientProvider({ children }: { children: ReactNode }) {
     if (stateRef.current.status === 'connected') dispatch({ type: 'locked' })
   }, [])
 
+  const unlock = useCallback(async () => {
+    const p = providerRef.current
+    if (!p || stateRef.current.status !== 'locked' || unlockingRef.current) return
+    unlockingRef.current = true
+    setUnlocking(true)
+    try {
+      const accounts = await requestAccounts(p)
+      if (accounts.length > 0) {
+        const gen = ++genRef.current
+        await refreshNetwork(p)
+        // The Connect approval just dropped view access in Sapient: ask again (a user action led here).
+        if (await loadAccount(p, accounts[0], gen)) await ensureView(p, gen, true)
+      }
+    } catch {
+      // Cancelled, closed, or left locked — or unlocked and THEN cancelled. Ask where things stand.
+    } finally {
+      unlockingRef.current = false
+      setUnlocking(false)
+      void refresh()
+    }
+  }, [refreshNetwork, loadAccount, ensureView, refresh])
+
   // The session check: on an interval, and whenever the page comes back into view.
   useEffect(() => {
     if (!provider) return
@@ -249,7 +295,7 @@ export function SapientProvider({ children }: { children: ReactNode }) {
   }, [ensureView])
 
   return (
-    <Ctx.Provider value={{ ...state, provider, connect, disconnect, grantViewAccess, refresh, reportLocked }}>
+    <Ctx.Provider value={{ ...state, provider, connect, disconnect, grantViewAccess, refresh, reportLocked, unlock, unlocking }}>
       {children}
     </Ctx.Provider>
   )

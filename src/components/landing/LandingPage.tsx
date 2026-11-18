@@ -9,7 +9,7 @@
 // LAYOUT. Rows are flex-wrap with flex-basis, as in the design, so columns stack on their own when
 // the window narrows; the media queries only tighten the outer padding and the vertical rhythm.
 
-import { useCallback, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useTheme } from '../../hooks/useTheme'
 import ThemeToggle from '../primitives/ThemeToggle'
@@ -17,6 +17,7 @@ import LogoTile from '../primitives/LogoTile'
 import ChatStill, { Bubble, CaravelAvatar, StillBody, StillHeader, StillWindow } from './ChatStill'
 import UserCountPill from './UserCountPill'
 import { useLiveUserCount } from './userCount'
+import { beltDurationSeconds } from './belt'
 
 const MONO = 'var(--font-mono)'
 const DOCS_URL = 'https://github.com/okansaglam016161-pixel/caravel#readme'
@@ -129,6 +130,40 @@ function EcosystemCards() {
   )
 }
 
+/**
+ * The conveyor belt. Four copies of the set; the track moves right by exactly one set (25%) per
+ * cycle, so it loops without a seam. The copies after the first are hidden from assistive tech.
+ *
+ * NEVER THE SAME CARD TWICE ON SCREEN: a set is always at least one screen PLUS one card wide (the
+ * gap grows to make it so; see the CSS), so a card has fully left one edge before its next copy can
+ * reach the other. The set's width therefore changes with the screen, and the cycle's duration is
+ * set from its measured width to keep the cards' speed constant (belt.ts).
+ */
+function EcosystemBelt() {
+  const trackRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const track = trackRef.current
+    const set = track?.firstElementChild as HTMLElement | null
+    if (!track || !set || typeof ResizeObserver === 'undefined') return
+    const apply = () => { track.style.animationDuration = `${beltDurationSeconds(set.getBoundingClientRect().width)}s` }
+    apply()
+    const ro = new ResizeObserver(apply)
+    ro.observe(set)
+    return () => ro.disconnect()
+  }, [])
+  return (
+    <div className="cv-lp-marquee">
+      <div ref={trackRef} className="cv-lp-track">
+        {[0, 1, 2, 3].map(copy => (
+          <div key={copy} className="cv-lp-set" aria-hidden={copy > 0 ? true : undefined}>
+            <EcosystemCards />
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function LandingPage() {
@@ -190,19 +225,10 @@ export default function LandingPage() {
       </section>
 
       {/* ── Ecosystem: heading in the content column (styled like FAQs); the cards on a full-width
-          conveyor belt. Four copies of the set, the belt moving one set's width per cycle, so it loops
-          without a seam; the three copies after the first are hidden from assistive tech. ── */}
+          conveyor belt (EcosystemBelt). ── */}
       <section className="cv-lp-section">
         <div className="cv-lp-wrap"><h2 className="cv-lp-h2">Ecosystem</h2></div>
-        <div className="cv-lp-marquee">
-          <div className="cv-lp-track">
-            {[0, 1, 2, 3].map(copy => (
-              <div key={copy} className="cv-lp-set" aria-hidden={copy > 0 ? true : undefined}>
-                <EcosystemCards />
-              </div>
-            ))}
-          </div>
-        </div>
+        <EcosystemBelt />
       </section>
 
       {/* ── Questions: title left, a chat with Caravel right ── */}
@@ -308,14 +334,20 @@ const LANDING_CSS = `
 
 /* The Ecosystem belt: full page width, clipped (so the page never scrolls sideways), soft-faded at
    both edges. The track holds four copies of the card set; moving it right by one set (25%) per cycle
-   loops seamlessly. Each card carries its own 18px right margin so every set is exactly equal. */
-.cv-lp-marquee { margin-top: 20px; padding: 12px 0; overflow: hidden;
+   loops seamlessly. Each card carries its gap as its own right margin, so every set is exactly equal.
+
+   NEVER TWICE ON SCREEN. Cards scale with the screen (380 to 520px, at most 82vw on phones) and the
+   gap grows so that one set = 3 x (card + gap) >= 100vw + one card: a card is fully off one edge
+   before its next copy reaches the other. gap = max(48px, (100vw - 2 x card) / 3). */
+.cv-lp-marquee { --lp-card-w: min(clamp(380px, 28vw, 520px), 82vw);
+  --lp-gap: max(48px, calc((100vw - 2 * var(--lp-card-w)) / 3));
+  margin-top: 20px; padding: 12px 0; overflow: hidden;
   -webkit-mask-image: linear-gradient(to right, transparent, #000 96px, #000 calc(100% - 96px), transparent);
   mask-image: linear-gradient(to right, transparent, #000 96px, #000 calc(100% - 96px), transparent); }
 .cv-lp-track { display: flex; width: max-content; animation: cv-lp-belt 36s linear infinite; will-change: transform; }
 .cv-lp-marquee:hover .cv-lp-track { animation-play-state: paused; }
 .cv-lp-set { display: flex; align-items: stretch; }
-.cv-lp-set > .cv-lp-card { flex: none; width: min(380px, 82vw); margin-right: 18px; }
+.cv-lp-set > .cv-lp-card { flex: none; width: var(--lp-card-w); margin-right: var(--lp-gap); }
 @keyframes cv-lp-belt { from { transform: translateX(-25%); } to { transform: translateX(0); } }
 .cv-lp-primary:hover { background: var(--accent-hover) !important; }
 

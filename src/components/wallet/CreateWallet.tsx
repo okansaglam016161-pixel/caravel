@@ -12,7 +12,7 @@ import { MONO } from './entryStyles'
 import {
   CustodyLine, EntryButton, EntryCard, EntryError, EntryField, EntryLink, EntryBlurb, EntryTitle,
   Lockup, WordChip, WordGrid, entryShell,
-} from './entryUi'
+} from '../chat/identity/entryUi'
 
 /**
  * The positions quizzed in step 3, 1-indexed.

@@ -1,10 +1,9 @@
-//   The V3 entry chrome — shared by unlock, create and restore.
+//   The V3 entry chrome — the chat identity gate's (create, import, unlock).
 //
 //   All three flows draw the same card, the same field, the same buttons and the same word grid;
 //   they differ only in what they ask for. Before this they each carried their own copy of that
 //   vocabulary, which is how the three screens a user meets FIRST ended up with three slightly
-//   different input borders. The style objects live next door in entryStyles.ts; the pieces that
-//   need markup live here.
+//   different input borders.
 //
 //   THEME HANDOFF PRESERVED. Nothing here is a literal except the logo tile's mark, which is the
 //   light mark on an accent ground in both themes by design. Everything else reads role tokens, so
@@ -17,8 +16,10 @@
 import { useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
-import LogoTile from '../primitives/LogoTile'
-import { MONO } from './entryStyles'
+import LogoTile from '../../primitives/LogoTile'
+
+/** The entry screens' mono face (the theme token, not chatDisplay's literal). */
+export const MONO = 'var(--font-mono)'
 
 /** The page ground. Flat, per V3 — the radial lift it replaced predates the foundation. */
 export const entryShell: CSSProperties = {

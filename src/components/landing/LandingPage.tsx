@@ -40,7 +40,6 @@ import { useTheme } from '../../hooks/useTheme'
 import ThemeToggle from '../primitives/ThemeToggle'
 import LogoTile from '../primitives/LogoTile'
 import ChatStill from './ChatStill'
-import WalletStill from './WalletStill'
 
 // ── Icons ─────────────────────────────────────────────────────────────────────
 //
@@ -274,8 +273,7 @@ function AppMockup() {
               page, so a hover here would advertise the one journey in the rail that has nowhere to
               go. */}
           <LogoTile size={32} style={{ marginBottom: 10 }} />
-          <SpineItem icon={<Wallet size={15} />} active />
-          <SpineItem icon={<Message size={15} />} />
+          <SpineItem icon={<Message size={15} />} active />
           <span style={{ flex: 1, minHeight: 24 }} />
           {/* The identity tile — STILL A ROW IN THE REAL SPINE, unlike the @ service tab that used to
               sit above it. .cv-accent-tile is ServiceNav's own class here too, `!important` and all,
@@ -287,10 +285,9 @@ function AppMockup() {
           }}>@</span>
         </div>
 
-        {/* The wallet pane — the real components, over mock props. See WalletStill: the header
-            cluster is drawn there too, because it belongs inside the same inert subtree. */}
+        {/* The chat pane — the real chat components over mock content (see ChatStill). */}
         <div style={{ flex: 1, padding: '20px 24px 24px', minWidth: 0 }}>
-          <WalletStill />
+          <ChatStill />
         </div>
       </div>
     </div>
@@ -442,11 +439,6 @@ function Services() {
   return (
     <section className="cv-lp-section">
       <H2 narrow>One app. A growing set of private services.</H2>
-      <ServiceRow
-        title="Wallet"
-        body="Private and public balances in one place. Make funds private or public. Your money, your call."
-        card={<WalletStill compact />}
-      />
       <ServiceRow
         flip
         title="Chat"

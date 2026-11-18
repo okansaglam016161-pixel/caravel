@@ -18,7 +18,7 @@ import RestoreFlow from './RestoreFlow'
 import {
   EntryButton, EntryCard, EntryError, EntryField, EntryLink, EntrySpinner, EntryTitle, Lockup,
   entryShell,
-} from './entryUi'
+} from '../chat/identity/entryUi'
 
 function UnlockScreen({ onRestore, onCreate }: { onRestore: () => void; onCreate: () => void }) {
   const { unlock } = useWallet()

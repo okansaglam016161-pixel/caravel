@@ -72,7 +72,7 @@
 import Avatar from '../chat/Avatar'
 import MessageBubble from '../chat/MessageBubble'
 import { HEADER_LEFT, THREAD_HEADER, THREAD_SCROLLER, THREAD_TITLE } from '../chat/threadChrome'
-import { TICKER } from '../wallet/v2/format'
+import { TICKER } from '../../sapient/units'
 
 // TIMES ARE DERIVED, NOT LITERAL. MessageBubble prints them through toLocaleTimeString, so a
 // hardcoded epoch would read 03:14 for a visitor in Sydney — not a plausible afternoon exchange.

@@ -24,7 +24,7 @@
 
 import { useState } from 'react'
 import ChatApp from '../chat/ChatApp'
-import ProfilePanel from '../wallet/ProfilePanel'
+import ProfilePanel from '../chat/ProfilePanel'
 import WalletPage from '../wallet/WalletPage'
 import ServiceNav, { type Service } from './ServiceNav'
 

@@ -2,11 +2,9 @@ import { Fragment, useState, useEffect, useCallback, useLayoutEffect, useMemo, u
 import * as nip19 from 'nostr-tools/nip19'
 import Logo from '../primitives/Logo'
 import Callout from '../primitives/Callout'
-import { useWallet } from '../../context/WalletContext'
 import { useChat } from '../../context/ChatContext'
 import WalletConnectBar from './WalletConnectBar'
 import { parseOotleAddress } from '@tari-project/ootle-wasm'
-import { plainError } from '../wallet/v2/plainError'
 import { compareMessages, sortKey, type CaravelMessage, type Group } from '../../messaging/types'
 import GroupThread from './GroupThread'
 import CreateGroupModal, { type GroupContactOption } from './CreateGroupModal'
@@ -19,16 +17,14 @@ import { loadNicknames, setNickname, MAX_NICKNAME_LEN, type NicknameMap } from '
 import { loadAddressSent, markAddressSent, clearAddressSent, type AddressSentMap } from '../../messaging/addressSentStore'
 import { useSapient } from '../../context/SapientContext'
 import { asSendResult, assertPayableAddress, insufficientPrivateBalance, makePaymentNonce, parseTari, readRequest, sendPrivately, shield, type RequestPhase } from '../../sapient/payments'
-import { formatBalance, getPrivateTariBalance, networkLabel, toSapientError, SAPIENT_INSTALL_URL } from '../../sapient/provider'
+import { getPrivateTariBalance, networkLabel, toSapientError, SAPIENT_INSTALL_URL } from '../../sapient/provider'
 import { addOutbox, loadOutbox, removeOutbox, updateOutbox, type OutboxEntry } from '../../messaging/paymentOutbox'
 import { claimView, type ClaimView } from '../../messaging/paymentClaims'
 import { usePaymentClaimer } from '../../hooks/usePaymentClaimer'
 import { createActionLock, guarded } from '../../crypto/actionLock'
 import { dedupePaymentMessages, disputedUtxos } from '../../messaging/paymentDedupe'
 import { ConnectionIndicator, RelayHealthPanel } from './ConnectionStatus'
-// The wallet's amount formatters, bigint-only — shared rather than re-derived, which is the whole
-// point of format.ts having been written. MASK_SHORT is the same stand-in its balance rows use.
-import { fmt6, MASK_SHORT, TICKER } from '../wallet/v2/format'
+import { formatTari, TICKER } from '../../sapient/units'
 import { avatarFor, conversationPreview, initialsFor, truncNpub, bubbleTime, compactTime, dayLabel, isNewDay, mergeThreadItems, replyChipDetail, threadContentKey, MONO } from './chatDisplay'
 import Avatar from './Avatar'
 import MessageBubble from './MessageBubble'
@@ -213,12 +209,10 @@ type ComposeRes =
 
 // Decimal µTari string → TARI display string. Defensive; never throws.
 //
-// fmt6, NOT `Number(µt) / 1_000_000`. Amounts are 128-bit on the wire and a float divide drifts on a
-// large one — the same silent-rounding bug the faucet shipped once, which is why format.ts exists
-// and is bigint-only. The try/catch stays: these strings come off the wire and out of a cache, and a
-// malformed one must render a dash rather than throw inside a message row.
+// Bigint throughout (sapient/units). The try/catch stays: these strings come off the wire and out of
+// a cache, and a malformed one must render a dash rather than throw inside a message row.
 function microToTari(micro: string): string {
-  try { return fmt6(BigInt(micro)) } catch { return '—' }
+  try { return formatTari(BigInt(micro)) } catch { return '—' }
 }
 
 // ── Payment card (§8A) ────────────────────────────────────────────────────────
@@ -245,7 +239,7 @@ function microToTari(micro: string): string {
 
 type PayCardState = {
   dir: 'SENT' | 'RECEIVED'
-  /** Formatted TARI, already through fmt6. Mutually exclusive with `masked`. */
+  /** Formatted TARI, already through formatTari. Mutually exclusive with `masked`. */
   amount?: string
   /** The sender's "••••" — an amount that exists but is not on this device. */
   masked?: boolean
@@ -399,7 +393,6 @@ function PaymentMessageCard({ message, lid, flashed, disputed, view, onRetry }: 
 export default function ChatApp() {
   // Payments go through SAPIENT (the browser wallet), not the built-in wallet: the address this side
   // announces is Sapient's, and so is every send and claim. Chat works without either.
-  const { balanceHidden } = useWallet()
   const sapient = useSapient()
   /** The `otl_…` address this side announces — the connected Sapient account's, or none. */
   // Still announced while LOCKED: the account (and its address) has not changed, only its access.
@@ -510,21 +503,9 @@ export default function ChatApp() {
    * each safe site opts in: a new failure site added later stays quiet until someone proves it can.
    */
   const [payErrorSafe, setPayErrorSafe] = useState(false)
-  /**
-   * EVERY pay error goes through the translator (M9 C10).
-   *
-   * This screen spends the same money through the same builders as the wallet's Send tab, and those
-   * builders speak µtTARI and "output(s)" on purpose — their messages are quoted in tests and in
-   * on-chain reconciliation notes, so they are not softened at source. The wallet modal translates
-   * at its boundary; chat had no boundary and showed them raw, so the identical failure read as
-   * "amount is spread across too many small outputs" here and as plain English three tabs away.
-   *
-   * plainError passes anything it does not recognise through UNCHANGED, so routing the fixed
-   * strings and network rejections through it too costs nothing and means no future call site can
-   * forget. That is the point of wrapping the setter rather than the call sites.
-   */
+  /** Set (or clear) the pay error; `safe` marks one that provably moved no money (see above). */
   const setPayError = useCallback((m: string | null, safe = false) => {
-    setPayErrorRaw(m === null ? null : plainError(m))
+    setPayErrorRaw(m)
     setPayErrorSafe(m !== null && safe)
   }, [])
   // Persistent, must-acknowledge banner for the two dangerous outcomes: a payment that went
@@ -699,8 +680,8 @@ export default function ChatApp() {
     setGroupSendNote(null)
     try {
       const provider = createMessagingProvider()
-      // Locked wallet → null. Previously this returned silently; now it surfaces as a failed bubble.
-      if (!provider) throw new Error('Wallet is locked — unlock to send')
+      // Locked chat → null. Previously this returned silently; now it surfaces as a failed bubble.
+      if (!provider) throw new Error('Chat is locked — unlock to send')
       try {
         const res = await provider.sendGroupMessage(groupId, members, text, { replyTo })
         recordSentMessage(res.message)
@@ -910,8 +891,8 @@ export default function ChatApp() {
     setPendingSends(p => [...p, { id: tempId, peerHex: peer, text, status: 'sending', attemptedAt: Date.now() }])
     try {
       const provider = createMessagingProvider()
-      // Locked wallet → null. Surface a clear reason rather than leaking a null-reference error.
-      if (!provider) throw new Error('Wallet is locked — unlock to send')
+      // Locked chat → null. Surface a clear reason rather than leaking a null-reference error.
+      if (!provider) throw new Error('Chat is locked — unlock to send')
       // Self-healing address exchange (M9.0d): piggyback my address until the peer has it.
       const addr = outboundAddressFor(peer)
       const msg = await provider.sendMessage(peer, text, { tariAddress: addr, replyTo: replying?.logicalId })
@@ -968,7 +949,7 @@ export default function ChatApp() {
 
     const provider = createMessagingProvider()
     try {
-      if (!provider) throw new Error('Wallet is locked — unlock to send')
+      if (!provider) throw new Error('Chat is locked — unlock to send')
       if (inGroup) {
         const { result, plaintextBytes } = await sendImageToGroup(provider, file, target.groupId, target.members, caption, setStage)
         recordSentMessage(result.message)
@@ -1246,10 +1227,9 @@ export default function ChatApp() {
     return () => { live = false }
   }, [paymentMode, sapientReady, sapient.viewAccess, sapient.provider])
 
-  const availableText = balanceHidden ? MASK_SHORT
-    : privateBal === undefined ? (sapient.viewAccess === 'granted' ? '…' : 'grant view access to see')
+  const availableText = privateBal === undefined ? (sapient.viewAccess === 'granted' ? '…' : 'grant view access to see')
     : privateBal === null ? '—'
-    : `${formatBalance({ amount: privateBal, divisibility: 6 })} ${TICKER}`
+    : `${formatTari(privateBal)} ${TICKER}`
 
   /** The amount as raw units, or null when it does not parse. */
   function payAmountRaw(): bigint | null {
@@ -2322,7 +2302,7 @@ export default function ChatApp() {
               {outboxAsk.map(entry => (
                 <div key={entry.id} role="alert" style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12, padding: '11px 13px', borderRadius: 12, background: 'var(--card-warn)', border: '1px solid var(--warn)' }}>
                   <div style={{ fontSize: 12, lineHeight: 1.5, color: 'var(--text-body)' }}>
-                    A payment of <span style={{ fontFamily: MONO }}>{formatBalance({ amount: BigInt(entry.amount), divisibility: 6 })} {TICKER}</span> to {displayName(entry.peerHex)} was approved in Sapient but not sent.
+                    A payment of <span style={{ fontFamily: MONO }}>{microToTari(entry.amount)} {TICKER}</span> to {displayName(entry.peerHex)} was approved in Sapient but not sent.
                   </div>
                   <div style={{ display: 'flex', gap: 8 }}>
                     <button onClick={() => void resolveOutboxAsk(entry, false)} style={{ ...PAY_BTN, flex: 1, border: '1px solid var(--border-strong)', background: 'transparent', color: 'var(--text-body-dim)' }}>Cancel</button>
@@ -2470,13 +2450,13 @@ export default function ChatApp() {
                   {shieldOffer && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '10px 12px', borderRadius: 10, border: '1px solid var(--border-strong)' }}>
                       <div style={{ fontSize: 12, color: 'var(--text-body)', lineHeight: 1.5 }}>
-                        {shieldOffer.have !== null ? <>Your private balance is {formatBalance({ amount: shieldOffer.have, divisibility: 6 })} {TICKER}. </> : null}
-                        Make {formatBalance({ amount: shieldOffer.shortfall, divisibility: 6 })} {TICKER} private first? Sapient takes it from your public balance.
+                        {shieldOffer.have !== null ? <>Your private balance is {formatTari(shieldOffer.have)} {TICKER}. </> : null}
+                        Make {formatTari(shieldOffer.shortfall)} {TICKER} private first? Sapient takes it from your public balance.
                       </div>
                       <div style={{ display: 'flex', gap: 8 }}>
                         <button onClick={() => setShieldOffer(null)} style={{ ...PAY_BTN, flex: 1, border: '1px solid var(--border-strong)', background: 'transparent', color: 'var(--text-body-dim)' }}>Not now</button>
                         <button onClick={() => void shieldThenPay()} className="cv-btn-primary" style={{ ...PAY_BTN, flex: 1, border: 'none', background: 'var(--accent-400)', color: 'var(--ink-on-accent)', cursor: 'pointer' }}>
-                          Shield {formatBalance({ amount: shieldOffer.shortfall, divisibility: 6 })} {TICKER}
+                          Shield {formatTari(shieldOffer.shortfall)} {TICKER}
                         </button>
                       </div>
                     </div>

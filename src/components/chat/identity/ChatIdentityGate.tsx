@@ -6,7 +6,7 @@
 //     no identity on this device → Welcome → Create (phrase → confirm → password) or Import
 //     identity on this device    → Unlock, with Import ("Forgot password?") and a fresh start
 //
-//   Built from the same entry primitives as the wallet's gate (wallet/entryUi), so the two read as one
+//   Built from the same entry primitives as the wallet's gate (./entryUi), so the two read as one
 //   app. The 12-word phrase is labelled as a CHAT backup everywhere it appears, and a 24-word wallet
 //   phrase is refused at import with a pointer to the Wallet tab — two phrases is the cost of keeping
 //   the identities independent, and the screens must not let one be mistaken for the other.
@@ -15,11 +15,10 @@ import { useEffect, useState } from 'react'
 import { useChat, type ImportCheck } from '../../../context/ChatContext'
 import { createChatPhrase } from '../../../crypto/chatIdentity'
 import { CryptoBusy } from '../../primitives'
-import { MONO } from '../../wallet/entryStyles'
 import {
   CustodyLine, EntryBlurb, EntryButton, EntryCard, EntryError, EntryField, EntryLink, EntrySpinner,
-  EntryTitle, Lockup, WordChip, WordGrid, entryShell,
-} from '../../wallet/entryUi'
+  EntryTitle, Lockup, MONO, WordChip, WordGrid, entryShell,
+} from './entryUi'
 
 /** Positions quizzed after the phrase is shown, 1-indexed — one from each third of the 12. */
 const QUIZ_POSITIONS = [3, 7, 11]

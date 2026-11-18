@@ -39,7 +39,7 @@ import { CryptoBusy } from '../primitives'
 import { MONO } from './entryStyles'
 import {
   EntryButton, EntryCard, EntryError, EntryField, EntryLink, EntryBlurb, EntryTitle, WordGrid,
-} from './entryUi'
+} from '../chat/identity/entryUi'
 
 type Step = 'phrase' | 'ambiguous' | 'password' | 'restoring'
 

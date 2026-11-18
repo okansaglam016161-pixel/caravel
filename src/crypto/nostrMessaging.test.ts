@@ -11,7 +11,7 @@ import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools/pure
 import * as nip44 from 'nostr-tools/nip44'
 import type { NostrEvent } from 'nostr-tools'
 import { wrapEvent } from 'nostr-tools/nip59'
-import { newLogicalId, planPublishRetry, unwrapMessage, wrapEdit, wrapMessage, wrapReaction } from './nostrMessaging'
+import { newLogicalId, planPublishRetry, publishToAll, unwrapMessage, wrapEdit, wrapMessage, wrapReaction } from './nostrMessaging'
 import type { MediaRef } from '../messaging/types'
 import { ALL_EMOJI } from '../components/chat/emojiData'
 
@@ -905,4 +905,14 @@ describe('sender send time (rumor created_at + caravel-ts)', () => {
     expect(out.senderPubkeyHex).toBe(alicePub)
     expect(out.sentAtMs).toBeDefined()
   })
+})
+
+describe('publishToAll: one result per relay, never just the first to answer', () => {
+  it('waits for every relay and reports each (unreachable ones as failed)', async () => {
+    const urls = ['ws://127.0.0.1:1', 'ws://127.0.0.1:2', 'ws://127.0.0.1:3']
+    const ev = wrapMessage(generateSecretKey(), getPublicKey(generateSecretKey()), 'x')
+    const results = await publishToAll(ev, urls, 3_000, 1_000)
+    expect(results.map(r => r.relay)).toEqual(urls)
+    expect(results.every(r => r.ok === false && typeof r.error === 'string')).toBe(true)
+  }, 20_000)
 })

@@ -3,10 +3,11 @@
 
 import { beforeEach, describe, expect, it } from 'vitest'
 import { getPublicKey, verifyEvent } from 'nostr-tools/pure'
-import { buildStatNote, dayStart, loadStats, markSent, queueStat, setCountMe, takeDue } from './usageStats'
+import { buildStatNote, dayStart, loadStats, noteToSend, queueStat, recordDelivery, setCountMe, takeDue } from './usageStats'
 import {
-  PROD_TAG_PREFIX, STAT_DELAY_MS, STAT_GIVE_UP_MS, STAT_NOTE_KIND, STAT_TAG_PREFIX, TEST_TAG_PREFIX, statTag,
+  COUNT_RELAYS, PROD_TAG_PREFIX, STAT_DELAY_MS, STAT_GIVE_UP_MS, STAT_NOTE_KIND, STAT_TAG_PREFIX, TEST_TAG_PREFIX, statTag,
 } from '../config/stats'
+import { DEFAULT_RELAYS } from '../config/relays'
 import { setStoreKey } from '../crypto/sessionKey'
 
 function memoryStorage(): Storage {
@@ -81,7 +82,8 @@ describe('the queue', () => {
     // The app was closed for three days: the next unlock finds it due.
     const later = T0 + 3 * 86_400_000
     expect(takeDue(ME, later)).toEqual(['identity_created'])
-    markSent(ME, 'identity_created')
+    noteToSend(ME, 'identity_created', later)
+    recordDelivery(ME, 'identity_created', [...DEFAULT_RELAYS])
     expect(takeDue(ME, later)).toEqual([])
     queueStat(ME, 'identity_created', later)      // happens again: once per identity
     expect(loadStats(ME).queued.identity_created).toBeUndefined()
@@ -92,6 +94,44 @@ describe('the queue', () => {
     queueStat(ME, 'wallet_connected', T0, () => 0)
     expect(takeDue(ME, T0 + HI)).toEqual(['wallet_connected'])
     expect(takeDue(ME, T0 + HI + 600_000)).toEqual(['wallet_connected'])   // not marked sent: still there
+  })
+
+  it('the first send goes to every default relay and every COUNT relay', () => {
+    queueStat(ME, 'identity_created', T0, () => 0)
+    const send = noteToSend(ME, 'identity_created', T0 + LO)!
+    expect(new Set(send.relays)).toEqual(new Set([...DEFAULT_RELAYS, ...COUNT_RELAYS]))
+    expect(send.event.tags[0][1]).toBe(statTag('identity_created'))
+  })
+
+  it('stays queued until EVERY COUNT relay holds it, resending the SAME note only to those missing it', () => {
+    queueStat(ME, 'identity_created', T0, () => 0)
+    const first = noteToSend(ME, 'identity_created', T0 + LO)!
+    // One COUNT relay (say damus, rate-limiting us) did not take it.
+    const missingOne = COUNT_RELAYS[COUNT_RELAYS.length - 1]
+    const r1 = recordDelivery(ME, 'identity_created', first.relays.filter(u => u !== missingOne))
+    expect(r1).toEqual({ done: false, missing: [missingOne] })
+    expect(takeDue(ME, T0 + LO + 600_000)).toEqual(['identity_created'])
+    const again = noteToSend(ME, 'identity_created', T0 + LO + 600_000)!
+    expect(again.relays).toEqual([missingOne])
+    expect(again.event.id).toBe(first.event.id)          // the same bytes: a relay dedupes, never counts twice
+    expect(recordDelivery(ME, 'identity_created', [missingOne])).toEqual({ done: true, missing: [] })
+    expect(loadStats(ME).done.identity_created).toBe('sent')
+    expect(takeDue(ME, T0 + 2 * HI)).toEqual([])
+  })
+
+  it('the kept note survives a reload of the store (a later session resends the same note)', () => {
+    queueStat(ME, 'wallet_connected', T0, () => 0)
+    const first = noteToSend(ME, 'wallet_connected', T0 + LO)!
+    recordDelivery(ME, 'wallet_connected', [])
+    expect(noteToSend(ME, 'wallet_connected', T0 + LO + 86_400_000)!.event.id).toBe(first.event.id)
+  })
+
+  it('out of time: on some relays counts as sent, on none is dropped', () => {
+    queueStat(ME, 'identity_created', T0, () => 0)
+    noteToSend(ME, 'identity_created', T0 + LO)
+    recordDelivery(ME, 'identity_created', [COUNT_RELAYS[0]])
+    expect(takeDue(ME, T0 + LO + STAT_GIVE_UP_MS + 1)).toEqual([])
+    expect(loadStats(ME).done.identity_created).toBe('sent')
   })
 
   it('gives up (dropped, never sent) on a note still unsent long after it was due', () => {

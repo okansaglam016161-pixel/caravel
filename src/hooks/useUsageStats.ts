@@ -1,17 +1,17 @@
 // Sends the anonymous usage notes (messaging/usageStats) when their delay has passed. Mounted once,
 // in the signed-in shell; runs only while chat is unlocked (the queue is sealed with the chat key).
 //
-// FIRE AND FORGET. Nothing here can affect the app: every failure is swallowed, and a note that did
-// not reach any relay stays queued for the next check (on unlock, and every STAT_CHECK_MS).
+// FIRE AND FORGET. Nothing here can affect the app: every failure is swallowed. A note waits for
+// every relay it was sent to (publishToAll) and stays queued until all the COUNT relays hold it; the
+// next check (on unlock, and every STAT_CHECK_MS) resends the same note to the ones still missing it.
 //
 // It also records the first Sapient connection for this identity (`wallet_connected`).
 
 import { useEffect, useRef } from 'react'
 import { useSapient } from '../context/SapientContext'
-import { DEFAULT_RELAYS } from '../config/relays'
 import { STAT_CHECK_MS } from '../config/stats'
-import { publishGiftWrap } from '../crypto/nostrMessaging'
-import { buildStatNote, markSent, queueStat, takeDue } from '../messaging/usageStats'
+import { publishToAll } from '../crypto/nostrMessaging'
+import { noteToSend, queueStat, recordDelivery, takeDue } from '../messaging/usageStats'
 
 const PUBLISH_TIMEOUT_MS = 10_000
 const CONNECT_TIMEOUT_MS = 10_000
@@ -40,12 +40,16 @@ export function useUsageStats(me: string | null) {
       try {
         for (const kind of takeDue(me)) {
           if (!live) break
-          // Published through the shared helper: a fresh connection to each relay, with retries.
-          // The name says gift wrap; it publishes any signed event.
-          const results = await publishGiftWrap(buildStatNote(kind), [...DEFAULT_RELAYS], PUBLISH_TIMEOUT_MS, CONNECT_TIMEOUT_MS)
-          const ok = results.filter(r => r.ok).length
-          devLog(kind, `published to ${ok}/${results.length} relays`)
-          if (ok > 0 && live) markSent(me, kind)
+          const send = noteToSend(me, kind)
+          if (!send || send.relays.length === 0) continue
+          // Waits for every relay (a fresh connection each, with the bounded per-relay retry).
+          const results = await publishToAll(send.event, send.relays, PUBLISH_TIMEOUT_MS, CONNECT_TIMEOUT_MS)
+          if (!live) break
+          const accepted = results.filter(r => r.ok).map(r => r.relay)
+          const { done, missing } = recordDelivery(me, kind, accepted)
+          devLog(kind, `published to ${accepted.length}/${results.length} relays`,
+            results.filter(r => !r.ok).map(r => `${r.relay}: ${r.error ?? 'rejected'}`),
+            done ? '(on every COUNT relay: done)' : `(will resend to: ${missing.join(', ')})`)
         }
       } catch (e) {
         devLog('check failed', e)

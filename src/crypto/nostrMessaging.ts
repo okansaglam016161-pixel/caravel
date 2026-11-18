@@ -795,6 +795,54 @@ async function publishOnce(
   }
 }
 
+// ONE relay, with the bounded retry: ok if ANY attempt succeeded. Never rejects. Shared by
+// publishGiftWrap (resolves on the first relay to accept) and publishToAll (waits for every relay).
+async function publishToRelay(url: string, event: NostrEvent, timeoutMs: number, connectTimeoutMs: number): Promise<PublishResult> {
+  const publishTimeout = Math.floor(timeoutMs * 0.9)
+  const started = Date.now()
+  // THE LATENCY INVARIANT: a relay's whole retry sequence gets the budget ONE attempt could already
+  // have consumed (a full dial plus a full publish). So retries never extend the worst case — they
+  // only spend time a FAST failure left unspent, which is the common case (a refused dial returns in
+  // milliseconds, and that is precisely the failure worth retrying). A relay that burns its budget
+  // on one timeout gets no second attempt, exactly as today.
+  const relayBudgetMs = connectTimeoutMs + publishTimeout
+  let attemptConnectTimeout = connectTimeoutMs
+  let attemptsMade = 0
+  let lastError = 'no attempt made'
+
+  for (;;) {
+    const result = await publishOnce(url, event, attemptConnectTimeout, publishTimeout)
+    attemptsMade++
+    if (result.ok) return { relay: url, ok: true }
+    lastError = result.error ?? 'rejected'
+
+    const plan = planPublishRetry(
+      attemptsMade,
+      PUBLISH_ATTEMPTS,
+      relayBudgetMs - (Date.now() - started),
+      PUBLISH_RETRY_BACKOFF_MS,
+      Math.random(),
+      connectTimeoutMs,
+    )
+    if (!plan.retry) {
+      return { relay: url, ok: false, error: `${lastError} (${attemptsMade} attempt${attemptsMade === 1 ? '' : 's'})` }
+    }
+    await sleep(plan.backoffMs)
+    attemptConnectTimeout = plan.budgetMs
+  }
+}
+
+/**
+ * Publish to EVERY relay and wait for all of them: one result per relay, accepted or not. For a
+ * caller that needs to know exactly where an event landed (the usage count), unlike publishGiftWrap,
+ * which returns as soon as one relay accepts.
+ */
+export async function publishToAll(
+  event: NostrEvent, relayUrls: readonly string[], timeoutMs: number, connectTimeoutMs: number,
+): Promise<{ relay: string; ok: boolean; error?: string }[]> {
+  return Promise.all(relayUrls.map(url => publishToRelay(url, event, timeoutMs, connectTimeoutMs)))
+}
+
 // Publishes a gift wrap to each relay in parallel. Each relay gets its own connection with an
 // explicit connect timeout and publish timeout, and — since the partial-delivery fix — a bounded
 // per-relay RETRY (see PUBLISH_ATTEMPTS). Connections are closed in finally.
@@ -822,41 +870,7 @@ export async function publishGiftWrap(
   timeoutMs: number,
   connectTimeoutMs: number
 ): Promise<PublishResult[]> {
-  const publishTimeout = Math.floor(timeoutMs * 0.9)
-
-  const attempts = relayUrls.map(async (url): Promise<PublishResult> => {
-    const started = Date.now()
-    // THE LATENCY INVARIANT: a relay's whole retry sequence gets the budget ONE attempt could already
-    // have consumed (a full dial plus a full publish). So retries never extend the worst case — they
-    // only spend time a FAST failure left unspent, which is the common case (a refused dial returns in
-    // milliseconds, and that is precisely the failure worth retrying). A relay that burns its budget
-    // on one timeout gets no second attempt, exactly as today.
-    const relayBudgetMs = connectTimeoutMs + publishTimeout
-    let attemptConnectTimeout = connectTimeoutMs
-    let attemptsMade = 0
-    let lastError = 'no attempt made'
-
-    for (;;) {
-      const result = await publishOnce(url, giftWrap, attemptConnectTimeout, publishTimeout)
-      attemptsMade++
-      if (result.ok) return { relay: url, ok: true }
-      lastError = result.error ?? 'rejected'
-
-      const plan = planPublishRetry(
-        attemptsMade,
-        PUBLISH_ATTEMPTS,
-        relayBudgetMs - (Date.now() - started),
-        PUBLISH_RETRY_BACKOFF_MS,
-        Math.random(),
-        connectTimeoutMs,
-      )
-      if (!plan.retry) {
-        return { relay: url, ok: false, error: `${lastError} (${attemptsMade} attempt${attemptsMade === 1 ? '' : 's'})` }
-      }
-      await sleep(plan.backoffMs)
-      attemptConnectTimeout = plan.budgetMs
-    }
-  })
+  const attempts = relayUrls.map(url => publishToRelay(url, giftWrap, timeoutMs, connectTimeoutMs))
 
   if (attempts.length === 0) return []
 

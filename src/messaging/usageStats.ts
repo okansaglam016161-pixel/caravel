@@ -9,25 +9,41 @@
 // it only exists while chat is unlocked and leaves no plain trace on the device. Each kind goes out
 // at most once per identity on this device:
 //
-//   queued   waiting for its dueAt (2 to 6 hours after the event, at random)
-//   sent     published to at least one relay
+//   queued   waiting for its dueAt (2 to 6 hours after the event, at random); then, once signed,
+//            waiting for every COUNT relay to hold it
+//   sent     on every COUNT relay (or on some of them when the give-up time came)
 //   skipped  happened while "Count me anonymously" was off, or was switched off while queued
 //   dropped  could not be sent within STAT_GIVE_UP_MS of being due
 //
 // Nothing that is skipped or dropped is ever sent later: switching the setting back on does not
 // backfill.
+//
+// ONE NOTE, RESENT UNTIL EVERY COUNT RELAY HAS IT. The landing count is the HIGHEST relay's number,
+// so a note only counts if it is on that relay: it has to reach all of them. The note is signed once
+// and kept (sealed) with the relays that accepted it; later checks resend the SAME bytes to the
+// COUNT relays still missing it. Relays drop exact duplicates, so a resend can never count twice.
+// (A fresh note with a fresh key would.) The first send goes to every default relay as well.
 
-import { finalizeEvent, generateSecretKey, type NostrEvent } from 'nostr-tools/pure'
+import { finalizeEvent, generateSecretKey, verifyEvent, type NostrEvent } from 'nostr-tools/pure'
 import { asRecord, loadStore, writeStore, type Parse } from '../crypto/storeIo'
-import { STAT_DELAY_MS, STAT_GIVE_UP_MS, STAT_NOTE_KIND, statTag, type StatKind } from '../config/stats'
+import { COUNT_RELAYS, STAT_DELAY_MS, STAT_GIVE_UP_MS, STAT_NOTE_KIND, statTag, type StatKind } from '../config/stats'
+import { DEFAULT_RELAYS } from '../config/relays'
 
 const KINDS: readonly StatKind[] = ['identity_created', 'wallet_connected']
 
 export interface StatsState {
   /** "Count me anonymously" switched off. On by default. */
   optOut: boolean
-  queued: Partial<Record<StatKind, { dueAt: number }>>
+  queued: Partial<Record<StatKind, QueuedNote>>
   done: Partial<Record<StatKind, 'sent' | 'skipped' | 'dropped'>>
+}
+
+export interface QueuedNote {
+  dueAt: number
+  /** Signed at the first send and kept, so every resend is the same note. */
+  event?: NostrEvent
+  /** Relays that have accepted it. */
+  accepted?: string[]
 }
 
 const EMPTY = (): StatsState => ({ optOut: false, queued: {}, done: {} })
@@ -43,7 +59,13 @@ const parse: Parse<StatsState> = decoded => {
   const done = asRecord(r.done) ?? {}
   for (const k of KINDS) {
     const q = asRecord(queued[k])
-    if (q && typeof q.dueAt === 'number' && Number.isFinite(q.dueAt)) out.queued[k] = { dueAt: q.dueAt }
+    if (q && typeof q.dueAt === 'number' && Number.isFinite(q.dueAt)) {
+      const note: QueuedNote = { dueAt: q.dueAt }
+      const ev = q.event as NostrEvent | undefined
+      if (ev && typeof ev === 'object' && verifyEvent(ev)) note.event = ev
+      if (Array.isArray(q.accepted)) note.accepted = q.accepted.filter((u): u is string => typeof u === 'string')
+      out.queued[k] = note
+    }
     const d = done[k]
     if (d === 'sent' || d === 'skipped' || d === 'dropped') out.done[k] = d
   }
@@ -93,18 +115,52 @@ export function takeDue(me: string, now = Date.now()): StatKind[] {
   for (const k of KINDS) {
     const q = s.queued[k]
     if (!q || q.dueAt > now) continue
-    if (now - q.dueAt > STAT_GIVE_UP_MS) { delete s.queued[k]; s.done[k] = 'dropped'; changed = true; continue }
+    if (now - q.dueAt > STAT_GIVE_UP_MS) {
+      // Out of time: on some relays already counts as sent; on none, it is dropped.
+      delete s.queued[k]; s.done[k] = q.accepted?.length ? 'sent' : 'dropped'; changed = true; continue
+    }
     due.push({ k, at: q.dueAt })
   }
   if (changed) save(me, s)
   return due.sort((a, b) => a.at - b.at).map(d => d.k)
 }
 
-export function markSent(me: string, kind: StatKind): void {
+/**
+ * The note to send for a due `kind`, and where: signed now if this is its first send (and kept), to
+ * every default relay plus the COUNT relays; afterwards only to the COUNT relays still missing it.
+ */
+export function noteToSend(me: string, kind: StatKind, now = Date.now()): { event: NostrEvent; relays: string[] } | null {
   const s = loadStats(me)
-  delete s.queued[kind]
-  s.done[kind] = 'sent'
+  const q = s.queued[kind]
+  if (!q || s.optOut) return null
+  if (!q.event) {
+    q.event = buildStatNote(kind, now)
+    save(me, s)
+  }
+  const accepted = new Set(q.accepted ?? [])
+  const relays = q.accepted
+    ? COUNT_RELAYS.filter(u => !accepted.has(u))
+    : [...new Set([...DEFAULT_RELAYS, ...COUNT_RELAYS])]
+  return { event: q.event, relays }
+}
+
+/**
+ * Record where the note landed. Done (`sent`) once every COUNT relay holds it; otherwise it stays
+ * queued and the next check resends it to the missing ones.
+ */
+export function recordDelivery(me: string, kind: StatKind, acceptedBy: readonly string[]): { done: boolean; missing: string[] } {
+  const s = loadStats(me)
+  const q = s.queued[kind]
+  if (!q) return { done: s.done[kind] === 'sent', missing: [] }
+  const accepted = new Set([...(q.accepted ?? []), ...acceptedBy])
+  q.accepted = [...accepted]
+  const missing = COUNT_RELAYS.filter(u => !accepted.has(u))
+  if (missing.length === 0) {
+    delete s.queued[kind]
+    s.done[kind] = 'sent'
+  }
   save(me, s)
+  return { done: missing.length === 0, missing }
 }
 
 /** UTC midnight of `now`, in seconds — the note's only date. */

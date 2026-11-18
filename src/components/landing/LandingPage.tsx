@@ -33,7 +33,7 @@ const FAQS = [
   { q: 'How do people find me?', a: 'Share your npub, your public Nostr ID. Anyone with it can message you and pay you.' },
   { q: 'Who holds my funds?', a: 'You do. Your funds and wallet keys stay in Sapient on your computer. Caravel never sees them.' },
   { q: 'What if I lose my backup phrase?', a: 'Your 12 words (or nsec) are the only way to restore your chat identity. Nobody can recover them for you, including us.' },
-  { q: 'Can I use real funds?', a: 'Yes, on Ootle mainnet. Caravel is new and unaudited, so only use amounts you can afford to lose.' },
+  { q: 'Can I use real funds?', a: 'Yes. Caravel runs on Ootle mainnet.' },
 ]
 
 // ── Pieces ────────────────────────────────────────────────────────────────────
@@ -176,7 +176,7 @@ export default function LandingPage() {
       {/* ── Questions: title left, a chat with Caravel right ── */}
       <section className="cv-lp-wrap cv-lp-section cv-lp-questions">
         <div style={{ flex: '1 1 260px', minWidth: 0 }}>
-          <h2 className="cv-lp-h2">Questions</h2>
+          <h2 className="cv-lp-h2">FAQs</h2>
           <p style={{ margin: '14px 0 0', maxWidth: 300, fontSize: 16, lineHeight: 1.6, color: 'var(--text-body-dim)' }}>
             The short answers. More in the docs.
           </p>

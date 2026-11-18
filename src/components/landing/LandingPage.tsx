@@ -15,6 +15,8 @@ import { useTheme } from '../../hooks/useTheme'
 import ThemeToggle from '../primitives/ThemeToggle'
 import LogoTile from '../primitives/LogoTile'
 import ChatStill, { Bubble, CaravelAvatar, StillBody, StillHeader, StillWindow } from './ChatStill'
+import UserCountPill from './UserCountPill'
+import { useLiveUserCount } from './userCount'
 
 const MONO = 'var(--font-mono)'
 const DOCS_URL = 'https://github.com/okansaglam016161-pixel/caravel#readme'
@@ -111,6 +113,8 @@ export default function LandingPage() {
   const navigate = useNavigate()
   const { theme } = useTheme()
   const launch = useCallback(() => navigate('/app'), [navigate])
+  // The live user count (userCount.ts): null until a relay answers; fetched once, when idle.
+  const userCount = useLiveUserCount()
 
   return (
     <div className="cv-lp" data-theme={theme}>
@@ -121,6 +125,8 @@ export default function LandingPage() {
         <a href="#top" aria-label="Caravel, back to top" style={{ textDecoration: 'none' }}>
           <Lockup tile={32} text={18} gap={10} />
         </a>
+        {/* Centred in the bar, out of the flow, so it moves nothing when it appears. Wide screens only. */}
+        <div className="cv-lp-count-bar" aria-live="polite"><UserCountPill count={userCount} /></div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
           <ThemeToggle />
           <LaunchButton onClick={launch} />
@@ -138,6 +144,8 @@ export default function LandingPage() {
           <p style={{ margin: '16px 0 0', fontSize: 14, color: 'var(--text-body-dim)' }}>
             Free and self-custodial. Desktop Chrome, Brave or Edge.
           </p>
+          {/* Narrow screens: the bar has no room, so the count sits here (its line is reserved). */}
+          <div className="cv-lp-count-hero" aria-live="polite"><UserCountPill count={userCount} /></div>
         </div>
         <div style={{ flex: '1 1 460px', minWidth: 0 }}>
           <ChatStill />
@@ -229,6 +237,7 @@ const LANDING_CSS = `
   --lp-avatar-bg: var(--accent-50);
   --lp-avatar-ink: var(--accent-600);
   --lp-green: #0E6E4C;
+  --lp-green-wash: rgba(14, 110, 76, 0.10);
   min-height: 100vh;
   background: var(--surface-void);
   color: var(--text-primary);
@@ -240,6 +249,7 @@ const LANDING_CSS = `
   --lp-avatar-bg: var(--accent-800);
   --lp-avatar-ink: var(--accent-200);
   --lp-green: var(--positive);
+  --lp-green-wash: rgba(var(--positive-rgb), 0.12);
 }
 .cv-lp a { color: var(--accent-600); text-decoration: none; }
 .cv-lp a:hover { color: var(--accent-700); }
@@ -250,7 +260,11 @@ const LANDING_CSS = `
 .cv-lp ::selection { background: rgba(var(--accent-400-rgb), 0.22); }
 
 .cv-lp-wrap { max-width: 1120px; margin: 0 auto; padding-left: 40px; padding-right: 40px; box-sizing: border-box; }
-.cv-lp-bar { padding-top: 22px; padding-bottom: 22px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.cv-lp-bar { position: relative; padding-top: 22px; padding-bottom: 22px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.cv-lp-count-bar { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); }
+.cv-lp-count-hero { display: none; }
+.cv-lp-count { animation: cv-lp-fade 0.3s ease-out; }
+@keyframes cv-lp-fade { from { opacity: 0; } to { opacity: 1; } }
 .cv-lp-hero { padding-top: 88px; display: flex; flex-wrap: wrap; align-items: center; gap: 56px; }
 .cv-lp-steps { padding-top: 96px; }
 .cv-lp-section { padding-top: 150px; }
@@ -274,11 +288,14 @@ const LANDING_CSS = `
   .cv-lp-section { padding-top: 96px; }
   .cv-lp-footer { margin-top: 96px; }
   .cv-lp-card { padding: 24px !important; gap: 18px !important; }
+  .cv-lp-count-bar { display: none; }
+  .cv-lp-count-hero { display: block; margin-top: 14px; min-height: 25px; }
 }
 @media (max-width: 380px) {
   .cv-lp-card { flex-direction: column; }
 }
 @media (prefers-reduced-motion: reduce) {
   .cv-lp, .cv-lp-primary { transition: none; }
+  .cv-lp-count { animation: none; }
 }
 `

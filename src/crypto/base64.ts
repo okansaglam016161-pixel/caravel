@@ -1,6 +1,6 @@
 // Binary ⇄ base64 helpers.
 //
-// Deliberately a COPY of the private helpers in walletCrypto.ts rather than an import or a
+// Deliberately a COPY of the private helpers in (former) walletCrypto.ts rather than an import or a
 // refactor of them: that file is the mnemonic-encryption path, and churning wallet-critical code to
 // share fourteen lines is a poor trade. Converging the two is separate cleanup with its own review.
 //

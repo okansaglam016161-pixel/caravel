@@ -29,11 +29,11 @@ function key(myPubkeyHex: string) { return `caravel.nicknames.v1.${myPubkeyHex}`
 const parse: Parse<NicknameMap> = decoded => asRecord(decoded) as NicknameMap | null
 
 export function loadNicknames(myPubkeyHex: string): NicknameMap {
-  return loadStore(key(myPubkeyHex), parse, () => ({}), 'chat')
+  return loadStore(key(myPubkeyHex), parse, () => ({}))
 }
 
 function save(myPubkeyHex: string, map: NicknameMap): void {
-  writeStore(key(myPubkeyHex), JSON.stringify(map), parse, 'chat')
+  writeStore(key(myPubkeyHex), JSON.stringify(map), parse)
 }
 
 // ── Mutation helpers ──────────────────────────────────────────────────────────

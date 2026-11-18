@@ -35,11 +35,11 @@ const parse: Parse<Group[]> = decoded => {
 }
 
 export function loadGroups(pubkeyHex: string): Group[] {
-  return loadStore(key(pubkeyHex), parse, () => [], 'chat')
+  return loadStore(key(pubkeyHex), parse, () => [])
 }
 
 function save(pubkeyHex: string, groups: Group[]): void {
-  writeStore(key(pubkeyHex), JSON.stringify(groups), parse, 'chat')
+  writeStore(key(pubkeyHex), JSON.stringify(groups), parse)
 }
 
 // A lazy placeholder is a group we learned of from a message before its definition arrived: it has

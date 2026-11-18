@@ -42,7 +42,7 @@ beforeEach(() => {
   // A store key per test, for the same reason (stage 5): every read and write now needs one, and an
   // unlocked session is the ordinary case these specs describe. The locked case is its own block.
   // Copied rather than shared — clearStoreKey zeroes the buffer it is handed.
-  setStoreKey(Uint8Array.from(STORE_KEY), 'chat')
+  setStoreKey(Uint8Array.from(STORE_KEY))
   __resetBlobCacheForTests()
 })
 
@@ -434,7 +434,7 @@ describe('AAD binds the record to its id and mime', () => {
 
 describe('no store key means a miss, never plaintext', () => {
   it('refuses to write while locked, and writes nothing at all', async () => {
-    clearStoreKey('chat')
+    clearStoreKey()
     expect(await putBlob(ME, 'hash1', secretBytes(), 'image/png')).toBe(false)
     expect(await rawGet(`${ME}:hash1`)).toBeUndefined()
     expect(await rawCount()).toBe(0)
@@ -442,7 +442,7 @@ describe('no store key means a miss, never plaintext', () => {
 
   it('reads as a miss while locked, and has/get agree', async () => {
     await putBlob(ME, 'hash1', secretBytes(), 'image/png')
-    clearStoreKey('chat')
+    clearStoreKey()
     expect(await getBlob(ME, 'hash1')).toBeNull()
     expect(await hasBlob(ME, 'hash1')).toBe(false)
     // The record is untouched — locking is not a purge.
@@ -452,7 +452,7 @@ describe('no store key means a miss, never plaintext', () => {
   it('still purges while locked — destroying what we cannot read IS the operation', async () => {
     await putBlob(ME, 'keep', secretBytes(), 'image/png')
     await putBlob(ME, 'drop', secretBytes(), 'image/png')
-    clearStoreKey('chat')
+    clearStoreKey()
     await deleteBlobs(ME, ['drop'])
     expect(await rawGet(`${ME}:drop`)).toBeUndefined()
     await deleteAllForIdentity(ME)
@@ -464,14 +464,14 @@ describe('no store key means a miss, never plaintext', () => {
     // Without the null check on every operation this read would still succeed.
     await putBlob(ME, 'hash1', secretBytes(), 'image/png')
     expect(await getBlob(ME, 'hash1')).not.toBeNull()   // warms the import
-    clearStoreKey('chat')
+    clearStoreKey()
     expect(await getBlob(ME, 'hash1')).toBeNull()
   })
 
   it('resumes on the next unlock', async () => {
     await putBlob(ME, 'hash1', secretBytes(), 'image/png')
-    clearStoreKey('chat')
-    setStoreKey(Uint8Array.from(STORE_KEY), 'chat')
+    clearStoreKey()
+    setStoreKey(Uint8Array.from(STORE_KEY))
     expect(new Uint8Array((await getBlob(ME, 'hash1'))!.bytes)).toEqual(SECRET)
   })
 })
@@ -479,17 +479,17 @@ describe('no store key means a miss, never plaintext', () => {
 describe('a wrong key is a miss, not garbage', () => {
   it('fails the tag check rather than returning wrong bytes', async () => {
     await putBlob(ME, 'hash1', secretBytes(), 'image/png')
-    setStoreKey(new Uint8Array(32).fill(7), 'chat')   // a re-minted salt derives a different key
+    setStoreKey(new Uint8Array(32).fill(7))   // a re-minted salt derives a different key
     expect(await getBlob(ME, 'hash1')).toBeNull()
   })
 
   it('LEAVES the undecryptable record on disk — a read path must not be destructive', async () => {
     await putBlob(ME, 'hash1', secretBytes(), 'image/png')
-    setStoreKey(new Uint8Array(32).fill(7), 'chat')
+    setStoreKey(new Uint8Array(32).fill(7))
     await getBlob(ME, 'hash1')
     expect(await rawCount()).toBe(1)
     // and the right key still opens it, which is why deleting would have been wrong
-    setStoreKey(Uint8Array.from(STORE_KEY), 'chat')
+    setStoreKey(Uint8Array.from(STORE_KEY))
     expect(new Uint8Array((await getBlob(ME, 'hash1'))!.bytes)).toEqual(SECRET)
   })
 })

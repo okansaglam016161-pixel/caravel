@@ -108,7 +108,7 @@ describe('ownSendTxIds — never credited back to us', () => {
 describe('the stores, sealed under the chat key', () => {
   beforeEach(() => {
     globalThis.localStorage = memoryStorage()
-    setStoreKey(new Uint8Array(32).fill(5), 'chat')
+    setStoreKey(new Uint8Array(32).fill(5))
   })
 
   it('outcomes stored under v1 (which could hold a genuine payment as "not verified") are not read back', () => {
@@ -141,7 +141,7 @@ describe('the stores, sealed under the chat key', () => {
   })
 
   it('an outbox that cannot be written says so — the caller must not pay', () => {
-    clearStoreKey('chat')
+    clearStoreKey()
     expect(addOutbox(ME, {
       id: 'o2', peerHex: PEER, recipient: 'otl_1x', amount: '1', nonce: '0123456789abcdef',
       network: 'mainnet', note: '', createdAt: 1, requestId: null, result: null,

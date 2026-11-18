@@ -178,7 +178,7 @@ function Pill({ tone, children }: { tone: 'live' | 'quiet' | 'mono'; children: R
 // the header cluster — and the spine and header are copied measurement-for-measurement from
 // ServiceNav and RootHeader, with their geometry imported where a module exists to import it from.
 //
-// TERMINOLOGY: PRIVATE / PUBLIC, and TARI (TICKER, wallet/v2/format.ts). The app purged "shielded / unshielded" outright —
+// TERMINOLOGY: PRIVATE / PUBLIC, and TARI (TICKER, sapient/units.ts). The app purged "shielded / unshielded" outright —
 // wallet/v2/total.ts puts the rule as "the words here have to be the words the screen around them
 // uses", and moveCopy.test.ts pins it with a case-insensitive assertion that no derived string may
 // match /shielded/i ("Nothing may bring it back"). This page was the last surface still saying it.
@@ -246,7 +246,7 @@ function AppMockup() {
 
             IT HOVERS NOW, AND ONLY HERE. The rail carries the app's own .cv-nav-item and
             .cv-accent-tile, so the rows and the identity tile answer the pointer exactly as the
-            real ones do. The PANE beside it cannot: WalletStill is inert, and inert takes a subtree
+            real ones do. The PANE beside it cannot: ChatStill is inert, and inert takes a subtree
             out of hit testing, so its buttons never see a hover to respond to. The asymmetry is
             measured rather than chosen — see the .cv-lp-mock block in LANDING_CSS.
 

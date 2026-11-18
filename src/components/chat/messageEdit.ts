@@ -1,7 +1,7 @@
 // Pure logic for the per-message edit UI (M3) — kept out of ChatApp so the rules are testable
 // rather than tangled in render. Nothing here touches React, the store, or the wire.
 //
-// The optimistic layer lives here too. WalletContext.editMessage deliberately updates the store
+// The optimistic layer lives here too. ChatContext.editMessage deliberately updates the store
 // only once a relay has ACCEPTED the edit (M2), so between Save and that acceptance there is
 // nothing in `messages` to render. An in-flight map covers exactly that window: it holds the new
 // text while the publish is outstanding, and the bubble falls back to the stored text the moment
@@ -18,7 +18,7 @@ export interface EditFlight {
 }
 
 // logicalId → flight. Keyed by logical id, not message id, because that is the handle the wire and
-// WalletContext.editMessage both use.
+// ChatContext.editMessage both use.
 export type EditFlightMap = Record<string, EditFlight>
 
 // Which rows offer the Edit affordance. MINE-ONLY, and from M4 the same rule for DMs and groups —
@@ -47,7 +47,7 @@ export type EditFlightMap = Record<string, EditFlight>
 //                       is exactly how a media row would regain the pencil after a future refactor.
 //
 // Not checked here, deliberately: whether the row's GROUP is still active. That is a send-time
-// concern with a different answer (WalletContext.editMessage refuses a non-active group), and a
+// concern with a different answer (ChatContext.editMessage refuses a non-active group), and a
 // non-active group's thread is not rendered at all — so there is no bubble to hang this off.
 export function canEditMessage(m: CaravelMessage): boolean {
   return m.direction === 'sent'

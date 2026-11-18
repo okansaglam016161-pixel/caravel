@@ -224,7 +224,7 @@ export class NostrMessagingProvider implements MessagingProvider {
 
   // Send an EDIT of an already-sent message (M2). Boolean, not a throw: acceptance by any one relay
   // is all we can observe, and the caller decides how to surface a miss. Nothing is applied locally
-  // here — WalletContext.editMessage applies via the store only after this resolves true, so a
+  // here — ChatContext.editMessage applies via the store only after this resolves true, so a
   // failed send never leaves the sender showing text the recipient will never see.
   async sendEdit(recipientPubkeyHex: string, targetLogicalId: string, newText: string, revision: number): Promise<boolean> {
     const wrapped = wrapEdit(this.secretKey, recipientPubkeyHex, targetLogicalId, newText, revision)
@@ -270,7 +270,7 @@ export class NostrMessagingProvider implements MessagingProvider {
 
   // Send a REACTION on a DM (reactions v1). Boolean, exactly like sendEdit: relay acceptance is all
   // we can observe, and the caller decides how to surface a miss. Nothing is applied locally here —
-  // WalletContext.reactMessage writes the store only once this resolves true, so a send that went
+  // ChatContext.reactMessage writes the store only once this resolves true, so a send that went
   // nowhere never leaves this device showing a reaction no peer will ever see.
   //
   // Note what is NOT checked here, deliberately: neither that the target is mine (it need not be)
@@ -730,7 +730,7 @@ export class NostrMessagingProvider implements MessagingProvider {
       // because the applier keys every row on this authenticated value, so a reaction can only ever
       // touch the sender's OWN row. See applyReactionByLogicalId.
       //
-      // Note this bypasses the tombstone gate in WalletContext's onMessage, exactly as an edit does:
+      // Note this bypasses the tombstone gate in ChatContext's onMessage, exactly as an edit does:
       // control messages never reach it. Harmless — a deleted conversation's rows are gone, so the
       // applier's unknown-logicalId guard no-ops on anything a backfill replays.
       if (reaction) {

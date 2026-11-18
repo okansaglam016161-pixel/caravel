@@ -2,7 +2,7 @@
 //
 // Chat no longer depends on the wallet. Its identity is its own: a Nostr key from a 12-word NIP-06
 // phrase or an imported nsec, held in a password-encrypted record (crypto/chatIdentityStore) beside a
-// random storage key that seals every messaging store (sessionKey scope 'chat'). Chat unlocks with its
+// random storage key that seals every messaging store (sessionKey). Chat unlocks with its
 // own password, and keeps working with the wallet locked or not set up at all.
 //
 // The messaging state and actions below moved here verbatim from WalletContext; only their lifecycle
@@ -105,7 +105,7 @@ export interface ChatCtx {
   /** Sent + received messages for the current identity, persisted per-pubkey in localStorage
    *  and reloaded on unlock. React state is cleared on lock; the stored copy survives. */
   messages: CaravelMessage[]
-  /** True when this session could not OPEN the stored history — see WalletContext for what follows. */
+  /** True when this session could not OPEN the stored history (the store key did not open it). */
   historyUnreadable: boolean
   /** Persist + surface a message we just sent (the CaravelMessage returned by sendMessage). */
   recordSentMessage: (msg: CaravelMessage) => void
@@ -455,7 +455,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   // The one place an opened identity becomes the live session. The storage key is set BEFORE
   // startMessaging, which is where every chat store read begins.
   const adopt = useCallback((identity: NostrIdentity, storeKey: Uint8Array) => {
-    setStoreKey(storeKey, 'chat')
+    setStoreKey(storeKey)
     nostrSecretKeyRef.current = identity.privateKeyHex
     setNostrNpub(identity.npub)
     setNostrPubkeyHex(identity.publicKeyHex)
@@ -541,7 +541,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     setNostrNpub(null)
     setNostrPubkeyHex(null)
     nostrSecretKeyRef.current = null
-    clearStoreKey('chat')
+    clearStoreKey()
   }, [])
 
   // Record a message we just sent (the CaravelMessage returned by provider.sendMessage),

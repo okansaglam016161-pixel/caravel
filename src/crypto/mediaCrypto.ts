@@ -1,6 +1,6 @@
-// AES-256-GCM for image attachments (M2). Same primitive, same conventions as walletCrypto.ts —
+// AES-256-GCM for image attachments (M2). Same primitive, same conventions as (former) walletCrypto.ts —
 // 12-byte nonce from crypto.getRandomValues, base64 for key material, the `as BufferSource` casts
-// below — but a different key model: walletCrypto DERIVES its key from a password (PBKDF2), while
+// below — but a different key model: (former) walletCrypto DERIVES its key from a password (PBKDF2), while
 // every image gets a fresh RANDOM key that travels to the recipient inside the gift wrap.
 //
 // The security boundary is the GCM auth tag. It authenticates the ciphertext under the key, so a
@@ -13,7 +13,7 @@
 
 import { b64Decode, b64Encode } from './base64'
 
-// 96 bits, the GCM standard nonce size and what walletCrypto uses for the same primitive.
+// 96 bits, the GCM standard nonce size and what (former) walletCrypto uses for the same primitive.
 const NONCE_BYTES = 12
 // 256-bit content key.
 const KEY_BYTES = 32
@@ -46,7 +46,7 @@ export async function encryptMedia(plaintext: ArrayBuffer): Promise<EncryptedMed
   // `keyBytes as BufferSource`: a Uint8Array IS a BufferSource at runtime, but TS's generic
   // Uint8Array<ArrayBufferLike> default doesn't structurally match BufferSource (which requires
   // ArrayBuffer, not SharedArrayBuffer). Lib-typing only — no runtime effect. Same cast, same
-  // reason, as walletCrypto.deriveKey.
+  // reason, as (former) walletCrypto.deriveKey.
   const key = await crypto.subtle.importKey('raw', keyBytes as BufferSource, 'AES-GCM', false, ['encrypt'])
   const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: nonce }, key, plaintext)
 
@@ -60,7 +60,7 @@ export async function encryptMedia(plaintext: ArrayBuffer): Promise<EncryptedMed
 }
 
 // Decrypt. THROWS on failure — a wrong key, a wrong nonce, or a single altered byte all surface as
-// a DOMException 'OperationError', exactly as a wrong wallet password does (see walletCrypto and
+// a DOMException 'OperationError', exactly as a wrong wallet password does (see (former) walletCrypto and
 // UnlockWallet's handling). Callers classify; blossomClient maps it to `undecryptable`.
 export async function decryptMedia(
   ciphertext: ArrayBuffer,

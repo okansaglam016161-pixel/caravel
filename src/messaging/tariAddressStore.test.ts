@@ -28,7 +28,7 @@ const sealedOnDisk = () => JSON.parse(localStorage.getItem(SKEY)!).v === 2
 
 beforeEach(() => {
   globalThis.localStorage = memoryStorage()
-  setStoreKey(Uint8Array.from(STORE_KEY), 'chat')
+  setStoreKey(Uint8Array.from(STORE_KEY))
 })
 
 const SKEY = 'caravel.tariaddr.v1.' + ME
@@ -50,9 +50,9 @@ describe('encryption at rest', () => {
 
   it('cannot be read with a different key, or with none', () => {
     setTariAddress(ME, {}, PEER, 'otl_esm_1abc', 'manual')
-    setStoreKey(new Uint8Array(32).fill(7), 'chat')
+    setStoreKey(new Uint8Array(32).fill(7))
     expect(loadTariAddresses(ME)).toEqual({})
-    clearStoreKey('chat')
+    clearStoreKey()
     expect(loadTariAddresses(ME)).toEqual({})
   })
 })
@@ -88,15 +88,15 @@ describe('never clobber', () => {
   it('will not overwrite a store it could not read', () => {
     setTariAddress(ME, {}, PEER, 'otl_esm_1keep', 'exchanged')
     const original = localStorage.getItem(SKEY)!
-    setStoreKey(new Uint8Array(32).fill(7), 'chat')
+    setStoreKey(new Uint8Array(32).fill(7))
     setTariAddress(ME, {}, PEER, 'otl_esm_1new', 'manual')
     expect(localStorage.getItem(SKEY)).toBe(original)
-    setStoreKey(Uint8Array.from(STORE_KEY), 'chat')
+    setStoreKey(Uint8Array.from(STORE_KEY))
     expect(loadTariAddresses(ME)[PEER].address).toBe('otl_esm_1keep')
   })
 
   it('will not write with no store key', () => {
-    clearStoreKey('chat')
+    clearStoreKey()
     setTariAddress(ME, {}, PEER, 'otl_esm_1abc', 'manual')
     expect(localStorage.getItem(SKEY)).toBeNull()
   })

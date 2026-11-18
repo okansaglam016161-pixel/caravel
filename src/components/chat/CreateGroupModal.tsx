@@ -1,5 +1,5 @@
 //   Phase 1 create-group modal: name + multi-select from existing contacts. The creator is added to
-//   the roster automatically (in WalletContext.createGroup), so only OTHER members are selected here.
+//   the roster automatically (in ChatContext.createGroup), so only OTHER members are selected here.
 //
 //   ONE STEP, AND NO npub ENTRY. You pick from people you already have a conversation with. Adding a
 //   stranger to a group would be a feature — a second resolution flow, and a decision about whether

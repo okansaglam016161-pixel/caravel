@@ -5,7 +5,7 @@
 // it — and not who: every upload is authorised by a FRESH EPHEMERAL KEY (see buildUploadAuth), so
 // nothing ties an upload to the Caravel identity or to any other upload.
 //
-// Failure classification mirrors crypto/paymentResolver.ts, and for the same reason: the caller
+// Failure classification mirrors (former) crypto/paymentResolver.ts, and for the same reason: the caller
 // (M4's resolver hook) needs to know what is worth retrying. A 404 from a host that purged the blob
 // is permanent; a dropped connection is not. Getting that split wrong means either a spinner that
 // never stops or an image marked dead over a blip.

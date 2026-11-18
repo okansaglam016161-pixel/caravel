@@ -480,7 +480,7 @@ a:hover { color: var(--accent-200); }
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-thumb { background: rgba(var(--border-rgb), 0.55); border-radius: 4px; }
 
-/* Shared animations for the primitive kit + wallet modal (components/primitives/*, WalletModal). */
+/* Shared animations for the primitive kit (components/primitives/*) and chat. */
 @keyframes cv-spin { to { transform: rotate(360deg); } }
 
 /* Tap-to-jump flash (replies v1): the jumped-to message pulses once, then fades. DELIBERATELY NOT

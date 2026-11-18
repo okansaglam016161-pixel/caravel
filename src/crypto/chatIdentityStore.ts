@@ -5,7 +5,7 @@
 // that seals the chat stores. ALL OF IT IS INSIDE THE ENVELOPE — not even the npub sits in plaintext,
 // so the record does not say whose it is to anyone without the password.
 //
-// Read failures follow the wallet record's rule (walletCrypto.loadStoredWallet): ABSENT returns null,
+// Read failures follow one rule: ABSENT returns null,
 // but PRESENT-AND-UNREADABLE throws. Reading an unopenable record as "no identity here" would send the
 // person to the create screen, where making a new identity overwrites the one they could not open.
 //

@@ -44,11 +44,11 @@ const parse: Parse<AddressSentMap> = decoded => {
 }
 
 function save(myPubkeyHex: string, map: AddressSentMap): void {
-  writeStore(key(myPubkeyHex), JSON.stringify(map), parse, 'chat')
+  writeStore(key(myPubkeyHex), JSON.stringify(map), parse)
 }
 
 export function loadAddressSent(myPubkeyHex: string): AddressSentMap {
-  return loadStore(key(myPubkeyHex), parse, () => ({}), 'chat')
+  return loadStore(key(myPubkeyHex), parse, () => ({}))
 }
 
 // Mark my address delivered to a peer. Returns the next map.

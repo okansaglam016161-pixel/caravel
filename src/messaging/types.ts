@@ -359,7 +359,7 @@ export interface MessagingProvider {
   // receipt: a partial fan-out leaves some members on the new text and some on the old, and neither
   // side can tell which.
   //
-  // NEVER THROWS, unlike sendGroupMessage — the caller (WalletContext.editMessage) is awaited from a
+  // NEVER THROWS, unlike sendGroupMessage — the caller (ChatContext.editMessage) is awaited from a
   // `void saveEdit()` with no catch, so a rejection here would escape as an unhandled rejection.
   // Same contract as sendGroupLeave for the same class of reason.
   sendGroupEdit(groupId: string, memberPubkeysHex: string[], targetLogicalId: string, newText: string, revision: number): Promise<{ memberCount: number; membersReached: number }>

@@ -6,8 +6,7 @@
 //   network. The connected pill opens a small menu: the full address (copy), the network, view access
 //   (with Grant when it is off) and Disconnect.
 //
-//   This is CONNECTION ONLY. Chat payments still go through the built-in wallet until the payments
-//   step moves them onto Sapient.
+//   Payments themselves (send, claim) live in ChatApp, sapient/payments and hooks/usePaymentClaimer.
 
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { useSapient } from '../../context/SapientContext'

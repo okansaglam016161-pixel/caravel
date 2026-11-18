@@ -39,11 +39,11 @@ function key(myPubkeyHex: string) { return `caravel.contacts.v1.${myPubkeyHex}` 
 const parse: Parse<ContactMap> = decoded => asRecord(decoded) as ContactMap | null
 
 function save(myPubkeyHex: string, map: ContactMap): void {
-  writeStore(key(myPubkeyHex), JSON.stringify(map), parse, 'chat')
+  writeStore(key(myPubkeyHex), JSON.stringify(map), parse)
 }
 
 export function loadContacts(myPubkeyHex: string): ContactMap {
-  return loadStore(key(myPubkeyHex), parse, () => ({}), 'chat')
+  return loadStore(key(myPubkeyHex), parse, () => ({}))
 }
 
 /**

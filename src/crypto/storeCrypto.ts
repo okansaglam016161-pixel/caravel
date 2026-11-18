@@ -1,8 +1,8 @@
 // The AT-REST ENVELOPE for Caravel's local stores — seal a JSON string, open it again.
 //
 // Stage 2 of the encryption-at-rest work. Stage 1 (sessionKey.ts) made a store key exist for the
-// unlocked session; this is the thing that uses it. journalStore is the only consumer today; the
-// remaining stores adopt it in later stages, which is why this module knows nothing about journals.
+// unlocked session; this is the thing that uses it — every messaging store, through crypto/storeIo.
+// It knows nothing about any one store's shape.
 //
 // ── SYNCHRONOUS, AND THAT IS THE WHOLE REASON IT IS NOT crypto.subtle ────────
 //
@@ -16,7 +16,7 @@
 //
 // ── XCHACHA20-POLY1305, WHERE THE REST OF THE APP USES AES-256-GCM ───────────
 //
-// A DELIBERATE INCONSISTENCY, recorded here so it is not read as an oversight. walletCrypto (the
+// A DELIBERATE INCONSISTENCY, recorded here so it is not read as an oversight. (former) walletCrypto (the
 // mnemonic) and mediaCrypto (image attachments) both use AES-256-GCM, and matching them would have
 // been the tidier choice.
 //
@@ -78,7 +78,7 @@ export type OpenResult =
  * THE DISCRIMINATOR THE MIGRATION RESTS ON. A stored value that does not have this shape is v1
  * plaintext — the format every store used before this module existed — and absence of the version
  * field positively identifies it, the same way a missing `scheme` positively identifies a
- * pre-CipherSeed wallet in walletCrypto.
+ * pre-CipherSeed wallet in (former) walletCrypto.
  *
  * THIS REQUIRES THAT NO STORE'S PLAINTEXT SHAPE HAS A TOP-LEVEL `v`. True across all of them today:
  * the journal is an array, the epoch is keyed startedAt/degradedAt/covers, every messaging store is

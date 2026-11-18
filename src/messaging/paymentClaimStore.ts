@@ -38,13 +38,13 @@ const parse: Parse<ClaimMap> = decoded => {
 }
 
 export function loadClaims(myPubkeyHex: string): ClaimMap {
-  return loadStore(key(myPubkeyHex), parse, () => ({}), 'chat')
+  return loadStore(key(myPubkeyHex), parse, () => ({}))
 }
 
 export function saveClaim(myPubkeyHex: string, utxoId: string, claim: StoredClaim): void {
   const map = loadClaims(myPubkeyHex)
   map[utxoId] = claim
-  writeStore(key(myPubkeyHex), JSON.stringify(map), parse, 'chat')
+  writeStore(key(myPubkeyHex), JSON.stringify(map), parse)
 }
 
 /** Forget outcomes — a conversation delete, or a Retry on an unconfirmed payment. */
@@ -53,5 +53,5 @@ export function removeClaims(myPubkeyHex: string, utxoIds: string[]): void {
   const map = loadClaims(myPubkeyHex)
   let changed = false
   for (const id of utxoIds) if (id in map) { delete map[id]; changed = true }
-  if (changed) writeStore(key(myPubkeyHex), JSON.stringify(map), parse, 'chat')
+  if (changed) writeStore(key(myPubkeyHex), JSON.stringify(map), parse)
 }

@@ -66,7 +66,7 @@
 //   pass, so on the default light theme this is a white tile. There is no dark island left here —
 //   the payment card was the only thing that earned one.
 //
-//   INERT, like WalletStill beside it. Nothing in a picture should take focus or a click; the
+//   INERT. Nothing in a picture should take focus or a click; the
 //   attribute also removes the subtree from the accessibility tree, which is right for decoration.
 
 import Avatar from '../chat/Avatar'

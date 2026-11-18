@@ -7,7 +7,7 @@ import ChatIdentityGate from './chat/identity/ChatIdentityGate'
  * - Chat unlocked → the service shell (Chat is the default view)
  * - otherwise     → the chat identity gate (create / import / unlock)
  *
- * The wallet is optional and sets itself up from its own tab — see WalletPage.
+ * Payments go through Sapient (the browser wallet); Caravel holds no wallet of its own.
  */
 export default function AppRoute() {
   const { chatUnlocked } = useChat()

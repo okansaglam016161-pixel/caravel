@@ -1,9 +1,6 @@
 // A string, encrypted under a password: PBKDF2-SHA-256 (600 000 iterations) → AES-256-GCM.
 //
-// The chat identity record's envelope (crypto/chatIdentityStore). The same construction, parameters
-// and iteration count the wallet record uses (crypto/walletCrypto) — duplicated rather than shared on
-// purpose: the built-in wallet is temporary, and leaving its record code untouched until it goes is
-// cheaper than threading a refactor through code that is about to be deleted.
+// The chat identity record's envelope (crypto/chatIdentityStore).
 //
 // A wrong password is not distinguishable from a damaged ciphertext: AES-GCM authentication fails
 // either way, and openWithPassword throws. Callers say "wrong password" because that is by far the

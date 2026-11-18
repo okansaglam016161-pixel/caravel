@@ -878,7 +878,7 @@ export default function ChatApp() {
 
   // Send the composer draft to the selected conversation. Same proven path as the dev panel:
   // a throwaway provider per send (a separate NostrMessagingProvider instance — it does NOT
-  // disturb the long-lived subscription in WalletContext), then record the returned message so
+  // disturb the long-lived subscription in ChatContext), then record the returned message so
   // it appears in the thread immediately without waiting for a relay round-trip.
   async function handleSend() {
     const text = draft.trim()
@@ -1653,7 +1653,7 @@ export default function ChatApp() {
 
   return (
     <>
-    {/* FILLS ITS PANE, like WalletPage and NamePage do. AppShell's Pane is a flex row, so chat's
+    {/* FILLS ITS PANE. AppShell's Pane is a flex row, so chat's
         root has to grow into it — without `flex: 1` it shrink-to-fits the sidebar plus the thread's
         intrinsic width and leaves the rest of the pane blank. `minWidth: 0` travels with it: a flex
         item otherwise refuses to shrink below its content's min-content width, which is what would
@@ -2667,7 +2667,7 @@ export default function ChatApp() {
            modal — from BEFORE the group existed — so the lookup returns undefined, the guard fails,
            and nothing is selected. The group was created and the user landed nowhere.
            The returned Group is well-formed and `state: 'active'` by construction (see createGroup in
-           WalletContext), so the very object in hand is the answer the guard was reaching for stale
+           ChatContext), so the very object in hand is the answer the guard was reaching for stale
            state to find. Mirrors acceptInvite, which sets both directly for the same reason. */
         onCreate={(name, memberHexes) => {
           void createGroup(name, memberHexes).then(g => {

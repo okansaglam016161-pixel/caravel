@@ -70,7 +70,7 @@
 // which lets them run inside a React updater (`setMessages(prev => addSentMessage(…))`). Nothing here
 // may be called from inside an updater.
 //
-// That is not a new problem for this codebase: usePaymentResolution is already an async, cache-first
+// That is not a new problem for this codebase: (former) usePaymentResolution is already an async, cache-first
 // resolver with loading/resolved/failed states and module-level in-flight dedup. A media hook is the
 // same machine with an async cache read in front of it, so the async-ness stays behind a hook and
 // never reaches the synchronous stores.
@@ -120,7 +120,7 @@ export interface CachedBlob {
 // ── Keying ────────────────────────────────────────────────────────────────────
 
 // The composite primary key. Direct analogue of the localStorage convention (one namespace per
-// identity) and of usePaymentResolution's `${pubkey}:${utxoId}` dedup key, for the same reason: two
+// identity) and of (former) usePaymentResolution's `${pubkey}:${utxoId}` dedup key, for the same reason: two
 // identities on one device must never read each other's data, and without the pubkey the lookup key
 // is unguessable.
 //
@@ -136,7 +136,7 @@ export function blobCacheKey(pubkeyHex: string, blobKey: string): string {
 
 // Singleton open, shared by every caller. Without it, StrictMode's double-invocation plus several
 // image cards mounting at once would each open the database independently. Same purpose as
-// usePaymentResolution's `inflightResolve`, with one difference: a DB handle is a long-lived resource,
+// (former) usePaymentResolution's `inflightResolve`, with one difference: a DB handle is a long-lived resource,
 // so a SUCCESSFUL open is kept, while a failed one is cleared so a later call can retry.
 let dbPromise: Promise<IDBDatabase | null> | null = null
 
@@ -236,7 +236,7 @@ async function withStore<T>(
 
 // ── Sealing ───────────────────────────────────────────────────────────────────
 
-/** GCM's standard nonce width, and what mediaCrypto and walletCrypto use for the same primitive. */
+/** GCM's standard nonce width, and what mediaCrypto and (former) walletCrypto use for the same primitive. */
 const NONCE_BYTES = 12
 
 // The imported form of the session store key. getStoreKey() hands out RAW BYTES — sessionKey derives
@@ -259,11 +259,11 @@ let importedKey: { raw: Uint8Array; key: CryptoKey } | null = null
  * guarantees the engine kept only one copy.
  */
 async function sealingKey(): Promise<CryptoKey | null> {
-  const raw = getStoreKey('chat')
+  const raw = getStoreKey()
   if (raw === null) { importedKey = null; return null }
   if (importedKey !== null && importedKey.raw === raw) return importedKey.key
   try {
-    // `raw as BufferSource`: the same lib-typing reconciliation walletCrypto and mediaCrypto both
+    // `raw as BufferSource`: the same lib-typing reconciliation (former) walletCrypto and mediaCrypto both
     // document — a Uint8Array IS a BufferSource at runtime. No runtime effect.
     const key = await crypto.subtle.importKey('raw', raw as BufferSource, 'AES-GCM', false, ['encrypt', 'decrypt'])
     importedKey = { raw, key }
@@ -420,7 +420,7 @@ export async function hasBlob(pubkeyHex: string, blobKey: string): Promise<boole
 // destruction IS the operation, and refusing to purge while locked would only strand bytes.
 //
 // Resolves when the transaction commits, but callers are expected to fire it and move on: the delete
-// paths in WalletContext are synchronous and must not wait on a best-effort cleanup of a
+// paths in ChatContext are synchronous and must not wait on a best-effort cleanup of a
 // non-authoritative cache.
 export async function deleteBlobs(pubkeyHex: string, blobKeys: string[]): Promise<void> {
   if (!pubkeyHex || blobKeys.length === 0) return

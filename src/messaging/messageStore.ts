@@ -7,7 +7,7 @@ import { open, seal } from '../crypto/storeCrypto'
 // while the stored copy persists. Two deliberate divergences from txHistory:
 //   1. No bigint fields — CaravelMessage is fully JSON-safe, so there is no toRaw/fromRaw layer.
 //   2. Function names are *Message-suffixed to avoid colliding with txHistory's addSent, which
-//      WalletContext imports alongside these.
+//      ChatContext imports alongside these.
 
 // Window within which a self-authored 'received' copy is treated as an echo of a local 'sent'
 // message (see addReceivedMessage). Generous enough to cover relay round-trip + clock skew.
@@ -70,7 +70,7 @@ function read(pubkeyHex: string): MessagesRead {
     return { status: 'unreadable' }
   }
 
-  const opened = open(getStoreKey('chat'), raw)
+  const opened = open(getStoreKey(), raw)
   if (opened.status !== 'ok') return opened
 
   try {
@@ -94,7 +94,7 @@ export function loadMessages(pubkeyHex: string): CaravelMessage[] {
  * wrong one for DECIDING. A caller about to act on the absence of history needs to know whether the
  * history is absent or merely unopenable: unopenable means "I cannot tell", and inferring "this peer
  * is new" from it is how a failed read of this store ended up rewriting a healthy contacts store.
- * See the pending-contact rule in WalletContext's subscribe().
+ * See the pending-contact rule in ChatContext's subscribe().
  *
  * Deliberately a SIBLING rather than a widened loadMessages: the collapsing form is correct for the
  * seven mutation helpers below, which have no decision to make, and for the tests that read back
@@ -121,7 +121,7 @@ export function loadMessagesResult(pubkeyHex: string): MessagesRead {
  *    read. Losing one message to a refusal is recoverable; losing every message is not.
  */
 function save(pubkeyHex: string, messages: CaravelMessage[]): void {
-  const storeKey = getStoreKey('chat')
+  const storeKey = getStoreKey()
   if (storeKey === null) return
   if (read(pubkeyHex).status === 'unreadable') return
 

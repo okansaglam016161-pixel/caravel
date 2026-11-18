@@ -6,7 +6,7 @@ import type { MediaRef } from '../messaging/types'
 
 // ── Image resolution (images M4) ──────────────────────────────────────────────
 //
-// The twin of usePaymentResolution, and deliberately so: cache-first, module-level in-flight dedup
+// The twin of (former) usePaymentResolution, and deliberately so: cache-first, module-level in-flight dedup
 // keyed per identity, bounded backoff for transient failures only, no polling, terminal failures
 // never retried. Same shape, same backoff numbers, same cancellation style (a `cancelled` flag plus
 // cleared timers rather than an AbortSignal).
@@ -17,7 +17,7 @@ import type { MediaRef } from '../messaging/types'
 //      verify → decrypt inside one call, so the boundary is not observable from here. Splitting M2's
 //      API to expose it would scatter the host-fallback logic for the sake of a spinner label.
 //
-//   2. A CACHE HIT CANNOT RENDER ON THE FIRST PAINT. usePaymentResolution seeds useState
+//   2. A CACHE HIT CANNOT RENDER ON THE FIRST PAINT. (former) usePaymentResolution seeds useState
 //      synchronously from localStorage; getBlob is IndexedDB and therefore async, so even a fully
 //      cached image shows 'loading' for one tick. The sized box in MediaMessageCard absorbs this —
 //      it is a brief empty frame, never a layout jump. If that flash ever looks bad, the fix is a
@@ -42,7 +42,7 @@ type Resolution =
 
 // In-flight dedup: one download per (identity, ciphertext hash), however many cards mount at once,
 // and however many times StrictMode double-invokes the effect. Keyed by pubkey too so it cannot leak
-// across identities — the same rule as usePaymentResolution's inflightResolve.
+// across identities — the same rule as (former) usePaymentResolution's inflightResolve.
 //
 // ⚠️ THIS MAP HOLDS ArrayBuffers ONLY, NEVER OBJECT URLs. Caching a URL here would outlive every
 // component that could revoke it, which is precisely the leak this module is built to avoid. Each

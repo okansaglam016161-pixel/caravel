@@ -36,7 +36,7 @@ import { pushEscape } from './escapeStack'
 
 export default function MessageActionRow({ onReact, reactOpen, reactPopover, onReply, onEdit, menuAlign }: {
   // Each callback is optional; an omitted one drops its button. That is how a received bubble loses
-  // Edit, a self-thread bubble loses React (WalletContext.reactMessage has no one to publish to —
+  // Edit, a self-thread bubble loses React (ChatContext.reactMessage has no one to publish to —
   // see its DM branch), and a pre-M2 row with no logical id loses all three.
   onReact?: () => void
   reactOpen?: boolean

@@ -50,8 +50,8 @@ const parse: Parse<OutboxMap> = decoded => {
   return out
 }
 
-const load = (me: string): OutboxMap => loadStore<OutboxMap>(key(me), parse, () => ({}), 'chat')
-const save = (me: string, map: OutboxMap) => writeStore(key(me), JSON.stringify(map), parse, 'chat')
+const load = (me: string): OutboxMap => loadStore<OutboxMap>(key(me), parse, () => ({}))
+const save = (me: string, map: OutboxMap) => writeStore(key(me), JSON.stringify(map), parse)
 
 export function loadOutbox(myPubkeyHex: string): OutboxEntry[] {
   return Object.values(load(myPubkeyHex)).sort((a, b) => a.createdAt - b.createdAt)

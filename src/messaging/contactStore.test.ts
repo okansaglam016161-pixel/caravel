@@ -28,7 +28,7 @@ const sealedOnDisk = () => JSON.parse(localStorage.getItem(SKEY)!).v === 2
 
 beforeEach(() => {
   globalThis.localStorage = memoryStorage()
-  setStoreKey(Uint8Array.from(STORE_KEY), 'chat')
+  setStoreKey(Uint8Array.from(STORE_KEY))
 })
 
 const SKEY = 'caravel.contacts.v1.' + ME
@@ -74,15 +74,15 @@ describe('never clobber', () => {
   it('will not overwrite a store it could not read', () => {
     setContactState(ME, {}, PEER, 'accepted')
     const original = localStorage.getItem(SKEY)!
-    setStoreKey(new Uint8Array(32).fill(7), 'chat')
+    setStoreKey(new Uint8Array(32).fill(7))
     setContactState(ME, {}, 'c'.repeat(64), 'pending')
     expect(localStorage.getItem(SKEY)).toBe(original)
-    setStoreKey(Uint8Array.from(STORE_KEY), 'chat')
+    setStoreKey(Uint8Array.from(STORE_KEY))
     expect(loadContacts(ME)[PEER].state).toBe('accepted')
   })
 
   it('will not write with no store key', () => {
-    clearStoreKey('chat')
+    clearStoreKey()
     setContactState(ME, {}, PEER, 'accepted')
     expect(localStorage.getItem(SKEY)).toBeNull()
   })

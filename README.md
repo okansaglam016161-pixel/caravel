@@ -60,3 +60,5 @@ npm run test:live  # live end-to-end checks against real Nostr relays and Blosso
 ## License
 
 MIT: see [LICENSE](LICENSE).
+
+Sapient icon by 0xhra, MIT licence.

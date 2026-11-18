@@ -77,12 +77,11 @@ function Tag({ children }: { children: ReactNode }) {
   )
 }
 
-/** A card in the Ecosystem row. `drift` is its place in the slow diagonal drift (negative = started earlier). */
-function BackerCard({ logo, tag, title, drift, children }: { logo: ReactNode; tag: string; title: string; drift: string; children: ReactNode }) {
+/** A card in the Ecosystem belt. Its width comes from the belt's CSS (.cv-lp-set > .cv-lp-card). */
+function BackerCard({ logo, tag, title, children }: { logo: ReactNode; tag: string; title: string; children: ReactNode }) {
   return (
-    <div className="cv-lp-card cv-lp-drift" style={{
-      animationDelay: drift,
-      flex: '1 1 320px', minWidth: 0, background: 'var(--surface)', border: '1px solid var(--border)',
+    <div className="cv-lp-card" style={{
+      boxSizing: 'border-box', minWidth: 0, background: 'var(--surface)', border: '1px solid var(--border)',
       borderRadius: 18, padding: 32, boxShadow: 'var(--e1)',
       display: 'flex', gap: 22, alignItems: 'flex-start',
     }}>
@@ -106,6 +105,27 @@ function PartnerLogo({ src, alt, plate }: { src: string; alt: string; plate?: st
     }}>
       <img src={src} alt={alt} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
     </span>
+  )
+}
+
+/** The three Ecosystem cards, as one set (the belt repeats it). */
+function EcosystemCards() {
+  return (
+    <>
+      <BackerCard tag="BACKER" title="Digital Node Capital"
+        logo={<PartnerLogo src="/partner-dnc.png" alt="Digital Node Capital" plate="#FFFFFF" />}>
+        &ldquo;We back builders making privacy usable. Caravel does exactly that.&rdquo;
+      </BackerCard>
+      <BackerCard tag="PROTOCOL" title="Built on Tari"
+        logo={<PartnerLogo src="/partner-tari.jpg" alt="Tari" />}>
+        Caravel runs on the Ootle, Tari&rsquo;s programmable layer two for confidential assets.
+      </BackerCard>
+      {/* Sapient's own icon (tari-wallet public/icons/icon.svg, MIT, by 0xhra), on the same white plate. */}
+      <BackerCard tag="WALLET" title="Sapient"
+        logo={<PartnerLogo src="/partner-sapient.svg" alt="Sapient" plate="#FFFFFF" />}>
+        The Tari browser wallet. Your funds and keys stay in Sapient; Caravel never holds them.
+      </BackerCard>
+    </>
   )
 }
 
@@ -169,23 +189,19 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* ── Ecosystem: the backers. Heading styled like FAQs; 32px to the cards, the FAQs row gap. ── */}
-      <section className="cv-lp-wrap cv-lp-section">
-        <h2 className="cv-lp-h2">Ecosystem</h2>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 18, marginTop: 32 }}>
-          <BackerCard tag="BACKER" title="Digital Node Capital" drift="0s"
-            logo={<PartnerLogo src="/partner-dnc.png" alt="Digital Node Capital" plate="#FFFFFF" />}>
-            &ldquo;We back builders making privacy usable. Caravel does exactly that.&rdquo;
-          </BackerCard>
-          <BackerCard tag="PROTOCOL" title="Built on Tari" drift="-2.3s"
-            logo={<PartnerLogo src="/partner-tari.jpg" alt="Tari" />}>
-            Caravel runs on the Ootle, Tari&rsquo;s programmable layer two for confidential assets.
-          </BackerCard>
-          {/* Sapient's own icon (tari-wallet public/icons/icon.svg, MIT), on the same white plate. */}
-          <BackerCard tag="WALLET" title="Sapient" drift="-4.6s"
-            logo={<PartnerLogo src="/partner-sapient.svg" alt="Sapient" plate="#FFFFFF" />}>
-            The Tari browser wallet. Your funds and keys stay in Sapient; Caravel never holds them.
-          </BackerCard>
+      {/* ── Ecosystem: heading in the content column (styled like FAQs); the cards on a full-width
+          conveyor belt. Four copies of the set, the belt moving one set's width per cycle, so it loops
+          without a seam; the three copies after the first are hidden from assistive tech. ── */}
+      <section className="cv-lp-section">
+        <div className="cv-lp-wrap"><h2 className="cv-lp-h2">Ecosystem</h2></div>
+        <div className="cv-lp-marquee">
+          <div className="cv-lp-track">
+            {[0, 1, 2, 3].map(copy => (
+              <div key={copy} className="cv-lp-set" aria-hidden={copy > 0 ? true : undefined}>
+                <EcosystemCards />
+              </div>
+            ))}
+          </div>
         </div>
       </section>
 
@@ -290,9 +306,17 @@ const LANDING_CSS = `
 
 .cv-lp-primary { transition: background 0.15s; }
 
-/* The Ecosystem cards drift slowly up-right by ~10px (7px each way) and back, out of step. */
-.cv-lp-drift { animation: cv-lp-drift 7s ease-in-out infinite; will-change: transform; }
-@keyframes cv-lp-drift { 0%, 100% { transform: translate(0, 0); } 50% { transform: translate(7px, -7px); } }
+/* The Ecosystem belt: full page width, clipped (so the page never scrolls sideways), soft-faded at
+   both edges. The track holds four copies of the card set; moving it right by one set (25%) per cycle
+   loops seamlessly. Each card carries its own 18px right margin so every set is exactly equal. */
+.cv-lp-marquee { margin-top: 20px; padding: 12px 0; overflow: hidden;
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 96px, #000 calc(100% - 96px), transparent);
+  mask-image: linear-gradient(to right, transparent, #000 96px, #000 calc(100% - 96px), transparent); }
+.cv-lp-track { display: flex; width: max-content; animation: cv-lp-belt 36s linear infinite; will-change: transform; }
+.cv-lp-marquee:hover .cv-lp-track { animation-play-state: paused; }
+.cv-lp-set { display: flex; align-items: stretch; }
+.cv-lp-set > .cv-lp-card { flex: none; width: min(380px, 82vw); margin-right: 18px; }
+@keyframes cv-lp-belt { from { transform: translateX(-25%); } to { transform: translateX(0); } }
 .cv-lp-primary:hover { background: var(--accent-hover) !important; }
 
 @media (max-width: 640px) {
@@ -308,10 +332,23 @@ const LANDING_CSS = `
 @media (max-width: 380px) {
   .cv-lp-card { flex-direction: column; }
 }
+@media (max-width: 640px) {
+  .cv-lp-marquee { -webkit-mask-image: linear-gradient(to right, transparent, #000 32px, #000 calc(100% - 32px), transparent);
+    mask-image: linear-gradient(to right, transparent, #000 32px, #000 calc(100% - 32px), transparent); }
+}
 @media (prefers-reduced-motion: reduce) {
   .cv-lp, .cv-lp-primary { transition: none; }
   .cv-lp-count { animation: none; }
-  .cv-lp-drift { animation: none; }
+  /* No belt: the first set only, as a normal wrapping row in the content column. */
+  .cv-lp-marquee { -webkit-mask-image: none; mask-image: none; overflow: visible; padding: 0;
+    max-width: 1120px; margin: 32px auto 0; padding-left: 40px; padding-right: 40px; box-sizing: border-box; }
+  .cv-lp-track { animation: none; width: auto; }
+  .cv-lp-set { flex-wrap: wrap; gap: 18px; width: 100%; }
+  .cv-lp-set[aria-hidden="true"] { display: none; }
+  .cv-lp-set > .cv-lp-card { flex: 1 1 320px; width: auto; margin-right: 0; }
   .cv-lp-live-dot::after { animation: none; opacity: 0; }
+}
+@media (max-width: 640px) and (prefers-reduced-motion: reduce) {
+  .cv-lp-marquee { padding-left: 20px; padding-right: 20px; }
 }
 `

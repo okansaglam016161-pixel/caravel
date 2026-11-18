@@ -46,7 +46,7 @@ const STORE_KEY = new Uint8Array(32).fill(42)
 
 beforeEach(() => {
   globalThis.localStorage = memoryStorage()
-  setStoreKey(Uint8Array.from(STORE_KEY))
+  setStoreKey(Uint8Array.from(STORE_KEY), 'chat')
 })
 
 describe('applyEdit — guards', () => {
@@ -842,9 +842,9 @@ describe('messages: encryption at rest', () => {
 
   it('cannot be read with a different key, or with none', () => {
     addSentMessage(ME, [], msg())
-    setStoreKey(new Uint8Array(32).fill(7))
+    setStoreKey(new Uint8Array(32).fill(7), 'chat')
     expect(loadMessages(ME)).toEqual([])
-    clearStoreKey()
+    clearStoreKey('chat')
     expect(loadMessages(ME)).toEqual([])
   })
 })
@@ -882,7 +882,7 @@ describe('messages: refusing to write', () => {
   const MSG_KEY = 'caravel.messages.v1.' + ME
 
   it('will not write with no store key', () => {
-    clearStoreKey()
+    clearStoreKey('chat')
     addSentMessage(ME, [], msg())
     expect(localStorage.getItem(MSG_KEY)).toBeNull()
   })
@@ -891,20 +891,20 @@ describe('messages: refusing to write', () => {
     addSentMessage(ME, [], msg({ id: 'keep', plaintext: 'the history that must survive' }))
     const original = localStorage.getItem(MSG_KEY)!
 
-    setStoreKey(new Uint8Array(32).fill(7))       // wrong key
+    setStoreKey(new Uint8Array(32).fill(7), 'chat')       // wrong key
     expect(loadMessages(ME)).toEqual([])           // reads empty...
 
     addReceivedMessage(ME, [], msg({ id: 'new', direction: 'received' }))
     expect(localStorage.getItem(MSG_KEY)).toBe(original)   // ...and did not clobber
 
-    setStoreKey(Uint8Array.from(STORE_KEY))
+    setStoreKey(Uint8Array.from(STORE_KEY), 'chat')
     expect(loadMessages(ME)[0].plaintext).toBe('the history that must survive')
   })
 
   it('will not let a DELETE clobber an unreadable history either', () => {
     addSentMessage(ME, [], msg({ id: 'keep' }))
     const original = localStorage.getItem(MSG_KEY)!
-    setStoreKey(new Uint8Array(32).fill(7))
+    setStoreKey(new Uint8Array(32).fill(7), 'chat')
     deletePeerMessages(ME, [msg({ id: 'keep' })], PEER)
     expect(localStorage.getItem(MSG_KEY)).toBe(original)
   })
@@ -936,7 +936,7 @@ describe('loadMessagesResult — a failed read is not an empty one', () => {
 
   it('reports UNREADABLE, not empty, under a wrong key', () => {
     addSentMessage(ME, [], msg())
-    setStoreKey(new Uint8Array(32).fill(7))
+    setStoreKey(new Uint8Array(32).fill(7), 'chat')
     expect(loadMessagesResult(ME)).toEqual({ status: 'unreadable' })
     // The collapsing form still degrades to [] exactly as it always did — unchanged on purpose.
     expect(loadMessages(ME)).toEqual([])
@@ -944,7 +944,7 @@ describe('loadMessagesResult — a failed read is not an empty one', () => {
 
   it('reports UNREADABLE with no store key at all', () => {
     addSentMessage(ME, [], msg())
-    clearStoreKey()
+    clearStoreKey('chat')
     expect(loadMessagesResult(ME)).toEqual({ status: 'unreadable' })
   })
 

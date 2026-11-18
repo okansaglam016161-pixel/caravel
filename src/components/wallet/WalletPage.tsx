@@ -37,8 +37,22 @@
 
 import WalletModal from './WalletModal'
 import { PAGE_MAX_WIDTH } from './v2/tokens'
+import { useWallet } from '../../context/WalletContext'
+import CreateWallet from './CreateWallet'
+import UnlockWallet from './UnlockWallet'
 
 export default function WalletPage() {
+  // THE WALLET IS OPTIONAL NOW. Chat is the app's gate; the wallet sets itself up, or unlocks, here in
+  // its own tab — the same screens it used to show as the whole app. (Temporary: the built-in wallet
+  // is being replaced.)
+  const { wallet, walletExists } = useWallet()
+  if (!wallet) {
+    return (
+      <div style={{ flex: 1, minWidth: 0, overflowY: 'auto' }}>
+        {walletExists ? <UnlockWallet /> : <CreateWallet />}
+      </div>
+    )
+  }
   return (
     <div style={{ flex: 1, minWidth: 0, overflowY: 'auto' }}>
       <div style={{

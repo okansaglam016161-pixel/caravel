@@ -6,9 +6,8 @@
 // there. What is left here is the part that was always right: holding one key for the length of an
 // unlocked session, handing it to the stores that ask, and dropping it on lock.
 //
-// NOTHING ABOUT THE OLD SCHEME IS LEFT HERE. The reader for the retired `caravel.storekey.v1`
-// record, and the PBKDF2 derivation that went with it, live in storeKeyMigration.ts — together, so
-// that retiring the migration is one file deletion rather than an archaeology exercise across two.
+// NOTHING ABOUT THE OLD SCHEME IS LEFT. The retired `caravel.storekey.v1` record and its one-time
+// migration (storeKeyMigration.ts) were deleted once there were no devices left to convert.
 //
 // ── WHY MODULE STATE AND NOT REACT STATE ─────────────────────────────────────
 //
@@ -42,28 +41,35 @@
 // where it used to do two. Measured across the change: CipherSeed 121.7ms to 49.2ms, BIP-39 70.5ms
 // to 15.5ms.
 //
-// Devices that still hold stores sealed the old way are converted by storeKeyMigration.ts, once,
-// losslessly, at unlock.
+// ── TWO KEYS, ONE PER OWNER ──────────────────────────────────────────────────
+//
+// `wallet` is the key above: derived from the wallet seed, sealing the wallet's own records (journal,
+// spend record, ledger, history, reservations, receive-scan cursor). `chat` belongs to the standalone
+// chat identity — a random secret kept inside the password-encrypted chat record (chatIdentityStore)
+// — and seals every messaging store. The two never stand in for each other: Chat must keep working
+// with the wallet locked or absent, and the wallet is temporary.
 
 // ── Session state ────────────────────────────────────────────────────────────
 
-let storeKey: Uint8Array | null = null
+export type StoreScope = 'wallet' | 'chat'
 
-/** The live store key, or `null` while locked. */
-export function getStoreKey(): Uint8Array | null {
-  return storeKey
+const keys: Record<StoreScope, Uint8Array | null> = { wallet: null, chat: null }
+
+/** The live store key for `scope`, or `null` while that side is locked. */
+export function getStoreKey(scope: StoreScope = 'wallet'): Uint8Array | null {
+  return keys[scope]
 }
 
-export function hasStoreKey(): boolean {
-  return storeKey !== null
+export function hasStoreKey(scope: StoreScope = 'wallet'): boolean {
+  return keys[scope] !== null
 }
 
 /**
- * Adopt a derived key for this session. Called by create, unlock and restore — always BEFORE
- * adoptIdentity, so that no store read can ever observe an unlocked wallet with no key.
+ * Adopt a key for this session. Called by create, unlock and restore (and the chat identity's
+ * create, import and unlock) — always BEFORE any store read begins.
  */
-export function setStoreKey(key: Uint8Array): void {
-  storeKey = key
+export function setStoreKey(key: Uint8Array, scope: StoreScope = 'wallet'): void {
+  keys[scope] = key
 }
 
 /**
@@ -75,7 +81,7 @@ export function setStoreKey(key: Uint8Array): void {
  * the most obvious case (a heap snapshot taken after lock), which is worth having as long as nobody
  * reads it as a stronger promise than it is.
  */
-export function clearStoreKey(): void {
-  storeKey?.fill(0)
-  storeKey = null
+export function clearStoreKey(scope: StoreScope = 'wallet'): void {
+  keys[scope]?.fill(0)
+  keys[scope] = null
 }

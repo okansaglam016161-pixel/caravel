@@ -70,7 +70,7 @@ function read(pubkeyHex: string): MessagesRead {
     return { status: 'unreadable' }
   }
 
-  const opened = open(getStoreKey(), raw)
+  const opened = open(getStoreKey('chat'), raw)
   if (opened.status !== 'ok') return opened
 
   try {
@@ -121,7 +121,7 @@ export function loadMessagesResult(pubkeyHex: string): MessagesRead {
  *    read. Losing one message to a refusal is recoverable; losing every message is not.
  */
 function save(pubkeyHex: string, messages: CaravelMessage[]): void {
-  const storeKey = getStoreKey()
+  const storeKey = getStoreKey('chat')
   if (storeKey === null) return
   if (read(pubkeyHex).status === 'unreadable') return
 

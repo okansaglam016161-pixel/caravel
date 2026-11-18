@@ -42,7 +42,7 @@
 // in-load migration becomes permanent at the same time — tariAddressStore's legacy bare strings and
 // groupStore's missing `state` have both been re-derived on every load until now.
 
-import { getStoreKey } from './sessionKey'
+import { getStoreKey, type StoreScope } from './sessionKey'
 import { open, seal } from './storeCrypto'
 
 /**
@@ -67,12 +67,12 @@ export type StoreRead<T> =
 export type Parse<T> = (decoded: unknown) => T | null
 
 /** Decrypt-and-JSON status only. Deliberately does NOT run the store's Parse — see writeStore. */
-function statusOf<T>(storageKey: string, parse: Parse<T>): 'ok' | 'empty' | 'unreadable' {
-  const result = readStore(storageKey, parse)
+function statusOf<T>(storageKey: string, parse: Parse<T>, scope: StoreScope): 'ok' | 'empty' | 'unreadable' {
+  const result = readStore(storageKey, parse, scope)
   return result.status
 }
 
-export function readStore<T>(storageKey: string, parse: Parse<T>): StoreRead<T> {
+export function readStore<T>(storageKey: string, parse: Parse<T>, scope: StoreScope = 'wallet'): StoreRead<T> {
   let raw: string | null
   try {
     raw = localStorage.getItem(storageKey)
@@ -80,7 +80,7 @@ export function readStore<T>(storageKey: string, parse: Parse<T>): StoreRead<T> 
     return { status: 'unreadable' }   // storage disabled — not "nothing stored"
   }
 
-  const opened = open(getStoreKey(), raw)
+  const opened = open(getStoreKey(scope), raw)
   if (opened.status !== 'ok') return opened
 
   let decoded: unknown
@@ -107,10 +107,10 @@ export function readStore<T>(storageKey: string, parse: Parse<T>): StoreRead<T> 
  * record still reads — there is nothing to decrypt — but cannot be sealed, so it waits for an
  * unlocked session rather than being rewritten or lost.
  */
-export function loadStore<T>(storageKey: string, parse: Parse<T>, empty: () => T): T {
-  const result = readStore(storageKey, parse)
+export function loadStore<T>(storageKey: string, parse: Parse<T>, empty: () => T, scope: StoreScope = 'wallet'): T {
+  const result = readStore(storageKey, parse, scope)
   if (result.status !== 'ok') return empty()
-  if (result.legacy) writeStore(storageKey, JSON.stringify(result.value), parse)
+  if (result.legacy) writeStore(storageKey, JSON.stringify(result.value), parse, scope)
   return result.value
 }
 
@@ -127,10 +127,10 @@ export function loadStore<T>(storageKey: string, parse: Parse<T>, empty: () => T
  * therefore behaves exactly as a quota failure always has — React state holds something disk does
  * not, and a reload loses it.
  */
-export function writeStore<T>(storageKey: string, json: string, parse: Parse<T>): boolean {
-  const storeKey = getStoreKey()
+export function writeStore<T>(storageKey: string, json: string, parse: Parse<T>, scope: StoreScope = 'wallet'): boolean {
+  const storeKey = getStoreKey(scope)
   if (storeKey === null) return false
-  if (statusOf(storageKey, parse) === 'unreadable') return false
+  if (statusOf(storageKey, parse, scope) === 'unreadable') return false
 
   try {
     localStorage.setItem(storageKey, seal(storeKey, json))

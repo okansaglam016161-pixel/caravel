@@ -259,7 +259,7 @@ let importedKey: { raw: Uint8Array; key: CryptoKey } | null = null
  * guarantees the engine kept only one copy.
  */
 async function sealingKey(): Promise<CryptoKey | null> {
-  const raw = getStoreKey()
+  const raw = getStoreKey('chat')
   if (raw === null) { importedKey = null; return null }
   if (importedKey !== null && importedKey.raw === raw) return importedKey.key
   try {

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useWallet } from '../context/WalletContext'
+import { useChat } from '../context/ChatContext'
 import { resolvePayment, type PaymentResolution } from '../crypto/paymentResolver'
 import { loadResolvedAmounts, cacheResolvedAmount } from '../messaging/paymentResolutionStore'
 
@@ -23,6 +24,9 @@ function dedupResolve(myPubkeyHex: string, utxoId: string, viewSecret: Uint8Arra
 
 export type ResolveState =
   | { kind: 'loading' }
+  /** The wallet is locked or not set up, so there is no view key to open the output with. Chat runs
+   *  without the wallet now; this says why the amount is missing rather than hiding the payment. */
+  | { kind: 'wallet-locked' }
   | { kind: 'retrying'; reason: 'not_found' | 'network_error' }
   | { kind: 'resolved'; amountMicrotari: string }
   | { kind: 'failed'; reason: 'not_found' | 'network_error' | 'spent' | 'unreadable' }
@@ -38,20 +42,22 @@ const RESOLVE_BACKOFFS_MS = [2_000, 4_000, 8_000, 15_000, 30_000, 60_000]
 // Terminal failures (spent, unreadable) never auto-retry. Timers are cleared on unmount; manual
 // retry() re-runs the whole sequence.
 export function usePaymentResolution(utxoId: string): { state: ResolveState; retry: () => void } {
-  const { wallet, nostrPubkeyHex } = useWallet()
+  const { wallet } = useWallet()
+  const { nostrPubkeyHex } = useChat()
   const [nonce, setNonce] = useState(0)
   const [state, setState] = useState<ResolveState>(() => {
     if (nostrPubkeyHex) {
       const cached = loadResolvedAmounts(nostrPubkeyHex)[utxoId]
       if (cached) return { kind: 'resolved', amountMicrotari: cached }
     }
-    return { kind: 'loading' }
+    return wallet ? { kind: 'loading' } : { kind: 'wallet-locked' }
   })
 
   useEffect(() => {
-    if (!wallet || !nostrPubkeyHex) return
+    if (!nostrPubkeyHex) return
     const cached = loadResolvedAmounts(nostrPubkeyHex)[utxoId]
     if (cached) { setState({ kind: 'resolved', amountMicrotari: cached }); return }
+    if (!wallet) { setState({ kind: 'wallet-locked' }); return }
     const viewSecret = wallet.getViewOnlySecret()
     if (!viewSecret) return
 

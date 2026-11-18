@@ -2,9 +2,8 @@
 // dropping it on lock. That is all this module does now.
 //
 // WHERE THE REST WENT. The derivation moved to derivation.ts, where the key comes from the wallet's
-// own seed and has its own frozen vectors. The retired password-and-salt scheme — its record reader,
-// its PBKDF2, and their specs — moved to storeKeyMigration.ts, which exists only until every device
-// has been converted.
+// own seed and has its own frozen vectors. The retired password-and-salt scheme and its one-time
+// migration are gone: there were no devices left to convert.
 
 import { beforeEach, describe, expect, it } from 'vitest'
 import { clearStoreKey, getStoreKey, hasStoreKey, setStoreKey } from './sessionKey'

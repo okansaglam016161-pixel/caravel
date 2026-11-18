@@ -30,7 +30,7 @@ const sealedOnDisk = () => JSON.parse(localStorage.getItem(SKEY)!).v === 2
 
 beforeEach(() => {
   globalThis.localStorage = memoryStorage()
-  setStoreKey(Uint8Array.from(STORE_KEY))
+  setStoreKey(Uint8Array.from(STORE_KEY), 'chat')
 })
 
 const SKEY = 'caravel.addrsent.v1.' + ME
@@ -94,30 +94,30 @@ describe('never clobber', () => {
     const original = localStorage.getItem(SKEY)!
     // A re-minted salt derives a different key. The React mirror this store is called with was
     // seeded at mount from a load that now returns {}, so the write would have been the whole map.
-    setStoreKey(new Uint8Array(32).fill(7))
+    setStoreKey(new Uint8Array(32).fill(7), 'chat')
     markAddressSent(ME, {}, OTHER_PEER)
     expect(localStorage.getItem(SKEY)).toBe(original)
-    setStoreKey(Uint8Array.from(STORE_KEY))
+    setStoreKey(Uint8Array.from(STORE_KEY), 'chat')
     expect(loadAddressSent(ME)[PEER]).toBeTypeOf('number')
   })
 
   it('will not let a clear destroy a store it could not read either', () => {
     const map = markAddressSent(ME, {}, PEER)
     const original = localStorage.getItem(SKEY)!
-    setStoreKey(new Uint8Array(32).fill(7))
+    setStoreKey(new Uint8Array(32).fill(7), 'chat')
     clearAddressSent(ME, map, PEER)
     expect(localStorage.getItem(SKEY)).toBe(original)
   })
 
   it('will not write with no store key', () => {
-    clearStoreKey()
+    clearStoreKey('chat')
     markAddressSent(ME, {}, PEER)
     expect(localStorage.getItem(SKEY)).toBeNull()
   })
 
   it('reads as empty with no store key, rather than as a plaintext fallback', () => {
     markAddressSent(ME, {}, PEER)
-    clearStoreKey()
+    clearStoreKey('chat')
     expect(loadAddressSent(ME)).toEqual({})
   })
 })

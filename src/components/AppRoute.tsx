@@ -1,20 +1,15 @@
-import { useWallet } from '../context/WalletContext'
+import { useChat } from '../context/ChatContext'
 import AppShell from './shell/AppShell'
-import CreateWallet from './wallet/CreateWallet'
-import UnlockWallet from './wallet/UnlockWallet'
+import ChatIdentityGate from './chat/identity/ChatIdentityGate'
 
 /**
- * The /app route. Acts as a wallet gate:
- * - No wallet in localStorage → show create flow
- * - Wallet exists but not yet unlocked in memory → show unlock screen
- * - Wallet unlocked in memory → show the service shell (Wallet is the default view)
+ * The /app route. Gated on the CHAT identity, not the wallet:
+ * - Chat unlocked → the service shell (Chat is the default view)
+ * - otherwise     → the chat identity gate (create / import / unlock)
+ *
+ * The wallet is optional and sets itself up from its own tab — see WalletPage.
  */
 export default function AppRoute() {
-  const { wallet, walletExists } = useWallet()
-
-  if (wallet) return <AppShell />
-  // The gates follow the theme, so launching from a dark landing page arrives at a dark unlock
-  // screen rather than a light one. Their page backdrop reads role tokens now — see entryStyles.
-  if (walletExists) return <UnlockWallet />
-  return <CreateWallet />
+  const { chatUnlocked } = useChat()
+  return chatUnlocked ? <AppShell /> : <ChatIdentityGate />
 }

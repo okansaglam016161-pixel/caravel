@@ -39,6 +39,7 @@
 
 import { useEffect, useState } from 'react'
 import { useWallet } from '../../context/WalletContext'
+import { useChat, type ChatBackup } from '../../context/ChatContext'
 
 const MONO = 'var(--font-mono)'
 
@@ -150,11 +151,17 @@ function PanelButton({ tone, onClick, children, mt, disabled = false }: {
   )
 }
 
-type Step = 'main' | 'phraseAuth' | 'phraseWords'
+type Step = 'main' | 'phraseAuth' | 'phraseWords' | 'chatBackup'
 
 export default function ProfilePanel({ onClose }: { onClose: () => void }) {
-  const { getMnemonic, lock, address, nostrNpub } = useWallet()
+  const { getMnemonic, lock, address, wallet } = useWallet()
+  const { nostrNpub, revealChatBackup, lockChat } = useChat()
   const [step, setStep] = useState<Step>('main')
+  // Which secret the password step is for. The CHAT backup uses the chat password and the WALLET
+  // phrase the wallet password — two records, two passwords — and the same gate shape for both: the
+  // secret is only ever produced by a successful decrypt.
+  const [authFor, setAuthFor] = useState<'wallet' | 'chat'>('wallet')
+  const [backup, setBackup] = useState<ChatBackup | null>(null)
   const [phrasePass, setPhrasePass] = useState('')
   const [showPhrasePass, setShowPhrasePass] = useState(false)
   const [phraseError, setPhraseError] = useState('')
@@ -177,11 +184,16 @@ export default function ProfilePanel({ onClose }: { onClose: () => void }) {
     setPhraseError('')
     setPhraseLoading(true)
     try {
+      if (authFor === 'chat') {
+        setBackup(await revealChatBackup(phrasePass))
+        setStep('chatBackup')
+        return
+      }
       const mnemonic = await getMnemonic(phrasePass)
       setWords(mnemonic.split(' '))
       setStep('phraseWords')
     } catch (e) {
-      const isWrongPass = e instanceof DOMException && e.name === 'OperationError'
+      const isWrongPass = (e instanceof DOMException && e.name === 'OperationError') || (e instanceof Error && e.message === 'Wrong password.')
       setPhraseError(isWrongPass ? 'Incorrect password. Try again.' : `Failed: ${e instanceof Error ? e.message : String(e)}`)
     } finally {
       setPhraseLoading(false)
@@ -195,10 +207,15 @@ export default function ProfilePanel({ onClose }: { onClose: () => void }) {
     // The words leave state with the screen. Going back is not just navigation here — it is the
     // point at which the phrase stops being in memory for this component.
     setWords(null)
+    setBackup(null)
     setShowPhrasePass(false)
   }
 
-  function handleLock() { lock(); onClose() }
+  function openAuth(target: 'wallet' | 'chat') { setAuthFor(target); setStep('phraseAuth') }
+
+  // ONE LOCK FOR BOTH. Chat is the app's gate, so locking it returns to the chat unlock screen; the
+  // wallet locks with it rather than staying open behind a locked app.
+  function handleLock() { lock(); lockChat(); onClose() }
 
   return (
     <>
@@ -248,13 +265,13 @@ export default function ProfilePanel({ onClose }: { onClose: () => void }) {
                   and set before this panel can be opened, so its missing state is effectively
                   unreachable. It is written anyway, because the context type says `string | null`
                   and a row that renders `null` as text is how you ship the word "null" to a user. */}
-              <IdRow label="Address" value={address} missing="Resolving your account…" mt={24} />
-              <IdRow label="npub" value={nostrNpub} missing="npub unavailable" mt={8} />
+              <IdRow label="npub" value={nostrNpub} missing="npub unavailable" mt={24} />
+              <IdRow label="Address" value={address} missing={wallet ? 'Resolving your account…' : 'Wallet locked'} mt={8} />
 
               <div
                 role="button" tabIndex={0}
-                onClick={() => setStep('phraseAuth')}
-                onKeyDown={e => e.key === 'Enter' && setStep('phraseAuth')}
+                onClick={() => openAuth('chat')}
+                onKeyDown={e => e.key === 'Enter' && openAuth('chat')}
                 className="cv-quiet-btn"
                 style={{
                   display: 'flex', alignItems: 'center', gap: 10, marginTop: 8,
@@ -262,20 +279,38 @@ export default function ProfilePanel({ onClose }: { onClose: () => void }) {
                   border: '1px solid var(--border)', cursor: 'pointer',
                 }}
               >
-                <span style={{ flex: 1, fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>Show recovery phrase</span>
-                {/* The gate, ANNOUNCED. Someone deciding whether to tap this should know it will
-                    ask before it shows anything. */}
-                <span style={{ fontSize: 11.5, color: 'var(--text-muted-dim)' }}>Requires password</span>
+                <span style={{ flex: 1, fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>Show chat backup</span>
+                <span style={{ fontSize: 11.5, color: 'var(--text-muted-dim)' }}>Requires chat password</span>
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
                   <path d="M9 18l6-6-6-6" />
                 </svg>
               </div>
 
+              {wallet && <div
+                role="button" tabIndex={0}
+                onClick={() => openAuth('wallet')}
+                onKeyDown={e => e.key === 'Enter' && openAuth('wallet')}
+                className="cv-quiet-btn"
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 10, marginTop: 8,
+                  padding: '12px 14px', borderRadius: 10,
+                  border: '1px solid var(--border)', cursor: 'pointer',
+                }}
+              >
+                <span style={{ flex: 1, fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>Show wallet recovery phrase</span>
+                {/* The gate, ANNOUNCED. Someone deciding whether to tap this should know it will
+                    ask before it shows anything. */}
+                <span style={{ fontSize: 11.5, color: 'var(--text-muted-dim)' }}>Requires wallet password</span>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                  <path d="M9 18l6-6-6-6" />
+                </svg>
+              </div>}
+
               <PanelButton tone="quiet" mt={20} onClick={handleLock}>
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
                   <rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" />
                 </svg>
-                Lock wallet
+                Lock
               </PanelButton>
             </div>
           )}
@@ -284,11 +319,11 @@ export default function ProfilePanel({ onClose }: { onClose: () => void }) {
           {step === 'phraseAuth' && (
             <div style={CARD}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                <span style={{ flex: 1, fontSize: 21, fontWeight: 600, letterSpacing: '-0.015em', color: 'var(--text-primary)' }}>Recovery phrase</span>
+                <span style={{ flex: 1, fontSize: 21, fontWeight: 600, letterSpacing: '-0.015em', color: 'var(--text-primary)' }}>{authFor === 'chat' ? 'Chat backup' : 'Recovery phrase'}</span>
                 <CloseButton onClose={onClose} />
               </div>
               <div style={{ fontSize: 13, color: 'var(--text-muted-dim)', marginTop: 6 }}>
-                Enter your password to reveal your 24 words.
+                {authFor === 'chat' ? 'Enter your chat password to reveal your nsec and backup phrase.' : 'Enter your wallet password to reveal your 24 words.'}
               </div>
 
               <div style={{ marginTop: 28 }}>
@@ -331,7 +366,7 @@ export default function ProfilePanel({ onClose }: { onClose: () => void }) {
                 onClick={() => void revealPhrase()}
               >
                 {phraseLoading && <span style={{ width: 15, height: 15, borderRadius: '50%', border: '2px solid rgba(255,255,255,0.35)', borderTopColor: '#FFFFFF', animation: 'cv-spin 0.8s linear infinite' }} />}
-                {phraseLoading ? 'Verifying…' : 'Reveal phrase'}
+                {phraseLoading ? 'Verifying…' : authFor === 'chat' ? 'Reveal backup' : 'Reveal phrase'}
               </PanelButton>
               <PanelButton tone="quiet" mt={10} onClick={backToMain}>Cancel</PanelButton>
             </div>
@@ -381,6 +416,52 @@ export default function ProfilePanel({ onClose }: { onClose: () => void }) {
               </div>
 
               <PanelButton tone="quiet" mt={16} onClick={backToMain}>Hide phrase</PanelButton>
+            </div>
+          )}
+
+          {/* ═══ CHAT BACKUP, REVEALED ═══
+              Same rule as the wallet phrase: `backup` is assigned only from a successful decrypt of the
+              chat record, and Hide (or Back) drops it. The nsec is always there; the 12 words only
+              when the identity was created from, or imported as, a phrase. */}
+          {step === 'chatBackup' && backup && (
+            <div style={CARD}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <span style={{ flex: 1, fontSize: 21, fontWeight: 600, letterSpacing: '-0.015em', color: 'var(--text-primary)' }}>Chat backup</span>
+                <CloseButton onClose={onClose} />
+              </div>
+              <div style={{ fontSize: 13, color: 'var(--text-muted-dim)', marginTop: 6 }}>
+                Either of these restores your chat identity. Neither restores your wallet.
+              </div>
+
+              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-muted-dim)', marginTop: 20 }}>nsec</div>
+              <div style={{
+                marginTop: 6, padding: '10px 12px', borderRadius: 8,
+                background: 'var(--surface-void)', border: '1px solid var(--border)',
+                fontFamily: MONO, fontSize: 11.5, color: 'var(--text-primary)', wordBreak: 'break-all', userSelect: 'all',
+              }}>{backup.nsec}</div>
+
+              {backup.phrase && (
+                <>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-muted-dim)', marginTop: 16 }}>Backup phrase</div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 6, marginTop: 6 }}>
+                    {backup.phrase.split(' ').map((w, i) => (
+                      <span key={i} style={{
+                        padding: '7px 10px', borderRadius: 8,
+                        background: 'var(--surface-void)', border: '1px solid var(--border)',
+                        fontFamily: MONO, fontSize: 11, color: 'var(--text-primary)', userSelect: 'all',
+                      }}>
+                        <span style={{ color: 'var(--text-muted-dim)' }}>{i + 1}</span> {w}
+                      </span>
+                    ))}
+                  </div>
+                </>
+              )}
+
+              <div style={{ fontSize: 12.5, color: 'var(--text-muted-dim)', lineHeight: 1.55, textAlign: 'center', marginTop: 16, textWrap: 'pretty' }}>
+                Anyone with these can read and send your messages. Keep them offline; Caravel cannot recover them for you.
+              </div>
+
+              <PanelButton tone="quiet" mt={16} onClick={backToMain}>Hide backup</PanelButton>
             </div>
           )}
 

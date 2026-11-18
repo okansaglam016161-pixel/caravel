@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { WalletProvider } from './context/WalletContext'
+import { ChatProvider } from './context/ChatContext'
 import { ThemeProvider } from './hooks/useTheme'
 import LandingPage from './components/landing/LandingPage'
 import AppRoute from './components/AppRoute'
@@ -10,6 +11,9 @@ export default function App() {
   // gate screens, which render outside the app shell and would otherwise have no theme at all.
   return (
     <ThemeProvider>
+      {/* Chat outside the wallet: the wallet reads chat's messages (payment attribution), never the
+          other way round, and Chat must work with no wallet at all. */}
+      <ChatProvider>
       <WalletProvider>
         <BrowserRouter>
           <Routes>
@@ -18,6 +22,7 @@ export default function App() {
           </Routes>
         </BrowserRouter>
       </WalletProvider>
+      </ChatProvider>
     </ThemeProvider>
   )
 }

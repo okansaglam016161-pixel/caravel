@@ -70,7 +70,7 @@
 //   differ by #0C1A2E vs the page ground is a line doing no work.
 
 import { useNavigate } from 'react-router-dom'
-import { useWallet } from '../../context/WalletContext'
+import { useChat } from '../../context/ChatContext'
 import LogoTile from '../primitives/LogoTile'
 
 // ── WHAT EARNS A ROW ─────────────────────────────────────────────────────────
@@ -111,7 +111,7 @@ export default function ServiceNav({ service, onSelect, onProfile }: {
   onSelect: (s: Service) => void
   onProfile: () => void
 }) {
-  const { address } = useWallet()
+  const { nostrNpub } = useChat()
   // The same hook and the same shape as the landing page's own `navigate('/app')` — one router API
   // across the two directions of this door, rather than a <Link> here and a navigate there.
   const navigate = useNavigate()
@@ -166,7 +166,7 @@ export default function ServiceNav({ service, onSelect, onProfile }: {
           screen. Same fix as the logo above, and the same rule. */}
       <button
         onClick={onProfile}
-        title={address ?? 'Your profile'}
+        title={nostrNpub ?? 'Your profile'}
         aria-label="Your profile"
         className="cv-accent-tile"
         style={{

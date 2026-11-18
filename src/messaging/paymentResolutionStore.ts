@@ -32,11 +32,11 @@ function key(myPubkeyHex: string) { return `caravel.payresolved.v1.${myPubkeyHex
 const parse: Parse<ResolvedAmountMap> = decoded => asRecord(decoded) as ResolvedAmountMap | null
 
 function save(myPubkeyHex: string, map: ResolvedAmountMap): void {
-  writeStore(key(myPubkeyHex), JSON.stringify(map), parse)
+  writeStore(key(myPubkeyHex), JSON.stringify(map), parse, 'chat')
 }
 
 export function loadResolvedAmounts(myPubkeyHex: string): ResolvedAmountMap {
-  return loadStore(key(myPubkeyHex), parse, () => ({}))
+  return loadStore(key(myPubkeyHex), parse, () => ({}), 'chat')
 }
 
 // Cache one resolved amount (read-modify-write). No `current` param — each card resolves its own

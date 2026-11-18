@@ -82,6 +82,9 @@ export function receivedPaymentVisible(state: ResolveState): boolean {
   switch (state.kind) {
     case 'resolved': return true
     case 'loading': return false
+    // No view key to check with (the wallet is locked or absent). Shown, crediting nobody an amount:
+    // the card says to unlock the wallet. Unknown is not absent — the same reasoning as network_error.
+    case 'wallet-locked': return true
     case 'retrying': return state.reason === 'network_error'
     case 'failed': return state.reason === 'spent' || state.reason === 'network_error'
   }

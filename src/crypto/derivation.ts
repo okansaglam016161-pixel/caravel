@@ -2,7 +2,7 @@
 //
 //   Caravel now issues Tari's own CipherSeed phrases, which official Tari wallets can import. Every
 //   wallet created before that switch used BIP-39 with a Caravel-specific key derivation, and those
-//   wallets must keep opening at exactly the same address and Nostr identity — so both paths live
+//   wallets must keep opening at exactly the same address — so both paths live
 //   here, side by side, until BIP-39 is dropped for mainnet.
 //
 //   Both formats are 24 English words drawn from the SAME 2048-word list (Tari's English wordlist
@@ -18,7 +18,7 @@
 //   legacyBip39.ts. Nothing else should need touching — no other module in the app is aware that
 //   more than one derivation ever existed.
 
-import { entropyToMnemonic, mnemonicToSeed, validateMnemonic } from '@scure/bip39'
+import { validateMnemonic } from '@scure/bip39'
 import { wordlist } from '@scure/bip39/wordlists/english.js'
 import { Network } from '@tari-project/ootle'
 import { SecretKeyWallet } from '@tari-project/ootle-secret-key-wallet'
@@ -28,7 +28,6 @@ import {
   importWalletSeed,
   isPlausibleMnemonic,
 } from 'tari-cipherseed'
-import { deriveNostrKeyFromSeed, type NostrIdentity } from './nostrCrypto'
 import { seedFromMnemonic, walletFromSeed } from './legacyBip39'
 import type { StoredWallet } from './walletCrypto'
 
@@ -43,7 +42,6 @@ export type DetectedScheme = DerivationScheme | 'ambiguous' | 'invalid'
 
 export interface WalletIdentity {
   wallet: SecretKeyWallet
-  nostr: NostrIdentity
   /**
    * The key every sealed local store is encrypted under, for THIS wallet.
    *
@@ -66,26 +64,10 @@ export interface WalletIdentity {
 const ACCOUNT_INDEX = 0
 
 /**
- * Caravel's own hashing domain for deriving a Nostr identity from CipherSeed entropy.
- *
- * FROZEN. Once any CipherSeed wallet exists, changing this string — or the label, or the byte
- * length below — silently changes every npub derived from it: new identity, contacts gone, chat
- * history orphaned, with no error to explain it. Pinned by a golden vector in derivation.test.ts.
- *
- * Deliberately Caravel's own namespace rather than Tari's KeyManagerDomain: this is not a Tari key
- * and has no business claiming a Tari domain.
- */
-const NOSTR_DOMAIN = 'com.caravel.nostr'
-const NOSTR_DOMAIN_VERSION = 1
-const NOSTR_LABEL = 'nostr_entropy'
-/** 16 bytes = BIP-39's 128-bit entropy size, which encodes to a 12-word mnemonic. */
-const NOSTR_ENTROPY_BYTES = 16
-
-/**
  * Caravel's own hashing domain for the STORE KEY — the symmetric key every sealed local store is
  * encrypted under at rest.
  *
- * FROZEN, exactly as frozen as NOSTR_DOMAIN above and for a worse failure. Change this string, the
+ * FROZEN. Change this string, the
  * version, the label or the byte length, and every wallet on every device derives a DIFFERENT store
  * key from the same phrase: messages, contacts, nicknames, groups, the journal and the transaction
  * history all stop decrypting at once, with no error anywhere. The stores read as empty, the
@@ -93,14 +75,10 @@ const NOSTR_ENTROPY_BYTES = 16
  * lost its history and cannot record new history either. Pinned by golden vectors in
  * derivation.test.ts — if those fail, the derivation drifted; do not update them.
  *
- * ── DERIVED FROM THE WALLET SEED, NEVER FROM THE NOSTR KEY ───────────────────
+ * ── WALLET STORES ONLY ───────────────────────────────────────────────────────
  *
- * The Nostr secret is the tempting input: uniform across both schemes, already in hand, no arms
- * needed. It is the wrong one, because `nsec` is MEANT to leave — exporting it to another Nostr
- * client is an ordinary thing to do, and it must not also hand over the key to every message on
- * disk. This is the mirror image of the argument nostrFromCipherSeedEntropy already makes in the
- * other direction, where entropy is hashed BEFORE it can be exported as words. There is a test
- * asserting this rather than a comment hoping for it.
+ * This key now seals the WALLET's own records. Chat has its own identity and its own random storage
+ * key (crypto/chatIdentity, sessionKey scope 'chat'), and the wallet no longer derives a Nostr key.
  *
  * ── ROTATION: RESERVED, NOT BUILT ────────────────────────────────────────────
  *
@@ -205,7 +183,7 @@ export function detectScheme(phrase: string): DetectedScheme {
 // ── Derivation ──────────────────────────────────────────────────────────────
 
 /**
- * Turns a phrase into the Tari wallet, the Nostr identity, and the store key, by the given scheme.
+ * Turns a phrase into the Tari wallet and the store key, by the given scheme.
  *
  * THE STORE KEY RIDES ALONG because the seed material it needs is computed here anyway. That is not
  * tidiness: deriving it separately would re-run importWalletSeed's Argon2d for a value this function
@@ -245,57 +223,19 @@ async function deriveFromCipherSeed(phrase: string): Promise<WalletIdentity> {
   const wallet = SecretKeyWallet.fromSecretKey(ownerSecret, Network.Esmeralda, viewSecret)
   return {
     wallet,
-    nostr: await nostrFromCipherSeedEntropy(seed.entropy),
     // Free: `seed.entropy` is already here, and the hash is Blake2b over 16 bytes.
     storeKey: storeKeyFromSeedMaterial(seed.entropy),
   }
 }
 
 async function deriveFromBip39(phrase: string): Promise<WalletIdentity> {
-  // Untouched legacy behaviour: one 64-byte BIP-39 seed feeding both branches, exactly as before
-  // the migration. See legacyBip39.ts.
+  // Untouched legacy behaviour for the wallet keys. See legacyBip39.ts.
   const seed = await seedFromMnemonic(phrase)
   return {
     wallet: await walletFromSeed(seed),
-    nostr: deriveNostrKeyFromSeed(seed),
     // The same 64-byte seed, hashed under Caravel's store domain — never used as a key directly.
     storeKey: storeKeyFromSeedMaterial(seed),
   }
-}
-
-// ── Nostr identity for CipherSeed wallets ───────────────────────────────────
-
-/**
- * CipherSeed has no BIP-39 seed to feed NIP-06, so one is constructed from the wallet's entropy:
- *
- *   entropy(16) ──domain-separated Blake2b──▶ nostrEntropy(16) ──BIP-39──▶ 12 words ──▶ NIP-06
- *
- * The domain-separation step is the load-bearing part. Feeding the wallet entropy straight into
- * BIP-39 would also work cryptographically, but the resulting 12-word phrase WOULD ENCODE THE
- * WALLET'S SPENDING ENTROPY — anyone who shared their "Nostr phrase" would be handing over their
- * funds. Hashing first makes it a one-way derivative that is safe to export on its own.
- *
- * Everything downstream is standard and already audited: BIP-39 encoding and seed stretching from
- * @scure/bip39, then deriveNostrKeyFromSeed() unchanged — the same NIP-06 path legacy wallets use.
- *
- * Note the portability that CipherSeed costs us regardless of this choice: because the RECOVERY
- * phrase is no longer BIP-39, no external NIP-06 client can rebuild this identity from the 24
- * words. The 12-word phrase derived here can, which is why deriving it this way leaves that door
- * open for a future export feature.
- */
-async function nostrFromCipherSeedEntropy(entropy: Uint8Array): Promise<NostrIdentity> {
-  const nostrEntropy = new DomainSeparatedHasher(
-    NOSTR_DOMAIN,
-    NOSTR_DOMAIN_VERSION,
-    NOSTR_LABEL,
-    32,
-  )
-    .chain(entropy)
-    .finalize()
-    .slice(0, NOSTR_ENTROPY_BYTES)
-
-  const seed = await mnemonicToSeed(entropyToMnemonic(nostrEntropy, wordlist))
-  return deriveNostrKeyFromSeed(seed)
 }
 
 // ── The store key ───────────────────────────────────────────────────────────
@@ -311,8 +251,7 @@ async function nostrFromCipherSeedEntropy(entropy: Uint8Array): Promise<NostrIde
  *
  * NOT A KDF, AND IT DOES NOT NEED TO BE. A KDF exists to stretch a LOW-entropy secret. The input here
  * is the wallet's own seed material, high-entropy by construction, so a domain-separated hash is the
- * correct primitive — the same one Tari's key manager and Caravel's own Nostr derivation already
- * apply to the same kind of input.
+ * correct primitive — the same one Tari's key manager applies to the same kind of input.
  *
  * WHAT PROTECTS THE STORES AT REST, said plainly because it changed: no longer the password directly,
  * but the seed — which is itself behind the password, inside the wallet record. An attacker holding

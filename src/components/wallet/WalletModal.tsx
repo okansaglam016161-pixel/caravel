@@ -27,6 +27,7 @@
 
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { useWallet } from '../../context/WalletContext'
+import { useChat } from '../../context/ChatContext'
 import { MIN_CONCEAL_MICROTARI, maxConcealTyped, prepareConceal, type PreparedConceal } from '../../crypto/conceal'
 import { MIN_REVEAL_MICROTARI, maxRevealable, prepareReveal, type PreparedReveal } from '../../crypto/reveal'
 import { loadAccountAddress } from '../../crypto/accountStore'
@@ -159,7 +160,7 @@ function ReceivedRowV2({ row, hidden }: { row: Extract<ActivityRow, { kind: 'rec
   if (!receivedPaymentVisible(state)) return null
   const status: ActivityStatus =
     state.kind === 'resolved' ? 'received'
-    : state.kind === 'loading' || state.kind === 'retrying' ? 'checking'
+    : state.kind === 'loading' || state.kind === 'retrying' || state.kind === 'wallet-locked' ? 'checking'
     : state.reason === 'spent' ? 'spent'
     : state.reason === 'unreadable' ? 'unreadable'
     : 'pending'   // not_found / network — indexer lag, may still resolve
@@ -226,10 +227,12 @@ type Chrome = 'modal' | 'page'
 
 export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: () => void; chrome?: Chrome }) {
   const {
-    wallet, address, scan, revealed, rescan, txHistory, messages, recordSent,
+    wallet, address, scan, revealed, rescan, txHistory, recordSent,
     balanceHidden, setBalanceHidden,
     settles, isSettling, settleLagged, beginSettle, acknowledgeSettle,
   } = useWallet()
+  // Chat payments feed this wallet's Activity (attribution and dedupe) — read from chat.
+  const { messages } = useChat()
 
   // The journal, live. Subscribed rather than held in context: it is written to localStorage by
   // the call sites below, none of which pass through React state on the way.

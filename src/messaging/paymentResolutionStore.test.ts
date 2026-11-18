@@ -27,7 +27,7 @@ const sealedOnDisk = () => JSON.parse(localStorage.getItem(SKEY)!).v === 2
 
 beforeEach(() => {
   globalThis.localStorage = memoryStorage()
-  setStoreKey(Uint8Array.from(STORE_KEY))
+  setStoreKey(Uint8Array.from(STORE_KEY), 'chat')
 })
 
 const SKEY = 'caravel.payresolved.v1.' + ME
@@ -91,15 +91,15 @@ describe('never clobber', () => {
     // under a wrong key the read returns {} and the write would have been the entire new cache.
     cacheResolvedAmount(ME, UTXO, '1500000')
     const original = localStorage.getItem(SKEY)!
-    setStoreKey(new Uint8Array(32).fill(7))
+    setStoreKey(new Uint8Array(32).fill(7), 'chat')
     cacheResolvedAmount(ME, 'utxo_0101_new', '5')
     expect(localStorage.getItem(SKEY)).toBe(original)
-    setStoreKey(Uint8Array.from(STORE_KEY))
+    setStoreKey(Uint8Array.from(STORE_KEY), 'chat')
     expect(loadResolvedAmounts(ME)[UTXO]).toBe('1500000')
   })
 
   it('will not write with no store key', () => {
-    clearStoreKey()
+    clearStoreKey('chat')
     cacheResolvedAmount(ME, UTXO, '1')
     expect(localStorage.getItem(SKEY)).toBeNull()
   })

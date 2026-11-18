@@ -368,7 +368,6 @@ interface Harnessed {
   address: string
   ownerPkHex: string
   viewSecret: Uint8Array
-  npub: string
   scheme: DerivationScheme
 }
 
@@ -401,7 +400,7 @@ async function identity(): Promise<Harnessed> {
   }
   const scheme: DerivationScheme = override ?? (detected === 'ambiguous' || detected === 'invalid' ? 'cipherseed' : detected)
 
-  const { wallet, nostr, storeKey } = await deriveIdentity(phrase, scheme)
+  const { wallet, storeKey } = await deriveIdentity(phrase, scheme)
   // EXACTLY WHAT UNLOCK DOES (WalletContext: `setStoreKey(identity.storeKey)`). Every per-identity
   // store — the journal, the first-seen ledger, and now the spend record — is sealed under this
   // key, so without it loadExcludedIds would read as empty and the harness would silently test the
@@ -415,7 +414,6 @@ async function identity(): Promise<Harnessed> {
   field('scheme', scheme + (override ? '  (from CARAVEL_TEST_SCHEME)' : detected === 'ambiguous' ? '  (phrase is valid under BOTH — default taken; set CARAVEL_TEST_SCHEME to override)' : `  (detected)`))
   field('address', address)
   field('owner pubkey', ownerPkHex)
-  field('npub', nostr.npub)
   // The secret itself is never printed. Its LENGTH and the agreement between the two accessors are
   // worth stating: walletScanner is given `getViewOnlySecret()` by the app and stealthUtxos calls
   // `getViewSecret()`, and if those ever diverged the balance and the spendable set would be
@@ -425,7 +423,7 @@ async function identity(): Promise<Harnessed> {
   field('view secret', `${viewSecret.length} bytes (not printed) · getViewOnlySecret ≡ getViewSecret: ${agree ? 'yes' : 'NO — THE TWO SCANS USE DIFFERENT KEYS'}`)
   field('resource', RESOURCE_HEX)
 
-  return { wallet, address, ownerPkHex, viewSecret, npub: nostr.npub, scheme }
+  return { wallet, address, ownerPkHex, viewSecret, scheme }
 }
 
 /**

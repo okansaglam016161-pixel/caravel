@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useWallet } from '../context/WalletContext'
+import { useChat } from '../context/ChatContext'
 import { downloadAndDecrypt, isTerminalDownloadStatus, type DownloadResult } from '../crypto/blossomClient'
 import { getBlob, putBlob } from '../messaging/blobCache'
 import type { MediaRef } from '../messaging/types'
@@ -64,7 +64,7 @@ function dedupDownload(pubkeyHex: string, media: MediaRef): Promise<DownloadResu
 const MEDIA_BACKOFFS_MS = [2_000, 4_000, 8_000]
 
 export function useMediaResolution(media: MediaRef): { state: MediaState; retry: () => void } {
-  const { nostrPubkeyHex } = useWallet()
+  const { nostrPubkeyHex } = useChat()
   const [nonce, setNonce] = useState(0)
   const [resolution, setResolution] = useState<Resolution>({ kind: 'loading' })
   const [url, setUrl] = useState<string | null>(null)

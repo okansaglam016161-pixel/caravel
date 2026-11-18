@@ -29,7 +29,7 @@ const sealedOnDisk = () => JSON.parse(localStorage.getItem(SKEY)!).v === 2
 
 beforeEach(() => {
   globalThis.localStorage = memoryStorage()
-  setStoreKey(Uint8Array.from(STORE_KEY))
+  setStoreKey(Uint8Array.from(STORE_KEY), 'chat')
 })
 
 const SKEY = 'caravel.groups.v1.' + ME
@@ -104,15 +104,15 @@ describe('never clobber', () => {
   it('will not overwrite a store it could not read', () => {
     addOrUpdateGroup(ME, [], DEF)
     const original = localStorage.getItem(SKEY)!
-    setStoreKey(new Uint8Array(32).fill(7))
+    setStoreKey(new Uint8Array(32).fill(7), 'chat')
     ensureGroup(ME, [], 'grp-new')
     expect(localStorage.getItem(SKEY)).toBe(original)
-    setStoreKey(Uint8Array.from(STORE_KEY))
+    setStoreKey(Uint8Array.from(STORE_KEY), 'chat')
     expect(loadGroups(ME)[0].name).toBe('Design crew')
   })
 
   it('will not write with no store key', () => {
-    clearStoreKey()
+    clearStoreKey('chat')
     addOrUpdateGroup(ME, [], DEF)
     expect(localStorage.getItem(SKEY)).toBeNull()
   })

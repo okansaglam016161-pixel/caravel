@@ -34,11 +34,11 @@ function key(myPubkeyHex: string) { return `caravel.addrsent.v1.${myPubkeyHex}` 
 const parse: Parse<AddressSentMap> = decoded => asRecord(decoded) as AddressSentMap | null
 
 function save(myPubkeyHex: string, map: AddressSentMap): void {
-  writeStore(key(myPubkeyHex), JSON.stringify(map), parse)
+  writeStore(key(myPubkeyHex), JSON.stringify(map), parse, 'chat')
 }
 
 export function loadAddressSent(myPubkeyHex: string): AddressSentMap {
-  return loadStore(key(myPubkeyHex), parse, () => ({}))
+  return loadStore(key(myPubkeyHex), parse, () => ({}), 'chat')
 }
 
 // Mark my address delivered to a peer. Returns the next map.

@@ -5,7 +5,6 @@
 //   that one first.
 
 import { describe, expect, it } from 'vitest'
-import { DomainSeparatedHasher, importWalletSeed } from 'tari-cipherseed'
 import {
   type DerivationScheme,
   detectScheme,
@@ -18,7 +17,6 @@ import { open, seal } from './storeCrypto'
 import type { StoredWallet } from './walletCrypto'
 
 const hex = (b: Uint8Array) => [...b].map(x => x.toString(16).padStart(2, '0')).join('')
-const unhex = (h: string) => Uint8Array.from(h.match(/../g)!.map(x => parseInt(x, 16)))
 
 // A CipherSeed phrase, proven byte-for-byte against tari_ootle_walletd 0.39.0.
 const CIPHERSEED =
@@ -220,14 +218,13 @@ describe('deriveIdentity', () => {
     )
   }, 30_000)
 
-  it('derives the unchanged legacy address and npub for a BIP-39 phrase', async () => {
+  it('derives the unchanged legacy address for a BIP-39 phrase', async () => {
     // The same values pinned in derivationAnchors.test.ts, reached through the new entry point —
     // proof that routing through deriveIdentity() did not disturb the legacy path.
-    const { wallet, nostr } = await deriveIdentity(BIP39_DOC_ANCHOR, 'bip39')
+    const { wallet } = await deriveIdentity(BIP39_DOC_ANCHOR, 'bip39')
     expect(await wallet.getAddress()).toBe(
       'otl_esm_1gr509dqcyc27669392p5dl59tkdl5ef85h09thy07ezu2pvaz4ex30h6mm7z6wn243ca3jkp76ncpl93rcwgnml6vr70c26hkf7hweg30h9jv',
     )
-    expect(nostr.npub).toBe('npub1cldv05xqek9jl9a0dflx9j2y7vsf2m6m8xzjeqyakp4p68ehcmyq2d7dvc')
   }, 30_000)
 
   it('is deterministic for both schemes', async () => {
@@ -236,7 +233,6 @@ describe('deriveIdentity', () => {
       deriveIdentity(CIPHERSEED, 'cipherseed'),
     ])
     expect(await a.wallet.getAddress()).toBe(await b.wallet.getAddress())
-    expect(a.nostr.npub).toBe(b.nostr.npub)
   }, 30_000)
 
   it('derives different identities from the two schemes', async () => {
@@ -244,51 +240,6 @@ describe('deriveIdentity', () => {
     const cs = await deriveIdentity(CIPHERSEED, 'cipherseed')
     const legacy = await deriveIdentity(BIP39_DOC_ANCHOR, 'bip39')
     expect(await cs.wallet.getAddress()).not.toBe(await legacy.wallet.getAddress())
-    expect(cs.nostr.npub).not.toBe(legacy.nostr.npub)
-  }, 30_000)
-})
-
-// ── C′ Nostr identity for CipherSeed wallets ────────────────────────────────
-
-describe("CipherSeed Nostr identity (C')", () => {
-  // FROZEN VECTOR. This pins the domain string "com.caravel.nostr", its version, the label
-  // "nostr_entropy", the 16-byte truncation, and the BIP-39 + NIP-06 steps that follow. Change any
-  // one of them and every CipherSeed wallet's npub changes: new identity, contacts gone, chat
-  // history orphaned, with no error anywhere. If this test fails, the derivation drifted — do not
-  // update the expected value.
-  it('derives the pinned npub for a known CipherSeed entropy', async () => {
-    const { nostr } = await deriveIdentity(CIPHERSEED, 'cipherseed')
-    expect(nostr.npub).toBe('npub1fdthsvpcrg470q7pusmv8eemhcmp74uye2ref9pj5q8l8mt5yw9qazxhgv')
-    expect(nostr.publicKeyHex).toBe(
-      '4b577830381a2be783c1e436c3e73bbe361f5784ca87949432a00ff3ed74238a',
-    )
-  }, 30_000)
-
-  it('produces a well-formed NIP-06 identity', async () => {
-    const { nostr } = await deriveIdentity(CIPHERSEED, 'cipherseed')
-    expect(nostr.publicKeyHex).toMatch(/^[0-9a-f]{64}$/)
-    expect(nostr.privateKeyHex).toMatch(/^[0-9a-f]{64}$/)
-    expect(nostr.npub.startsWith('npub1')).toBe(true)
-    expect(nostr.nsec.startsWith('nsec1')).toBe(true)
-  }, 30_000)
-
-  it('gives different CipherSeed wallets different Nostr identities', async () => {
-    const a = await deriveIdentity(CIPHERSEED, 'cipherseed')
-    const b = await deriveIdentity(
-      'cake edge usual omit blanket boy combine slim exact debris eternal elevator maid hero angle sunset logic outside shy mistake stay game useless client',
-      'cipherseed',
-    )
-    expect(a.nostr.npub).not.toBe(b.nostr.npub)
-  }, 30_000)
-
-  it('does not expose the wallet entropy through the Nostr key', async () => {
-    // The domain-separation step exists so a future "export your Nostr phrase" feature cannot leak
-    // spending material. The Nostr private key must not simply BE the wallet entropy.
-    const { importWalletSeed } = await import('tari-cipherseed')
-    const seed = await importWalletSeed(CIPHERSEED)
-    const entropyHex = [...seed.entropy].map(b => b.toString(16).padStart(2, '0')).join('')
-    const { nostr } = await deriveIdentity(CIPHERSEED, 'cipherseed')
-    expect(nostr.privateKeyHex).not.toContain(entropyHex)
   }, 30_000)
 })
 
@@ -355,36 +306,6 @@ describe('store key derivation', () => {
     const asCipherSeed = await storeKeyForPhrase(CIPHERSEED, 'cipherseed')
     const asBip39 = await storeKeyForPhrase(CIPHERSEED, 'bip39')
     expect(hex(asCipherSeed)).not.toBe(hex(asBip39))
-  }, 30_000)
-
-  // Domain separation against the OTHER thing derived from the very same CipherSeed entropy. Both
-  // hash that entropy with Blake2b; only the domain and label keep them apart, so that is what this
-  // asserts. Without it, the Nostr identity and the storage key could be one value.
-  it('does not collide with the Nostr derivation over the same entropy', async () => {
-    const { entropy } = await importWalletSeed(CIPHERSEED)
-    const nostrSide = new DomainSeparatedHasher('com.caravel.nostr', 1, 'nostr_entropy', 32)
-      .chain(entropy)
-      .finalize()
-    expect(hex(storeKeyFromSeedMaterial(entropy))).not.toBe(hex(nostrSide))
-  }, 30_000)
-
-  // ── THE CONSTRAINT, ENCODED ───────────────────────────────────────────────
-  //
-  // The store key must come from the wallet SEED, never from the Nostr key. `nsec` is meant to
-  // leave — exporting it to another Nostr client is an ordinary thing to do — and it must not also
-  // hand over the key to every message on disk.
-  //
-  // The middle assertion is the one that bites: if anyone ever reimplements this over the Nostr
-  // secret, storeKeyForPhrase would equal storeKeyFromSeedMaterial(nsec bytes), and this fails. A
-  // comment could not have caught that.
-  it('is not derived from the Nostr key, at any remove', async () => {
-    const { nostr } = await deriveIdentity(CIPHERSEED, 'cipherseed')
-    const storeKey = hex(await storeKeyForPhrase(CIPHERSEED, 'cipherseed'))
-
-    expect(storeKey).not.toBe(nostr.privateKeyHex)
-    expect(storeKey).not.toBe(hex(storeKeyFromSeedMaterial(unhex(nostr.privateKeyHex))))
-    expect(storeKey).not.toBe(nostr.publicKeyHex)
-    expect(storeKey).not.toBe(hex(storeKeyFromSeedMaterial(unhex(nostr.publicKeyHex))))
   }, 30_000)
 })
 
@@ -459,8 +380,9 @@ describe('the wallet keys a restore depends on — frozen byte for byte', () => 
   //
   // Captured from the derivation as it stood before the Trade key was dropped (trim/wallet-chat), and
   // kept as the proof that removing a purpose key moved nothing else: the spend (owner) key, the view
-  // secret, the address built from them, the Nostr keypair, and the store key. (The faucet and names
-  // keys were pinned here too until each was dropped; only those entries were removed.) Every one of
+  // secret, the address built from them, and the store key. (The faucet and names keys, and the
+  // wallet-derived Nostr keypair, were pinned here too until each was dropped — the Nostr key when Chat
+  // got its own identity; only those entries were removed.) Every one of
   // them is what a restored phrase must reproduce exactly — a drift here opens a different, empty
   // wallet, or a different chat identity. IF ONE FAILS, THE DERIVATION DRIFTED — DO
   // NOT UPDATE IT.
@@ -470,8 +392,6 @@ describe('the wallet keys a restore depends on — frozen byte for byte', () => 
       spendPublic: 'e692325a4528d687ad7b6ff9efed43c98f794be1979f56558d8f90681d6fe771',
       viewSecret: 'b30d0ba8627107efefd795db0a6f021e04f6a290974b1f97bc2e7ca78f36fe00',
       address: 'otl_esm_1u6frykj99rtg0ttmdlu7lm2rex8hjjlpj704v4vd37gxs8t0uace4lvs6q9rz374nhq9nudflxjzg2cfdn4q894vkz5anpzfgzg86ngha863h',
-      nostrPublic: '4b577830381a2be783c1e436c3e73bbe361f5784ca87949432a00ff3ed74238a',
-      nostrPrivate: '893f7b0e8883f659c763ee7a67ba93da8866516a828d2541bcbb32e679fb4652',
       storeKey: '517fd91a7236b8cb4b3dcd7f2dbe0a997a3baea620b88dd603d578c7840b246d',
     },
     bip39: {
@@ -479,8 +399,6 @@ describe('the wallet keys a restore depends on — frozen byte for byte', () => 
       spendPublic: 'fa672bd2d2b0137e0813102c154e7415768a4256bafa33c497cd0ff36a64545a',
       viewSecret: '19dcc5f16a310a14440d08a4cc2803ae6f759a061023ab8535d3742dd69ec302',
       address: 'otl_esm_1lfnjh5kjkqfhuzqnzqkp2nn5z4mg5sjkhtar83yhe58lx6ny23dzy5vt2n4q2tn5c3mrgug96dxlpfkj0wcdjw0t9erc5n0fr8msqjcrn209v',
-      nostrPublic: '1ca7e48a33d62063f25d79f18617cc892ef064628aaf80af485e41849343ca52',
-      nostrPrivate: '132f7c29e20fea96e9d11f221b0cf8a126d9f0966ed4963e1e00dae1d73ce855',
       storeKey: 'dd39a38b31cc950f917243e686c64b7633ec70a847830f0d5c8e85c40fdeeeb0',
     },
   } as const
@@ -493,8 +411,6 @@ describe('the wallet keys a restore depends on — frozen byte for byte', () => 
         spendPublic: hex(await id.wallet.getPublicKey()),
         viewSecret: hex(await id.wallet.getViewSecret()),
         address: await id.wallet.getAddress(),
-        nostrPublic: id.nostr.publicKeyHex,
-        nostrPrivate: id.nostr.privateKeyHex,
         storeKey: hex(id.storeKey),
       }).toEqual(pinned)
     }, 30_000)

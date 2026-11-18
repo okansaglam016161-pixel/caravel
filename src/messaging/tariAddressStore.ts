@@ -52,11 +52,11 @@ const parse: Parse<TariAddressMap> = decoded => {
 }
 
 function save(myPubkeyHex: string, map: TariAddressMap): void {
-  writeStore(key(myPubkeyHex), JSON.stringify(map), parse)
+  writeStore(key(myPubkeyHex), JSON.stringify(map), parse, 'chat')
 }
 
 export function loadTariAddresses(myPubkeyHex: string): TariAddressMap {
-  return loadStore(key(myPubkeyHex), parse, () => ({}))
+  return loadStore(key(myPubkeyHex), parse, () => ({}), 'chat')
 }
 
 // Set (or clear, when addr is blank) a peer's address with an explicit source. Returns the next

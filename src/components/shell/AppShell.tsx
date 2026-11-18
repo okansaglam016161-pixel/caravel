@@ -38,7 +38,7 @@ function Pane({ show, children }: { show: boolean; children: React.ReactNode }) 
 }
 
 export default function AppShell() {
-  const [service, setService] = useState<Service>('wallet')
+  const [service, setService] = useState<Service>('chat')
   const [profileOpen, setProfileOpen] = useState(false)
 
   return (

@@ -3,6 +3,7 @@ import * as nip19 from 'nostr-tools/nip19'
 import Logo from '../primitives/Logo'
 import Callout from '../primitives/Callout'
 import { useWallet } from '../../context/WalletContext'
+import { useChat } from '../../context/ChatContext'
 import { assertValidRecipient } from '../../crypto/publicSend'
 import { parseOotleAddress } from '@tari-project/ootle-wasm'
 import { plainError } from '../wallet/v2/plainError'
@@ -345,7 +346,10 @@ function ReceivedPaymentCard({ message, lid, flashed, disputed }: { message: Car
   // the moment the chain confirms it.
   if (!receivedPaymentVisible(res)) return null
   let state: PayCardState
-  if (res.kind === 'resolved' && disputed) {
+  if (res.kind === 'wallet-locked') {
+    // Chat runs without the wallet now; without its view key the amount cannot be opened.
+    state = { dir: 'RECEIVED', masked: true, tone: 'dim', status: 'Unlock your wallet to see the amount.' }
+  } else if (res.kind === 'resolved' && disputed) {
     // Another contact claims this same output — the card credits nobody (messaging/paymentDedupe).
     state = { dir: 'RECEIVED', amount: microToTari(res.amountMicrotari), tone: 'dim', status: 'Another contact claims this same payment, so the sender can’t be confirmed.' }
   } else if (res.kind === 'resolved') {
@@ -369,7 +373,10 @@ function PaymentMessageCard({ message, lid, flashed, disputed }: { message: Cara
 // ── Component ────────────────────────────────────────────────────────────────────
 
 export default function ChatApp() {
-  const { wallet, address, scan, messages, historyUnreadable, nostrPubkeyHex, messagingStatus, contacts, acceptContact, contactAddresses, setManualTariAddress, createMessagingProvider, recordSentMessage, deleteConversation, editMessage, reactMessage, getRelayStates, reconnectAll, groups, createGroup, acceptGroup, declineGroup, leaveGroup, reinviteGroup, balanceHidden } = useWallet()
+  // The wallet is OPTIONAL here: it may be locked or not set up, and chat works regardless. Only
+  // payments (and the address this side announces) need it.
+  const { wallet, address, scan, balanceHidden } = useWallet()
+  const { messages, historyUnreadable, nostrPubkeyHex, messagingStatus, contacts, acceptContact, contactAddresses, setManualTariAddress, createMessagingProvider, recordSentMessage, deleteConversation, editMessage, reactMessage, getRelayStates, reconnectAll, groups, createGroup, acceptGroup, declineGroup, leaveGroup, reinviteGroup } = useChat()
   // Payment claims this wallet must not credit — see messaging/paymentDedupe: claims on our own
   // outputs (our change) get no card, and an output two contacts claim credits neither.
   const journal = useJournal(address)

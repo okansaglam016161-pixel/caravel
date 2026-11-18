@@ -23,6 +23,7 @@ import { loadSeenDefIdSet, recordSeenDef } from '../messaging/seenDefStore'
 import type { Group } from '../messaging/types'
 import { loadTombstoneIdSet, recordTombstones } from '../messaging/tombstoneStore'
 import { removeClaims } from '../messaging/paymentClaimStore'
+import { queueStat } from '../messaging/usageStats'
 import { deleteBlobs } from '../messaging/blobCache'
 import { mediaBlobKeys } from '../messaging/sendMedia'
 import { loadContacts, setContactState, removeContact, type ContactMap } from '../messaging/contactStore'
@@ -476,6 +477,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     await saveChatIdentity({ nostrSecretHex: identity.privateKeyHex, phrase, storeKey }, password)
     setChatExists(true)
     adopt(identity, storeKey)
+    // The anonymous usage count: a NEW identity only (never import or unlock). Queued, sent hours later.
+    try { queueStat(identity.publicKeyHex, 'identity_created') } catch { /* never affects the app */ }
   }, [adopt])
 
   const resolveBackup = useCallback(async (raw: string): Promise<{ input: BackupInput; identity: NostrIdentity | null }> => {

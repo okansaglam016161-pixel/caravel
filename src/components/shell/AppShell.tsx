@@ -8,6 +8,8 @@ import { useState } from 'react'
 import ChatApp from '../chat/ChatApp'
 import ProfilePanel from '../chat/ProfilePanel'
 import ServiceNav, { type Service } from './ServiceNav'
+import { useChat } from '../../context/ChatContext'
+import { useUsageStats } from '../../hooks/useUsageStats'
 
 /** Hidden panes keep their state and their effects; they just stop taking space. */
 function Pane({ show, children }: { show: boolean; children: React.ReactNode }) {
@@ -21,6 +23,8 @@ function Pane({ show, children }: { show: boolean; children: React.ReactNode }) 
 export default function AppShell() {
   const [service, setService] = useState<Service>('chat')
   const [profileOpen, setProfileOpen] = useState(false)
+  // The anonymous usage count: sends due notes while chat is unlocked (hooks/useUsageStats).
+  useUsageStats(useChat().nostrPubkeyHex)
 
   return (
     <div style={{ height: '100vh', display: 'flex', background: 'var(--surface-base)', overflow: 'hidden' }}>

@@ -26,7 +26,8 @@
 import { useEffect, useState } from 'react'
 import { useChat, type ChatBackup } from '../../context/ChatContext'
 import { MIN_CHAT_PASSWORD, newPasswordProblem } from '../../crypto/chatIdentityStore'
-import { CopyRow, ListCard, NavRow } from './listRows'
+import { CopyRow, ListCard, NavRow, SwitchRow } from './listRows'
+import { loadStats, setCountMe } from '../../messaging/usageStats'
 import SapientCard from './SapientCard'
 
 const MONO = 'var(--font-mono)'
@@ -116,7 +117,7 @@ function PassField({ label, value, onChange, onEnter, invalid, autoFocus, mt }: 
 type Step = 'main' | 'auth' | 'backup' | 'changePass'
 
 export default function ProfilePanel({ onClose }: { onClose: () => void }) {
-  const { nostrNpub, revealChatBackup, changeChatPassword, lockChat } = useChat()
+  const { nostrNpub, nostrPubkeyHex, revealChatBackup, changeChatPassword, lockChat } = useChat()
   const [step, setStep] = useState<Step>('main')
   const [backup, setBackup] = useState<ChatBackup | null>(null)
   const [pass, setPass] = useState('')
@@ -130,6 +131,14 @@ export default function ProfilePanel({ onClose }: { onClose: () => void }) {
   const [changeError, setChangeError] = useState('')
   const [changing, setChanging] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
+  // "Count me anonymously" (messaging/usageStats): on by default, per identity.
+  const [countMe, setCountMeState] = useState(() => {
+    try { return nostrPubkeyHex ? !loadStats(nostrPubkeyHex).optOut : true } catch { return true }
+  })
+  function toggleCountMe(on: boolean) {
+    if (!nostrPubkeyHex) return
+    try { setCountMe(nostrPubkeyHex, on); setCountMeState(on) } catch { /* store locked: leave as is */ }
+  }
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) { if (e.key === 'Escape') onClose() }
@@ -219,6 +228,7 @@ export default function ProfilePanel({ onClose }: { onClose: () => void }) {
                 <CopyRow first label="npub" value={nostrNpub} missing="npub unavailable" />
                 <NavRow title="Show chat backup" hint="Requires chat password" onOpen={() => { setNotice(null); setStep('auth') }} />
                 <NavRow title="Change password" onOpen={() => { setNotice(null); setStep('changePass') }} />
+                <SwitchRow title="Count me anonymously" hint="Sends one anonymous, empty note. No npub or address." on={countMe} onChange={toggleCountMe} />
               </ListCard>
               {notice && (
                 <div role="status" style={{ fontSize: 12, color: 'var(--positive)', marginTop: 8, paddingLeft: 14 }}>{notice}</div>

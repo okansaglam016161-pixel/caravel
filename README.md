@@ -23,6 +23,14 @@ recipient's Caravel claims it through their own Sapient and shows it as received
 output's note carries that message's one-time code. Payments to an address on a different network
 than your wallet's are refused.
 
+**Anonymous usage count.** When you create a chat identity, and the first time you connect
+Sapient, Caravel publishes one empty Nostr note (kind 30078, tag `caravel/identity_created` or
+`caravel/wallet_connected`). It is signed by a brand-new random key that is used once and thrown
+away, dated to the day, and sent a few hours later. It contains no npub, address, amount or
+anything else. The relays that receive it see your IP address, as they do for your messages. You
+can turn it off in Profile under **Count me anonymously**. The landing page shows how many identity
+notes exist, read with Nostr COUNT from public relays.
+
 ## Run it locally
 
 Requires Node 20+ and, for payments, Sapient in a Chromium browser.

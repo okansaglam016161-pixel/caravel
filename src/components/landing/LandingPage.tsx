@@ -237,7 +237,6 @@ const LANDING_CSS = `
   --lp-avatar-bg: var(--accent-50);
   --lp-avatar-ink: var(--accent-600);
   --lp-green: #0E6E4C;
-  --lp-green-wash: rgba(14, 110, 76, 0.10);
   min-height: 100vh;
   background: var(--surface-void);
   color: var(--text-primary);
@@ -249,7 +248,6 @@ const LANDING_CSS = `
   --lp-avatar-bg: var(--accent-800);
   --lp-avatar-ink: var(--accent-200);
   --lp-green: var(--positive);
-  --lp-green-wash: rgba(var(--positive-rgb), 0.12);
 }
 .cv-lp a { color: var(--accent-600); text-decoration: none; }
 .cv-lp a:hover { color: var(--accent-700); }
@@ -265,6 +263,11 @@ const LANDING_CSS = `
 .cv-lp-count-hero { display: none; }
 .cv-lp-count { animation: cv-lp-fade 0.3s ease-out; }
 @keyframes cv-lp-fade { from { opacity: 0; } to { opacity: 1; } }
+/* The live dot: a soft green ring expands from it and fades, every 2s. */
+.cv-lp-live-dot { position: relative; flex-shrink: 0; width: 7px; height: 7px; border-radius: 999px; background: var(--lp-green); }
+.cv-lp-live-dot::after { content: ''; position: absolute; inset: 0; border-radius: 999px; background: var(--lp-green);
+  opacity: 0; animation: cv-lp-pulse 2s ease-out infinite; }
+@keyframes cv-lp-pulse { 0% { transform: scale(1); opacity: 0.45; } 70%, 100% { transform: scale(3); opacity: 0; } }
 .cv-lp-hero { padding-top: 88px; display: flex; flex-wrap: wrap; align-items: center; gap: 56px; }
 .cv-lp-steps { padding-top: 96px; }
 .cv-lp-section { padding-top: 150px; }
@@ -297,5 +300,6 @@ const LANDING_CSS = `
 @media (prefers-reduced-motion: reduce) {
   .cv-lp, .cv-lp-primary { transition: none; }
   .cv-lp-count { animation: none; }
+  .cv-lp-live-dot::after { animation: none; opacity: 0; }
 }
 `

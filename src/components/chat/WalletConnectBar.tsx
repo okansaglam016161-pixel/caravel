@@ -11,7 +11,10 @@
 
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { useSapient } from '../../context/SapientContext'
-import { SAPIENT_INSTALL_URL, isMainnet, networkLabel, shortAddress } from '../../sapient/provider'
+import {
+  SAPIENT_INSTALL_URL, formatBalance, getPrivateTariBalance, getPublicTariBalance, isMainnet, networkLabel, shortAddress,
+  type RawBalance,
+} from '../../sapient/provider'
 
 const MONO = 'var(--font-mono)'
 
@@ -49,14 +52,28 @@ function MenuRow({ label, children }: { label: string; children: ReactNode }) {
   )
 }
 
+/** One balance line in the menu. `no-access`: private TARI needs view access to read. */
+type BalanceView = { s: 'loading' } | { s: 'ok'; text: string } | { s: 'error' } | { s: 'no-access' }
+
+function BalanceText({ view }: { view: BalanceView }) {
+  if (view.s === 'loading') return <span style={{ color: 'var(--text-muted-dim)' }}>…</span>
+  if (view.s === 'no-access') return <span style={{ color: 'var(--text-muted-dim)' }}>Grant view access to see</span>
+  if (view.s === 'error') return <span style={{ color: 'var(--text-muted-dim)' }}>Couldn’t read</span>
+  return <span style={{ fontFamily: MONO, fontSize: 12 }}>{view.text} TARI</span>
+}
+
+const shown = (b: RawBalance): BalanceView => ({ s: 'ok', text: formatBalance(b) })
+
 const linkBtn: CSSProperties = {
   padding: 0, border: 'none', background: 'transparent', cursor: 'pointer',
   fontSize: 12.5, fontWeight: 600, fontFamily: 'inherit', color: 'var(--accent-ink)',
 }
 
 export default function WalletConnectBar() {
-  const { status, network, walletAddress, viewAccess, error, connect, disconnect, grantViewAccess } = useSapient()
+  const { status, network, walletAddress, viewAccess, error, provider, connect, disconnect, grantViewAccess } = useSapient()
   const [menuOpen, setMenuOpen] = useState(false)
+  const [privateBalance, setPrivateBalance] = useState<BalanceView>({ s: 'loading' })
+  const [publicBalance, setPublicBalance] = useState<BalanceView>({ s: 'loading' })
   const [copied, setCopied] = useState(false)
   const boxRef = useRef<HTMLDivElement>(null)
 
@@ -69,6 +86,27 @@ export default function WalletConnectBar() {
     window.addEventListener('keydown', onKey)
     return () => { window.removeEventListener('mousedown', onDown); window.removeEventListener('keydown', onKey) }
   }, [menuOpen])
+
+  // BALANCES, READ FRESH EVERY TIME THE MENU OPENS — and again if view access is granted while it is
+  // open. Never on the pill. Private TARI needs view access; public does not. A read that lands after
+  // the menu closed (or the inputs changed) is dropped.
+  useEffect(() => {
+    if (!menuOpen || status !== 'connected' || !provider) return
+    let live = true
+    setPublicBalance({ s: 'loading' })
+    getPublicTariBalance(provider)
+      .then(b => { if (live) setPublicBalance(shown(b)) })
+      .catch(() => { if (live) setPublicBalance({ s: 'error' }) })
+    if (viewAccess === 'granted') {
+      setPrivateBalance({ s: 'loading' })
+      getPrivateTariBalance(provider)
+        .then(b => { if (live) setPrivateBalance(shown(b)) })
+        .catch(() => { if (live) setPrivateBalance({ s: 'error' }) })
+    } else {
+      setPrivateBalance({ s: 'no-access' })
+    }
+    return () => { live = false }
+  }, [menuOpen, status, provider, viewAccess])
 
   // A connection that ends closes its menu.
   useEffect(() => { if (status !== 'connected') setMenuOpen(false) }, [status])
@@ -149,6 +187,8 @@ export default function WalletConnectBar() {
             {walletAddress && <button onClick={copyAddress} style={{ ...linkBtn, marginTop: 4 }}>{copied ? 'Copied' : 'Copy address'}</button>}
           </MenuRow>
           <MenuRow label="Network"><NetworkChip network={network} /></MenuRow>
+          <MenuRow label="Private"><BalanceText view={privateBalance} /></MenuRow>
+          <MenuRow label="Public"><BalanceText view={publicBalance} /></MenuRow>
           <MenuRow label="View access">
             {viewAccess === 'granted' ? 'Granted'
               : viewAccess === 'requesting' ? 'Approve in Sapient…'

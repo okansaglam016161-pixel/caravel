@@ -139,6 +139,50 @@ export async function disconnectSapient(p: TariProvider): Promise<void> {
   await sapientRequest(p, 'tari_disconnect')
 }
 
+// ── Balances ─────────────────────────────────────────────────────────────────
+
+/** Native TARI's resource address — the same on every network (tari-wallet background, and the spike). */
+export const TARI_RESOURCE = 'resource_0101010101010101010101010101010101010101010101010101010101010101'
+
+/** A balance in raw units, with the resource's own divisibility. */
+export interface RawBalance {
+  amount: bigint
+  divisibility: number
+}
+
+const TARI_DIVISIBILITY = 6
+
+function toRaw(entry: { amount?: unknown; divisibility?: unknown } | undefined): RawBalance {
+  const divisibility = typeof entry?.divisibility === 'number' ? entry.divisibility : TARI_DIVISIBILITY
+  const s = typeof entry?.amount === 'string' || typeof entry?.amount === 'number' ? String(entry.amount) : '0'
+  return { amount: /^\d+$/.test(s) ? BigInt(s) : 0n, divisibility }
+}
+
+function findTari(list: unknown): { amount?: unknown; divisibility?: unknown } | undefined {
+  return Array.isArray(list) ? list.find(b => (b as { resourceAddress?: unknown })?.resourceAddress === TARI_RESOURCE) : undefined
+}
+
+/** Private (shielded) TARI the wallet knows about. NEEDS VIEW ACCESS — throws without it. */
+export async function getPrivateTariBalance(p: TariProvider): Promise<RawBalance> {
+  return toRaw(findTari(await sapientRequest<unknown>(p, 'tari_getPrivateBalances')))
+}
+
+/** Public (revealed) TARI. `amount` in tari_getBalances is always real, with or without view access. */
+export async function getPublicTariBalance(p: TariProvider): Promise<RawBalance> {
+  return toRaw(findTari(await sapientRequest<unknown>(p, 'tari_getBalances')))
+}
+
+/**
+ * Raw units → "1,234.5": at most 6 decimals (floored past that), trailing zeros trimmed, thousands
+ * grouped. Exact — bigint throughout, never a float.
+ */
+export function formatBalance({ amount, divisibility }: RawBalance, maxDecimals = 6): string {
+  const scale = 10n ** BigInt(divisibility)
+  const whole = (amount / scale).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+  const frac = (amount % scale).toString().padStart(divisibility, '0').slice(0, maxDecimals).replace(/0+$/, '')
+  return frac ? `${whole}.${frac}` : whole
+}
+
 // ── Events ───────────────────────────────────────────────────────────────────
 
 export interface SapientEvents {

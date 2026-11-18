@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   detectSapient, getAccounts, getViewAccess, requestAccounts, requestViewAccess, shortAddress, subscribeSapient,
   toSapientError, networkLabel, isMainnet, type ProviderHost, type TariProvider,
+  TARI_RESOURCE, formatBalance, getPrivateTariBalance, getPublicTariBalance,
 } from './provider'
 
 function host(tari?: TariProvider): ProviderHost {
@@ -118,5 +119,37 @@ describe('display helpers', () => {
     expect(networkLabel(null)).toBe('Unknown network')
     expect(isMainnet('mainnet')).toBe(true)
     expect(isMainnet('esmeralda')).toBe(false)
+  })
+})
+
+describe('TARI balances', () => {
+  const OTHER = 'resource_' + 'ab'.repeat(32)
+
+  it('public reads `amount` from tari_getBalances, picking TARI out of every resource', async () => {
+    const p = fakeProvider({ tari_getBalances: [
+      { resourceAddress: OTHER, amount: '999', confidentialAmount: '0', privateVisible: false, divisibility: 2 },
+      { resourceAddress: TARI_RESOURCE, amount: '1500000', confidentialAmount: '0', privateVisible: false, divisibility: 6 },
+    ] })
+    expect(await getPublicTariBalance(p)).toEqual({ amount: 1_500_000n, divisibility: 6 })
+  })
+
+  it('private reads tari_getPrivateBalances; no TARI entry is zero', async () => {
+    const p = fakeProvider({ tari_getPrivateBalances: [{ resourceAddress: TARI_RESOURCE, amount: '42000000', outputCount: 3, divisibility: 6 }] })
+    expect(await getPrivateTariBalance(p)).toEqual({ amount: 42_000_000n, divisibility: 6 })
+    expect(await getPrivateTariBalance(fakeProvider({ tari_getPrivateBalances: [] }))).toEqual({ amount: 0n, divisibility: 6 })
+  })
+
+  it('private without view access throws, so the menu can say so', async () => {
+    const p = fakeProvider({ tari_getPrivateBalances: { code: -32603, message: 'Private view access not granted.' } })
+    await expect(getPrivateTariBalance(p)).rejects.toMatchObject({ name: 'SapientError' })
+  })
+
+  it('formats with at most 6 decimals, trailing zeros trimmed, thousands grouped, exactly', () => {
+    expect(formatBalance({ amount: 1_500_000n, divisibility: 6 })).toBe('1.5')
+    expect(formatBalance({ amount: 1n, divisibility: 6 })).toBe('0.000001')
+    expect(formatBalance({ amount: 0n, divisibility: 6 })).toBe('0')
+    expect(formatBalance({ amount: 1_234_567_000_000n, divisibility: 6 })).toBe('1,234,567')
+    expect(formatBalance({ amount: 123_456_789n, divisibility: 8 })).toBe('1.234567')   // floored past 6
+    expect(formatBalance({ amount: 9_007_199_254_740_993_000_000n, divisibility: 6 })).toBe('9,007,199,254,740,993')
   })
 })

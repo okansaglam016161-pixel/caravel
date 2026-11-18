@@ -4,7 +4,6 @@ import Logo from '../primitives/Logo'
 import Callout from '../primitives/Callout'
 import { useChat } from '../../context/ChatContext'
 import WalletConnectBar from './WalletConnectBar'
-import { parseOotleAddress } from '@tari-project/ootle-wasm'
 import { compareMessages, sortKey, type CaravelMessage, type Group } from '../../messaging/types'
 import GroupThread from './GroupThread'
 import CreateGroupModal, { type GroupContactOption } from './CreateGroupModal'
@@ -25,6 +24,7 @@ import { createActionLock, guarded } from '../../crypto/actionLock'
 import { dedupePaymentMessages, disputedUtxos } from '../../messaging/paymentDedupe'
 import { ConnectionIndicator, RelayHealthPanel } from './ConnectionStatus'
 import { formatTari, TICKER } from '../../sapient/units'
+import { addressParser, loadAddressParser } from '../../sapient/addressParser'
 import { avatarFor, conversationPreview, initialsFor, truncNpub, bubbleTime, compactTime, dayLabel, isNewDay, mergeThreadItems, replyChipDetail, threadContentKey, MONO } from './chatDisplay'
 import Avatar from './Avatar'
 import MessageBubble from './MessageBubble'
@@ -1231,6 +1231,19 @@ export default function ChatApp() {
     return () => { live = false }
   }, [paymentMode, sapientReady, sapient.viewAccess, sapient.provider])
 
+  // The address parser (WASM) is fetched the first time the pay panel opens — never at startup
+  // (sapient/addressParser). `parserState` re-renders the panel when it lands or fails.
+  const [parserState, setParserState] = useState<'idle' | 'loading' | 'ready' | 'failed'>(() => addressParser() ? 'ready' : 'idle')
+  useEffect(() => {
+    if (!paymentMode || addressParser()) return
+    let live = true
+    setParserState('loading')
+    loadAddressParser()
+      .then(() => { if (live) setParserState('ready') })
+      .catch(() => { if (live) setParserState('failed') })
+    return () => { live = false }
+  }, [paymentMode])
+
   const availableText = privateBal === undefined ? (sapient.viewAccess === 'granted' ? '…' : 'grant view access to see')
     : privateBal === null ? '—'
     : `${formatTari(privateBal)} ${TICKER}`
@@ -1257,8 +1270,14 @@ export default function ChatApp() {
     if (payAmountRaw() === null) return 'Enter an amount greater than 0, with at most 6 decimals.'
     // THE ADDRESS IS PARSED, NOT PREFIX-CHECKED, and its network byte must be Sapient's: a payment
     // to another network's keys is unrecoverable, with no bounce and no error at spend time.
+    const parse = addressParser()
+    if (!parse) {
+      return parserState === 'failed'
+        ? 'Couldn’t load the address checker. Check your connection, then close and reopen the payment.'
+        : 'Loading the address checker…'
+    }
     try {
-      assertPayableAddress(effectivePayAddress, sapient.network, parseOotleAddress)
+      assertPayableAddress(effectivePayAddress, sapient.network, parse)
     } catch (e) {
       return e instanceof Error ? e.message : String(e)
     }
@@ -1318,6 +1337,8 @@ export default function ChatApp() {
     if (!selectedConvo || !nostrPubkeyHex) return
     const gate = sapientGate()
     if (gate) { setPayError(gate, true); return }
+    // Normally loaded when the panel opened; wait for it here in case it is still on its way.
+    if (!addressParser()) await loadAddressParser().catch(() => undefined)
     const err = validatePayment()
     if (err) { setPayError(err, true); return }
     const p = sapient.provider!

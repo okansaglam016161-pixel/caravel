@@ -10,7 +10,9 @@ const wasm = wasmPlugin as unknown as () => PluginOption
 
 // Vite 8 handles top-level-await natively — no plugin needed.
 // vite-plugin-wasm handles the `import * as wasm from "*.wasm"` in @tari-project/ootle-wasm, which
-// Caravel uses only to parse an `otl_…` address and check its network before paying it.
+// Caravel uses only to parse an `otl_…` address and check its network before paying it. It is
+// imported dynamically (sapient/addressParser), so it is its own chunk, fetched when the pay panel
+// first opens — never on the landing page or at app start.
 export default defineConfig({
   plugins: [wasm(), react()],
   build: {

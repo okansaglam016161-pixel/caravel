@@ -23,13 +23,14 @@ const X_URL = 'https://x.com/Caravelxyz'
 // ── Content ───────────────────────────────────────────────────────────────────
 
 const STEPS = [
-  { n: '01', title: 'Create your chat identity.', body: 'Made on your device, backed up with 12 words.' },
-  { n: '02', title: 'Connect Sapient.', body: 'Your funds stay in the Tari browser wallet.' },
-  { n: '03', title: 'Pay inside the chat.', body: 'Private TARI, confirmed in the thread.' },
+  { n: '01', title: 'Create your Nostr identity.', body: 'Made on your device, or import your nsec.' },
+  { n: '02', title: 'Connect Sapient.', body: 'Your wallet for TARI on the Ootle.' },
+  { n: '03', title: 'Message any npub.', body: 'Pay in the chat, amounts hidden on chain.' },
 ]
 
 const FAQS = [
   { q: 'What do I need?', a: 'A desktop browser (Chrome, Brave or Edge). For payments, the Sapient wallet extension.' },
+  { q: 'How do people find me?', a: 'Share your npub, your public Nostr ID. Anyone with it can message you and pay you.' },
   { q: 'Who holds my funds?', a: 'You do. Your funds and wallet keys stay in Sapient on your computer. Caravel never sees them.' },
   { q: 'What if I lose my backup phrase?', a: 'Your 12 words (or nsec) are the only way to restore your chat identity. Nobody can recover them for you, including us.' },
   { q: 'Can I use real funds?', a: 'Yes, on Ootle mainnet. Caravel is new and unaudited, so only use amounts you can afford to lose.' },

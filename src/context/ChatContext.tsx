@@ -23,6 +23,7 @@ import { loadSeenDefIdSet, recordSeenDef } from '../messaging/seenDefStore'
 import type { Group } from '../messaging/types'
 import { loadTombstoneIdSet, recordTombstones } from '../messaging/tombstoneStore'
 import { removeResolvedAmounts, migrateResolvedAmounts } from '../messaging/paymentResolutionStore'
+import { removeClaims } from '../messaging/paymentClaimStore'
 import { deleteBlobs } from '../messaging/blobCache'
 import { mediaBlobKeys } from '../messaging/sendMedia'
 import { loadContacts, setContactState, removeContact, type ContactMap } from '../messaging/contactStore'
@@ -603,6 +604,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     //    known-peers set) so a later message from them arrives as a FRESH pending request — this
     //    unifies delete and decline (hide-and-forget).
     removeResolvedAmounts(pubkeyHex, utxoIds)
+    removeClaims(pubkeyHex, utxoIds)
     // FIRE-AND-FORGET: the blob cache is async (IndexedDB) while this function is synchronous, and it
     // is non-authoritative anyway — a purge that fails leaves unreachable bytes the browser evicts,
     // never a broken delete. So delete returns before the blobs are gone, deliberately.

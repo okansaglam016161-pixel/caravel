@@ -27,7 +27,7 @@
 
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { useWallet } from '../../context/WalletContext'
-import { useChat } from '../../context/ChatContext'
+import type { CaravelMessage } from '../../messaging/types'
 import { MIN_CONCEAL_MICROTARI, maxConcealTyped, prepareConceal, type PreparedConceal } from '../../crypto/conceal'
 import { MIN_REVEAL_MICROTARI, maxRevealable, prepareReveal, type PreparedReveal } from '../../crypto/reveal'
 import { loadAccountAddress } from '../../crypto/accountStore'
@@ -225,14 +225,18 @@ function ActivityRowFor({ row, hidden }: { row: ActivityRow; hidden: boolean }) 
  */
 type Chrome = 'modal' | 'page'
 
+/** Stable empty list — see the note where it is used. */
+const NO_CHAT_MESSAGES: CaravelMessage[] = []
+
 export default function WalletModal({ onClose, chrome = 'modal' }: { onClose?: () => void; chrome?: Chrome }) {
   const {
     wallet, address, scan, revealed, rescan, txHistory, recordSent,
     balanceHidden, setBalanceHidden,
     settles, isSettling, settleLagged, beginSettle, acknowledgeSettle,
   } = useWallet()
-  // Chat payments feed this wallet's Activity (attribution and dedupe) — read from chat.
-  const { messages } = useChat()
+  // Chat payments go through Sapient now, never this built-in wallet, so its Activity no longer
+  // mixes them in. (The whole built-in wallet goes in the next step.)
+  const messages = NO_CHAT_MESSAGES
 
   // The journal, live. Subscribed rather than held in context: it is written to localStorage by
   // the call sites below, none of which pass through React state on the way.

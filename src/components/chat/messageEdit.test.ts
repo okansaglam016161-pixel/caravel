@@ -58,7 +58,7 @@ describe('canEditMessage', () => {
 
   it('refuses a system notice and a payment row', () => {
     expect(canEditMessage(msg({ system: 'group-leave', plaintext: '' }))).toBe(false)
-    expect(canEditMessage(msg({ payment: { utxoId: 'utxo_1' } }))).toBe(false)
+    expect(canEditMessage(msg({ payment: { utxoId: 'utxo_1', nonce: '0123456789abcdef', network: 'mainnet' } }))).toBe(false)
   })
 
   it('refuses a group-leave notice in a group thread — the only place system rows live', () => {

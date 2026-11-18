@@ -5,7 +5,6 @@ import Callout from '../primitives/Callout'
 import { useWallet } from '../../context/WalletContext'
 import { useChat } from '../../context/ChatContext'
 import WalletConnectBar from './WalletConnectBar'
-import { assertValidRecipient } from '../../crypto/publicSend'
 import { parseOotleAddress } from '@tari-project/ootle-wasm'
 import { plainError } from '../wallet/v2/plainError'
 import { compareMessages, sortKey, type CaravelMessage, type Group } from '../../messaging/types'
@@ -18,21 +17,18 @@ import { useJumpToMessage } from './useJumpToMessage'
 import PendingBubble, { type PendingSend } from './PendingBubble'
 import { loadNicknames, setNickname, MAX_NICKNAME_LEN, type NicknameMap } from '../../messaging/nicknameStore'
 import { loadAddressSent, markAddressSent, clearAddressSent, type AddressSentMap } from '../../messaging/addressSentStore'
-import { prepareConfidentialSend, tariToMicrotari, MAX_FEE, type PreparedConfidentialSend } from '../../crypto/confidentialSend'
-import { FEE_SHORT_MESSAGE, QuoteChanged, isFeeShortRejection } from '../../crypto/quote'
+import { useSapient } from '../../context/SapientContext'
+import { asSendResult, assertPayableAddress, insufficientPrivateBalance, makePaymentNonce, parseTari, readRequest, sendPrivately, shield, type RequestPhase } from '../../sapient/payments'
+import { formatBalance, getPrivateTariBalance, networkLabel, toSapientError, SAPIENT_INSTALL_URL } from '../../sapient/provider'
+import { addOutbox, loadOutbox, removeOutbox, updateOutbox, type OutboxEntry } from '../../messaging/paymentOutbox'
+import { claimView, type ClaimView } from '../../messaging/paymentClaims'
+import { usePaymentClaimer } from '../../hooks/usePaymentClaimer'
 import { createActionLock, guarded } from '../../crypto/actionLock'
-import { dedupePaymentMessages, disputedUtxos, isOwnOutputClaim, ownOutputIds, receivedPaymentVisible } from '../../messaging/paymentDedupe'
-import { useJournal } from '../../hooks/useJournal'
-import { beginEntry, settleEntry } from '../../crypto/journalStore'
+import { dedupePaymentMessages, disputedUtxos } from '../../messaging/paymentDedupe'
 import { ConnectionIndicator, RelayHealthPanel } from './ConnectionStatus'
-import { usePaymentResolution } from '../../hooks/usePaymentResolution'
-import { balanceIsLowerBound, isInsufficientBalance } from './paymentGuard'
 // The wallet's amount formatters, bigint-only — shared rather than re-derived, which is the whole
 // point of format.ts having been written. MASK_SHORT is the same stand-in its balance rows use.
 import { fmt6, MASK_SHORT, TICKER } from '../wallet/v2/format'
-// The wallet's own sentence for "this figure came off a truncated scan". Shared, not retyped: its
-// note says there is one wording precisely so the two surfaces cannot drift apart on the claim.
-import { incompleteAvailableNote } from '../wallet/v2/total'
 import { avatarFor, conversationPreview, initialsFor, truncNpub, bubbleTime, compactTime, dayLabel, isNewDay, mergeThreadItems, replyChipDetail, threadContentKey, MONO } from './chatDisplay'
 import Avatar from './Avatar'
 import MessageBubble from './MessageBubble'
@@ -340,48 +336,72 @@ function SentPaymentCard({ message, lid, flashed }: { message: CaravelMessage; l
   return <PaymentCard sent state={state} timestamp={message.timestamp} plaintext={message.plaintext} lid={lid} flashed={flashed} />
 }
 
-function ReceivedPaymentCard({ message, lid, flashed, disputed }: { message: CaravelMessage; lid?: string; flashed?: boolean; disputed?: boolean }) {
-  const { state: res, retry } = usePaymentResolution(message.payment!.utxoId)
-  // ONLY A PAYMENT THAT LANDED GETS A CARD — see messaging/paymentDedupe. While the output is being
-  // checked, and when it is not on chain (never landed) or not ours, nothing is drawn; it appears
-  // the moment the chain confirms it.
-  if (!receivedPaymentVisible(res)) return null
+/**
+ * A received payment's card, from its CLAIM through Sapient (hooks/usePaymentClaimer): credited only
+ * when the output's memo carries this message's nonce. Every state is shown — including one that
+ * cannot be confirmed — and none of them credits anybody without that match.
+ */
+function ReceivedPaymentCard({ message, lid, flashed, disputed, view, onRetry }: {
+  message: CaravelMessage; lid?: string; flashed?: boolean; disputed?: boolean; view: ClaimView; onRetry: () => void
+}) {
   let state: PayCardState
-  if (res.kind === 'wallet-locked') {
-    // Chat runs without the wallet now; without its view key the amount cannot be opened.
-    state = { dir: 'RECEIVED', masked: true, tone: 'dim', status: 'Unlock your wallet to see the amount.' }
-  } else if (res.kind === 'resolved' && disputed) {
-    // Another contact claims this same output — the card credits nobody (messaging/paymentDedupe).
-    state = { dir: 'RECEIVED', amount: microToTari(res.amountMicrotari), tone: 'dim', status: 'Another contact claims this same payment, so the sender can’t be confirmed.' }
-  } else if (res.kind === 'resolved') {
-    state = { dir: 'RECEIVED', amount: microToTari(res.amountMicrotari), pill: true }        // R1
-  } else if (res.kind === 'retrying') {
-    state = { dir: 'RECEIVED', tone: 'dim', spin: true, status: 'Reaching the indexer…' }    // R4
-  } else if (res.kind === 'failed' && res.reason === 'spent') {
-    state = { dir: 'RECEIVED', tone: 'dim', status: 'Payment output has been spent.' }       // R5
-  } else {
-    state = { dir: 'RECEIVED', tone: 'danger', retry, status: 'Could not reach the network.' }  // R8
+  switch (view.s) {
+    case 'verified':
+      state = disputed
+        // Another contact names this same output — the card credits nobody (messaging/paymentDedupe).
+        ? { dir: 'RECEIVED', amount: microToTari(view.amount), tone: 'dim', status: 'Another contact claims this same payment, so the sender can’t be confirmed.' }
+        : { dir: 'RECEIVED', amount: microToTari(view.amount), pill: true }
+      break
+    case 'unverified':
+      state = view.reason === 'own-send'
+        ? { dir: 'RECEIVED', masked: true, tone: 'dim', status: 'This is one of your own payments, not one from this contact.' }
+        : view.reason === 'spent'
+          ? { dir: 'RECEIVED', masked: true, tone: 'dim', status: 'Couldn’t verify this payment: the output has already been spent.' }
+          : { dir: 'RECEIVED', ...(view.amount ? { amount: microToTari(view.amount) } : { masked: true }), tone: 'dim', status: 'Not verified: this payment’s note doesn’t match the message.' }
+      break
+    case 'unconfirmed':
+      state = { dir: 'RECEIVED', masked: true, tone: 'danger', retry: onRetry, status: 'Couldn’t confirm this payment.' }
+      break
+    case 'claiming':
+      state = { dir: 'RECEIVED', masked: true, tone: 'dim', spin: true, status: 'Confirming with Sapient…' }
+      break
+    case 'retrying':
+      state = { dir: 'RECEIVED', masked: true, tone: 'dim', spin: true, status: 'Not on chain yet — checking again shortly…' }
+      break
+    case 'needs-sapient':
+      state = {
+        dir: 'RECEIVED', masked: true, tone: 'dim',
+        status: view.why === 'install' ? 'Install Sapient to confirm this payment.'
+          : view.why === 'view' ? 'Grant view access in Sapient to confirm this payment.'
+          : view.why === 'network' ? `Sent on ${networkLabel(view.network ?? null)} — switch Sapient to confirm.`
+          : 'Connect or unlock Sapient to confirm this payment.',
+      }
+      break
   }
   return <PaymentCard sent={false} state={state} timestamp={message.timestamp} plaintext={message.plaintext} lid={lid} flashed={flashed} />
 }
 
-function PaymentMessageCard({ message, lid, flashed, disputed }: { message: CaravelMessage; lid?: string; flashed?: boolean; disputed?: boolean }) {
-  return message.direction === 'sent'
+function PaymentMessageCard({ message, lid, flashed, disputed, view, onRetry }: {
+  message: CaravelMessage; lid?: string; flashed?: boolean; disputed?: boolean; view: ClaimView | null; onRetry: () => void
+}) {
+  return message.direction === 'sent' || !view
     ? <SentPaymentCard message={message} lid={lid} flashed={flashed} />
-    : <ReceivedPaymentCard message={message} lid={lid} flashed={flashed} disputed={disputed} />
+    : <ReceivedPaymentCard message={message} lid={lid} flashed={flashed} disputed={disputed} view={view} onRetry={onRetry} />
 }
 
 // ── Component ────────────────────────────────────────────────────────────────────
 
 export default function ChatApp() {
-  // The wallet is OPTIONAL here: it may be locked or not set up, and chat works regardless. Only
-  // payments (and the address this side announces) need it.
-  const { wallet, address, scan, balanceHidden } = useWallet()
+  // Payments go through SAPIENT (the browser wallet), not the built-in wallet: the address this side
+  // announces is Sapient's, and so is every send and claim. Chat works without either.
+  const { balanceHidden } = useWallet()
+  const sapient = useSapient()
+  /** The `otl_…` address this side announces — the connected Sapient account's, or none. */
+  const myAddress = sapient.status === 'connected' ? sapient.walletAddress : null
   const { messages, historyUnreadable, nostrPubkeyHex, messagingStatus, contacts, acceptContact, contactAddresses, setManualTariAddress, createMessagingProvider, recordSentMessage, deleteConversation, editMessage, reactMessage, getRelayStates, reconnectAll, groups, createGroup, acceptGroup, declineGroup, leaveGroup, reinviteGroup } = useChat()
-  // Payment claims this wallet must not credit — see messaging/paymentDedupe: claims on our own
-  // outputs (our change) get no card, and an output two contacts claim credits neither.
-  const journal = useJournal(address)
-  const ownOutputs = useMemo(() => ownOutputIds(journal), [journal])
+  // Received payments are claimed through Sapient in the background (hooks/usePaymentClaimer), and
+  // credited only when the memo nonce matches. An output two contacts claim credits neither.
+  const { claims, busy: claimBusy, retry: retryClaim } = usePaymentClaimer(nostrPubkeyHex, messages, contacts)
   const disputedClaims = useMemo(() => disputedUtxos(messages), [messages])
   // Logo has no theme awareness of its own — `onLight` is a manual prop. Both marks in this view
   // sit on surfaces that are now light in the light theme, so the white mark would vanish.
@@ -459,20 +479,16 @@ export default function ChatApp() {
   const imageInputRef = useRef<HTMLInputElement | null>(null)
   const [paymentMode, setPaymentMode] = useState(false)
   const [payAmount, setPayAmount] = useState('')       // XTR, as typed
-  const [payAddress, setPayAddress] = useState('')     // recipient otl_esm_ (manual — see caveat)
-  const [confirming, setConfirming] = useState(false)  // inline confirm panel shown
+  const [payAddress, setPayAddress] = useState('')     // recipient otl_… (manual — see caveat)
   /**
-   * The payment priced for the confirm card — the envelope Send submits, so the fee it shows is the
-   * fee it pays. Null while pricing (the card says "Pricing…" and Send is disabled) and whenever
-   * the card is closed. `payPriceGen` drops a pricing result the user has already walked away from.
+   * Sapient's private TARI, read when the panel opens (view access only) — the pre-check against it,
+   * and the "Private available" line. `undefined` = not read (no view access), `null` = read failed.
    */
-  const [payPrepared, setPayPrepared] = useState<PreparedConfidentialSend | null>(null)
-  const payPriceGen = useRef(0)
-  /** Why the card is asking again — the quote was re-checked at Send and re-priced. Nothing was sent. */
-  const [payNotice, setPayNotice] = useState<string | null>(null)
-  // The priced payment holds its coins (crypto/coinReservations); let them go whenever it is
-  // replaced or the chat unmounts. Idempotent, and never touches a submitted payment's lock.
-  useEffect(() => () => payPrepared?.release(), [payPrepared])
+  const [privateBal, setPrivateBal] = useState<bigint | null | undefined>(undefined)
+  /** The private balance is short: offer to make the difference private first (Sapient `shield`). */
+  const [shieldOffer, setShieldOffer] = useState<{ shortfall: bigint; have: bigint | null } | null>(null)
+  /** Outbox entries waiting on the person: approved in Sapient before a reload, never submitted. */
+  const [outboxAsk, setOutboxAsk] = useState<OutboxEntry[]>([])
   const [payBusy, setPayBusy] = useState(false)        // payment/message in flight
   const [payProgress, setPayProgress] = useState<string | null>(null)
   const [payError, setPayErrorRaw] = useState<string | null>(null)
@@ -514,21 +530,23 @@ export default function ChatApp() {
   useEffect(() => {
     setAddressSent(nostrPubkeyHex ? loadAddressSent(nostrPubkeyHex) : {})
   }, [nostrPubkeyHex])
-  function markSent(peerHex: string) {
-    if (nostrPubkeyHex) setAddressSent(prev => markAddressSent(nostrPubkeyHex, prev, peerHex))
+  function markSent(peerHex: string, addr: string) {
+    if (nostrPubkeyHex) setAddressSent(prev => markAddressSent(nostrPubkeyHex, prev, peerHex, addr))
   }
-  // My address to attach to an outbound message, or undefined once the peer already has it.
+  // My (Sapient) address to attach to an outbound message, or undefined once the peer already has
+  // THIS one — a Sapient account switch changes it, and the next message carries the new one.
   function outboundAddressFor(peerHex: string): string | undefined {
-    return address && !addressSent[peerHex] ? address : undefined
+    return myAddress && addressSent[peerHex] !== myAddress ? myAddress : undefined
   }
   // Send my address as a dedicated silent control message (initiate/accept); mark delivered on
   // relay-accept. Fire-and-forget — failures self-heal via the next message's piggyback.
   function sendAddressControl(peerHex: string) {
-    if (!address) return
+    const addr = myAddress
+    if (!addr) return
     const provider = createMessagingProvider()
     if (!provider) return
-    provider.sendContactAddress(peerHex, address)
-      .then(ok => { if (ok) markSent(peerHex) })
+    provider.sendContactAddress(peerHex, addr)
+      .then(ok => { if (ok) markSent(peerHex, addr) })
       .catch(() => { /* self-heals via piggyback on the next normal message */ })
       .finally(() => provider.disconnect())
   }
@@ -893,7 +911,7 @@ export default function ChatApp() {
       const msg = await provider.sendMessage(peer, text, { tariAddress: addr, replyTo: replying?.logicalId })
       provider.disconnect()
       recordSentMessage(msg)
-      if (addr) markSent(peer)
+      if (addr) markSent(peer, addr)
       setDraft('')  // clear only on success — a failed send keeps the text
       setReplying(null)  // same rule as the draft: the quote survives a failed send, with the text
       setPendingSends(p => p.filter(x => x.id !== tempId))  // real persisted bubble now shows
@@ -955,7 +973,7 @@ export default function ChatApp() {
         const { message, plaintextBytes } = await sendImageToPeer(provider, file, target.peerHex, caption, addr, setStage)
         recordSentMessage(message)
         seedOwnImage(message, plaintextBytes)
-        if (addr) markSent(target.peerHex)
+        if (addr) markSent(target.peerHex, addr)
         setPendingSends(p => p.filter(x => x.id !== tempId))
       }
     } catch (e) {
@@ -1090,7 +1108,7 @@ export default function ChatApp() {
     // CAPTION field while edit mode uses it as the EDIT field, both bound to `draft`. With an image
     // picked, starting an edit would have the caption and the edit text overwrite each other and
     // Save/Send act on whichever won — silently, with nothing thrown and nothing failing to compile.
-    if (paymentMode || confirming || sending || payBusy || attachment) return
+    if (paymentMode || sending || payBusy || attachment) return
     setStashedDraft(editing ? stashedDraft : draft)   // don't clobber the stash when re-targeting
     setEditing({ logicalId, original: currentText })
     setDraft(currentText)
@@ -1175,7 +1193,16 @@ export default function ChatApp() {
     await runEdit(logicalId, flight.text)
   }
 
-  // ── Payment (TARI) flow ──────────────────────────────────────────────────────
+  // ── Payment (TARI) flow — through Sapient ─────────────────────────────────────
+  //
+  // Send goes straight to Sapient: its popup shows the amount, recipient and fee, and is the only
+  // confirmation. The composer shows a progress line. The memo carries a random nonce; the chat
+  // message carries the output id, that nonce and the network (payment tag v2), and the recipient
+  // credits the payment only when they match (sapient/payments.claimPayment).
+  //
+  // THE OUTBOX makes it crash-safe: an entry is written before Sapient is asked, holds the requestId
+  // and then the result, and goes only once the message carrying the payment is sent — so a closed
+  // tab can never lose a commitment the recipient needs (messaging/paymentOutbox; resumed below).
 
   function toggleTari() {
     if (payBusy) return
@@ -1186,9 +1213,8 @@ export default function ChatApp() {
         // Entering payment mode: prefill the known address for this peer (exchanged or manual).
         if (selectedConvo) setPayAddress(contactAddresses[selectedConvo.peerHex]?.address ?? '')
         setPayError(null)
-      } else {
-        closeConfirm()
       }
+      setShieldOffer(null)
       return next
     })
   }
@@ -1201,61 +1227,57 @@ export default function ChatApp() {
   const addressVerified = peerAddrRec?.source === 'exchanged'
   const effectivePayAddress = addressVerified ? peerAddrRec!.address : payAddress.trim()
 
-  // Insufficient-balance pre-check (flag 3b): same rule as the wallet's validateSendForm —
-  // amount + MAX_FEE must not exceed the confidential balance. Additive guard; never blocks a
-  // valid send. `payInsufficient` drives the design's inline pre-check state in the composer.
-  //
-  // THE RULE ITSELF LIVES IN paymentGuard.ts, and the reason is written there: it used to block on a
-  // TRUNCATED scan, where the balance is a lower bound and "larger than what we could see" is not
-  // "more than you have". Inline in this file nothing could test it, and it failed as a disabled
-  // button with no explanation.
-  // ── The "Private available" line (§8B·1) ────────────────────────────────────
-  //
-  // PRIVATE ONLY, and that is the honest figure rather than a partial one. A chat payment goes
-  // through sendConfidential, which spends confidential UTXOs — the public balance is not spendable
-  // from this panel without a move first, so showing it here would offer money this button cannot
-  // touch. The wallet's Send tab shows both because it can actually choose a source; this cannot.
-  //
-  // The three qualifications are the wallet's, not new ones: null is "—" and never 0 (a failed read
-  // is not an empty wallet), a truncated scan keeps its figure and states the uncertainty rather
-  // than withdrawing a number that is safe to act on, and the hide toggle masks it.
-  const availableLowerBound = balanceIsLowerBound(scan)
-  const availableText = balanceHidden
-    ? MASK_SHORT
-    : scan.balance === null ? '—' : `${fmt6(scan.balance)} ${TICKER}`
+  // Sapient's private TARI, read whenever the panel opens (and again when view access arrives).
+  // Without view access there is no pre-check; Sapient's own "exceeds your private balance" answer
+  // still leads to the same Shield offer.
+  const sapientReady = sapient.status === 'connected' && !!sapient.provider
+  useEffect(() => {
+    if (!paymentMode || !sapientReady || sapient.viewAccess !== 'granted' || !sapient.provider) { setPrivateBal(undefined); return }
+    let live = true
+    getPrivateTariBalance(sapient.provider)
+      .then(b => { if (live) setPrivateBal(b.amount) })
+      .catch(() => { if (live) setPrivateBal(null) })
+    return () => { live = false }
+  }, [paymentMode, sapientReady, sapient.viewAccess, sapient.provider])
 
-  const payAmountNum = Number(payAmount)
-  const payAmountUsable = !!payAmount.trim() && isFinite(payAmountNum) && payAmountNum > 0
-  const payInsufficient = isInsufficientBalance(
-    payAmountUsable ? tariToMicrotari(payAmountNum) : null,
-    MAX_FEE,
-    scan,
-  )
+  const availableText = balanceHidden ? MASK_SHORT
+    : privateBal === undefined ? (sapient.viewAccess === 'granted' ? '…' : 'grant view access to see')
+    : privateBal === null ? '—'
+    : `${formatBalance({ amount: privateBal, divisibility: 6 })} ${TICKER}`
 
-  function validatePayment(): string | null {
-    const amt = Number(payAmount)
-    if (!payAmount.trim() || !isFinite(amt) || amt <= 0) return 'Enter an amount greater than 0.'
-    // THE SAME CHECK THE WALLET USES — parse, network byte, key length. A prefix test is not
-    // enough: a MAINNET address starts with otl_ too, is well-formed, and parses cleanly, so it
-    // passes `startsWith` and then commits the payment to keys nobody on this chain is watching.
-    // There is no bounce and no error at spend time, which makes it unrecoverable. This screen
-    // spends the same money as the wallet's Send tab and gets the same guard.
-    try {
-      assertValidRecipient(effectivePayAddress, parseOotleAddress)
-    } catch (e) {
-      return e instanceof Error ? e.message : String(e)
-    }
-    if (payInsufficient) return 'Insufficient balance.'
+  /** The amount as raw units, or null when it does not parse. */
+  function payAmountRaw(): bigint | null {
+    try { const v = parseTari(payAmount); return v > 0n ? v : null } catch { return null }
+  }
+  const payInsufficient = (() => {
+    const v = payAmountRaw()
+    return v !== null && typeof privateBal === 'bigint' && v > privateBal
+  })()
+
+  /** What stops Sapient being asked at all — said on the panel with the action to fix it. */
+  function sapientGate(): string | null {
+    if (sapient.status === 'missing') return 'Install Sapient to send payments.'
+    if (sapient.status === 'detecting') return 'Looking for Sapient…'
+    if (sapient.status !== 'connected') return 'Connect your wallet (Sapient) to send payments — or unlock it if it is locked.'
     return null
   }
 
-  // Send button: in payment mode this validates and opens the confirm gate; otherwise plain send.
+  function validatePayment(): string | null {
+    if (payAmountRaw() === null) return 'Enter an amount greater than 0, with at most 6 decimals.'
+    // THE ADDRESS IS PARSED, NOT PREFIX-CHECKED, and its network byte must be Sapient's: a payment
+    // to another network's keys is unrecoverable, with no bounce and no error at spend time.
+    try {
+      assertPayableAddress(effectivePayAddress, sapient.network, parseOotleAddress)
+    } catch (e) {
+      return e instanceof Error ? e.message : String(e)
+    }
+    return null
+  }
+
+  // Send button: in payment mode this goes straight to Sapient; otherwise plain send.
   function onComposerSend() {
     if (paymentMode) {
-      const err = validatePayment()
-      if (err) { setPayError(err, true); return }   // validation — nothing has been attempted
-      setPayError(null)
-      void pricePayment()
+      void submitPayment()
     } else if (attachment) {
       // Reached only outside edit mode — both callers check `editing` first — and after the payment
       // branch above. composerSend.ts owns that precedence and is where it is tested; this arm is
@@ -1266,210 +1288,210 @@ export default function ChatApp() {
     }
   }
 
+  const PHASE_TEXT: Record<RequestPhase, string> = {
+    approve: 'Approve the payment in Sapient…',
+    submitting: 'Submitting…',
+    finalizing: 'Waiting for the network to finalize (up to a minute)…',
+  }
+
   /**
-   * Open the confirm gate and PRICE the payment for it: scan, select, dry run and build happen now,
-   * so the card shows the exact fee the transaction pays and Send submits that very envelope. The
-   * quick pre-check (validatePayment, against the fee ceiling) has already run; this is the real
-   * answer. A failure here sent nothing.
+   * Send the chat message that carries a finished payment, and clear its outbox entry. The money has
+   * already moved; this only delivers the commitment and the note. Throws when the message does not
+   * go out — the entry stays, and the next unlock tries again.
    */
-  async function pricePayment(notice: string | null = null) {
-    if (!wallet || !address) { setPayError('Wallet is locked — unlock to send.', true); return }
-    const gen = ++payPriceGen.current
-    // A previous quote's coins go back before this one selects — otherwise it would skip them.
-    payPrepared?.release()
-    setPayPrepared(null)
-    setPayNotice(notice)
-    setConfirming(true)
+  async function announcePayment(entry: OutboxEntry, result: NonNullable<OutboxEntry['result']>): Promise<void> {
+    if (!nostrPubkeyHex) throw new Error('Chat is locked.')
+    const provider = createMessagingProvider()
+    if (!provider) throw new Error('Chat is locked.')
     try {
-      const prepared = await prepareConfidentialSend(wallet, address, {
-        recipient: effectivePayAddress,
-        amountMicrotari: tariToMicrotari(Number(payAmount)),
+      const addr = outboundAddressFor(entry.peerHex)
+      const msg = await provider.sendMessage(entry.peerHex, entry.note, {
+        payment: { utxoId: result.recipientSubstateId, nonce: entry.nonce, network: entry.network },
+        tariAddress: addr,
       })
-      if (gen !== payPriceGen.current) { prepared.release(); return }
-      setPayPrepared(prepared)
-    } catch (e) {
-      if (gen !== payPriceGen.current) return
-      setConfirming(false)
-      setPayError(e instanceof Error ? e.message : String(e), true)   // priced, not sent
+      if (addr) markSent(entry.peerHex, addr)
+      // The amount and txId stay LOCAL (never on the wire) so our thread renders what we sent — and
+      // so the claimer never credits our own send back to us.
+      recordSentMessage({ ...msg, localPayment: { amountMicrotari: entry.amount, txId: result.transactionId } })
+      removeOutbox(nostrPubkeyHex, entry.id)
+    } finally {
+      provider.disconnect()
     }
   }
 
-  /** Close the confirm gate and drop whatever it priced — a later Send must price afresh. */
-  function closeConfirm() {
-    payPriceGen.current++
-    setPayPrepared(null)
-    setPayNotice(null)
-    setConfirming(false)
-  }
-
-  // Runs only after the user confirms. Sequencing (decided): pre-flight connection check → submit
-  // the payment priced on the confirm card → only on Commit send the message carrying the recipient
-  // UTXO id.
   // ONE RUN PER PRESS SEQUENCE — crypto/actionLock: taken synchronously, released when it settles.
-  // The confirm card's Send stays on screen through the confirm check's round trip; pressing it
-  // again used to submit the same payment again and announce it once per press.
   const payLock = useRef(createActionLock())
   const submitPayment = guarded(payLock.current, submitPaymentNow)
 
   async function submitPaymentNow() {
-    if (!selectedConvo) return
-    const prepared = payPrepared
-    // The card's Send is disabled until this exists; refusing here keeps it a rule, not UI state.
-    if (!prepared) { closeConfirm(); setPayError('This payment wasn’t ready yet, so nothing was sent. Try again.', true); return }
-
-    // ── THE CONFIRM-TIME CHECK, BEFORE ANYTHING IS RECORDED OR SENT ──
-    //
-    // Quote age, the coins, and a dry run of this very payment at the quoted fee (crypto/quote). If
-    // it no longer holds, nothing has been sent: the card re-prices and asks again.
-    setPayBusy(true)
-    setPayProgress('Checking the fee…')
-    try {
-      await prepared.confirm()
-    } catch (e) {
-      setPayBusy(false)
-      setPayProgress(null)
-      if (e instanceof QuoteChanged) { void pricePayment(e.message); return }
-      closeConfirm()
-      setPayError(e instanceof Error ? e.message : String(e), true)   // checked, not sent
+    if (!selectedConvo || !nostrPubkeyHex) return
+    const gate = sapientGate()
+    if (gate) { setPayError(gate, true); return }
+    const err = validatePayment()
+    if (err) { setPayError(err, true); return }
+    const p = sapient.provider!
+    const amount = payAmountRaw()!
+    // The pre-check, when Sapient lets us read the private balance.
+    if (typeof privateBal === 'bigint' && amount > privateBal) {
+      setShieldOffer({ shortfall: amount - privateBal, have: privateBal })
       return
     }
-    // The card closes; the payment it priced is what goes. `payPrepared` is KEPT until submit
-    // returns: its coins pass from the review hold to the spend record inside submit, and clearing
-    // the state now would fire the release effect before that hand-over.
-    payPriceGen.current++
-    setConfirming(false)
-    setPayNotice(null)
-    setPayError(null)
-
     // PRE-FLIGHT: never spend money we cannot announce.
     if (messagingStatus !== 'connected' && messagingStatus !== 'degraded') {
-      setPayPrepared(null)   // releases its coins (see the effect above) — nothing was sent
       setPayError('Not connected to relays — cannot announce the payment. Try again once connected.', true)
       return
     }
-    if (!wallet || !address) { setPayPrepared(null); setPayError('Wallet is locked — unlock to send.', true); return }
 
-    const amountMicro = prepared.recipientAmount
-    const recipientAddr = effectivePayAddress   // exchanged address, or the manually-entered one
-    const note = draft.trim() || '💸 Payment'   // NIP-44 needs ≥1 byte; empty note gets a caption
     const peerHex = selectedConvo.peerHex
+    const recipientAddr = effectivePayAddress   // exchanged address, or the manually-entered one
     const amountShown = payAmount
+    const entry: OutboxEntry = {
+      id: crypto.randomUUID(),
+      peerHex,
+      recipient: recipientAddr,
+      amount: amount.toString(),
+      nonce: makePaymentNonce(),
+      network: sapient.network ?? 'mainnet',
+      note: draft.trim() || '💸 Payment',   // NIP-44 needs ≥1 byte; empty note gets a caption
+      createdAt: Date.now(),
+      requestId: null,
+      result: null,
+    }
+    if (!addOutbox(nostrPubkeyHex, entry)) {
+      setPayError('Couldn’t save the payment locally, so nothing was sent. Try again.', true)
+      return
+    }
 
+    setPayError(null)
+    setShieldOffer(null)
     setPayBusy(true)
-    setPayProgress('Starting payment…')
-
-    // ── JOURNALLED FOR SUBTRACTION, NOT FOR DISPLAY ──
-    //
-    // A chat payment spends this wallet's confidential UTXOs and hands back a change output at our
-    // own stealth address. That output carries no sender, exactly like a payment from a stranger,
-    // so a later scan cannot tell the two apart — and reconciliation would report our own change
-    // as money somebody sent us. Recording its commitment is what stops that.
-    //
-    // IT NEVER BECOMES A WALLET ACTIVITY ROW. activity.ts returns no row for `chat-payment`, the
-    // same way it returns none for `receive`. Compartmentalisation is about the display, and this
-    // is bookkeeping.
-    //
-    // WHAT IS DELIBERATELY NOT RECORDED: the peer and the note. Those are chat's, they already
-    // live in the message store, and copying them into the wallet's plaintext journal would widen
-    // the disclosure for no gain — subtraction needs the commitments and nothing else. The amount
-    // and fee ARE recorded: that is this wallet's own money moving, which is its business.
-    const journalId = beginEntry(address, {
-      kind: 'chat-payment',
-      amountMicrotari: amountMicro,
-      feeMicrotari: prepared.feeMicrotari,   // priced on the confirm card; the receipt confirms it
-      from: 'private',
-      to: 'external',
-      counterparty: null,
-      note: null,
-      source: 'local-journal',
-      selfOutputIds: null,
-      spentInputIds: null,             // not known until the send returns
-    }).entry.id
-
+    setPayProgress(PHASE_TEXT.approve)
+    let submitted = false
+    let requestId: string | null = null
     try {
-      const result = await prepared.submit((m) => setPayProgress(m))
-
-      // BEFORE THE BRANCHING, AND THAT IS THE POINT. Every exit below — rejected, timed out, no
-      // recipient id, no provider, and the orphan where the payment lands but the message does not
-      // — happens after the transaction was already submitted. One settle here covers all of them,
-      // where a write inside each branch would be five chances to miss the one that matters most.
-      settleEntry(address, journalId, {
-        outcome: result.outcome === 'Commit' ? 'committed'
-          : result.outcome === 'Reject' ? 'rejected'
-          : 'timeout',
-        txId: result.txId,
-        feeMicrotari: result.feeMicrotari ?? null,
-        // A rejected transaction created nothing, so there is nothing of ours on chain to subtract.
-        selfOutputIds: result.outcome === 'Reject' ? [] : result.selfOutputIds ?? null,
-        // And it consumed nothing — crypto/confidentialSend has already released the locks on a
-        // Reject, so recording `[]` keeps the journal row consistent with what the wallet excludes.
-        spentInputIds: result.outcome === 'Reject' ? [] : result.spentInputIds,
+      const result = await sendPrivately(p, { recipient: recipientAddr, amount, nonce: entry.nonce }, {
+        onRequest: id => { requestId = id; updateOutbox(nostrPubkeyHex, entry.id, { requestId: id }) },
+        onPhase: phase => { if (phase !== 'approve') submitted = true; setPayProgress(PHASE_TEXT[phase]) },
       })
+      const res = { transactionId: result.transactionId, recipientSubstateId: result.recipientSubstateId }
+      updateOutbox(nostrPubkeyHex, entry.id, { result: res })
 
-      if (result.outcome === 'Reject' && isFeeShortRejection(result.reason)) {
-        // THE FEE ROSE AS IT WAS SENT — a free reject. Re-open the card with the new price and ask
-        // again; never resend on our own at a different fee.
-        void pricePayment(FEE_SHORT_MESSAGE)
-        return
-      }
-      if (result.outcome === 'Reject') {
-        // Nothing happened — keep payment mode + fields so the user can adjust and retry.
-        setPayError('Payment was rejected on-chain — nothing was sent.', true)
-        return
-      }
-      if (result.outcome === 'Timeout') {
-        // Unconfirmed: do NOT announce. Missing beats broken. Exit payment mode to avoid a re-pay.
-        setPayAlert({ kind: 'timeout', txId: result.txId, amountTari: amountShown })
-        setPaymentMode(false)
-        return
-      }
-      // Commit — need the recipient UTXO id to reference the payment.
-      if (!result.recipientUtxoId) {
-        setPayAlert({ kind: 'orphan', txId: result.txId, amountTari: amountShown })
-        setPaymentMode(false)
-        return
-      }
-
-      // Announce: send the message carrying the payment reference.
       setPayProgress('Payment confirmed — sending the message…')
-      const provider = createMessagingProvider()
-      if (!provider) {
-        setPayAlert({ kind: 'orphan', txId: result.txId, amountTari: amountShown })
+      try {
+        await announcePayment(entry, res)
+      } catch {
+        // The dangerous case: the payment went through but the message did not. The outbox keeps
+        // it, and the next unlock re-sends the message.
+        setPayAlert({ kind: 'orphan', txId: res.transactionId, amountTari: amountShown })
         setPaymentMode(false)
         return
       }
-      try {
-        // Piggyback my address (M9.0d self-healing) on this payment message too, if not yet sent.
-        const addr = outboundAddressFor(peerHex)
-        const msg = await provider.sendMessage(peerHex, note, { payment: { utxoId: result.recipientUtxoId }, tariAddress: addr })
-        provider.disconnect()
-        if (addr) markSent(peerHex)
-        // Cache the amount + txId LOCALLY (never on the wire) so our thread renders the amount.
-        const withLocal: CaravelMessage = { ...msg, localPayment: { amountMicrotari: amountMicro.toString(), txId: result.txId } }
-        recordSentMessage(withLocal)
-        // Success: remember a MANUALLY-entered address for next time (an exchanged one is already
-        // stored + authoritative, so don't re-store it as manual). Clear the composer + mode.
-        if (!addressVerified) setManualTariAddress(peerHex, recipientAddr)
-        setDraft('')
-        setPayAmount('')
-        setPaymentMode(false)
-      } catch {
-        // The dangerous case: the payment went through but the message did not.
-        setPayAlert({ kind: 'orphan', txId: result.txId, amountTari: amountShown })
-        setPaymentMode(false)
-      }
+      // Success: remember a MANUALLY-entered address for next time (an exchanged one is already
+      // stored + authoritative, so don't re-store it as manual). Clear the composer + mode.
+      if (!addressVerified) setManualTariAddress(peerHex, recipientAddr)
+      setDraft('')
+      setPayAmount('')
+      setPaymentMode(false)
     } catch (e) {
-      // The throw path. The row already exists, so an exception mid-broadcast leaves a record that
-      // the attempt happened rather than nothing at all — and records it as ATTEMPTED, because a
-      // throw can land either side of the money moving and proves neither.
-      settleEntry(address, journalId, { outcome: 'pending' })
-      // NO `safe` FLAG HERE, deliberately — same reason the journal records this as ATTEMPTED. The
-      // error strip will not add "Nothing left your wallet."; on this one path we do not know that.
-      setPayError(e instanceof Error ? e.message : String(e))
+      const sErr = toSapientError(e)
+      const have = insufficientPrivateBalance(sErr.message)
+      if (have !== null) {
+        removeOutbox(nostrPubkeyHex, entry.id)
+        setShieldOffer({ shortfall: amount > have ? amount - have : amount, have })
+      } else if (sErr.kind === 'declined') {
+        removeOutbox(nostrPubkeyHex, entry.id)
+        setPayError('Payment cancelled in Sapient.', true)
+      } else if (submitted && /time(d)? ?out/i.test(sErr.message)) {
+        // Submitted, then no verdict in time: it may still land. Keep the outbox entry — the next
+        // unlock asks Sapient how it ended — and do not invite a second payment.
+        setPayAlert({ kind: 'timeout', txId: requestId ?? entry.id, amountTari: amountShown })
+        setPaymentMode(false)
+      } else {
+        removeOutbox(nostrPubkeyHex, entry.id)
+        // Before submission nothing left the wallet; after it, Sapient's reason is all we know.
+        setPayError(sErr.message, !submitted)
+      }
     } finally {
       setPayBusy(false)
       setPayProgress(null)
-      setPayPrepared(null)
+    }
+  }
+
+  /** Make the shortfall private (Sapient `shield`), then send the payment the person asked for. */
+  async function shieldThenPay() {
+    const offer = shieldOffer
+    if (!offer || !sapient.provider) return
+    setPayError(null)
+    setPayBusy(true)
+    setPayProgress('Approve making it private in Sapient…')
+    try {
+      await shield(sapient.provider, offer.shortfall, {
+        onPhase: phase => setPayProgress(phase === 'approve' ? 'Approve making it private in Sapient…' : 'Making it private…'),
+      })
+      setShieldOffer(null)
+      setPrivateBal(undefined)   // re-read on the next attempt
+    } catch (e) {
+      const sErr = toSapientError(e)
+      setPayBusy(false)
+      setPayProgress(null)
+      setPayError(sErr.kind === 'declined' ? 'Cancelled in Sapient.' : sErr.message, sErr.kind === 'declined')
+      return
+    }
+    setPayBusy(false)
+    setPayProgress(null)
+    // The shielded funds are in; send the payment now. A fresh read of the balance is skipped on
+    // purpose — Sapient checks it again, and a shortfall still comes back as the same offer.
+    void submitPayment()
+  }
+
+  // ── Resume the outbox after an unlock / a reload ──
+  //
+  // Once per chat session, when Sapient is connected: a finished payment gets its message sent; a
+  // request still in Sapient is asked how it ended. An APPROVED-but-never-submitted request is put
+  // to the person (Send now / Cancel) — never submitted automatically after a reload.
+  const outboxResumedRef = useRef<string | null>(null)
+  useEffect(() => {
+    const me = nostrPubkeyHex
+    const p = sapient.provider
+    if (!me || !p || sapient.status !== 'connected' || outboxResumedRef.current === me) return
+    outboxResumedRef.current = me
+    void (async () => {
+      const ask: OutboxEntry[] = []
+      for (const entry of loadOutbox(me)) {
+        if (entry.result) { await announcePayment(entry, entry.result).catch(() => undefined); continue }
+        if (!entry.requestId) { removeOutbox(me, entry.id); continue }
+        const state = await readRequest(p, entry.requestId)
+        if (state.s === 'submitted') {
+          try {
+            const r = asSendResult(state.result)
+            const res = { transactionId: r.transactionId, recipientSubstateId: r.recipientSubstateId }
+            updateOutbox(me, entry.id, { result: res })
+            await announcePayment(entry, res).catch(() => undefined)
+          } catch { removeOutbox(me, entry.id) }
+        } else if (state.s === 'approved') {
+          ask.push(entry)
+        } else if (state.s === 'gone') {
+          removeOutbox(me, entry.id)   // rejected, failed, expired, or unknown to Sapient
+        }
+        // 'waiting' (still pending, submitting, or Sapient locked): left for the next unlock.
+      }
+      setOutboxAsk(ask)
+    })()
+    // announcePayment closes over the latest state; this runs once per identity by design.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nostrPubkeyHex, sapient.status, sapient.provider])
+
+  async function resolveOutboxAsk(entry: OutboxEntry, send: boolean) {
+    setOutboxAsk(list => list.filter(e => e.id !== entry.id))
+    if (!nostrPubkeyHex) return
+    if (!send || !sapient.provider || !entry.requestId) { removeOutbox(nostrPubkeyHex, entry.id); return }
+    try {
+      const o = asSendResult(await sapient.provider.request({ method: 'tari_submitTransactionRequest', params: { requestId: entry.requestId } }))
+      const res = { transactionId: o.transactionId, recipientSubstateId: o.recipientSubstateId }
+      updateOutbox(nostrPubkeyHex, entry.id, { result: res })
+      await announcePayment(entry, res)
+    } catch (e) {
+      setPayError(toSapientError(e).message)
     }
   }
 
@@ -1499,7 +1521,7 @@ export default function ChatApp() {
   useEffect(() => {
     setAttachment(null)
     setPaymentMode(false)
-    closeConfirm()
+    setShieldOffer(null)
     setPayError(null)
     setPayAmount('')
     setMenuOpen(false)
@@ -2153,7 +2175,7 @@ export default function ChatApp() {
                 the thread forever — see mergeThreadItems. */}
             {/* One card per payment however many times it was announced — see paymentDedupe. */}
             {/* And no card for a claim on one of our own outputs (our change is never a payment to us). */}
-            {mergeThreadItems(dedupePaymentMessages(selectedConvo.messages).filter(m => !isOwnOutputClaim(m, ownOutputs)), pendingForPeer).map((item, i, items) => {
+            {mergeThreadItems(dedupePaymentMessages(selectedConvo.messages), pendingForPeer).map((item, i, items) => {
               // DAY DIVIDERS. Inserted at render time by comparing neighbours — nothing is written into
               // the merged list, so mergeThreadItems and the ThreadItem union are untouched. The
               // Fragment carries the key; the inner element's own key is then unused and harmless.
@@ -2174,7 +2196,11 @@ export default function ChatApp() {
                   )
                 }
                 const m = item.message
-                if (m.payment) return <PaymentMessageCard key={m.id} message={m} lid={m.logicalId} flashed={!!m.logicalId && flashedId === m.logicalId} disputed={m.direction === 'received' && disputedClaims.has(m.payment.utxoId)} />
+                if (m.payment) return <PaymentMessageCard key={m.id} message={m} lid={m.logicalId} flashed={!!m.logicalId && flashedId === m.logicalId} disputed={m.direction === 'received' && disputedClaims.has(m.payment.utxoId)}
+                  view={m.direction !== 'received' ? null
+                    : m.payment.nonce ? claimView(m.payment, claims[m.payment.utxoId], claimBusy[m.payment.utxoId], sapient)
+                    : { s: 'unverified', amount: null, reason: 'memo' }}
+                  onRetry={() => retryClaim(m.payment!.utxoId)} />
                 /* Encrypted image (images M4): resolves itself — cache first, then the host. */
                 if (m.media) return <MediaMessageCard key={m.id} message={m} lid={m.logicalId} flashed={!!m.logicalId && flashedId === m.logicalId} />
                 const flight = flightFor(m, editFlights)
@@ -2274,12 +2300,27 @@ export default function ChatApp() {
             const canSend = canSubmit({
               editing: !!editing, paymentMode, attachment: !!attachment,
               draft, sending, imageBusy, editSubmittable, paymentValid,
-              busy: payBusy || confirming,
+              busy: payBusy,
             })
             const showCounter = draft.length >= MAX_MESSAGE_LEN - 200
-            const inputsDisabled = sending || payBusy || confirming
+            const inputsDisabled = sending || payBusy
             return (
             <div style={COMPOSER_SHELL}>
+
+              {/* A payment approved in Sapient before a reload but never submitted. Put to the person
+                  — never submitted automatically (messaging/paymentOutbox). Shown in whichever
+                  conversation is open, naming who it was for, so it cannot be missed. */}
+              {outboxAsk.map(entry => (
+                <div key={entry.id} role="alert" style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12, padding: '11px 13px', borderRadius: 12, background: 'var(--card-warn)', border: '1px solid var(--warn)' }}>
+                  <div style={{ fontSize: 12, lineHeight: 1.5, color: 'var(--text-body)' }}>
+                    A payment of <span style={{ fontFamily: MONO }}>{formatBalance({ amount: BigInt(entry.amount), divisibility: 6 })} {TICKER}</span> to {displayName(entry.peerHex)} was approved in Sapient but not sent.
+                  </div>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button onClick={() => void resolveOutboxAsk(entry, false)} style={{ ...PAY_BTN, flex: 1, border: '1px solid var(--border-strong)', background: 'transparent', color: 'var(--text-body-dim)' }}>Cancel</button>
+                    <button onClick={() => void resolveOutboxAsk(entry, true)} className="cv-btn-primary" style={{ ...PAY_BTN, flex: 1, border: 'none', background: 'var(--accent-400)', color: 'var(--ink-on-accent)', cursor: 'pointer' }}>Send now</button>
+                  </div>
+                </div>
+              ))}
 
               {/* §8B·5 — PERSISTENT must-acknowledge alert (orphan / timeout), above the restored
                   composer. Logic unchanged.
@@ -2296,7 +2337,7 @@ export default function ChatApp() {
                     <div style={{ fontSize: 11.5, lineHeight: 1.5, textWrap: 'pretty' }}>
                       {payAlert.kind === 'orphan'
                         ? <><span style={{ fontWeight: 600, color: 'var(--warn)' }}>The funds left your wallet, but no note was attached.</span> <span style={{ color: 'var(--text-body-dim)' }}>{displayName(selectedConvo.peerHex)} received {payAlert.amountTari} {TICKER} without your message, so tell them separately.</span></>
-                        : <><span style={{ fontWeight: 600, color: 'var(--warn)' }}>The send timed out. Do not resend.</span> <span style={{ color: 'var(--text-body-dim)' }}>{payAlert.amountTari} {TICKER} may still have gone through. Check Activity before trying again.</span></>}
+                        : <><span style={{ fontWeight: 600, color: 'var(--warn)' }}>The send timed out. Do not resend.</span> <span style={{ color: 'var(--text-body-dim)' }}>{payAlert.amountTari} {TICKER} may still have gone through. Check Sapient before trying again — Caravel will send the message if it did.</span></>}
                     </div>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '9px 12px', borderRadius: 9, background: 'var(--surface-trough)' }}>
@@ -2342,7 +2383,7 @@ export default function ChatApp() {
 
               {/* §8B·1 — THE INLINE PANEL. Not a modal and not a screen: it opens in the composer's
                   own slot, over the composer, and the upward shadow is what says so. */}
-              {paymentMode && !confirming && !payBusy && (
+              {paymentMode && !payBusy && (
                 <div style={{ ...PAY_PANEL, border: `1px solid ${payInsufficient ? 'var(--danger-500)' : 'var(--border-strong)'}` }}>
                   <PayPanelHeader onClose={toggleTari} />
 
@@ -2382,23 +2423,54 @@ export default function ChatApp() {
                     <input
                       value={payAddress}
                       onChange={e => { setPayAddress(e.target.value); if (payError) setPayError(null) }}
-                      placeholder="otl_esm_…"
+                      placeholder="otl_…"
                       spellCheck={false}
                       aria-label="Recipient address"
                       style={{ display: 'block', width: '100%', boxSizing: 'border-box', padding: '10px 12px', borderRadius: 10, background: 'transparent', border: '1px solid var(--border)', fontFamily: MONO, fontSize: 12.5, color: 'var(--text-body-dim)', outline: 'none' }}
                     />
                   )}
 
-                  {/* The spendable figure. Private only — see the derivation above. */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: 'var(--text-muted-dim)', marginTop: -4 }}>
-                    <svg width={9} height={9} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" style={{ flexShrink: 0 }}><rect x={5} y={11} width={14} height={9} rx={2} /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></svg>
-                    Private available: <span style={{ fontFamily: MONO, color: 'var(--text-body-dim)' }}>{availableText}</span>
-                  </div>
-                  {availableLowerBound && !balanceHidden && (
-                    <div style={{ fontSize: 11, color: 'var(--warn)', lineHeight: 1.5, marginTop: -6, textWrap: 'pretty' }}>{incompleteAvailableNote()}</div>
+                  {/* SAPIENT FIRST. Payments go through the browser wallet; when it is missing, not
+                      connected or locked, the panel says so and offers the way forward. */}
+                  {(() => {
+                    const gate = sapientGate()
+                    if (!gate) return null
+                    return (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 9, background: 'var(--card-warn)', color: 'var(--warn)', fontSize: 12, lineHeight: 1.45 }}>
+                        <span style={{ flex: 1, minWidth: 0 }}>{gate}</span>
+                        {sapient.status === 'missing'
+                          ? <a href={SAPIENT_INSTALL_URL} target="_blank" rel="noopener noreferrer" title="Sapient runs in Chrome, Brave or Edge" style={{ flexShrink: 0, fontWeight: 600, color: 'var(--accent-ink)' }}>Install</a>
+                          : sapient.status === 'disconnected' && <button onClick={() => void sapient.connect()} style={{ flexShrink: 0, padding: 0, border: 'none', background: 'transparent', cursor: 'pointer', fontSize: 12, fontWeight: 600, fontFamily: 'inherit', color: 'var(--accent-ink)' }}>Connect wallet</button>}
+                      </div>
+                    )
+                  })()}
+
+                  {/* The spendable figure: Sapient's PRIVATE TARI, which is all a private send can spend. */}
+                  {sapientReady && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: 'var(--text-muted-dim)', marginTop: -4 }}>
+                      <svg width={9} height={9} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" style={{ flexShrink: 0 }}><rect x={5} y={11} width={14} height={9} rx={2} /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></svg>
+                      Private available: <span style={{ fontFamily: MONO, color: 'var(--text-body-dim)' }}>{availableText}</span>
+                    </div>
                   )}
-                  {payInsufficient && (
-                    <div style={{ fontSize: 11.5, color: 'var(--danger-300)', marginTop: -6 }}>Exceeds your balance</div>
+                  {payInsufficient && !shieldOffer && (
+                    <div style={{ fontSize: 11.5, color: 'var(--danger-300)', marginTop: -6 }}>More than your private balance — you can make some public TARI private first.</div>
+                  )}
+
+                  {/* NOT ENOUGH PRIVATE TARI: make the difference private (a second Sapient approval),
+                      then the payment is sent. */}
+                  {shieldOffer && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '10px 12px', borderRadius: 10, border: '1px solid var(--border-strong)' }}>
+                      <div style={{ fontSize: 12, color: 'var(--text-body)', lineHeight: 1.5 }}>
+                        {shieldOffer.have !== null ? <>Your private balance is {formatBalance({ amount: shieldOffer.have, divisibility: 6 })} {TICKER}. </> : null}
+                        Make {formatBalance({ amount: shieldOffer.shortfall, divisibility: 6 })} {TICKER} private first? Sapient takes it from your public balance.
+                      </div>
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <button onClick={() => setShieldOffer(null)} style={{ ...PAY_BTN, flex: 1, border: '1px solid var(--border-strong)', background: 'transparent', color: 'var(--text-body-dim)' }}>Not now</button>
+                        <button onClick={() => void shieldThenPay()} className="cv-btn-primary" style={{ ...PAY_BTN, flex: 1, border: 'none', background: 'var(--accent-400)', color: 'var(--ink-on-accent)', cursor: 'pointer' }}>
+                          Shield {formatBalance({ amount: shieldOffer.shortfall, divisibility: 6 })} {TICKER}
+                        </button>
+                      </div>
+                    </div>
                   )}
 
                   <textarea
@@ -2412,72 +2484,15 @@ export default function ChatApp() {
 
                   <div style={{ display: 'flex', gap: 8 }}>
                     <button onClick={toggleTari} style={{ ...PAY_BTN, flex: 1, border: '1px solid var(--border-strong)', background: 'transparent', color: 'var(--text-body-dim)' }}>Cancel</button>
-                    {(() => { const ok = validatePayment() === null; return (
-                      <button onClick={onComposerSend} disabled={!ok} className={ok ? 'cv-btn-primary' : undefined} style={{ ...PAY_BTN, flex: 1, border: ok ? 'none' : '1px solid var(--border)', background: ok ? 'var(--accent-400)' : 'var(--surface-inset)', color: ok ? 'var(--ink-on-accent)' : 'var(--text-disabled)', cursor: ok ? 'pointer' : 'default' }}>Review payment</button>
+                    {(() => { const ok = validatePayment() === null && sapientGate() === null && !shieldOffer; return (
+                      <button onClick={onComposerSend} disabled={!ok} className={ok ? 'cv-btn-primary' : undefined} style={{ ...PAY_BTN, flex: 1, border: ok ? 'none' : '1px solid var(--border)', background: ok ? 'var(--accent-400)' : 'var(--surface-inset)', color: ok ? 'var(--ink-on-accent)' : 'var(--text-disabled)', cursor: ok ? 'pointer' : 'default' }}>Send with Sapient</button>
                     ) })()}
                   </div>
                 </div>
               )}
 
-              {/* §8B·2 — the confirm gate, in the SAME panel. The old "Confirm payment to X" title
-                  is gone: the design carries the recipient as a To row instead, and the note joins
-                  the summary rather than sitting in a box of its own. */}
-              {confirming && (
-                <div style={{ ...PAY_PANEL, border: '1px solid var(--border-strong)' }}>
-                  <PayPanelHeader onClose={toggleTari} />
-
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '11px 13px', borderRadius: 11, background: 'var(--surface-base)', border: '1px solid var(--border)' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 12.5 }}>
-                      <span style={{ color: 'var(--text-muted-dim)' }}>Amount</span>
-                      <span style={{ fontFamily: MONO, fontWeight: 600, color: 'var(--text-primary)' }}>{payAmount} {TICKER}</span>
-                    </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 12.5, minWidth: 0 }}>
-                      <span style={{ color: 'var(--text-muted-dim)', flexShrink: 0 }}>To</span>
-                      <span style={{ fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{displayName(selectedConvo.peerHex)}</span>
-                    </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 12.5, minWidth: 0 }}>
-                      <span style={{ color: 'var(--text-muted-dim)', flexShrink: 0 }}>Note</span>
-                      <span style={{ color: 'var(--text-body-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{draft.trim() || '💸 Payment'}</span>
-                    </div>
-                    {/* THE EXACT FEE — priced when this card opened, and what the payment pays. */}
-                    <div style={{ borderTop: '1px solid var(--border)', paddingTop: 8, display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 12.5 }}>
-                      <span style={{ color: 'var(--text-muted-dim)' }}>Fee</span>
-                      <span style={{ fontFamily: MONO, fontWeight: 600, color: payPrepared ? 'var(--text-primary)' : 'var(--text-muted-dim)' }}>
-                        {payPrepared ? `${fmt6(payPrepared.feeMicrotari)} ${TICKER}` : 'Pricing…'}
-                      </span>
-                    </div>
-                    {payNotice && (
-                      <div role="status" style={{ fontSize: 11.5, color: 'var(--warn)', lineHeight: 1.5 }}>{payNotice}</div>
-                    )}
-                    {payPrepared && (
-                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 12.5 }}>
-                        <span style={{ color: 'var(--text-muted-dim)' }}>Total</span>
-                        <span style={{ fontFamily: MONO, fontWeight: 600, color: 'var(--text-primary)' }}>{fmt6(payPrepared.recipientAmount + payPrepared.feeMicrotari)} {TICKER}</span>
-                      </div>
-                    )}
-                  </div>
-
-                  <div style={{ display: 'flex', gap: 8, padding: '9px 11px', borderRadius: 9, background: 'var(--card-warn)', color: 'var(--warn)', fontSize: 11.5, lineHeight: 1.5, textWrap: 'pretty' }}>
-                    <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" style={{ flexShrink: 0, marginTop: 2 }}><circle cx={12} cy={12} r={9} /><path d="M12 8v4M12 16h.01" /></svg>
-                    <span>Confidential payments cannot be cancelled once sent.</span>
-                  </div>
-
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <button onClick={closeConfirm} style={{ ...PAY_BTN, flex: 1, border: '1px solid var(--border-strong)', background: 'transparent', color: 'var(--text-body-dim)' }}>Cancel</button>
-                    {/* Live only with a priced payment and nothing in flight; "Sending…" from the first press. */}
-                    {(() => {
-                      const live = !!payPrepared && !payBusy
-                      return (
-                        <button onClick={live ? () => { void submitPayment() } : undefined} disabled={!live} className={live ? 'cv-btn-primary' : undefined} style={{ ...PAY_BTN, flex: 1, border: live ? 'none' : '1px solid var(--border)', background: live ? 'var(--accent-400)' : 'var(--surface-inset)', color: live ? 'var(--ink-on-accent)' : 'var(--text-disabled)', cursor: live ? 'pointer' : 'default' }}>{payBusy ? 'Sending…' : 'Send payment'}</button>
-                      )
-                    })()}
-                  </div>
-                </div>
-              )}
-
-
               {/* Picked image, awaiting Send (images M5) — same slot the payment card uses. */}
-              {attachment && !paymentMode && !confirming && (
+              {attachment && !paymentMode && (
                 <AttachPreview
                   file={attachment}
                   busy={imageBusy}
@@ -2492,7 +2507,7 @@ export default function ChatApp() {
                   bordered blocks — the composer being in a state, rather than a notice near it.
                   The card itself turns accent while editing, so the mode is legible from the
                   control you are typing into. */}
-              {!paymentMode && !confirming && (
+              {!paymentMode && (
                 <div style={{
                   ...COMPOSER_CARD,
                   ...(editing ? { border: '1px solid var(--accent-400)', boxShadow: '0 0 0 3px rgba(var(--accent-400-rgb),0.14)' } : null),
@@ -2627,7 +2642,7 @@ export default function ChatApp() {
                   </div>
                 </div>
               )}
-              {!paymentMode && !confirming && showCounter && (
+              {!paymentMode && showCounter && (
                 <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
                   <span style={{ fontFamily: MONO, fontSize: 11, color: draft.length >= MAX_MESSAGE_LEN ? 'var(--danger-500)' : 'var(--text-muted-dim)' }}>{draft.length}/{MAX_MESSAGE_LEN}</span>
                 </div>

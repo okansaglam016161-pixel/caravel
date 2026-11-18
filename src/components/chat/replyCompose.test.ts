@@ -38,7 +38,7 @@ describe('canReplyTo — which rows offer the Reply affordance', () => {
   })
 
   it('refuses payment and media rows — v1 is text replies only', () => {
-    expect(canReplyTo(msg({ payment: { utxoId: 'utxo_1' } }))).toBe(false)
+    expect(canReplyTo(msg({ payment: { utxoId: 'utxo_1', nonce: '0123456789abcdef', network: 'mainnet' } }))).toBe(false)
     expect(canReplyTo(msg({ media: { url: 'u', key: 'k', nonce: 'n', mime: 'image/webp', x: 'x', ox: '', width: 1, height: 1, size: 1 } }))).toBe(false)
   })
 
@@ -92,7 +92,7 @@ describe('classifyQuoted — what the preview renders', () => {
   })
 
   it('classifies media and payment targets, which only a later client can create', () => {
-    expect(classifyQuoted(msg({ payment: { utxoId: 'utxo_1' } }))).toBe('payment')
+    expect(classifyQuoted(msg({ payment: { utxoId: 'utxo_1', nonce: '0123456789abcdef', network: 'mainnet' } }))).toBe('payment')
     expect(classifyQuoted(msg({ media: { url: 'u', key: 'k', nonce: 'n', mime: 'image/webp', x: 'x', ox: '', width: 1, height: 1, size: 1 } }))).toBe('media')
   })
 
@@ -102,7 +102,7 @@ describe('classifyQuoted — what the preview renders', () => {
 
   it('prefers payment over media when a row somehow carries both', () => {
     // Deterministic ordering matters only so the two views never disagree about the same row.
-    const both = msg({ payment: { utxoId: 'u' }, media: { url: 'u', key: 'k', nonce: 'n', mime: 'image/webp', x: 'x', ox: '', width: 1, height: 1, size: 1 } })
+    const both = msg({ payment: { utxoId: 'u', nonce: '0123456789abcdef', network: 'mainnet' }, media: { url: 'u', key: 'k', nonce: 'n', mime: 'image/webp', x: 'x', ox: '', width: 1, height: 1, size: 1 } })
     expect(classifyQuoted(both)).toBe('payment')
   })
 })

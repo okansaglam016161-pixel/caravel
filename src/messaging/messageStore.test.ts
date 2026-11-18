@@ -91,7 +91,7 @@ describe('applyEdit — guards', () => {
 describe('applyEdit — successful apply', () => {
   it('replaces the text, stamps editedAt/revision, and preserves everything else', () => {
     const current = [msg({
-      payment: { utxoId: 'utxo_1' },
+      payment: { utxoId: 'utxo_1', nonce: '0123456789abcdef', network: 'mainnet' },
       localPayment: { amountMicrotari: '42', txId: 'tx_1' },
       groupId: 'g1',
     })]
@@ -106,7 +106,7 @@ describe('applyEdit — successful apply', () => {
     // timestamp frozen — threads order by it, so an edit must not move the message.
     expect(row.timestamp).toBe(1_000_000)
     // untouched payload
-    expect(row.payment).toEqual({ utxoId: 'utxo_1' })
+    expect(row.payment).toEqual({ utxoId: 'utxo_1', nonce: '0123456789abcdef', network: 'mainnet' })
     expect(row.localPayment).toEqual({ amountMicrotari: '42', txId: 'tx_1' })
     expect(row.groupId).toBe('g1')
     expect(row.direction).toBe('sent')
@@ -720,7 +720,7 @@ describe('applyReactionByLogicalId — what it refuses outright', () => {
     // Neither card has anywhere to draw a pill, so a stored reaction on one would be invisible
     // forever: quiet localStorage growth a peer on a richer client could produce by accident.
     for (const over of [
-      { payment: { utxoId: 'utxo_1' } },
+      { payment: { utxoId: 'utxo_1', nonce: '0123456789abcdef', network: 'mainnet' } },
       { media: { url: 'u', key: 'k', nonce: 'n', mime: 'image/webp', x: 'x', ox: 'o', width: 1, height: 1, size: 1 } },
       { system: 'group-leave' as const, plaintext: '' },
     ]) {
@@ -739,7 +739,7 @@ describe('applyReactionByLogicalId — what it refuses outright', () => {
 describe('isReactableTarget / liveReactionCountBy', () => {
   it('accepts a text row and refuses payment, media and system rows', () => {
     expect(isReactableTarget(msg())).toBe(true)
-    expect(isReactableTarget(msg({ payment: { utxoId: 'u' } }))).toBe(false)
+    expect(isReactableTarget(msg({ payment: { utxoId: 'u', nonce: '0123456789abcdef', network: 'mainnet' } }))).toBe(false)
     expect(isReactableTarget(msg({ system: 'group-leave', plaintext: '' }))).toBe(false)
   })
 

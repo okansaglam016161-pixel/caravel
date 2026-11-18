@@ -33,7 +33,7 @@ beforeEach(() => {
   setStoreKey(Uint8Array.from(STORE_KEY), 'chat')
 })
 
-const SKEY = 'caravel.addrsent.v1.' + ME
+const SKEY = 'caravel.addrsent.v2.' + ME
 
 
 describe('encryption at rest', () => {
@@ -41,20 +41,20 @@ describe('encryption at rest', () => {
     // The whole reason this store moved out of the metadata tier: the KEYS are the sensitive part
     // here, not the values. A timestamp reveals nothing; a list of counterparties reveals everything
     // contactStore was sealed to protect.
-    markAddressSent(ME, {}, PEER)
+    markAddressSent(ME, {}, PEER, 'otl_1mine')
     const stored = localStorage.getItem(SKEY)!
     expect(stored).not.toContain(PEER)
     expect(sealedOnDisk()).toBe(true)
   })
 
   it('round-trips a delivery', () => {
-    markAddressSent(ME, {}, PEER)
-    expect(typeof loadAddressSent(ME)[PEER]).toBe('number')
+    markAddressSent(ME, {}, PEER, 'otl_1mine')
+    expect(loadAddressSent(ME)[PEER]).toBe('otl_1mine')
   })
 
   it('seals the result of a clear rather than dropping back to plaintext', () => {
     // The decline/delete path. It must not be the one write that leaves the remaining peers bare.
-    const map = markAddressSent(ME, markAddressSent(ME, {}, PEER), OTHER_PEER)
+    const map = markAddressSent(ME, markAddressSent(ME, {}, PEER, 'otl_1mine'), OTHER_PEER, 'otl_1mine')
     clearAddressSent(ME, map, PEER)
     expect(sealedOnDisk()).toBe(true)
     expect(Object.keys(loadAddressSent(ME))).toEqual([OTHER_PEER])
@@ -63,9 +63,9 @@ describe('encryption at rest', () => {
   it('does not write at all when nothing changed', () => {
     // Both mutations short-circuit — a re-mark of a known peer and a clear of an absent one. Neither
     // should mint a fresh nonce for an identical map.
-    const map = markAddressSent(ME, {}, PEER)
+    const map = markAddressSent(ME, {}, PEER, 'otl_1mine')
     const after = localStorage.getItem(SKEY)!
-    expect(markAddressSent(ME, map, PEER)).toBe(map)
+    expect(markAddressSent(ME, map, PEER, 'otl_1mine')).toBe(map)
     expect(clearAddressSent(ME, map, OTHER_PEER)).toBe(map)
     expect(localStorage.getItem(SKEY)).toBe(after)
   })
@@ -75,13 +75,13 @@ describe('migration', () => {
   it('reads a plaintext store and seals it on the first load', () => {
     // Reached on the ordinary path: ChatApp loads this on mount, so no forced startup read is
     // needed the way paymentResolutionStore needed one.
-    localStorage.setItem(SKEY, JSON.stringify({ [PEER]: 1_700_000_000_000 }))
-    expect(loadAddressSent(ME)[PEER]).toBe(1_700_000_000_000)
+    localStorage.setItem(SKEY, JSON.stringify({ [PEER]: 'otl_1plain' }))
+    expect(loadAddressSent(ME)[PEER]).toBe('otl_1plain')
     expect(sealedOnDisk()).toBe(true)
   })
 
   it('does not rewrite an already-sealed store', () => {
-    markAddressSent(ME, {}, PEER)
+    markAddressSent(ME, {}, PEER, 'otl_1mine')
     const after = localStorage.getItem(SKEY)!
     loadAddressSent(ME); loadAddressSent(ME)
     expect(localStorage.getItem(SKEY)).toBe(after)
@@ -90,19 +90,19 @@ describe('migration', () => {
 
 describe('never clobber', () => {
   it('will not overwrite a store it could not read', () => {
-    markAddressSent(ME, {}, PEER)
+    markAddressSent(ME, {}, PEER, 'otl_1mine')
     const original = localStorage.getItem(SKEY)!
     // A re-minted salt derives a different key. The React mirror this store is called with was
     // seeded at mount from a load that now returns {}, so the write would have been the whole map.
     setStoreKey(new Uint8Array(32).fill(7), 'chat')
-    markAddressSent(ME, {}, OTHER_PEER)
+    markAddressSent(ME, {}, OTHER_PEER, 'otl_1mine')
     expect(localStorage.getItem(SKEY)).toBe(original)
     setStoreKey(Uint8Array.from(STORE_KEY), 'chat')
-    expect(loadAddressSent(ME)[PEER]).toBeTypeOf('number')
+    expect(loadAddressSent(ME)[PEER]).toBe('otl_1mine')
   })
 
   it('will not let a clear destroy a store it could not read either', () => {
-    const map = markAddressSent(ME, {}, PEER)
+    const map = markAddressSent(ME, {}, PEER, 'otl_1mine')
     const original = localStorage.getItem(SKEY)!
     setStoreKey(new Uint8Array(32).fill(7), 'chat')
     clearAddressSent(ME, map, PEER)
@@ -111,13 +111,22 @@ describe('never clobber', () => {
 
   it('will not write with no store key', () => {
     clearStoreKey('chat')
-    markAddressSent(ME, {}, PEER)
+    markAddressSent(ME, {}, PEER, 'otl_1mine')
     expect(localStorage.getItem(SKEY)).toBeNull()
   })
 
   it('reads as empty with no store key, rather than as a plaintext fallback', () => {
-    markAddressSent(ME, {}, PEER)
+    markAddressSent(ME, {}, PEER, 'otl_1mine')
     clearStoreKey('chat')
     expect(loadAddressSent(ME)).toEqual({})
+  })
+})
+
+describe('which address was sent', () => {
+  it('a different address for the same contact is recorded — the next message re-announces it', () => {
+    const map = markAddressSent(ME, {}, PEER, 'otl_1first')
+    const next = markAddressSent(ME, map, PEER, 'otl_1second')
+    expect(next).not.toBe(map)
+    expect(loadAddressSent(ME)[PEER]).toBe('otl_1second')
   })
 })

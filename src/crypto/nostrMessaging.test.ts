@@ -149,9 +149,9 @@ describe('wrapMessage — options object', () => {
     expect(bare.groupId).toBeUndefined()
   })
 
-  it('payment rides on the wire as utxoId only', () => {
-    const out = roundTrip('paid', { payment: { utxoId: 'utxo-abc' } })
-    expect(out.payment).toEqual({ utxoId: 'utxo-abc' })
+  it('payment rides on the wire as utxoId, nonce and network — never the amount', () => {
+    const out = roundTrip('paid', { payment: { utxoId: 'utxo_0101010101010101010101010101010101010101010101010101010101010101_abababababababababababababababababababababababababababababababab', nonce: '0123456789abcdef', network: 'mainnet' } })
+    expect(out.payment).toEqual({ utxoId: 'utxo_0101010101010101010101010101010101010101010101010101010101010101_abababababababababababababababababababababababababababababababab', nonce: '0123456789abcdef', network: 'mainnet' })
     expect(out.plaintext).toBe('paid')
   })
 
@@ -170,11 +170,11 @@ describe('wrapMessage — options object', () => {
 
   it('all three options together each land under their own key', () => {
     const out = roundTrip('everything', {
-      payment: { utxoId: 'utxo-1' },
+      payment: { utxoId: 'utxo_0101010101010101010101010101010101010101010101010101010101010101_cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd', nonce: '0123456789abcdef', network: 'mainnet' },
       tariAddress: 'otl_esm_xyz',
       groupId: 'group-9',
     })
-    expect(out.payment).toEqual({ utxoId: 'utxo-1' })
+    expect(out.payment).toEqual({ utxoId: 'utxo_0101010101010101010101010101010101010101010101010101010101010101_cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd', nonce: '0123456789abcdef', network: 'mainnet' })
     expect(out.tariAddress).toBe('otl_esm_xyz')
     expect(out.groupId).toBe('group-9')
     expect(out.plaintext).toBe('everything')
@@ -183,8 +183,8 @@ describe('wrapMessage — options object', () => {
   it('key order in the literal does not affect the result', () => {
     // Positional order mattered; key order must not. This is the property that makes a merge
     // resolution safe to do as a union of keys.
-    const a = roundTrip('x', { payment: { utxoId: 'u' }, groupId: 'g', tariAddress: 't' })
-    const b = roundTrip('x', { tariAddress: 't', payment: { utxoId: 'u' }, groupId: 'g' })
+    const a = roundTrip('x', { payment: { utxoId: 'utxo_0101010101010101010101010101010101010101010101010101010101010101_abababababababababababababababababababababababababababababababab', nonce: '0123456789abcdef', network: 'mainnet' }, groupId: 'g', tariAddress: 't' })
+    const b = roundTrip('x', { tariAddress: 't', payment: { utxoId: 'utxo_0101010101010101010101010101010101010101010101010101010101010101_abababababababababababababababababababababababababababababababab', nonce: '0123456789abcdef', network: 'mainnet' }, groupId: 'g' })
     expect(a.payment).toEqual(b.payment)
     expect(a.tariAddress).toBe(b.tariAddress)
     expect(a.groupId).toBe(b.groupId)
@@ -700,10 +700,23 @@ describe('caravel-reaction — emoji validation', () => {
 
 describe('existing wire behaviour is unchanged', () => {
   it('still round-trips a payment reference', () => {
-    const wrapped = wrapMessage(senderSk, recipientPk, 'note', { payment: { utxoId: 'utxo_1' } })
+    const wrapped = wrapMessage(senderSk, recipientPk, 'note', { payment: { utxoId: 'utxo_0101010101010101010101010101010101010101010101010101010101010101_cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd', nonce: '0123456789abcdef', network: 'mainnet' } })
     const out = unwrapMessage(recipientSk, wrapped)
-    expect(out.payment).toEqual({ utxoId: 'utxo_1' })
+    expect(out.payment).toEqual({ utxoId: 'utxo_0101010101010101010101010101010101010101010101010101010101010101_cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd', nonce: '0123456789abcdef', network: 'mainnet' })
     expect(out.media).toBeUndefined()
+  })
+
+  it('a v2 payment tag with a malformed nonce, id or network degrades to a plain message', () => {
+    const U = 'utxo_' + '01'.repeat(32) + '_' + 'cd'.repeat(32)
+    for (const payment of [
+      { utxoId: U, nonce: 'not-hex!', network: 'mainnet' },
+      { utxoId: 'utxo-short', nonce: '0123456789abcdef', network: 'mainnet' },
+      { utxoId: U, nonce: '0123456789abcdef', network: 'Main Net' },
+    ]) {
+      const out = unwrapMessage(recipientSk, wrapMessage(senderSk, recipientPk, 'note', { payment }))
+      expect(out.payment).toBeUndefined()
+      expect(out.plaintext).toBe('note')
+    }
   })
 
   it('still enforces the NIP-17 seal/rumor pubkey invariant', () => {

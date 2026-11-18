@@ -1,4 +1,8 @@
-// Tracks which contacts I have delivered MY Tari address to (M9.0d self-healing exchange).
+// Tracks WHICH of my Tari addresses I have delivered to each contact (M9.0d self-healing exchange).
+//
+// The address is Sapient's (the connected account's `otl_…`), and an account switch in Sapient changes
+// it. So this records the address itself, not just "sent": a contact whose recorded address differs
+// from the current one gets the new one piggybacked on my next message to them.
 //
 // The dedicated address control message (sent on initiate/accept) can fail independently — a
 // network blip or relay rejection can leave the exchange asymmetric. Rather than a retry queue,
@@ -26,12 +30,18 @@
 
 import { asRecord, loadStore, writeStore, type Parse } from '../crypto/storeIo'
 
-// peer Nostr pubkey hex → ms epoch when my address was delivered.
-export type AddressSentMap = Record<string, number>
+// peer Nostr pubkey hex → the address of mine they were last given.
+export type AddressSentMap = Record<string, string>
 
-function key(myPubkeyHex: string) { return `caravel.addrsent.v1.${myPubkeyHex}` }
+function key(myPubkeyHex: string) { return `caravel.addrsent.v2.${myPubkeyHex}` }
 
-const parse: Parse<AddressSentMap> = decoded => asRecord(decoded) as AddressSentMap | null
+const parse: Parse<AddressSentMap> = decoded => {
+  const record = asRecord(decoded)
+  if (record === null) return null
+  const out: AddressSentMap = {}
+  for (const peer in record) if (typeof record[peer] === 'string') out[peer] = record[peer] as string
+  return out
+}
 
 function save(myPubkeyHex: string, map: AddressSentMap): void {
   writeStore(key(myPubkeyHex), JSON.stringify(map), parse, 'chat')
@@ -42,9 +52,9 @@ export function loadAddressSent(myPubkeyHex: string): AddressSentMap {
 }
 
 // Mark my address delivered to a peer. Returns the next map.
-export function markAddressSent(myPubkeyHex: string, current: AddressSentMap, peerHex: string): AddressSentMap {
-  if (current[peerHex]) return current
-  const next = { ...current, [peerHex]: Date.now() }
+export function markAddressSent(myPubkeyHex: string, current: AddressSentMap, peerHex: string, address: string): AddressSentMap {
+  if (current[peerHex] === address) return current
+  const next = { ...current, [peerHex]: address }
   save(myPubkeyHex, next)
   return next
 }

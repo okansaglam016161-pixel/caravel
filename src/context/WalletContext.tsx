@@ -21,7 +21,6 @@ import { loadExcludedIds, loadSpentOutputs, heldOutOfBalance, type ExcludedValue
 import { sweepLocks } from '../crypto/lockSweep'
 import { repairShapeBreakSpends } from '../crypto/spentRepair'
 import { loadHistory, addSent, type SentEntry, type NewSentParams } from '../crypto/txHistory'
-import { useChat } from './ChatContext'
 import { recoverAccountAddress } from '../crypto/accountRecovery'
 import { fetchRevealedBalance } from '../crypto/revealedBalance'
 import {
@@ -550,47 +549,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const rescanRef = useRef(rescan)
   rescanRef.current = rescan
 
-  // ── AN INCOMING PAYMENT HAS TO ASK FOR A SCAN, BECAUSE NOTHING ELSE WILL ────
-  //
-  // Every other balance change in this app is something the wallet DID, so it could rescan itself
-  // afterwards. A receive is the one that happens TO it, and until now nothing anywhere reacted to
-  // one: `rescan()` had four call sites — Refresh, the move commit, the send commit, the faucet —
-  // and the settle poll, none of which a stranger's payment touches. Money arrived and stayed
-  // invisible until the user happened to press Refresh.
-  //
-  // KEYED ON THE UTXO IDS, not on a count or on the array identity. `messages` is rebuilt on every
-  // relay event, edit, reaction and read-receipt, so anything coarser would rescan constantly.
-  //
-  // THE FIRST RUN SEEDS AND DOES NOT SCAN. Unlock loads the whole stored history at once, and
-  // every payment in it is old news; treating those as new would fire a redundant scan on top of
-  // the one unlock has already started. The ref is reset when the identity changes so the next
-  // wallet seeds its own.
-  //
-  // A FULL RESCAN, DELIBERATELY, even though paymentResolver can fetch one UTXO by id in O(1).
-  // That call returns an AMOUNT; it does not put the output into the owned set, and the balance is
-  // derived from the owned set alone. Injecting a figure beside the scan would create a second
-  // source of truth for the balance — the exact shape of bug this milestone has spent its time
-  // removing. One scan, one answer.
-  const { messages } = useChat()
-  const seenPaymentIdsRef = useRef<Set<string> | null>(null)
-  useEffect(() => { seenPaymentIdsRef.current = null }, [address])
-
-  useEffect(() => {
-    if (!wallet || !address) return
-    const ids = messages
-      .filter(m => m.direction === 'received' && m.payment?.utxoId)
-      .map(m => m.payment!.utxoId)
-
-    if (seenPaymentIdsRef.current === null) {
-      seenPaymentIdsRef.current = new Set(ids)
-      return
-    }
-    const fresh = ids.filter(id => !seenPaymentIdsRef.current!.has(id))
-    if (fresh.length === 0) return
-    for (const id of fresh) seenPaymentIdsRef.current.add(id)
-    // One scan for the batch, however many arrived together.
-    rescanRef.current()
-  }, [messages, wallet, address])
+  // (Chat payments used to trigger a rescan here when one arrived. They go through Sapient now and
+  // never pay into this built-in wallet, so nothing here listens to chat any more.)
 
   // ── WHY THE POLL SKIPS A SCAN ALREADY IN FLIGHT ─────────────────────────────
   //

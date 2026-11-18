@@ -36,7 +36,7 @@ describe('canReactTo', () => {
 
   it('refuses system, payment and media rows (text only in v1)', () => {
     expect(canReactTo(msg(undefined, { system: 'group-leave', plaintext: '' }))).toBe(false)
-    expect(canReactTo(msg(undefined, { payment: { utxoId: 'u' } }))).toBe(false)
+    expect(canReactTo(msg(undefined, { payment: { utxoId: 'u', nonce: '0123456789abcdef', network: 'mainnet' } }))).toBe(false)
     expect(canReactTo(msg(undefined, {
       media: { url: 'u', key: 'k', nonce: 'n', mime: 'image/webp', x: 'x', ox: 'o', width: 1, height: 1, size: 1 },
     }))).toBe(false)

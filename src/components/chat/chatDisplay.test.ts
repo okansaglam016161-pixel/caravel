@@ -305,7 +305,7 @@ describe('isNewDay — the day-divider boundary', () => {
 })
 
 describe('conversationPreview — a payment reads by direction', () => {
-  const pay = { payment: { utxoId: 'utxo_1' }, plaintext: '💸 Payment' }
+  const pay = { payment: { utxoId: 'utxo_1', nonce: '0123456789abcdef', network: 'mainnet' }, plaintext: '💸 Payment' }
   it('the side that paid sees "Payment sent"', () => {
     expect(conversationPreview({ ...pay, direction: 'sent' })).toBe('Payment sent')
   })

@@ -52,7 +52,7 @@ describe('mediaBlobKeys', () => {
     const rows = [
       msg({ id: '1' }),                                      // plain text
       msg({ id: '2', media: ref({ x: 'x2' }) }),
-      msg({ id: '3', payment: { utxoId: 'utxo_1' } }),       // payment card
+      msg({ id: '3', payment: { utxoId: 'utxo_1', nonce: '0123456789abcdef', network: 'mainnet' } }),       // payment card
       msg({ id: '4', system: 'group-leave', plaintext: '' }),
     ]
     expect(mediaBlobKeys(rows)).toEqual(['x2'])

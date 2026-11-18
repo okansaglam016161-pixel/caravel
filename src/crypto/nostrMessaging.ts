@@ -11,12 +11,15 @@ import type { PaymentRef, GroupDef, MediaRef } from '../messaging/types'
 // Kind 14 = NIP-17 private direct message (the rumor).
 const KIND_PRIVATE_DM = 14
 
-// Caravel payment reference tag (M10.0). Lives on the rumor — inside the encrypted seal — so it
-// is invisible to relays and ignored by non-Caravel clients (which show the note as a plain
-// message). Wire format: ["caravel-payment", "v1", "<utxo-substate-id>"]. Versioned so the tag
-// can be published as a spec; a reader that doesn't recognise the version degrades to plain text.
+// Caravel payment reference tag. Lives on the rumor — inside the encrypted seal — so it is invisible
+// to relays and ignored by non-Caravel clients (which show the note as a plain message).
+// Wire format v2 (Sapient payments):
+//   ["caravel-payment", "v2", "<utxo_resource_commitment>", "<nonce hex>", "<network>"]
+// The nonce is also in the output's memo (`caravel:<nonce>`); the recipient credits the payment only
+// when the two match — see sapient/payments.claimPayment. v1 (the built-in wallet's, utxo id only) is
+// no longer read: an unknown version degrades to a plain message rather than being misread.
 const PAYMENT_TAG = 'caravel-payment'
-const PAYMENT_TAG_VERSION = 'v1'
+const PAYMENT_TAG_VERSION = 'v2'
 
 // Caravel Tari-address tag (M9.0d) — same seal-protected, versioned pattern as the payment tag.
 // Wire format: ["caravel-tari-address", "v1", "<otl_esm_...>"]. Carries a contact's Tari address,
@@ -397,9 +400,11 @@ function extractPaymentRef(tags: string[][] | undefined): PaymentRef | undefined
   for (const tag of tags) {
     if (tag[0] !== PAYMENT_TAG) continue
     if (tag[1] !== PAYMENT_TAG_VERSION) return undefined  // unknown version → degrade to plain
-    const utxoId = tag[2]
-    if (typeof utxoId !== 'string' || utxoId.length === 0) return undefined
-    return { utxoId }
+    const [, , utxoId, nonce, network] = tag
+    if (typeof utxoId !== 'string' || !/^utxo_[0-9a-f]{64}_[0-9a-f]{64}$/.test(utxoId)) return undefined
+    if (typeof nonce !== 'string' || !/^[0-9a-f]{16,64}$/.test(nonce)) return undefined
+    if (typeof network !== 'string' || !/^[a-z]{1,20}$/.test(network)) return undefined
+    return { utxoId, nonce, network }
   }
   return undefined
 }
@@ -483,7 +488,7 @@ export function wrapMessage(
   // tag[0] so order does not affect parsing, but keeping it identical means this refactor changes
   // the call shape and nothing about the bytes on the wire.
   const tags: string[][] = [['p', recipientPubkeyHex]]
-  if (payment) tags.push([PAYMENT_TAG, PAYMENT_TAG_VERSION, payment.utxoId])
+  if (payment) tags.push([PAYMENT_TAG, PAYMENT_TAG_VERSION, payment.utxoId, payment.nonce, payment.network])
   if (tariAddress) tags.push([ADDRESS_TAG, ADDRESS_TAG_VERSION, tariAddress])
   if (groupId) tags.push([GROUP_TAG, GROUP_TAG_VERSION, groupId])
   if (logicalId) tags.push([MSGID_TAG, MSGID_VERSION, logicalId])

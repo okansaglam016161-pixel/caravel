@@ -18,6 +18,11 @@ export interface RelayState {
 // (not a bare string) so it can later carry resolved/cached fields (amount, status) without a rename.
 export interface PaymentRef {
   utxoId: string           // Tari UTXO substate id, e.g. "utxo_0101…_<commitment>"
+  /** Random hex, also carried in the output's memo as `caravel:<nonce>` — what proves the output is
+   *  THIS message's payment (sapient/payments.claimPayment). */
+  nonce: string
+  /** The network the payment was made on ("mainnet", "esmeralda", …). */
+  network: string
 }
 
 // LOCAL-ONLY sender-side cache. NEVER travels on the wire (wrapMessage tags only PaymentRef.utxoId)

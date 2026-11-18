@@ -1,31 +1,12 @@
-//   The signed-in shell: a permanent service rail, and whichever service is selected.
+//   The signed-in shell: the service spine, and the selected service beside it.
 //
-//   ── WALLET AND CHAT STAY MOUNTED ──
-//
-//   Switching services toggles VISIBILITY, not mounting, and that is deliberate on three counts:
-//
-//     1. Chat would lose its work. ChatApp owns the selected conversation, the composer draft, the
-//        reply target and the thread scroll position as local state. Unmounting on every switch
-//        throws all of it away — a half-typed message vanishing because someone checked their
-//        balance is the kind of bug that makes a shell feel worse than the modal it replaced.
-//     2. The wallet would lose a half-filled form for the same reason: a typed recipient, a chosen
-//        source, an amount pinned by MAX.
-//     3. It costs nothing new. ChatApp is already permanently mounted today — it IS what /app
-//        renders — so keeping it alive is the status quo, not an addition.
-//
-//   NOTHING LOAD-BEARING DEPENDS ON THIS. The relay subscription lives in WalletContext and is
-//   started by unlock, not by ChatApp; the settle loop and its poll live there too. Both would
-//   survive unmounting. Keeping the trees alive is about not discarding the user's work, and the
-//   guarantee that a committed transaction keeps settling across a service switch comes from the
-//   context sitting above this component, not from anything here.
-//
-//   `display: none` rather than conditional rendering is what makes that true without a keep-alive
-//   abstraction. The hidden subtree keeps its state and its effects, and pays no layout or paint.
+//   Panes toggle VISIBILITY, not mounting (`display: none`): a hidden service keeps its state — the
+//   selected conversation, a half-typed message, the scroll position. Chat is the only service now,
+//   so this is one pane; the mechanism stays for the next one.
 
 import { useState } from 'react'
 import ChatApp from '../chat/ChatApp'
 import ProfilePanel from '../chat/ProfilePanel'
-import WalletPage from '../wallet/WalletPage'
 import ServiceNav, { type Service } from './ServiceNav'
 
 /** Hidden panes keep their state and their effects; they just stop taking space. */
@@ -45,13 +26,7 @@ export default function AppShell() {
     <div style={{ height: '100vh', display: 'flex', background: 'var(--surface-base)', overflow: 'hidden' }}>
       <ServiceNav service={service} onSelect={setService} onProfile={() => setProfileOpen(true)} />
 
-      {/* Chat brings its own sidebar. The nested rails are much less of a collision now that the
-          spine is 64px, but chat's own header still carries a second Caravel lockup ~64px from
-          this one — that goes with the conversation-list reskin, not here. */}
-      <Pane show={service === 'wallet'}><WalletPage /></Pane>
-      {/* No longer pinned dark. Chat's literals now resolve through the v0.3 role tokens, so it
-          follows the app theme like every other service — and so does the wallet modal inside it,
-          which used to inherit the pin. */}
+      {/* Chat brings its own sidebar beside the spine. */}
       <Pane show={service === 'chat'}><ChatApp /></Pane>
 
       {profileOpen && (

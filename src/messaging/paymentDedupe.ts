@@ -1,42 +1,18 @@
-// One payment, one card, one Activity row — however many times it was announced.
+// One payment, one card — however many times it was announced.
 //
 // A payment message carries the recipient's UTXO id (PaymentRef). The SAME payment can arrive in
-// several messages: a sender that pressed Send repeatedly before the in-flight lock existed (see
-// crypto/actionLock) submitted one transaction and announced it once per press, and old clients will
-// keep doing so. Every one of those messages names the same output, so every card resolved the same
-// amount and Activity showed "+500" once per message. They are one payment, and render once: the
-// EARLIEST message per (direction, counterparty, UTXO) wins, and the rest are dropped from the thread and from
-// Activity alike.
+// several messages (a sender retrying, an outbox resend after a reload). Every one names the same
+// output, so they render once: the EARLIEST message per (direction, counterparty, UTXO) wins.
 //
 // ONLY FROM THE SAME COUNTERPARTY. A message's send time is the sender's claim and is not clamped in
-// the past, so "earliest wins" across senders would let anyone hide a real payment's row and take
-// its credit: name your output in a message backdated before the real one, and theirs would be the
-// one kept. Honest repeats come from one sender, so the key carries who the payment is with — a
-// stranger's claim on the same output can never displace the real sender's card or row.
+// the past, so "earliest wins" across senders would let anyone hide a real payment's card by naming
+// its output in a backdated message. The key carries who the payment is with, so a stranger's claim
+// on the same output can never displace the real sender's card.
 //
-// AND ONLY A PAYMENT THAT LANDED IS SHOWN. A message can name an output that never came to exist —
-// an attempt that failed, from an older client that announced before confirming. The UTXO id is
-// checked on chain (usePaymentResolution); a card or row appears once the output is CONFIRMED there
-// (resolved, or already spent), never for one that is not there or is not addressed to us. While the
-// check runs nothing is drawn, and a payment that cannot be checked because the network is down
-// keeps its card with a retry — unknown is not the same as absent.
+// AN OUTPUT CLAIMED BY TWO SENDERS NAMES NEITHER. Nothing on chain ties a confidential output to its
+// sender, so each claimant's card says the sender cannot be confirmed instead of crediting them.
+// (Whether a payment is OURS and carries the message's nonce is the claim's job: sapient/payments.)
 
-// ── WHO A PAYMENT IS FROM CANNOT BE PROVEN ────────────────────────────────────────
-//
-// A payment message is a CLAIM: "the output utxo_… is my payment to you". Nothing on chain ties a
-// confidential output to its sender, so anyone can message a claim naming any output this wallet
-// owns. Two rules keep a false claim from taking credit:
-//
-//   OUR OWN OUTPUTS ARE NEVER A RECEIVED PAYMENT. Change from our own sends (and every other output
-//   the journal records this wallet creating) is ours by construction. A message claiming one —
-//   say a payee naming our change — gets no card and no Activity row.
-//
-//   AN OUTPUT CLAIMED BY TWO SENDERS NAMES NEITHER. It is still money that arrived, so Activity shows
-//   it once, without a sender; each claimant's chat card says the sender cannot be confirmed instead
-//   of crediting them. (Hiding the cards would let a false claim hide the real sender's card.)
-
-import type { JournalEntry } from '../crypto/journal'
-import type { ResolveState } from '../hooks/usePaymentResolution'
 import { compareMessages, type CaravelMessage } from './types'
 
 /**
@@ -66,40 +42,6 @@ export function dedupePaymentMessages<T extends CaravelMessage>(messages: readon
     const key = paymentKey(m)
     return key === null || first.get(key) === m
   })
-}
-
-/**
- * Should a RECEIVED payment's card (and its Activity row) be drawn, given what the chain said?
- *
- *   resolved            yes — the output is ours and on chain
- *   failed: spent       yes — it existed (and has since been spent)
- *   network_error       yes — could not check; unknown is not absent, so it stays with a retry
- *   loading / not_found no  — not confirmed yet; drawn the moment it is
- *   failed: not_found   no  — no such output: the payment never landed
- *   failed: unreadable  no  — an output that is not addressed to this wallet is not a payment to it
- */
-export function receivedPaymentVisible(state: ResolveState): boolean {
-  switch (state.kind) {
-    case 'resolved': return true
-    case 'loading': return false
-    // No view key to check with (the wallet is locked or absent). Shown, crediting nobody an amount:
-    // the card says to unlock the wallet. Unknown is not absent — the same reasoning as network_error.
-    case 'wallet-locked': return true
-    case 'retrying': return state.reason === 'network_error'
-    case 'failed': return state.reason === 'spent' || state.reason === 'network_error'
-  }
-}
-
-/** Every output the journal records this wallet creating — its own change, by construction. */
-export function ownOutputIds(journal: readonly Pick<JournalEntry, 'selfOutputIds'>[]): Set<string> {
-  const ids = new Set<string>()
-  for (const e of journal) for (const id of e.selfOutputIds ?? []) ids.add(id)
-  return ids
-}
-
-/** A RECEIVED payment message that claims one of our own outputs as a payment to us. */
-export function isOwnOutputClaim(m: Pick<CaravelMessage, 'direction' | 'payment'>, own: ReadonlySet<string>): boolean {
-  return m.direction === 'received' && !!m.payment?.utxoId && own.has(m.payment.utxoId)
 }
 
 /** Outputs that more than one sender claims as their payment to us. */

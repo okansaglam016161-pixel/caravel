@@ -16,12 +16,6 @@
     "noEmit": true,
     "jsx": "react-jsx",
 
-    /* The Tari SDK resolves from node_modules like any dependency (0.39 bump — see vite.config.ts).
-       Only tari-cipherseed is aliased, to its vendored source. */
-    "paths": {
-      "tari-cipherseed": ["./vendor/tari-cipherseed/src/index.ts"]
-    },
-
     /* Linting */
     "noUnusedLocals": true,
     "noUnusedParameters": true,

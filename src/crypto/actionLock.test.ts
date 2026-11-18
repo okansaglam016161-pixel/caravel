@@ -2,7 +2,6 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import { createActionLock, guarded } from './actionLock'
-import walletModalSrc from '../components/wallet/WalletModal.tsx?raw'
 import chatAppSrc from '../components/chat/ChatApp.tsx?raw'
 
 const tick = () => new Promise(r => setTimeout(r, 0))
@@ -67,8 +66,6 @@ describe('createActionLock', () => {
 // one), and the guarded entry is hammered with that action's own sequence of steps.
 
 const BUTTONS = [
-  { name: 'Send (wallet)', file: walletModalSrc, entry: 'confirmSend', inner: 'handleConfirmSend', lock: 'sendLock', call: 'onConfirm: () => void confirmSend()', announce: false },
-  { name: 'Make public / make private', file: walletModalSrc, entry: 'confirmMove', inner: 'handleConfirmMove', lock: 'moveLock', call: 'onConfirm={() => void confirmMove()}', announce: false },
   { name: 'Chat payment', file: chatAppSrc, entry: 'submitPayment', inner: 'submitPaymentNow', lock: 'payLock', call: 'void submitPayment()', announce: true },
 ] as const
 

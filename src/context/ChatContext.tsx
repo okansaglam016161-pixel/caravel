@@ -22,7 +22,6 @@ import { loadDeletedGroupIdSet, recordDeletedGroup, clearDeletedGroup } from '..
 import { loadSeenDefIdSet, recordSeenDef } from '../messaging/seenDefStore'
 import type { Group } from '../messaging/types'
 import { loadTombstoneIdSet, recordTombstones } from '../messaging/tombstoneStore'
-import { removeResolvedAmounts, migrateResolvedAmounts } from '../messaging/paymentResolutionStore'
 import { removeClaims } from '../messaging/paymentClaimStore'
 import { deleteBlobs } from '../messaging/blobCache'
 import { mediaBlobKeys } from '../messaging/sendMedia'
@@ -257,10 +256,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     // worse than the display fault it looks like.
     contactsRef.current = new Set(Object.keys(loadedContacts))
     setContactAddresses(loadTariAddresses(pubkeyHex))
-    // No React state to seed — the resolved-amount cache is read per card, not held here. This read
-    // exists purely so the record is migrated to the sealed format at unlock like the loads around
-    // it, instead of waiting for a received-payment card that a given wallet may never render.
-    migrateResolvedAmounts(pubkeyHex)
     const loadedGroups = loadGroups(pubkeyHex)
     setGroups(loadedGroups)
     // Seed the "known peers" set from persisted history — anyone we already have a message with is
@@ -603,7 +598,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     // 2) THEN clear the stores this context owns. Also forget the peer entirely (contact record +
     //    known-peers set) so a later message from them arrives as a FRESH pending request — this
     //    unifies delete and decline (hide-and-forget).
-    removeResolvedAmounts(pubkeyHex, utxoIds)
     removeClaims(pubkeyHex, utxoIds)
     // FIRE-AND-FORGET: the blob cache is async (IndexedDB) while this function is synchronous, and it
     // is non-authoritative anyway — a purge that fails leaves unreachable bytes the browser evicts,

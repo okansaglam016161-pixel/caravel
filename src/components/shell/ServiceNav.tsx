@@ -1,73 +1,18 @@
-//   The service spine — the app's permanent left edge.
+//   The service spine — the app's permanent left edge: the mark (home), the services, and the @
+//   profile tile.
 //
-//   Built to the V3 design's locked shell (Caravel Chat V3.dc.html §1, "ICON SPINE + LIST +
-//   THREAD"): 64px wide, icon-only, labels dropped to tooltips. It sits on navy in both themes,
-//   which is the foundation's rule for nav and the balance hero ("the balance hero and nav live
-//   on 900-950").
+//   Built to the V3 design's shell: 64px wide, icon-only, labels as tooltips (`title` +
+//   `aria-label`). Chat brings its own sidebar, so the spine stays narrow. It sits on navy in both
+//   themes: `data-theme="dark"` makes everything inside resolve the dark ramp.
 //
-//   ── WHY ICON-ONLY, AND WHY APP-WIDE ──────────────────────────────────────────
+//   Chat is the only service now (the built-in wallet is gone; payments go through Sapient). The
+//   spine stays for the way home and the profile, and so a later service appends a row rather than
+//   inventing a shell.
 //
-//   The spine is the shell, not a chat component: the wallet renders beside it too, so it narrows
-//   for both services or neither. Chat is what forced the question — it brings its own 380px
-//   sidebar, so a labelled 210px rail put 590px of navy in two abutting columns before the thread
-//   started. 64px is the design's answer, and the 146px it gives back go to the content pane on
-//   every service.
+//   THE MARK IS THE WAY HOME, AND NOTHING ELSE. Locking is the profile panel's Lock button: a logo
+//   click means "go home", never "log out". No aria-current on it — it leaves the shell.
 //
-//   THE LABELS BECOME TOOLTIPS, via `title` + `aria-label` on each button — this codebase's
-//   pattern for an icon-only control (primitives/ThemeToggle, wallet/v2 HeaderIcon). There is no
-//   tooltip component here and a hover flyout would be a new one.
-//
-//   ── THE BALANCE CARD IS GONE ─────────────────────────────────────────────────
-//
-//   The rail used to carry a "Total balance" card under the lockup. V3 drops it, and the reason is
-//   not just that the design omits it: the wallet page's whole point is now one centred figure at
-//   52px, and a second copy of that same number 200px to its left is the screen saying the most
-//   important thing twice, in two type sizes, where the smaller one looks like a different fact.
-//
-//   IT COST SOMETHING REAL TO KEEP. The card had to reproduce the hero's entire honesty ladder —
-//   settling shows no figure, unreadable shows a dash, hidden shows dots — because a rail that
-//   disagreed with the wallet beside it would be worse than no rail at all. That was a second
-//   render path over the same unions, kept in step by hand.
-//
-//   WHERE IT SHOULD COME BACK, IF IT DOES: on a service OTHER than the wallet, where the balance is
-//   genuinely out of sight. Chat is the case that would justify it — and chat's own sidebar already
-//   carries a balance pill for exactly that reason. Restoring it here is not the answer; 64px has
-//   no room for a figure, which is the design settling the question.
-//
-//   ── THE ADDRESS LABEL WENT WITH THE WIDTH ────────────────────────────────────
-//
-//   The identity row used to print an elided address (ten leading characters and five trailing)
-//   beside a lock glyph. An icon-only spine has nowhere to put it, so it is now the design's 30px
-//   "@" tile and nothing else. THE FULL VALUE IS STILL ON `title`, which is where it always
-//   actually was — the elision was aggressive enough that it was never something to check an
-//   address against, only a "this is you" marker. The tile says the same thing in less space, and
-//   the panel behind it has the real row with the real copy control.
-//
-//   AN ALWAYS-DARK ISLAND, like the vault hero. The spine carries data-theme="dark" so its contents
-//   resolve the dark ramp whatever the page around it is, which is what lets it use ordinary role
-//   tokens instead of the white literals it would otherwise need. Same mechanism, same reason: the
-//   foundation keeps the nav on navy in both themes.
-//
-//   ── THE MARK IS THE WAY HOME ─────────────────────────────────────────────────
-//
-//   REVERSES STAGE 1's CALL that the logo be inert ("a fourth clickable thing at the top that goes
-//   somewhere else is a trap in 64px"). The reasoning held for what it was weighing — another
-//   NAVIGATION target competing with the service rows — but it left the app a one-way door: once
-//   inside, there was no route back to the landing page from anywhere. A logo that goes home is the
-//   most conventional affordance on the web, and its absence was the trap.
-//
-//   IT NAVIGATES AND NOTHING ELSE. The wallet stays unlocked in memory, so coming back in costs no
-//   password. Locking is the profile panel's Lock button and stays there: a logo click means "go
-//   home", never "log out", and conflating the two would make the safest-looking control in the
-//   shell the one that ends your session.
-//
-//   NO aria-current, unlike the service rows. Those select a view within this shell and one of them
-//   is always the answer to "where am I"; this leaves the shell entirely, so it is never the
-//   current page while it is on screen.
-//
-//   NO BORDER ON THE RIGHT EDGE, per the design. The pane beside it draws its own — chat's list
-//   pane and the wallet page both do — and a second hairline between two surfaces that already
-//   differ by #0C1A2E vs the page ground is a line doing no work.
+//   NO BORDER ON THE RIGHT EDGE, per the design: the pane beside it draws its own.
 
 import { useNavigate } from 'react-router-dom'
 import { useChat } from '../../context/ChatContext'
@@ -82,23 +27,17 @@ import LogoTile from '../primitives/LogoTile'
 // ORDER IS RENDER ORDER — the map below walks this array — so a new service appends rather than
 // displacing the two anyone already has muscle memory for.
 //
-// NOTHING NEEDS A FALLBACK. AppShell defaults to 'wallet' and always did, and this union is only
-// ever compared by equality, never switched on exhaustively. The two tables under it are
-// Record<Service, …>, so adding a member here is a type error until both are filled in.
-const SERVICES = ['wallet', 'chat'] as const
+// The two tables under it are Record<Service, …>, so adding a member here is a type error until
+// both are filled in.
+const SERVICES = ['chat'] as const
 
 /** Type-only export: keeps this file a component module, which is what fast refresh wants. */
 export type Service = (typeof SERVICES)[number]
 
 /** The tooltip text, and the accessible name. Both, from one string — see the header note. */
-const LABEL: Record<Service, string> = { wallet: 'Wallet', chat: 'Chat' }
+const LABEL: Record<Service, string> = { chat: 'Chat' }
 
 const ICON: Record<Service, React.ReactNode> = {
-  wallet: (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="2.5" y="6" width="19" height="13" rx="2.5" /><path d="M2.5 10h19" /><path d="M15.5 14.5h2" />
-    </svg>
-  ),
   chat: (
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
       <path d="M21 11.5a8.5 8.5 0 1 0-16.9 1.6L3 20l3.8-1.1A8.5 8.5 0 0 0 21 11.5z" />
@@ -157,8 +96,7 @@ export default function ServiceNav({ service, onSelect, onProfile }: {
 
       <span style={{ flex: 1, minHeight: 24 }} />
 
-      {/* Identity — opens the profile panel (address, recovery phrase, lock). The full address on
-          hover: the tile shows none of it, and this is the only place in the spine it exists.
+      {/* Identity — opens the profile panel (npub, chat backup, Sapient, lock). The npub on hover.
 
           ON .cv-accent-tile, NOT .cv-nav-item — it carried the latter since the spine was built and
           got no hover from it, because that rule hovers by setting `background` and this tile's

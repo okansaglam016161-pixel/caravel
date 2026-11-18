@@ -4,6 +4,7 @@ import Logo from '../primitives/Logo'
 import Callout from '../primitives/Callout'
 import { useWallet } from '../../context/WalletContext'
 import { useChat } from '../../context/ChatContext'
+import WalletConnectBar from './WalletConnectBar'
 import { assertValidRecipient } from '../../crypto/publicSend'
 import { parseOotleAddress } from '@tari-project/ootle-wasm'
 import { plainError } from '../wallet/v2/plainError'
@@ -1668,7 +1669,10 @@ export default function ChatApp() {
               NEW CONVERSATION AND NEW GROUP RIDE THE SEARCH ROW. They are the only two controls
               the emptied header held that have nowhere else to go, and a header strip containing
               nothing but two icons is more chrome than they are worth. */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '14px 12px 8px' }}>
+          {/* The Sapient wallet pill and its non-mainnet warning — their OWN row, above the search
+              row, so the two list actions keep the room they had. */}
+          <WalletConnectBar />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px 8px' }}>
             <div style={{
               flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 9,
               padding: '9px 12px', borderRadius: 10, background: 'var(--surface)',

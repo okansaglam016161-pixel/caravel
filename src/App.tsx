@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { WalletProvider } from './context/WalletContext'
 import { ChatProvider } from './context/ChatContext'
+import { SapientProvider } from './context/SapientContext'
 import { ThemeProvider } from './hooks/useTheme'
 import LandingPage from './components/landing/LandingPage'
 import AppRoute from './components/AppRoute'
@@ -13,6 +14,9 @@ export default function App() {
     <ThemeProvider>
       {/* Chat outside the wallet: the wallet reads chat's messages (payment attribution), never the
           other way round, and Chat must work with no wallet at all. */}
+      {/* Sapient (the browser wallet) stands on its own: detection and the connection do not depend on
+          chat or the built-in wallet, and the payments step reads it from here. */}
+      <SapientProvider>
       <ChatProvider>
       <WalletProvider>
         <BrowserRouter>
@@ -23,6 +27,7 @@ export default function App() {
         </BrowserRouter>
       </WalletProvider>
       </ChatProvider>
+      </SapientProvider>
     </ThemeProvider>
   )
 }

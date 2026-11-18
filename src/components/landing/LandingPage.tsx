@@ -77,9 +77,11 @@ function Tag({ children }: { children: ReactNode }) {
   )
 }
 
-function BackerCard({ logo, tag, title, children }: { logo: ReactNode; tag: string; title: string; children: ReactNode }) {
+/** A card in the Ecosystem row. `drift` is its place in the slow diagonal drift (negative = started earlier). */
+function BackerCard({ logo, tag, title, drift, children }: { logo: ReactNode; tag: string; title: string; drift: string; children: ReactNode }) {
   return (
-    <div className="cv-lp-card" style={{
+    <div className="cv-lp-card cv-lp-drift" style={{
+      animationDelay: drift,
       flex: '1 1 320px', minWidth: 0, background: 'var(--surface)', border: '1px solid var(--border)',
       borderRadius: 18, padding: 32, boxShadow: 'var(--e1)',
       display: 'flex', gap: 22, alignItems: 'flex-start',
@@ -171,13 +173,18 @@ export default function LandingPage() {
       <section className="cv-lp-wrap cv-lp-section">
         <h2 className="cv-lp-h2">Ecosystem</h2>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 18, marginTop: 32 }}>
-          <BackerCard tag="BACKER" title="Digital Node Capital"
+          <BackerCard tag="BACKER" title="Digital Node Capital" drift="0s"
             logo={<PartnerLogo src="/partner-dnc.png" alt="Digital Node Capital" plate="#FFFFFF" />}>
             &ldquo;We back builders making privacy usable. Caravel does exactly that.&rdquo;
           </BackerCard>
-          <BackerCard tag="PROTOCOL" title="Built on Tari"
+          <BackerCard tag="PROTOCOL" title="Built on Tari" drift="-2.3s"
             logo={<PartnerLogo src="/partner-tari.jpg" alt="Tari" />}>
             Caravel runs on the Ootle, Tari&rsquo;s programmable layer two for confidential assets.
+          </BackerCard>
+          {/* Sapient's own icon (tari-wallet public/icons/icon.svg, MIT), on the same white plate. */}
+          <BackerCard tag="WALLET" title="Sapient" drift="-4.6s"
+            logo={<PartnerLogo src="/partner-sapient.svg" alt="Sapient" plate="#FFFFFF" />}>
+            The Tari browser wallet. Your funds and keys stay in Sapient; Caravel never holds them.
           </BackerCard>
         </div>
       </section>
@@ -282,6 +289,10 @@ const LANDING_CSS = `
 .cv-lp-footer-row { padding-top: 34px; padding-bottom: 44px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; }
 
 .cv-lp-primary { transition: background 0.15s; }
+
+/* The Ecosystem cards drift slowly up-right by ~10px (7px each way) and back, out of step. */
+.cv-lp-drift { animation: cv-lp-drift 7s ease-in-out infinite; will-change: transform; }
+@keyframes cv-lp-drift { 0%, 100% { transform: translate(0, 0); } 50% { transform: translate(7px, -7px); } }
 .cv-lp-primary:hover { background: var(--accent-hover) !important; }
 
 @media (max-width: 640px) {
@@ -300,6 +311,7 @@ const LANDING_CSS = `
 @media (prefers-reduced-motion: reduce) {
   .cv-lp, .cv-lp-primary { transition: none; }
   .cv-lp-count { animation: none; }
+  .cv-lp-drift { animation: none; }
   .cv-lp-live-dot::after { animation: none; opacity: 0; }
 }
 `

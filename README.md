@@ -23,8 +23,6 @@ recipient's Caravel claims it through their own Sapient and shows it as received
 output's note carries that message's one-time code. Payments to an address on a different network
 than your wallet's are refused.
 
-Caravel is unaudited. Use it with amounts you can afford to lose.
-
 ## Run it locally
 
 Requires Node 20+ and, for payments, Sapient in a Chromium browser.

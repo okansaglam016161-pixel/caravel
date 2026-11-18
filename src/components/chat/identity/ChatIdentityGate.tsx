@@ -54,7 +54,7 @@ function PhraseReveal({ words, onNext }: { words: string[]; onNext: () => void }
   return (
     <EntryCard wide>
       <EntryTitle big>Your chat backup phrase</EntryTitle>
-      <EntryBlurb>12 words, in order. They restore your chat identity — not your wallet.</EntryBlurb>
+      <EntryBlurb>12 words, in order. They restore your chat identity, not your Sapient wallet.</EntryBlurb>
       <WordGrid>
         {words.map((word, i) => <WordChip key={i} n={i + 1} word={word} selectable />)}
       </WordGrid>
@@ -137,8 +137,8 @@ function SetPassword({ busyTitle, onSubmit, onBack }: {
         onKeyDown={e => { if (e.key === 'Enter' && canSubmit) void submit() }}
         placeholder="Repeat password" invalid={!!confirm && confirm !== pass} />
       <div style={{ fontSize: 12.5, color: 'var(--text-muted-dim)', marginTop: 14, lineHeight: 1.5, textWrap: 'pretty' }}>
-        This is separate from your wallet password. It unlocks Chat on this device; it does not recover
-        your identity — only your backup phrase or nsec can do that.
+        It unlocks Chat on this device; it does not recover your identity: only your backup phrase or
+        nsec can do that.
       </div>
       {error && <EntryError mt={12}>{error}</EntryError>}
       <EntryButton tone="primary" mt={20} disabled={!canSubmit} onClick={() => void submit()}>Continue</EntryButton>
@@ -152,7 +152,7 @@ function SetPassword({ busyTitle, onSubmit, onBack }: {
 function importMessage(check: ImportCheck): string | null {
   switch (check.kind) {
     case 'empty': return null
-    case 'wallet-phrase': return 'That’s a wallet recovery phrase. Restore it from the Wallet tab instead.'
+    case 'wallet-phrase': return 'That’s a 24-word wallet recovery phrase. It belongs in Sapient, not Caravel: Caravel only needs your 12-word chat backup phrase or an nsec.'
     case 'invalid':
       return check.reason === 'bad-nsec' ? 'That nsec isn’t valid.'
         : check.reason === 'bad-phrase' ? 'That isn’t a valid 12-word backup phrase.'

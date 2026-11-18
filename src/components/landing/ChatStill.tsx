@@ -1,116 +1,129 @@
-//   Chat, as a still — a short exchange in real V3 bubbles, and nothing else.
+// The landing page's chat pictures: a still of a Caravel conversation, drawn to the approved landing
+// design (Main.dc.html) on the app's own theme tokens. Two windows use these pieces: the hero's Mira
+// thread (the default export, with a confidential-payment card) and the Questions section's thread
+// with Caravel (LandingPage).
 //
-//   ── A TILE, NOT A WINDOW ─────────────────────────────────────────────────────
-//
-//   This began as a full thread: header with avatar, nickname and the encryption line, two bubbles,
-//   a confidential-payment card, a composer with four controls. All of it faithful, and all of it
-//   wrong for where it sits. The page already has ONE detailed picture of the product — the hero
-//   mockup at the top, with the shell, the spine and the whole wallet page in it. A second detailed
-//   picture two screens below does not add a second product; it splits the reader's attention and
-//   makes the mockup look like a duplicate of itself.
-//
-//   So the showcase is a glance now: a short exchange, in and out and back. That is what a chat tile
-//   beside one paragraph of copy has room to say.
-//
-//   THE PRIVACY CLAIM IS THE PARAGRAPH'S, NOT THE BUBBLES'. "Private messaging and private money,
-//   one conversation" is made in the copy beside this tile, and the tile's job is to make it
-//   plausible rather than to repeat it. The bubbles used to say "private" out loud, in the middle
-//   one, standing in for the payment card that had been removed — which meant the graphic was
-//   asserting the claim and the paragraph was asserting it again, two feet apart. They show the
-//   exchange instead: a payment that went around a bank, and a receipt confirming it landed. The
-//   payment object is still deliberately not drawn; see WHAT WENT below.
-//
-//   THREE BUBBLES, NOT TWO, AND THE THIRD IS FOR THE ROW. Two left this tile noticeably shorter than
-//   the balance hero across from it, and the services section reads as a set of peers — a tile that
-//   is two thirds the height of its neighbour looks like the lesser feature rather than the shorter
-//   graphic. A third message is the way to add that height without inventing anything: a reply
-//   closing the exchange is what a real conversation does, where padding stuffed to the same effect
-//   would just be a card full of air. It also lets the exchange RESOLVE, which two bubbles cannot —
-//   the answer now lands.
-//
-//   WHAT WENT, and where it lives if it is wanted back: the thread header (Avatar, E2ELine,
-//   ThreadMenuButton — all still exported from chat/, all still pure), the composer (the four
-//   COMPOSER_* constants in threadChrome), and a hand-drawn approximation of the confidential-
-//   payment card. The last of those is the only one that was not borrowed, and it is the only one
-//   whose loss costs nothing to rebuild — the real card is a closure in ChatApp driven by a
-//   ten-state union, so a still could never have reused it anyway.
-//
-//   ── ONE ROW OF THAT HEADER IS BACK, AND WHY ──────────────────────────────────
-//
-//   Names stopped being a service of their own and became a property of the identity you message
-//   with, so the landing page's separate @name card went and its claim moved into this row's copy.
-//   Copy that says people can reach you by name, beside a picture of a conversation with nobody's
-//   name in it, is the paragraph doing all the work while the graphic sits out — so the thread
-//   header returns as far as the name and no further: an avatar and @okz61, from the parts listed
-//   above, which the note already said were still pure.
-//
-//   THAT IS NOT THE WINDOW THIS FILE REFUSED. What was cut was a header AND a composer AND a
-//   payment card AND the encryption line — a second detailed picture of the product two screens
-//   under the first. One name row is not a window, and it buys back some of the height the third
-//   bubble was added to find.
-//
-//   NO E2ELine, deliberately. It prints "End-to-end encrypted", and the paragraph beside this card
-//   opens with the same words. Saying it twice in one row is the duplication the rest of this note
-//   is about.
-//
-//   ── WHY IT IS STILL A COMPONENT OVER A REAL BUBBLE ───────────────────────────
-//
-//   MessageBubble is what keeps this honest. It owns the V3 geometry — 14px in 10/14 padding, the
-//   tail on the BOTTOM corner rather than the top, --msg-sent / --msg-received, and the meta line
-//   under each bubble with the time and the sent tick. The hand-drawn pair this replaced had none
-//   of that: it was the pre-V3 shape, in navy, with no meta row at all, and it stayed that way for
-//   months because nothing compiled it. Three bubbles is little enough to hand-draw and exactly
-//   little enough to get quietly wrong.
-//
-//   THEME-FOLLOWING, unlike the navy card this replaced. Chat stopped being pinned dark in the V3
-//   pass, so on the default light theme this is a white tile. There is no dark island left here —
-//   the payment card was the only thing that earned one.
-//
-//   INERT. Nothing in a picture should take focus or a click; the
-//   attribute also removes the subtree from the accessibility tree, which is right for decoration.
+// DECORATION, NOT UI: `inert` takes every window out of focus, clicks and the accessibility tree.
+// Colours that the app has no role token for (the avatar wash, the RECEIVED green) are the landing's
+// own scoped variables, set per theme in LandingPage's CSS (`--lp-*`).
 
-import Avatar from '../chat/Avatar'
-import MessageBubble from '../chat/MessageBubble'
-import { HEADER_LEFT, THREAD_HEADER, THREAD_SCROLLER, THREAD_TITLE } from '../chat/threadChrome'
+import type { CSSProperties, ReactNode } from 'react'
+import LogoTile from '../primitives/LogoTile'
 import { TICKER } from '../../sapient/units'
 
-// TIMES ARE DERIVED, NOT LITERAL. MessageBubble prints them through toLocaleTimeString, so a
-// hardcoded epoch would read 03:14 for a visitor in Sydney — not a plausible afternoon exchange.
-// Offsets from load keep it recent in the reader's own locale, wherever they are.
-const now = Date.now()
-const MIN = 60_000
+const MONO = 'var(--font-mono)'
 
-export default function ChatStill() {
+/** The window: surface card with a hairline border. `chrome` adds the three-dot title bar. */
+export function StillWindow({ children, chrome = false, shadow = false, style }: {
+  children: ReactNode; chrome?: boolean; shadow?: boolean; style?: CSSProperties
+}) {
   return (
     <div inert style={{
-      pointerEvents: 'none',
-      background: 'var(--surface)', border: '1px solid var(--border)',
-      borderRadius: 18, boxShadow: 'var(--e1)',
+      minWidth: 0, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 20,
+      overflow: 'hidden', textAlign: 'left', ...(shadow ? { boxShadow: 'var(--e3)' } : {}), ...style,
     }}>
-      {/* THE NAME, AND NOTHING ELSE FROM THE HEADER. THREAD_HEADER carries the app's own hairline
-          and 13/18 padding, so the row sits where a reader of the real thread would expect it. */}
-      <div style={THREAD_HEADER}>
-        <div style={HEADER_LEFT}>
-          {/* CARAVEL BLUE, DELIBERATELY, AND ONLY HERE. Avatar's normal job is a colour derived from
-              an identity, so a real thread shows a different tile per person — but nothing in this
-              picture resolves to anybody, so a generated colour would be arbitrary rather than
-              meaningful. The still uses the brand blue instead, via the fill props Avatar already
-              takes. Avatar itself is untouched; every real usage keeps its per-identity colour. */}
-          <Avatar icon={<span style={{ fontSize: 12, fontWeight: 700 }}>MI</span>} bg="var(--accent-400)" fg="var(--ink-on-accent)" size={30} radius={99} />
-          <span style={THREAD_TITLE}>Mira</span>
+      {chrome && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '14px 18px', borderBottom: '1px solid var(--border)' }}>
+          {[0, 1, 2].map(i => <span key={i} style={{ width: 9, height: 9, borderRadius: 999, background: 'var(--border)' }} />)}
         </div>
-      </div>
+      )}
+      {children}
+    </div>
+  )
+}
 
-      {/* THREAD_SCROLLER for the column and the 12px message gap — the app's spacing between
-          bubbles, which is the part that would drift. Its padding is overridden: 18/24 is the
-          measurement of a full-height thread pane, and this is a tile that has to sit at the same
-          visual weight as the balance hero across the row from it. The two other overrides are
-          what make it a still — there is nothing to scroll, and no flex parent to weigh against. */}
-      <div style={{ ...THREAD_SCROLLER, flex: 'none', overflowY: 'visible', padding: 24 }}>
-        <MessageBubble variant="received" text="Here's my half of dinner, sent it right here" timestamp={now - 6 * MIN} />
-        <MessageBubble variant="sent" text={`Received, 250 ${TICKER}`} timestamp={now - 5 * MIN} />
-        <MessageBubble variant="received" text="So much easier" timestamp={now - 4 * MIN} />
+/** The thread header: an avatar, the name, and a one-line status under it. */
+export function StillHeader({ avatar, name, status }: { avatar: ReactNode; name: string; status: ReactNode }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '16px 22px', borderBottom: '1px solid var(--border)' }}>
+      {avatar}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+        <span style={{ fontWeight: 600, fontSize: 15, color: 'var(--text-primary)' }}>{name}</span>
+        <span style={{ fontSize: 12.5, color: 'var(--text-body-dim)', display: 'inline-flex', alignItems: 'center', gap: 5 }}>{status}</span>
       </div>
     </div>
+  )
+}
+
+/** The thread body, on the page ground. */
+export function StillBody({ children, padding, gap }: { children: ReactNode; padding: string; gap: number }) {
+  return (
+    <div style={{ padding, display: 'flex', flexDirection: 'column', gap, background: 'var(--surface-void)' }}>
+      {children}
+    </div>
+  )
+}
+
+/** One bubble. `in` = theirs (surface, left); `out` = yours (brand blue, right). */
+export function Bubble({ side, children, maxWidth = '78%', weight, lineHeight = 1.45 }: {
+  side: 'in' | 'out'; children: ReactNode; maxWidth?: string; weight?: number; lineHeight?: number
+}) {
+  const mine = side === 'out'
+  return (
+    <div style={{
+      alignSelf: mine ? 'flex-end' : 'flex-start', maxWidth, padding: '11px 15px',
+      borderRadius: mine ? '16px 16px 4px 16px' : '16px 16px 16px 4px',
+      background: mine ? 'var(--accent-400)' : 'var(--surface)',
+      color: mine ? '#FFFFFF' : 'var(--text-primary)',
+      border: mine ? 'none' : '1px solid var(--border)',
+      fontSize: 15, lineHeight, fontWeight: weight,
+    }}>{children}</div>
+  )
+}
+
+/** Caravel's round avatar: the brand tile, circular. */
+export function CaravelAvatar({ size = 32 }: { size?: number }) {
+  return <LogoTile size={size} style={{ borderRadius: '50%' }} />
+}
+
+const Lock = () => (
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" />
+  </svg>
+)
+
+/** A received confidential payment, as the chat draws one. */
+function PaymentStill() {
+  return (
+    <div style={{
+      alignSelf: 'flex-start', width: 260, maxWidth: '85%', boxSizing: 'border-box',
+      background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 14,
+      padding: '16px 18px', boxShadow: 'var(--e1)',
+    }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+        <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-body-dim)' }}>Confidential payment</span>
+        <span style={{ fontFamily: MONO, fontSize: 10.5, letterSpacing: '0.14em', fontWeight: 600, color: 'var(--lp-green)' }}>RECEIVED</span>
+      </div>
+      <div style={{ marginTop: 10, display: 'flex', alignItems: 'baseline', gap: 6 }}>
+        <span style={{ fontSize: 30, fontWeight: 600, letterSpacing: '-0.02em', color: 'var(--text-primary)' }}>250</span>
+        <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-body-dim)' }}>{TICKER}</span>
+      </div>
+      <div style={{ marginTop: 4, fontSize: 12.5, color: 'var(--text-body-dim)' }}>Amount hidden on chain</div>
+    </div>
+  )
+}
+
+/** The hero's window: a thread with Mira, carrying a received payment. */
+export default function ChatStill() {
+  return (
+    <StillWindow chrome shadow>
+      <StillHeader
+        avatar={
+          <span style={{
+            width: 36, height: 36, borderRadius: 999, flexShrink: 0,
+            background: 'var(--lp-avatar-bg)', color: 'var(--lp-avatar-ink)',
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontWeight: 600, fontSize: 13,
+          }}>MI</span>
+        }
+        name="Mira"
+        status={<><Lock />End-to-end encrypted</>}
+      />
+      <StillBody padding="24px 22px 28px" gap={12}>
+        <Bubble side="in">Here&rsquo;s my half of dinner, sent it right here</Bubble>
+        <PaymentStill />
+        <Bubble side="out">Got it, thank you</Bubble>
+        <Bubble side="in">So much easier</Bubble>
+      </StillBody>
+    </StillWindow>
   )
 }

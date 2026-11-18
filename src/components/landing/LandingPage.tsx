@@ -9,7 +9,7 @@
 // LAYOUT. Rows are flex-wrap with flex-basis, as in the design, so columns stack on their own when
 // the window narrows; the media queries only tighten the outer padding and the vertical rhythm.
 
-import { useCallback, useEffect, useRef, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useTheme } from '../../hooks/useTheme'
 import ThemeToggle from '../primitives/ThemeToggle'
@@ -17,7 +17,6 @@ import LogoTile from '../primitives/LogoTile'
 import ChatStill, { Bubble, CaravelAvatar, StillBody, StillHeader, StillWindow } from './ChatStill'
 import UserCountPill from './UserCountPill'
 import { useLiveUserCount } from './userCount'
-import { beltDurationSeconds } from './belt'
 
 const MONO = 'var(--font-mono)'
 const DOCS_URL = 'https://github.com/okansaglam016161-pixel/caravel#readme'
@@ -78,7 +77,7 @@ function Tag({ children }: { children: ReactNode }) {
   )
 }
 
-/** A card in the Ecosystem belt. Its width comes from the belt's CSS (.cv-lp-set > .cv-lp-card). */
+/** A card in the Ecosystem row. Its width and the flip-in come from the row's CSS (.cv-lp-eco). */
 function BackerCard({ logo, tag, title, children }: { logo: ReactNode; tag: string; title: string; children: ReactNode }) {
   return (
     <div className="cv-lp-card" style={{
@@ -109,7 +108,7 @@ function PartnerLogo({ src, alt, plate }: { src: string; alt: string; plate?: st
   )
 }
 
-/** The three Ecosystem cards, as one set (the belt repeats it). */
+/** The three Ecosystem cards. */
 function EcosystemCards() {
   return (
     <>
@@ -131,35 +130,27 @@ function EcosystemCards() {
 }
 
 /**
- * The conveyor belt. Four copies of the set; the track moves right by exactly one set (25%) per
- * cycle, so it loops without a seam. The copies after the first are hidden from assistive tech.
- *
- * NEVER THE SAME CARD TWICE ON SCREEN: a set is always at least one screen PLUS one card wide (the
- * gap grows to make it so; see the CSS), so a card has fully left one edge before its next copy can
- * reach the other. The set's width therefore changes with the screen, and the cycle's duration is
- * set from its measured width to keep the cards' speed constant (belt.ts).
+ * The Ecosystem row: the three cards, static, in the content column. When the row first scrolls into
+ * view each card turns into place (a flip around its vertical axis with a slight fade), one after
+ * another; once per page load. The cards are only transformed and faded while waiting, so they keep
+ * their space: nothing shifts. Reduced motion: no flip (CSS), they are simply there.
  */
-function EcosystemBelt() {
-  const trackRef = useRef<HTMLDivElement>(null)
+function EcosystemRow() {
+  const rowRef = useRef<HTMLDivElement>(null)
+  const [shown, setShown] = useState(false)
   useEffect(() => {
-    const track = trackRef.current
-    const set = track?.firstElementChild as HTMLElement | null
-    if (!track || !set || typeof ResizeObserver === 'undefined') return
-    const apply = () => { track.style.animationDuration = `${beltDurationSeconds(set.getBoundingClientRect().width)}s` }
-    apply()
-    const ro = new ResizeObserver(apply)
-    ro.observe(set)
-    return () => ro.disconnect()
+    const row = rowRef.current
+    if (!row) return
+    if (typeof IntersectionObserver === 'undefined') { setShown(true); return }
+    const io = new IntersectionObserver(entries => {
+      if (entries.some(e => e.isIntersecting)) { setShown(true); io.disconnect() }
+    }, { threshold: 0.25 })
+    io.observe(row)
+    return () => io.disconnect()
   }, [])
   return (
-    <div className="cv-lp-marquee">
-      <div ref={trackRef} className="cv-lp-track">
-        {[0, 1, 2, 3].map(copy => (
-          <div key={copy} className="cv-lp-set" aria-hidden={copy > 0 ? true : undefined}>
-            <EcosystemCards />
-          </div>
-        ))}
-      </div>
+    <div ref={rowRef} className={shown ? 'cv-lp-eco cv-lp-eco-in' : 'cv-lp-eco'}>
+      <EcosystemCards />
     </div>
   )
 }
@@ -224,11 +215,10 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* ── Ecosystem: heading in the content column (styled like FAQs); the cards on a full-width
-          conveyor belt (EcosystemBelt). ── */}
-      <section className="cv-lp-section">
-        <div className="cv-lp-wrap"><h2 className="cv-lp-h2">Ecosystem</h2></div>
-        <EcosystemBelt />
+      {/* ── Ecosystem: heading styled like FAQs; the three cards flip in on first view (EcosystemRow). ── */}
+      <section className="cv-lp-wrap cv-lp-section">
+        <h2 className="cv-lp-h2">Ecosystem</h2>
+        <EcosystemRow />
       </section>
 
       {/* ── Questions: title left, a chat with Caravel right ── */}
@@ -332,23 +322,15 @@ const LANDING_CSS = `
 
 .cv-lp-primary { transition: background 0.15s; }
 
-/* The Ecosystem belt: full page width, clipped (so the page never scrolls sideways), soft-faded at
-   both edges. The track holds four copies of the card set; moving it right by one set (25%) per cycle
-   loops seamlessly. Each card carries its gap as its own right margin, so every set is exactly equal.
-
-   NEVER TWICE ON SCREEN. Cards scale with the screen (380 to 520px, at most 82vw on phones) and the
-   gap grows so that one set = 3 x (card + gap) >= 100vw + one card: a card is fully off one edge
-   before its next copy reaches the other. gap = max(48px, (100vw - 2 x card) / 3). */
-.cv-lp-marquee { --lp-card-w: min(clamp(380px, 28vw, 520px), 82vw);
-  --lp-gap: max(48px, calc((100vw - 2 * var(--lp-card-w)) / 3));
-  margin-top: 20px; padding: 12px 0; overflow: hidden;
-  -webkit-mask-image: linear-gradient(to right, transparent, #000 96px, #000 calc(100% - 96px), transparent);
-  mask-image: linear-gradient(to right, transparent, #000 96px, #000 calc(100% - 96px), transparent); }
-.cv-lp-track { display: flex; width: max-content; animation: cv-lp-belt 36s linear infinite; will-change: transform; }
-.cv-lp-marquee:hover .cv-lp-track { animation-play-state: paused; }
-.cv-lp-set { display: flex; align-items: stretch; }
-.cv-lp-set > .cv-lp-card { flex: none; width: var(--lp-card-w); margin-right: var(--lp-gap); }
-@keyframes cv-lp-belt { from { transform: translateX(-25%); } to { transform: translateX(0); } }
+/* The Ecosystem row: three cards in the content column, wrapping on narrow screens. On first view
+   each turns into place: from 90deg around its vertical axis (edge-on) and transparent, to flat, one
+   after another. Transform and opacity only, so the cards hold their space before it plays. */
+.cv-lp-eco { display: flex; flex-wrap: wrap; gap: 18px; margin-top: 32px; }
+.cv-lp-eco > .cv-lp-card { flex: 1 1 320px; opacity: 0; transform: perspective(900px) rotateY(90deg);
+  transition: transform 600ms ease-out, opacity 600ms ease-out; }
+.cv-lp-eco-in > .cv-lp-card { opacity: 1; transform: perspective(900px) rotateY(0deg); }
+.cv-lp-eco-in > .cv-lp-card:nth-child(2) { transition-delay: 150ms; }
+.cv-lp-eco-in > .cv-lp-card:nth-child(3) { transition-delay: 300ms; }
 .cv-lp-primary:hover { background: var(--accent-hover) !important; }
 
 @media (max-width: 640px) {
@@ -364,23 +346,11 @@ const LANDING_CSS = `
 @media (max-width: 380px) {
   .cv-lp-card { flex-direction: column; }
 }
-@media (max-width: 640px) {
-  .cv-lp-marquee { -webkit-mask-image: linear-gradient(to right, transparent, #000 32px, #000 calc(100% - 32px), transparent);
-    mask-image: linear-gradient(to right, transparent, #000 32px, #000 calc(100% - 32px), transparent); }
-}
 @media (prefers-reduced-motion: reduce) {
   .cv-lp, .cv-lp-primary { transition: none; }
   .cv-lp-count { animation: none; }
-  /* No belt: the first set only, as a normal wrapping row in the content column. */
-  .cv-lp-marquee { -webkit-mask-image: none; mask-image: none; overflow: visible; padding: 0;
-    max-width: 1120px; margin: 32px auto 0; padding-left: 40px; padding-right: 40px; box-sizing: border-box; }
-  .cv-lp-track { animation: none; width: auto; }
-  .cv-lp-set { flex-wrap: wrap; gap: 18px; width: 100%; }
-  .cv-lp-set[aria-hidden="true"] { display: none; }
-  .cv-lp-set > .cv-lp-card { flex: 1 1 320px; width: auto; margin-right: 0; }
   .cv-lp-live-dot::after { animation: none; opacity: 0; }
-}
-@media (max-width: 640px) and (prefers-reduced-motion: reduce) {
-  .cv-lp-marquee { padding-left: 20px; padding-right: 20px; }
+  /* No flip: the Ecosystem cards are simply there. */
+  .cv-lp-eco > .cv-lp-card { opacity: 1; transform: none; transition: none; }
 }
 `

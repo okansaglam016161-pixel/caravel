@@ -55,8 +55,8 @@ const svgBase = (size: number, color: string, strokeWidth: number) => ({
   style: { flexShrink: 0 },
 })
 
-const Wallet = ({ size = 16, color = 'currentColor', strokeWidth = 1.8 }: IconProps) => (
-  <svg {...svgBase(size, color, strokeWidth)}><rect x="2.5" y="6" width="19" height="13" rx="2.5" /><path d="M2.5 10h19" /><path d="M15.5 14.5h2" /></svg>
+const Person = ({ size = 18, color = 'currentColor', strokeWidth = 1.8 }: IconProps) => (
+  <svg {...svgBase(size, color, strokeWidth)}><circle cx="12" cy="8" r="4" /><path d="M4.5 20a7.5 7.5 0 0 1 15 0" /></svg>
 )
 const Message = ({ size = 16, color = 'currentColor', strokeWidth = 1.8 }: IconProps) => (
   <svg {...svgBase(size, color, strokeWidth)}><path d="M21 11.5a8.5 8.5 0 1 0-16.9 1.6L3 20l3.8-1.1A8.5 8.5 0 0 0 21 11.5z" /></svg>
@@ -69,15 +69,6 @@ const Browser = ({ size = 18, color = 'currentColor', strokeWidth = 1.8 }: IconP
 )
 const Key = ({ size = 18, color = 'currentColor', strokeWidth = 1.8 }: IconProps) => (
   <svg {...svgBase(size, color, strokeWidth)}><circle cx="8" cy="15" r="4.5" /><path d="M11 12L20 3M16 7l3 3M13 10l2.5 2.5" /></svg>
-)
-const Swap = ({ size = 15, color = 'currentColor', strokeWidth = 1.8 }: IconProps) => (
-  <svg {...svgBase(size, color, strokeWidth)}><path d="M4 7h13l-3-3" /><path d="M20 17H7l3 3" /></svg>
-)
-const Bridge = ({ size = 15, color = 'currentColor', strokeWidth = 1.8 }: IconProps) => (
-  <svg {...svgBase(size, color, strokeWidth)}><path d="M2 17h20" /><path d="M4 17v-4a8 8 0 0 1 16 0v4" /></svg>
-)
-const Pools = ({ size = 15, color = 'currentColor', strokeWidth = 1.8 }: IconProps) => (
-  <svg {...svgBase(size, color, strokeWidth)}><circle cx="12" cy="7.5" r="3.2" /><circle cx="7.5" cy="15.5" r="3.2" /><circle cx="16.5" cy="15.5" r="3.2" /></svg>
 )
 const Chevron = ({ size = 16, color = 'currentColor', dir = 'down' }: IconProps & { dir?: 'up' | 'down' }) => (
   <svg {...svgBase(size, color, 2)}>{dir === 'up' ? <path d="M18 15l-6-6-6 6" /> : <path d="M6 9l6 6 6-6" />}</svg>
@@ -297,10 +288,10 @@ function AppMockup() {
 // ── Sections ──────────────────────────────────────────────────────────────────
 
 const STEPS = [
-  { icon: <Browser />, title: 'Launch Caravel', body: 'Open the app in your browser. Nothing to install.' },
-  { icon: <Wallet size={18} />, title: 'Create your wallet', body: 'Generated on your device. Your keys never leave it.' },
-  { icon: <Key />, title: 'Save your recovery phrase', body: 'Your 24 words. The only way back in, held by you.' },
-  { icon: <ArrowOut size={18} />, title: 'Start transacting', body: 'Send, receive, message, and claim your @name on the Ootle.' },
+  { icon: <Browser />, title: 'Launch Caravel', body: 'Open it in Chrome, Brave or Edge on a desktop computer.' },
+  { icon: <Person />, title: 'Create your chat identity', body: 'Made on your device and locked with your password.' },
+  { icon: <Key />, title: 'Save your backup phrase', body: '12 words that restore your chat. Keep them offline.' },
+  { icon: <ArrowOut size={18} />, title: 'Connect Sapient', body: 'Add the Sapient wallet to send and receive private TARI in chat.' },
 ]
 
 /**
@@ -429,34 +420,16 @@ function ServiceRow({ title, body, card, flip = false }: {
   return <div className="cv-lp-service">{flip ? <>{card}{copy}</> : <>{copy}{card}</>}</div>
 }
 
-const SOON = [
-  { icon: <Swap />, label: 'Swap' },
-  { icon: <Bridge />, label: 'Bridge' },
-  { icon: <Pools />, label: 'Pools' },
-]
-
 function Services() {
   return (
     <section className="cv-lp-section">
-      <H2 narrow>One app. A growing set of private services.</H2>
+      <H2 narrow>Private chat, with payments built in.</H2>
       <ServiceRow
         flip
         title="Chat"
-        body="End-to-end encrypted messaging, tied to your wallet. Claim an @name so people can reach you by name — private messaging and private money, one conversation."
+        body="End-to-end encrypted messaging over Nostr, with private TARI payments sent inside the conversation through the Sapient wallet. Relays can't read your messages or see who sent them."
         card={<ChatStill />}
       />
-      <div className="cv-lp-soon">
-        {SOON.map(s => (
-          <div key={s.label} style={{
-            border: '1px dashed var(--border-strong)', borderRadius: 16, padding: '18px 24px',
-            display: 'flex', alignItems: 'center', gap: 12,
-          }}>
-            <span style={{ width: 34, height: 34, borderRadius: 'var(--r-md)', border: '1px solid var(--border)', color: 'var(--text-muted-dim)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{s.icon}</span>
-            <span style={{ flex: 1, fontSize: 15, fontWeight: 600, color: 'var(--text-body-dim)' }}>{s.label}</span>
-            <Pill tone="quiet">Coming soon</Pill>
-          </div>
-        ))}
-      </div>
     </section>
   )
 }
@@ -519,12 +492,12 @@ function Backing() {
 }
 
 const FAQS: { q: string; a: string }[] = [
-  { q: 'Is Caravel really self-custodial?', a: 'Yes. Your keys are generated on your device and never leave it. Not even Caravel can access your funds.' },
-  { q: 'What if I lose my recovery phrase?', a: 'Your 24 words are the only way back in. Caravel cannot recover them for you, that is the nature of self-custody. Store them safely offline.' },
-  { q: 'How is my activity kept private?', a: 'On the Ootle, your balance can be held confidentially: amounts are hidden in cryptographic commitments, and the network verifies your transactions without ever seeing the values. You choose when to reveal funds publicly and when to keep them private. Messages are end to end encrypted over Nostr, wrapped so relays can’t read them or link who’s talking to whom.' },
-  { q: 'Can I use real funds?', a: 'Not yet. Caravel runs on the Tari Esmeralda testnet. It is experimental and for testing, not for real value.' },
-  { q: 'What are Tari and the Ootle?', a: 'Tari is the base protocol Caravel is built on. The Ootle is its programmable layer two, a smart contract platform that supports confidential assets, which is what lets Caravel keep your balances and payments private.' },
-  { q: 'What is coming next?', a: 'Bridge, Swap, and Pools are on the way, expanding Caravel into a Swiss bank account in your pocket, one private service at a time.' },
+  { q: 'What do I need?', a: 'A desktop browser (Chrome, Brave or Edge). For payments, the Sapient wallet extension. Chat works without it.' },
+  { q: 'Is Caravel really self-custodial?', a: 'Yes. Your funds and wallet keys stay in Sapient, the Tari browser wallet, on your computer; Caravel never sees them. Your chat key is created on your device and locked with your password.' },
+  { q: 'What if I lose my backup phrase?', a: 'Your 12-word backup phrase (or nsec) is the only way to restore your chat identity, and Caravel can’t recover it for you. Your funds are restored with Sapient’s own recovery phrase, which you keep separately.' },
+  { q: 'How is my activity kept private?', a: 'Payments are confidential TARI transfers on the Ootle: amounts are hidden in cryptographic commitments, and the network checks them without seeing the values. Messages are end-to-end encrypted over Nostr and gift-wrapped, so relays can’t read them or see who sent them.' },
+  { q: 'Can I use real funds?', a: 'Yes. Caravel runs on Ootle mainnet. It is new and unaudited, so only use amounts you can afford to lose.' },
+  { q: 'What are Tari and the Ootle?', a: 'Tari is the base protocol Caravel is built on. The Ootle is its programmable layer two, a smart contract platform that supports confidential assets, which is what keeps your payments private.' },
 ]
 
 /**
@@ -667,8 +640,6 @@ const LANDING_CSS = `
 .cv-lp-service { display: grid; grid-template-columns: 1fr 1fr; gap: 72px; align-items: center;
   max-width: 980px; margin: 80px auto 0; }
 .cv-lp-service ~ .cv-lp-service { margin-top: 96px; }
-.cv-lp-soon { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px;
-  max-width: 980px; margin: 96px auto 0; }
 .cv-lp-partners { display: grid; grid-template-columns: 1fr 1fr; gap: 18px;
   max-width: 880px; margin: 56px auto 0;
   /* THE PERSPECTIVE BELONGS TO THE CONTAINER AND NOWHERE ELSE. This property applies to an
@@ -730,7 +701,6 @@ const LANDING_CSS = `
   .cv-lp-steps { grid-template-columns: repeat(2, 1fr); gap: 40px 28px; margin-top: 48px; }
   .cv-lp-service { grid-template-columns: 1fr; gap: 32px; margin-top: 56px; }
   .cv-lp-service ~ .cv-lp-service { margin-top: 72px; }
-  .cv-lp-soon { grid-template-columns: 1fr; margin-top: 72px; }
   .cv-lp-partners { grid-template-columns: 1fr; }
   .cv-lp-footer { margin-top: 110px; }
 }
@@ -813,9 +783,9 @@ export default function LandingPage() {
 
       {/* Hero */}
       <section className="cv-lp-hero">
-        <h1 className="cv-lp-h1">Caravel is a vessel for a new era of private exchange.</h1>
+        <h1 className="cv-lp-h1">The vessel for a new era of private exchange.</h1>
         <div style={{ margin: '26px auto 0', fontSize: 22, fontWeight: 500, color: 'var(--text-body-dim)' }}>
-          A Swiss bank account in your pocket.
+          Private messages and private payments, in one conversation.
         </div>
         <div className="cv-lp-hero-ctas" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 22, marginTop: 38 }}>
           <LaunchButton onClick={onOpenApp} big />
@@ -846,7 +816,7 @@ export default function LandingPage() {
           <a href="https://x.com/Caravelxyz" target="_blank" rel="noreferrer noopener" style={{ color: 'var(--text-body-dim)' }}>X</a>
         </div>
         <div style={{ width: '100%', fontSize: 12.5, color: 'var(--text-muted-dim)', fontFamily: 'var(--font-mono)' }}>
-          Running on the Tari Esmeralda testnet. Self-custodial and experimental. Don&rsquo;t use for real value.
+          Running on Tari Ootle mainnet. Unaudited and experimental. Only use amounts you can afford to lose.
         </div>
       </footer>
     </div>

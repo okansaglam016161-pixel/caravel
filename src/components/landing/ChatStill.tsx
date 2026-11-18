@@ -96,8 +96,8 @@ export default function ChatStill() {
               picture resolves to anybody, so a generated colour would be arbitrary rather than
               meaningful. The still uses the brand blue instead, via the fill props Avatar already
               takes. Avatar itself is untouched; every real usage keeps its per-identity colour. */}
-          <Avatar icon={<span style={{ fontSize: 12, fontWeight: 700 }}>OK</span>} bg="var(--accent-400)" fg="var(--ink-on-accent)" size={30} radius={99} />
-          <span style={THREAD_TITLE}>@okz61</span>
+          <Avatar icon={<span style={{ fontSize: 12, fontWeight: 700 }}>MI</span>} bg="var(--accent-400)" fg="var(--ink-on-accent)" size={30} radius={99} />
+          <span style={THREAD_TITLE}>Mira</span>
         </div>
       </div>
 
@@ -107,7 +107,7 @@ export default function ChatStill() {
           visual weight as the balance hero across the row from it. The two other overrides are
           what make it a still — there is nothing to scroll, and no flex parent to weigh against. */}
       <div style={{ ...THREAD_SCROLLER, flex: 'none', overflowY: 'visible', padding: 24 }}>
-        <MessageBubble variant="received" text="Bank flagged my wire again 🙄 sending it on Caravel instead" timestamp={now - 6 * MIN} />
+        <MessageBubble variant="received" text="Here's my half of dinner, sent it right here" timestamp={now - 6 * MIN} />
         <MessageBubble variant="sent" text={`Received, 250 ${TICKER}`} timestamp={now - 5 * MIN} />
         <MessageBubble variant="received" text="So much easier" timestamp={now - 4 * MIN} />
       </div>

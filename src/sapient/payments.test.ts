@@ -5,7 +5,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   assertPayableAddress, claimPayment, insufficientPrivateBalance, makePaymentNonce, memoMatches,
-  parseSubstateId, parseTari, paymentMemo, readRequest, runTransactionRequest, sendPrivately, shield,
+  parseSubstateId, parseTari, paymentMemo, readMemo, readRequest, runTransactionRequest, sendPrivately, shield,
 } from './payments'
 import { TARI_RESOURCE, type TariProvider } from './provider'
 
@@ -49,6 +49,16 @@ describe('amounts, nonce, memo', () => {
     expect(memoMatches(`${paymentMemo(n)} `, n)).toBe(false)
     expect(memoMatches(undefined, n)).toBe(false)
     expect(memoMatches('caravel:0000000000000000', n)).toBe(false)
+  })
+
+  it('readMemo: plain text and Sapient\'s raw JSON Memo union read the same; nothing else becomes ours', () => {
+    expect(readMemo(`caravel:${NONCE}`)).toBe(`caravel:${NONCE}`)
+    expect(readMemo(`{"Message":"caravel:${NONCE}"}`)).toBe(`caravel:${NONCE}`)
+    expect(memoMatches(`{"Message":"caravel:${NONCE}"}`, NONCE)).toBe(true)
+    for (const none of [undefined, null, '', '{"Message":""}', 42]) expect(readMemo(none)).toBeNull()
+    expect(memoMatches(`{"SenderAddress":"caravel:${NONCE}"}`, NONCE)).toBe(false)
+    expect(memoMatches(`{"Message":"caravel:${NONCE} "}`, NONCE)).toBe(false)
+    expect(memoMatches('{not json', NONCE)).toBe(false)
   })
 
   it('reads the shortfall out of Sapient\'s "exceeds your private balance" error', () => {
@@ -179,17 +189,46 @@ describe('claimPayment', () => {
     expect(await claimPayment(p, ref, new Set(['our-tx']))).toEqual({ s: 'unverified', amount: '700000', reason: 'own-send' })
   })
 
-  it('our change — no memo — never verifies', async () => {
+  it('our change — no memo — never verifies (and, with nothing to compare, is "couldn\'t confirm")', async () => {
     const { p } = scripted({
       tari_claimPrivatePayment: { code: -32603, message: "You've already claimed this payment." },
       tari_getShieldedOutputs: [{ commitment: COMMIT, amount: '5', transactionId: 'x' }],
     })
-    expect(await claimPayment(p, ref, new Set())).toEqual({ s: 'unverified', amount: '5', reason: 'memo' })
+    expect(await claimPayment(p, ref, new Set())).toEqual({ s: 'unconfirmed' })
   })
 
-  it('"already claimed" but no longer unspent cannot be verified', async () => {
+  it('"already claimed" but no longer unspent: no memo left to read, so "couldn\'t confirm" — never "not verified"', async () => {
     const { p } = scripted({ tari_claimPrivatePayment: { code: -32603, message: "You've already claimed this payment." }, tari_getShieldedOutputs: [] })
-    expect(await claimPayment(p, ref, new Set())).toEqual({ s: 'unverified', amount: null, reason: 'spent' })
+    expect(await claimPayment(p, ref, new Set())).toEqual({ s: 'unconfirmed' })
+  })
+
+  // BUG 2 (mainnet): Sapient found the output by itself after an unlock (its UTXO-set scan stores the
+  // memo RAW, as the JSON Memo union), so the claim took the "already claimed" path and compared
+  // '{"Message":"caravel:…"}' with 'caravel:…' — a genuine payment shown as "Not verified".
+  it('BUG 2: "already claimed" with the memo stored raw by Sapient\'s UTXO scan is VERIFIED', async () => {
+    const { p } = scripted({
+      tari_claimPrivatePayment: { code: -32603, message: "You've already claimed this payment." },
+      tari_getShieldedOutputs: [{ commitment: COMMIT, amount: '1000000', memo: JSON.stringify({ Message: `caravel:${NONCE}` }), transactionId: '' }],
+    })
+    expect(await claimPayment(p, ref, new Set())).toEqual({ s: 'verified', amount: '1000000' })
+  })
+
+  it('BUG 2: the raw form is accepted on the fresh-claim path too, and a raw memo for ANOTHER nonce is still not verified', async () => {
+    const fresh = scripted({ tari_claimPrivatePayment: { amount: '7', memo: `{"Message":"caravel:${NONCE}"}` } })
+    expect(await claimPayment(fresh.p, ref, new Set())).toEqual({ s: 'verified', amount: '7' })
+    const other = scripted({
+      tari_claimPrivatePayment: { code: -32603, message: "You've already claimed this payment." },
+      tari_getShieldedOutputs: [{ commitment: COMMIT, amount: '7', memo: '{"Message":"caravel:ffffffffffffffff"}', transactionId: '' }],
+    })
+    expect(await claimPayment(other.p, ref, new Set())).toEqual({ s: 'unverified', amount: '7', reason: 'memo' })
+  })
+
+  it('a raw memo on one of OUR OWN sends is still refused', async () => {
+    const { p } = scripted({
+      tari_claimPrivatePayment: { code: -32603, message: "You've already claimed this payment." },
+      tari_getShieldedOutputs: [{ commitment: COMMIT, amount: '7', memo: `{"Message":"caravel:${NONCE}"}`, transactionId: 'our-tx' }],
+    })
+    expect(await claimPayment(p, ref, new Set(['our-tx']))).toEqual({ s: 'unverified', amount: '7', reason: 'own-send' })
   })
 
   it('not ours or not on chain is "not-found"; anything else is thrown for the caller to retry', async () => {

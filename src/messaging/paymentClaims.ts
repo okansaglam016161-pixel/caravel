@@ -11,12 +11,17 @@ export type ClaimView =
   | { s: 'claiming' }
   /** Not found yet — waiting out indexer lag before asking again. */
   | { s: 'retrying' }
+  /** The last attempt could not reach Sapient (not a lock) — tried again shortly, or by Retry. */
+  | { s: 'error' }
   /** Sapient cannot confirm it right now, and why — the card says what to do. */
-  | { s: 'needs-sapient'; why: 'install' | 'connect' | 'view' | 'network'; network?: string }
+  | { s: 'needs-sapient'; why: 'install' | 'connect' | 'unlock' | 'view' | 'network'; network?: string }
+
+/** What the claimer is doing with one payment right now (memory only). */
+export type ClaimBusy = 'claiming' | 'retrying' | 'error'
 
 /** The parts of the Sapient connection a card's state depends on. */
 export interface SapientReadiness {
-  status: 'detecting' | 'missing' | 'disconnected' | 'connecting' | 'connected'
+  status: 'detecting' | 'missing' | 'disconnected' | 'connecting' | 'connected' | 'locked'
   network: string | null
   viewAccess: 'unknown' | 'off' | 'requesting' | 'granted'
 }
@@ -27,17 +32,21 @@ export function claimReady(s: SapientReadiness, ref: Pick<PaymentRef, 'network'>
 
 /**
  * A card's state: a stored outcome wins; then whatever is in flight; then what Sapient needs before
- * it can confirm; otherwise it is queued to be claimed.
+ * it can confirm (a LOCKED wallet says so, rather than spinning on "Confirming…"); then a failed
+ * attempt; otherwise it is queued to be claimed.
  */
 export function claimView(
-  ref: Pick<PaymentRef, 'network'>, stored: StoredClaim | undefined, busy: 'claiming' | 'retrying' | undefined, s: SapientReadiness,
+  ref: Pick<PaymentRef, 'network'>, stored: StoredClaim | undefined, busy: ClaimBusy | undefined, s: SapientReadiness,
 ): ClaimView {
   if (stored) return stored
-  if (busy) return { s: busy }
+  if (busy === 'claiming' || busy === 'retrying') return { s: busy }
   if (s.status === 'missing') return { s: 'needs-sapient', why: 'install' }
+  // Locked is its own answer: the connection is fine, the wallet just cannot read anything yet.
+  if (s.status === 'locked') return { s: 'needs-sapient', why: 'unlock' }
   if (s.status !== 'connected') return { s: 'needs-sapient', why: 'connect' }
   if (s.network !== ref.network) return { s: 'needs-sapient', why: 'network', network: ref.network }
   if (s.viewAccess !== 'granted') return { s: 'needs-sapient', why: 'view' }
+  if (busy === 'error') return { s: 'error' }
   return { s: 'claiming' }
 }
 

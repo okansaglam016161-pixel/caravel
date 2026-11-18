@@ -270,6 +270,8 @@ function PaymentCard({ sent, state, timestamp, plaintext, lid, flashed }: {
   flashed?: boolean
 }) {
   const statusInk = state.tone === 'danger' ? 'var(--danger-500)' : 'var(--vault-ink-dim)'
+  const retryInk = state.tone === 'danger' ? 'var(--danger-500)' : 'var(--text-body-dim)'
+  const retryEdge = state.tone === 'danger' ? 'rgba(var(--danger-rgb),0.4)' : 'var(--vault-hairline)'
   return (
     <div data-lid={lid} className={flashed ? 'cv-msg-flash' : undefined} style={{ alignSelf: sent ? 'flex-end' : 'flex-start', maxWidth: '68%', width: 440 }}>
       {/* See the header note: the pin is the point, not a workaround. `cv-msg-flash` is the dark
@@ -302,7 +304,7 @@ function PaymentCard({ sent, state, timestamp, plaintext, lid, flashed }: {
             {state.spin && <span style={{ width: 12, height: 12, borderRadius: '50%', border: '2px solid var(--vault-hairline)', borderTopColor: 'var(--accent-300)', animation: 'cv-spin 1s linear infinite', flexShrink: 0, marginTop: 2 }} />}
             <span style={{ flex: 1 }}>{state.status}</span>
             {state.retry && (
-              <span onClick={state.retry} style={{ flexShrink: 0, padding: '3px 9px', borderRadius: 7, border: '1px solid rgba(var(--danger-rgb),0.4)', fontSize: 11.5, fontWeight: 600, color: 'var(--danger-500)', cursor: 'pointer' }}>Retry</span>
+              <button type="button" onClick={state.retry} style={{ flexShrink: 0, padding: '3px 9px', borderRadius: 7, background: 'transparent', border: `1px solid ${retryEdge}`, fontSize: 11.5, fontWeight: 600, color: retryInk, cursor: 'pointer', fontFamily: 'inherit' }}>Retry</button>
             )}
           </div>
         )}
@@ -339,7 +341,8 @@ function SentPaymentCard({ message, lid, flashed }: { message: CaravelMessage; l
 /**
  * A received payment's card, from its CLAIM through Sapient (hooks/usePaymentClaimer): credited only
  * when the output's memo carries this message's nonce. Every state is shown — including one that
- * cannot be confirmed — and none of them credits anybody without that match.
+ * cannot be confirmed — and none of them credits anybody without that match. Every state short of
+ * verified has a small Retry (re-check Sapient, claim again).
  */
 function ReceivedPaymentCard({ message, lid, flashed, disputed, view, onRetry }: {
   message: CaravelMessage; lid?: string; flashed?: boolean; disputed?: boolean; view: ClaimView; onRetry: () => void
@@ -354,27 +357,29 @@ function ReceivedPaymentCard({ message, lid, flashed, disputed, view, onRetry }:
       break
     case 'unverified':
       state = view.reason === 'own-send'
-        ? { dir: 'RECEIVED', masked: true, tone: 'dim', status: 'This is one of your own payments, not one from this contact.' }
-        : view.reason === 'spent'
-          ? { dir: 'RECEIVED', masked: true, tone: 'dim', status: 'Couldn’t verify this payment: the output has already been spent.' }
-          : { dir: 'RECEIVED', ...(view.amount ? { amount: microToTari(view.amount) } : { masked: true }), tone: 'dim', status: 'Not verified: this payment’s note doesn’t match the message.' }
+        ? { dir: 'RECEIVED', masked: true, tone: 'dim', retry: onRetry, status: 'This is one of your own payments, not one from this contact.' }
+        : { dir: 'RECEIVED', ...(view.amount ? { amount: microToTari(view.amount) } : { masked: true }), tone: 'dim', retry: onRetry, status: 'Not verified: this payment’s note doesn’t match the message.' }
       break
     case 'unconfirmed':
       state = { dir: 'RECEIVED', masked: true, tone: 'danger', retry: onRetry, status: 'Couldn’t confirm this payment.' }
       break
+    case 'error':
+      state = { dir: 'RECEIVED', masked: true, tone: 'dim', retry: onRetry, status: 'Couldn’t reach Sapient — trying again shortly.' }
+      break
     case 'claiming':
-      state = { dir: 'RECEIVED', masked: true, tone: 'dim', spin: true, status: 'Confirming with Sapient…' }
+      state = { dir: 'RECEIVED', masked: true, tone: 'dim', spin: true, retry: onRetry, status: 'Confirming with Sapient…' }
       break
     case 'retrying':
-      state = { dir: 'RECEIVED', masked: true, tone: 'dim', spin: true, status: 'Not on chain yet — checking again shortly…' }
+      state = { dir: 'RECEIVED', masked: true, tone: 'dim', spin: true, retry: onRetry, status: 'Not on chain yet — checking again shortly…' }
       break
     case 'needs-sapient':
       state = {
-        dir: 'RECEIVED', masked: true, tone: 'dim',
+        dir: 'RECEIVED', masked: true, tone: 'dim', retry: onRetry,
         status: view.why === 'install' ? 'Install Sapient to confirm this payment.'
+          : view.why === 'unlock' ? 'Unlock Sapient to confirm this payment.'
           : view.why === 'view' ? 'Grant view access in Sapient to confirm this payment.'
           : view.why === 'network' ? `Sent on ${networkLabel(view.network ?? null)} — switch Sapient to confirm.`
-          : 'Connect or unlock Sapient to confirm this payment.',
+          : 'Connect Sapient to confirm this payment.',
       }
       break
   }
@@ -397,7 +402,8 @@ export default function ChatApp() {
   const { balanceHidden } = useWallet()
   const sapient = useSapient()
   /** The `otl_…` address this side announces — the connected Sapient account's, or none. */
-  const myAddress = sapient.status === 'connected' ? sapient.walletAddress : null
+  // Still announced while LOCKED: the account (and its address) has not changed, only its access.
+  const myAddress = sapient.status === 'connected' || sapient.status === 'locked' ? sapient.walletAddress : null
   const { messages, historyUnreadable, nostrPubkeyHex, messagingStatus, contacts, acceptContact, contactAddresses, setManualTariAddress, createMessagingProvider, recordSentMessage, deleteConversation, editMessage, reactMessage, getRelayStates, reconnectAll, groups, createGroup, acceptGroup, declineGroup, leaveGroup, reinviteGroup } = useChat()
   // Received payments are claimed through Sapient in the background (hooks/usePaymentClaimer), and
   // credited only when the memo nonce matches. An output two contacts claim credits neither.
@@ -1258,6 +1264,7 @@ export default function ChatApp() {
   function sapientGate(): string | null {
     if (sapient.status === 'missing') return 'Install Sapient to send payments.'
     if (sapient.status === 'detecting') return 'Looking for Sapient…'
+    if (sapient.status === 'locked') return 'Sapient is locked. Unlock it to send payments.'
     if (sapient.status !== 'connected') return 'Connect your wallet (Sapient) to send payments — or unlock it if it is locked.'
     return null
   }
@@ -1394,6 +1401,7 @@ export default function ChatApp() {
       setPaymentMode(false)
     } catch (e) {
       const sErr = toSapientError(e)
+      if (sErr.kind === 'locked') sapient.reportLocked()
       const have = insufficientPrivateBalance(sErr.message)
       if (have !== null) {
         removeOutbox(nostrPubkeyHex, entry.id)
@@ -1432,6 +1440,7 @@ export default function ChatApp() {
       setPrivateBal(undefined)   // re-read on the next attempt
     } catch (e) {
       const sErr = toSapientError(e)
+      if (sErr.kind === 'locked') sapient.reportLocked()
       setPayBusy(false)
       setPayProgress(null)
       setPayError(sErr.kind === 'declined' ? 'Cancelled in Sapient.' : sErr.message, sErr.kind === 'declined')
@@ -2199,7 +2208,7 @@ export default function ChatApp() {
                 if (m.payment) return <PaymentMessageCard key={m.id} message={m} lid={m.logicalId} flashed={!!m.logicalId && flashedId === m.logicalId} disputed={m.direction === 'received' && disputedClaims.has(m.payment.utxoId)}
                   view={m.direction !== 'received' ? null
                     : m.payment.nonce ? claimView(m.payment, claims[m.payment.utxoId], claimBusy[m.payment.utxoId], sapient)
-                    : { s: 'unverified', amount: null, reason: 'memo' }}
+                    : { s: 'unconfirmed' }}
                   onRetry={() => retryClaim(m.payment!.utxoId)} />
                 /* Encrypted image (images M4): resolves itself — cache first, then the host. */
                 if (m.media) return <MediaMessageCard key={m.id} message={m} lid={m.logicalId} flashed={!!m.logicalId && flashedId === m.logicalId} />

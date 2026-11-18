@@ -70,7 +70,7 @@ const linkBtn: CSSProperties = {
 }
 
 export default function WalletConnectBar() {
-  const { status, network, walletAddress, viewAccess, error, provider, connect, disconnect, grantViewAccess } = useSapient()
+  const { status, network, walletAddress, viewAccess, error, provider, connect, disconnect, grantViewAccess, refresh } = useSapient()
   const [menuOpen, setMenuOpen] = useState(false)
   const [privateBalance, setPrivateBalance] = useState<BalanceView>({ s: 'loading' })
   const [publicBalance, setPublicBalance] = useState<BalanceView>({ s: 'loading' })
@@ -136,6 +136,17 @@ export default function WalletConnectBar() {
         Connecting… approve in Sapient
       </div>
     )
+  } else if (status === 'locked') {
+    // Connected, but the wallet is locked: nothing can be read or paid until it is unlocked in Sapient.
+    // Sapient sends no unlock event — SapientContext checks every few seconds; a click checks now.
+    pill = (
+      <button onClick={() => void refresh()} className="cv-quiet-btn" title="Unlock Sapient, then click to check again"
+        style={{ ...ROW, cursor: 'pointer' }}>
+        <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="var(--warn)" strokeWidth={2} strokeLinecap="round" style={{ flexShrink: 0 }}><rect x={5} y={11} width={14} height={9} rx={2} /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></svg>
+        <span style={{ flex: 1, textAlign: 'left', fontWeight: 600 }}>Sapient is locked</span>
+        <span style={{ fontSize: 11, color: 'var(--text-muted-dim)' }}>Unlock to use</span>
+      </button>
+    )
   } else if (status === 'connected') {
     pill = (
       <button onClick={() => setMenuOpen(v => !v)} aria-expanded={menuOpen} aria-haspopup="menu" className="cv-quiet-btn"
@@ -157,7 +168,7 @@ export default function WalletConnectBar() {
     )
   }
 
-  const showNetworkWarning = (status === 'connected' || status === 'disconnected' || status === 'connecting') && network !== null && !isMainnet(network)
+  const showNetworkWarning = (status === 'connected' || status === 'locked' || status === 'disconnected' || status === 'connecting') && network !== null && !isMainnet(network)
 
   return (
     <div ref={boxRef} style={{ position: 'relative', padding: '14px 12px 0' }}>

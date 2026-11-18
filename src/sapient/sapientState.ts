@@ -4,12 +4,16 @@
 //
 //   detecting → missing                                   (no window.tari within the timeout)
 //   detecting → disconnected → connecting → connected     (and back to disconnected on any reset)
+//   connected ⇄ locked                                    (the site stays connected; the wallet is locked)
+//
+// LOCKED is its own state because Sapient keeps the connection while locked but answers nothing that
+// needs the wallet — and sends no event either way, so SapientContext polls for it.
 //
 // VIEW ACCESS is separate from the connection, as Sapient keeps it: connecting reveals one public
 // component address; view access reveals the confidential position. It is lost on disconnect, an
 // account switch and a network switch, so every one of those resets it to `unknown`.
 
-export type SapientStatus = 'detecting' | 'missing' | 'disconnected' | 'connecting' | 'connected'
+export type SapientStatus = 'detecting' | 'missing' | 'disconnected' | 'connecting' | 'connected' | 'locked'
 
 /** `off` = not granted (declined, or never asked this session). `requesting` = a popup is open. */
 export type ViewAccess = 'unknown' | 'off' | 'requesting' | 'granted'
@@ -43,6 +47,10 @@ export type SapientAction =
   /** Sapient's accountsChanged. `[]` ends the session; a different account is a switch. */
   | { type: 'accounts-changed'; accounts: string[] }
   | { type: 'disconnected' }
+  /** The site is connected but the wallet is locked (a call said so, or the session check). */
+  | { type: 'locked' }
+  /** The wallet is unlocked again. */
+  | { type: 'unlocked' }
 
 const DISCONNECTED = (s: SapientState): SapientState => ({
   ...s, status: 'disconnected', componentAddress: null, walletAddress: null, capabilities: null, viewAccess: 'unknown',
@@ -66,9 +74,14 @@ export function sapientReducer(s: SapientState, a: SapientAction): SapientState 
         viewAccess: s.componentAddress === a.componentAddress ? s.viewAccess : 'unknown',
       }
     case 'view':
-      return s.status === 'connected' || s.status === 'connecting' ? { ...s, viewAccess: a.viewAccess } : s
+      return s.status === 'connected' || s.status === 'connecting' || s.status === 'locked' ? { ...s, viewAccess: a.viewAccess } : s
+    case 'locked':
+      // From disconnected too: a reload while locked finds the site connected but nothing readable.
+      return s.status === 'connected' || s.status === 'disconnected' ? { ...s, status: 'locked' } : s
+    case 'unlocked':
+      return s.status === 'locked' ? { ...s, status: 'connected' } : s
     case 'accounts-changed':
-      if (a.accounts.length === 0) return s.status === 'connected' || s.status === 'connecting' ? DISCONNECTED(s) : s
+      if (a.accounts.length === 0) return s.status === 'connected' || s.status === 'connecting' || s.status === 'locked' ? DISCONNECTED(s) : s
       // Same account: nothing changed. A different one is a switch — the address is re-read by the
       // context, and the grant does not carry over.
       if (s.status === 'connected' && a.accounts[0] !== s.componentAddress) {

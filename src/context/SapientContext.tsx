@@ -12,6 +12,15 @@
 // A quiet restore on page load and a network switch never open one — they show "View access: off"
 // with a Grant button instead.
 //
+// ── LOCKED: ASKED, NEVER TOLD ───────────────────────────────────────────────
+//
+// Sapient broadcasts nothing when it locks or unlocks (manual lock and auto-lock alike), so the pill
+// used to stay "connected" over a locked wallet, and every claim quietly failed. The session is now
+// CHECKED (provider.checkSession, no popup): every few seconds while a connection exists or might,
+// whenever the page regains focus, on demand (`refresh`, the cards' Retry), and at once when any
+// call reports "Wallet is locked." (`reportLocked`). Unlocking is noticed the same way, and everything
+// waiting on it resumes.
+//
 // ── STALE ANSWERS ────────────────────────────────────────────────────────────
 //
 // Every reset (disconnect, accounts → [], a switch, a new connect) bumps `genRef`, and async work
@@ -20,7 +29,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useReducer, useRef, useState, type ReactNode } from 'react'
 import {
-  SapientError, detectSapient, disconnectSapient, getAccounts, getCapabilities, getNetwork, getViewAccess, getWalletAddress,
+  SapientError, checkSession, detectSapient, disconnectSapient, getCapabilities, getNetwork, getViewAccess, getWalletAddress,
   requestAccounts, requestViewAccess, subscribeSapient, toSapientError, type TariProvider,
 } from '../sapient/provider'
 import { SAPIENT_INITIAL, sapientReducer, type SapientState } from '../sapient/sapientState'
@@ -34,6 +43,10 @@ export interface SapientCtx extends SapientState {
   disconnect: () => Promise<void>
   /** Ask for view access (Sapient's popup). For the Grant button. */
   grantViewAccess: () => Promise<void>
+  /** Re-check the session now (locked? unlocked? still connected?) — no popup. */
+  refresh: () => Promise<void>
+  /** A call just answered "Wallet is locked.": show it at once, and keep checking for the unlock. */
+  reportLocked: () => void
 }
 
 const Ctx = createContext<SapientCtx | null>(null)
@@ -43,6 +56,9 @@ export function useSapient(): SapientCtx {
   if (!ctx) throw new Error('useSapient must be used inside SapientProvider')
   return ctx
 }
+
+/** How often the session is re-checked while a connection exists or might (Sapient sends no lock events). */
+const SESSION_CHECK_MS = 5000
 
 function connectError(e: unknown): string {
   const err = toSapientError(e)
@@ -138,11 +154,13 @@ export function SapientProvider({ children }: { children: ReactNode }) {
 
       await refreshNetwork(p)
       try {
-        const accounts = await getAccounts(p)
-        if (cancelled || accounts.length === 0) return
+        const session = await checkSession(p)
+        if (cancelled) return
+        if (session.s === 'locked') { dispatch({ type: 'locked' }); return }
+        if (session.s !== 'unlocked') return
         const gen = ++genRef.current
-        if (await loadAccount(p, accounts[0], gen)) await ensureView(p, gen, false)
-      } catch { /* not connected, or locked: stay disconnected */ }
+        if (await loadAccount(p, session.account, gen)) await ensureView(p, gen, false)
+      } catch { /* stay disconnected; the session check tries again */ }
     })
 
     return () => { cancelled = true; unsubscribe?.() }
@@ -173,6 +191,57 @@ export function SapientProvider({ children }: { children: ReactNode }) {
     if (p) await disconnectSapient(p).catch(() => undefined)
   }, [])
 
+  /** Ask Sapient where the session stands and follow it — locked, unlocked, switched or gone. */
+  const refresh = useCallback(async () => {
+    const p = providerRef.current
+    const before = stateRef.current
+    if (!p || before.status === 'detecting' || before.status === 'missing' || before.status === 'connecting') return
+    let r
+    try { r = await checkSession(p) } catch { return }
+    const cur = stateRef.current
+    if (cur.status === 'connecting') return   // a connect is under way; it owns the state
+    if (r.s === 'locked') {
+      if (cur.status !== 'locked') dispatch({ type: 'locked' })
+      return
+    }
+    if (r.s === 'disconnected') {
+      if (cur.status === 'connected' || cur.status === 'locked') { genRef.current++; dispatch({ type: 'disconnected' }) }
+      return
+    }
+    // Unlocked (or connected from elsewhere). Same account coming back from a lock: just unlock, and
+    // re-check the grant quietly. A different or not-yet-loaded account: read it, quietly too.
+    if (cur.status === 'locked' && cur.componentAddress === r.account) {
+      dispatch({ type: 'unlocked' })
+      void ensureView(p, genRef.current, false)
+      return
+    }
+    if (cur.componentAddress !== r.account || cur.status !== 'connected') {
+      const gen = ++genRef.current
+      try {
+        if (await loadAccount(p, r.account, gen)) await ensureView(p, gen, false)
+      } catch { /* try again on the next check */ }
+    }
+  }, [loadAccount, ensureView])
+
+  const reportLocked = useCallback(() => {
+    if (stateRef.current.status === 'connected') dispatch({ type: 'locked' })
+  }, [])
+
+  // The session check: on an interval, and whenever the page comes back into view.
+  useEffect(() => {
+    if (!provider) return
+    const iv = setInterval(() => { void refresh() }, SESSION_CHECK_MS)
+    const onFocus = () => { void refresh() }
+    const onVisible = () => { if (document.visibilityState === 'visible') void refresh() }
+    window.addEventListener('focus', onFocus)
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      clearInterval(iv)
+      window.removeEventListener('focus', onFocus)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [provider, refresh])
+
   const grantViewAccess = useCallback(async () => {
     const p = providerRef.current
     if (!p || stateRef.current.status !== 'connected') return
@@ -180,7 +249,7 @@ export function SapientProvider({ children }: { children: ReactNode }) {
   }, [ensureView])
 
   return (
-    <Ctx.Provider value={{ ...state, provider, connect, disconnect, grantViewAccess }}>
+    <Ctx.Provider value={{ ...state, provider, connect, disconnect, grantViewAccess, refresh, reportLocked }}>
       {children}
     </Ctx.Provider>
   )

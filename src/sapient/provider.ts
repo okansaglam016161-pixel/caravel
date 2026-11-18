@@ -134,6 +134,36 @@ export async function requestViewAccess(p: TariProvider): Promise<boolean> {
   return (await sapientRequest<{ granted?: unknown } | null>(p, 'tari_requestViewAccess'))?.granted === true
 }
 
+/**
+ * Where this site stands with Sapient right now, without a popup.
+ *
+ * SAPIENT SENDS NO EVENT WHEN IT LOCKS OR UNLOCKS — `popup-lock` and the auto-lock alarm clear the
+ * seed and broadcast nothing (tari-wallet background/index.ts) — so the only way to know is to ask.
+ * `tari_getAccounts` answers `[]` both when the site is not connected and when the wallet is locked;
+ * `tari_getViewAccess` tells them apart, because it checks only the connection (it answers while
+ * locked, and throws "Site is not connected" when not).
+ */
+export type SessionCheck = { s: 'unlocked'; account: string } | { s: 'locked' } | { s: 'disconnected' }
+
+export async function checkSession(p: TariProvider): Promise<SessionCheck> {
+  const accounts = await getAccounts(p)
+  if (accounts.length > 0) return { s: 'unlocked', account: accounts[0] }
+  try {
+    await getViewAccess(p)
+    return { s: 'locked' }
+  } catch {
+    return { s: 'disconnected' }
+  }
+}
+
+/** Reject after `ms` — a wallet call must never hang the caller for good. */
+export function withTimeout<T>(promise: Promise<T>, ms: number, what = 'Sapient did not answer'): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => reject(new SapientError('wallet', `${what} in time.`, null)), ms)
+    promise.then(v => { clearTimeout(t); resolve(v) }, e => { clearTimeout(t); reject(e) })
+  })
+}
+
 /** Forget this site in Sapient. */
 export async function disconnectSapient(p: TariProvider): Promise<void> {
   await sapientRequest(p, 'tari_disconnect')

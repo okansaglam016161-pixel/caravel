@@ -52,6 +52,18 @@ describe('claimView — what the card says', () => {
     expect(claimView(ref(U1), undefined, undefined, { ...READY, viewAccess: 'off' })).toEqual({ s: 'needs-sapient', why: 'view' })
   })
 
+  // BUG 1 (mainnet): with the receiver's Sapient locked, the card said "Confirming with Sapient…"
+  // forever. Locked is now its own Sapient status, and the card says what to do.
+  it('BUG 1: a LOCKED Sapient says "unlock", not "Confirming…"', () => {
+    expect(claimView(ref(U1), undefined, undefined, { ...READY, status: 'locked' })).toEqual({ s: 'needs-sapient', why: 'unlock' })
+    expect(claimReady({ ...READY, status: 'locked' }, ref(U1))).toBe(false)
+  })
+
+  it('a failed attempt shows as an error (with Retry) — unless the wallet is locked, which says so instead', () => {
+    expect(claimView(ref(U1), undefined, 'error', READY)).toEqual({ s: 'error' })
+    expect(claimView(ref(U1), undefined, 'error', { ...READY, status: 'locked' })).toEqual({ s: 'needs-sapient', why: 'unlock' })
+  })
+
   it('ready and nothing stored: queued to claim', () => {
     expect(claimView(ref(U1), undefined, undefined, READY)).toEqual({ s: 'claiming' })
     expect(claimReady(READY, ref(U1))).toBe(true)
@@ -99,11 +111,16 @@ describe('the stores, sealed under the chat key', () => {
     setStoreKey(new Uint8Array(32).fill(5), 'chat')
   })
 
+  it('outcomes stored under v1 (which could hold a genuine payment as "not verified") are not read back', () => {
+    localStorage.setItem(`caravel.payclaims.v1.${ME}`, 'anything')
+    expect(loadClaims(ME)).toEqual({})
+  })
+
   it('claim outcomes round-trip, encrypted, and can be forgotten', () => {
     saveClaim(ME, U1, { s: 'verified', amount: '1500000' })
-    saveClaim(ME, U2, { s: 'unverified', amount: null, reason: 'spent' })
-    expect(localStorage.getItem(`caravel.payclaims.v1.${ME}`)).not.toContain('1500000')
-    expect(loadClaims(ME)).toEqual({ [U1]: { s: 'verified', amount: '1500000' }, [U2]: { s: 'unverified', amount: null, reason: 'spent' } })
+    saveClaim(ME, U2, { s: 'unverified', amount: null, reason: 'memo' })
+    expect(localStorage.getItem(`caravel.payclaims.v2.${ME}`)).not.toContain('1500000')
+    expect(loadClaims(ME)).toEqual({ [U1]: { s: 'verified', amount: '1500000' }, [U2]: { s: 'unverified', amount: null, reason: 'memo' } })
     removeClaims(ME, [U1])
     expect(Object.keys(loadClaims(ME))).toEqual([U2])
   })

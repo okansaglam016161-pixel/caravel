@@ -70,6 +70,25 @@ describe("Sapient's events", () => {
   })
 })
 
+describe('locked (Sapient sends no event — SapientContext checks)', () => {
+  it('connected ⇄ locked keeps the account, its address and its grant', () => {
+    const locked = run([{ type: 'locked' }], connected())
+    expect(locked).toMatchObject({ status: 'locked', componentAddress: A, walletAddress: ADDR, viewAccess: 'granted' })
+    expect(run([{ type: 'unlocked' }], locked)).toMatchObject({ status: 'connected', componentAddress: A, viewAccess: 'granted' })
+  })
+
+  it('a reload while locked goes from disconnected to locked', () => {
+    expect(run([{ type: 'detected', present: true }, { type: 'locked' }]).status).toBe('locked')
+  })
+
+  it('locked never overrides missing or a connect in progress; an empty accountsChanged still ends it', () => {
+    expect(run([{ type: 'detected', present: false }, { type: 'locked' }]).status).toBe('missing')
+    expect(run([{ type: 'detected', present: true }, { type: 'connect-start' }, { type: 'locked' }]).status).toBe('connecting')
+    expect(run([{ type: 'locked' }, { type: 'accounts-changed', accounts: [] }], connected()).status).toBe('disconnected')
+    expect(run([{ type: 'unlocked' }], connected()).status).toBe('connected')
+  })
+})
+
 describe('disconnect and view access', () => {
   it('disconnect resets everything but the network', () => {
     expect(run([{ type: 'disconnected' }], connected())).toMatchObject({

@@ -41,9 +41,32 @@ export function paymentMemo(nonce: string): string {
   return `caravel:${nonce}`
 }
 
-/** True only for exactly our memo with exactly this nonce. */
-export function memoMatches(memo: string | null | undefined, nonce: string): boolean {
-  return typeof memo === 'string' && memo === paymentMemo(nonce)
+/**
+ * A memo as Sapient hands it back, as plain text — or null when there is none to read.
+ *
+ * THE SAME MEMO ARRIVES IN TWO FORMS. tari_claimPrivatePayment and Sapient's transaction-history scan
+ * decode it (`fromMemo`) to the plain text, `caravel:<nonce>`. Its UTXO-set scan (scanForOwnedUtxos,
+ * which Sapient runs by itself when its popup opens after an unlock) stores it RAW — the JSON-encoded
+ * Memo union, `{"Message":"caravel:<nonce>"}` — and tari_getShieldedOutputs returns whatever was
+ * stored. Comparing the raw form to the plain one marked a genuine payment "not verified". Both forms
+ * are decoded here; any other Memo variant is not ours.
+ */
+export function readMemo(memo: unknown): string | null {
+  if (typeof memo !== 'string' || memo.length === 0) return null
+  const t = memo.trim()
+  if (t.startsWith('{')) {
+    try {
+      const m = JSON.parse(t) as { Message?: unknown } | null
+      if (m && typeof m === 'object' && typeof m.Message === 'string') return m.Message.length ? m.Message : null
+      return t   // another Memo variant: present, and not ours
+    } catch { return memo }
+  }
+  return memo
+}
+
+/** True only for exactly our memo with exactly this nonce, in either form Sapient returns it. */
+export function memoMatches(memo: unknown, nonce: string): boolean {
+  return readMemo(memo) === paymentMemo(nonce)
 }
 
 // ── Addresses and networks ───────────────────────────────────────────────────
@@ -227,8 +250,10 @@ export function insufficientPrivateBalance(message: string): bigint | null {
 export type ClaimOutcome =
   /** The output is ours and its memo carries this message's nonce. */
   | { s: 'verified'; amount: string }
-  /** The output is ours, but nothing ties it to this message — nobody is credited. */
-  | { s: 'unverified'; amount: string | null; reason: 'memo' | 'own-send' | 'spent' }
+  /** The output is ours, but its memo is NOT this message's (or it is our own send) — nobody is credited. */
+  | { s: 'unverified'; amount: string | null; reason: 'memo' | 'own-send' }
+  /** Ours, but there is no memo to read (none attached, or the output is already spent) — retryable. */
+  | { s: 'unconfirmed' }
   /** Not ours, or not on chain (yet) — Sapient cannot tell the two apart. */
   | { s: 'not-found' }
 
@@ -248,10 +273,7 @@ export async function claimPayment(
   if (!parts) return { s: 'not-found' }
   try {
     const r = await sapientRequest<{ amount?: unknown; memo?: unknown }>(p, 'tari_claimPrivatePayment', parts)
-    const amount = String(r?.amount ?? '0')
-    return memoMatches(typeof r?.memo === 'string' ? r.memo : null, ref.nonce)
-      ? { s: 'verified', amount }
-      : { s: 'unverified', amount, reason: 'memo' }
+    return judgeMemo(r?.memo, String(r?.amount ?? '0'), ref.nonce)
   } catch (e) {
     const err = toSapientError(e)
     if (/doesn'?t belong to your account|wasn'?t found on-chain/i.test(err.message)) return { s: 'not-found' }
@@ -263,10 +285,16 @@ export async function claimPayment(
     ? (outs as { commitment?: unknown; amount?: unknown; memo?: unknown; transactionId?: unknown }[])
         .find(o => typeof o?.commitment === 'string' && o.commitment.toLowerCase() === parts.commitment)
     : undefined
-  if (!hit) return { s: 'unverified', amount: null, reason: 'spent' }
+  // Not among the unspent outputs: spent since, so there is no memo left to read. Not "not verified".
+  if (!hit) return { s: 'unconfirmed' }
   const amount = String(hit.amount ?? '0')
-  if (typeof hit.transactionId === 'string' && ownTxIds.has(hit.transactionId)) return { s: 'unverified', amount, reason: 'own-send' }
-  return memoMatches(typeof hit.memo === 'string' ? hit.memo : null, ref.nonce)
-    ? { s: 'verified', amount }
-    : { s: 'unverified', amount, reason: 'memo' }
+  if (typeof hit.transactionId === 'string' && hit.transactionId !== '' && ownTxIds.has(hit.transactionId)) return { s: 'unverified', amount, reason: 'own-send' }
+  return judgeMemo(hit.memo, amount, ref.nonce)
+}
+
+/** Verified on a match; "not verified" only for a memo that is there and is not ours; else unconfirmed. */
+function judgeMemo(memo: unknown, amount: string, nonce: string): ClaimOutcome {
+  const text = readMemo(memo)
+  if (text === null) return { s: 'unconfirmed' }
+  return text === paymentMemo(nonce) ? { s: 'verified', amount } : { s: 'unverified', amount, reason: 'memo' }
 }

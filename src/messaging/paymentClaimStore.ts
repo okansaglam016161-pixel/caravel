@@ -10,19 +10,22 @@ import { asRecord, loadStore, writeStore, type Parse } from '../crypto/storeIo'
 
 export type StoredClaim =
   | { s: 'verified'; amount: string }
-  | { s: 'unverified'; amount: string | null; reason: 'memo' | 'own-send' | 'spent' }
-  /** Not ours or not on chain after the retries. Cleared by the card's Retry. */
+  /** A memo that is THERE and is not this message's, or one of our own sends. Nobody is credited. */
+  | { s: 'unverified'; amount: string | null; reason: 'memo' | 'own-send' }
+  /** Could not be confirmed either way — not found after the retries, or no memo to read. Retryable. */
   | { s: 'unconfirmed' }
 
 export type ClaimMap = Record<string, StoredClaim>
 
-function key(myPubkeyHex: string) { return `caravel.payclaims.v1.${myPubkeyHex}` }
+// v2: v1 could hold a genuine payment wrongly stored as "not verified" — its memo read through
+// tari_getShieldedOutputs as raw JSON (see sapient/payments.readMemo). A new key re-checks them all.
+function key(myPubkeyHex: string) { return `caravel.payclaims.v2.${myPubkeyHex}` }
 
 function valid(v: unknown): v is StoredClaim {
   const o = v as Partial<{ s: string; amount: unknown; reason: unknown }> | null
   if (!o || typeof o !== 'object') return false
   if (o.s === 'verified') return typeof o.amount === 'string'
-  if (o.s === 'unverified') return (o.amount === null || typeof o.amount === 'string') && (o.reason === 'memo' || o.reason === 'own-send' || o.reason === 'spent')
+  if (o.s === 'unverified') return (o.amount === null || typeof o.amount === 'string') && (o.reason === 'memo' || o.reason === 'own-send')
   return o.s === 'unconfirmed'
 }
 

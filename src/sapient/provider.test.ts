@@ -3,7 +3,7 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import {
-  detectSapient, getAccounts, getViewAccess, requestAccounts, requestViewAccess, shortAddress, subscribeSapient,
+  checkSession, withTimeout, detectSapient, getAccounts, getViewAccess, requestAccounts, requestViewAccess, shortAddress, subscribeSapient,
   toSapientError, networkLabel, isMainnet, type ProviderHost, type TariProvider,
   TARI_RESOURCE, formatBalance, getPrivateTariBalance, getPublicTariBalance,
 } from './provider'
@@ -76,6 +76,27 @@ describe('the calls', () => {
     const p = fakeProvider({ tari_getAccounts: [] })
     await getAccounts(p)
     expect(p.calls).toEqual([{ method: 'tari_getAccounts' }])
+  })
+})
+
+describe('checkSession — locked is asked, never told', () => {
+  it('BUG 1: getAccounts [] with the site still connected is LOCKED, not "connected" and not "disconnected"', async () => {
+    expect(await checkSession(fakeProvider({ tari_getAccounts: ['component_a'] }))).toEqual({ s: 'unlocked', account: 'component_a' })
+    expect(await checkSession(fakeProvider({ tari_getAccounts: [], tari_getViewAccess: { granted: true } }))).toEqual({ s: 'locked' })
+    expect(await checkSession(fakeProvider({
+      tari_getAccounts: [], tari_getViewAccess: { code: -32603, message: 'Site is not connected. Call tari_requestAccounts first.' },
+    }))).toEqual({ s: 'disconnected' })
+  })
+
+  it('withTimeout: a call that never answers becomes an error instead of a hang', async () => {
+    vi.useFakeTimers()
+    try {
+      const pending = withTimeout(new Promise<never>(() => {}), 1000)
+      const check = expect(pending).rejects.toMatchObject({ kind: 'wallet' })
+      await vi.advanceTimersByTimeAsync(1000)
+      await check
+      expect(await withTimeout(Promise.resolve(5), 1000)).toBe(5)
+    } finally { vi.useRealTimers() }
   })
 })
 

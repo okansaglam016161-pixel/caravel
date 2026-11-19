@@ -1,35 +1,53 @@
 # Caravel
 
-Encrypted chat with private TARI payments, on the [Tari Ootle](https://www.tari.com/) mainnet.
+**The vessel for a new era of private exchange.**
 
-Caravel is a browser app for end-to-end encrypted messaging over Nostr, with confidential TARI
-payments you send right inside a conversation. Payments go through
-[Sapient](https://chromewebstore.google.com/detail/tari-ootle-wallet/demkeckolenopkgnfbnpflkpbbdhpgkl),
-the Tari browser wallet. Caravel never holds your funds or your wallet keys.
+Caravel puts private messages over Nostr and private payments on the Tari Ootle in one
+conversation. It runs in your browser, and it never holds your funds or your wallet keys.
+
+[caravellabs.net](https://caravellabs.net)
 
 ## How it works
 
-**Chat identity.** Creating an identity gives you a Nostr key and a 12-word backup phrase (or
-import an existing one, or an `nsec`). It is encrypted on your device under a chat password;
-there is no account and no server holding it. Messages are Nostr direct messages, NIP-44
-encrypted inside NIP-59 gift wraps, so relays can neither read them nor see who sent them. Images
-are encrypted before they are uploaded to Blossom servers. Your history is stored locally,
-encrypted with a key that lives inside your identity.
+**Chat identity.** Your identity is a Nostr key, made on your device and backed up with 12 words
+(a standard NIP-06 phrase), or imported from an existing `nsec`. It is stored on your device,
+encrypted with your chat password. There is no account and no server holding it.
 
-**Payments, through Sapient.** Connect Sapient (Chrome, Brave or Edge) and grant view access.
-Sending a payment asks Sapient to make a confidential TARI transfer, which you approve in
-Sapient; Caravel then tells the recipient, in an encrypted message, which output is theirs. The
-recipient's Caravel claims it through their own Sapient and shows it as received only when the
-output's note carries that message's one-time code. Payments to an address on a different network
-than your wallet's are refused.
+**Messaging.** Messages are Nostr direct messages: encrypted with NIP-44 and sealed in NIP-59 gift
+wraps, so relays can neither read them nor see who sent them. One-to-one and group chats support
+replies, reactions and edits. Images are encrypted on your device (AES-256-GCM) before they are
+uploaded to Blossom servers. Your history is kept on your device, encrypted with a key that lives
+inside your identity.
 
-**Anonymous usage count.** When you create a chat identity, and the first time you connect
-Sapient, Caravel publishes one empty Nostr note (kind 30078, tag `caravel/identity_created` or
-`caravel/wallet_connected`). It is signed by a brand-new random key that is used once and thrown
-away, dated to the day, and sent a few hours later. It contains no npub, address, amount or
-anything else. The relays that receive it see your IP address, as they do for your messages. You
-can turn it off in Profile under **Count me anonymously**. The landing page shows how many identity
-notes exist, read with Nostr COUNT from public relays.
+**Payments.** Payments go through [Sapient](https://chromewebstore.google.com/detail/tari-ootle-wallet/demkeckolenopkgnfbnpflkpbbdhpgkl),
+the Tari browser wallet. In a one-to-one chat, you send confidential TARI on the Ootle: Sapient
+asks you to approve the transfer, and the amount is hidden on chain. Caravel then tells the
+recipient, in an encrypted message, which output is theirs and attaches a one-time code. The
+recipient's Caravel claims the payment through their own Sapient and marks it as received only if
+the payment's note carries that code. Payments to an address on a different network than your
+wallet's are refused.
+
+## Getting started
+
+1. Use a desktop browser: Chrome, Brave or Edge.
+2. Install [Sapient](https://chromewebstore.google.com/detail/tari-ootle-wallet/demkeckolenopkgnfbnpflkpbbdhpgkl)
+   and set up your wallet there.
+3. Open [caravellabs.net](https://caravellabs.net), choose **Launch Caravel** and create your chat
+   identity. Write down the 12 words and pick a chat password.
+4. Connect Sapient from the wallet button at the top of the chat list, and grant view access so
+   Caravel can confirm payments you receive.
+5. Start a conversation by pasting someone's `npub`. Share your own npub (in Profile) so people can
+   reach you. Your wallet address is shared with a contact automatically when you message them.
+
+## Anonymous usage count
+
+When you create a chat identity, and the first time you connect Sapient, Caravel publishes one
+empty Nostr note (kind 30078, tag `caravel/identity_created` or `caravel/wallet_connected`). It is
+signed by a brand-new random key that is used once and thrown away, dated to the day, and sent a
+few hours later. It contains no npub, address, amount or anything else. The relays that receive it
+see your IP address, as they do for your messages. You can turn it off in Profile under
+**Count me anonymously**. The landing page shows how many identity notes exist, read with Nostr
+COUNT from public relays.
 
 ## Run it locally
 
@@ -57,8 +75,8 @@ npm test           # unit tests (vitest)
 npm run test:live  # live end-to-end checks against real Nostr relays and Blossom servers
 ```
 
-## License
+## Credits and licence
 
-MIT: see [LICENSE](LICENSE).
+Caravel is released under the MIT licence: see [LICENSE](LICENSE).
 
 Sapient icon by 0xhra, MIT licence.

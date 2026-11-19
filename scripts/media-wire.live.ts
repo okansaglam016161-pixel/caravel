@@ -70,7 +70,7 @@ describe('media wire, end to end over real relays', () => {
 
       // ── send it as a CAPTIONLESS image: the harder case, because a single-space content is what
       // the receive path used to treat as "nothing to show".
-      const sent = await sender.sendMessage(recipientPk, ' ', undefined, undefined, media)
+      const sent = await sender.sendMessage(recipientPk, ' ', { media })
       expect(sent.media).toEqual(media)
 
       // ── wait for it to come back around through the relays

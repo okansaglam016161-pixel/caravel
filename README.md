@@ -45,9 +45,8 @@ When you create a chat identity, and the first time you connect Sapient, Caravel
 empty Nostr note (kind 30078, tag `caravel/identity_created` or `caravel/wallet_connected`). It is
 signed by a brand-new random key that is used once and thrown away, dated to the day, and sent a
 few hours later. It contains no npub, address, amount or anything else. The relays that receive it
-see your IP address, as they do for your messages. You can turn it off in Profile under
-**Count me anonymously**. The landing page shows how many identity notes exist, read with Nostr
-COUNT from public relays.
+see your IP address, as they do for your messages. The landing page shows how many identity notes
+exist, read with Nostr COUNT from public relays.
 
 ## Run it locally
 

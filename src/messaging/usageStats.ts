@@ -12,11 +12,7 @@
 //   queued   waiting for its dueAt (2 to 6 hours after the event, at random); then, once signed,
 //            waiting for every COUNT relay to hold it
 //   sent     on every COUNT relay (or on some of them when the give-up time came)
-//   skipped  happened while "Count me anonymously" was off, or was switched off while queued
-//   dropped  could not be sent within STAT_GIVE_UP_MS of being due
-//
-// Nothing that is skipped or dropped is ever sent later: switching the setting back on does not
-// backfill.
+//   dropped  could not be sent within STAT_GIVE_UP_MS of being due; never sent later
 //
 // ONE NOTE, RESENT UNTIL EVERY COUNT RELAY HAS IT. The landing count is the HIGHEST relay's number,
 // so a note only counts if it is on that relay: it has to reach all of them. The note is signed once
@@ -32,10 +28,8 @@ import { DEFAULT_RELAYS } from '../config/relays'
 const KINDS: readonly StatKind[] = ['identity_created', 'wallet_connected']
 
 export interface StatsState {
-  /** "Count me anonymously" switched off. On by default. */
-  optOut: boolean
   queued: Partial<Record<StatKind, QueuedNote>>
-  done: Partial<Record<StatKind, 'sent' | 'skipped' | 'dropped'>>
+  done: Partial<Record<StatKind, 'sent' | 'dropped'>>
 }
 
 export interface QueuedNote {
@@ -46,7 +40,7 @@ export interface QueuedNote {
   accepted?: string[]
 }
 
-const EMPTY = (): StatsState => ({ optOut: false, queued: {}, done: {} })
+const EMPTY = (): StatsState => ({ queued: {}, done: {} })
 
 function key(myPubkeyHex: string) { return `caravel.stats.v1.${myPubkeyHex}` }
 
@@ -54,7 +48,6 @@ const parse: Parse<StatsState> = decoded => {
   const r = asRecord(decoded)
   if (r === null) return null
   const out = EMPTY()
-  out.optOut = r.optOut === true
   const queued = asRecord(r.queued) ?? {}
   const done = asRecord(r.done) ?? {}
   for (const k of KINDS) {
@@ -67,7 +60,7 @@ const parse: Parse<StatsState> = decoded => {
       out.queued[k] = note
     }
     const d = done[k]
-    if (d === 'sent' || d === 'skipped' || d === 'dropped') out.done[k] = d
+    if (d === 'sent' || d === 'dropped') out.done[k] = d
   }
   return out
 }
@@ -81,35 +74,20 @@ function save(me: string, s: StatsState): void {
 }
 
 /**
- * Record that `kind` happened. Queued for a random time within STAT_DELAY_MS — unless it was
- * already queued or done, or counting is off (then it is marked skipped, never sent).
+ * Record that `kind` happened: queued for a random time within STAT_DELAY_MS, unless it is already
+ * queued or done.
  */
 export function queueStat(me: string, kind: StatKind, now = Date.now(), random = Math.random): void {
   const s = loadStats(me)
   if (s.done[kind] || s.queued[kind]) return
-  if (s.optOut) {
-    s.done[kind] = 'skipped'
-  } else {
-    const [lo, hi] = STAT_DELAY_MS
-    s.queued[kind] = { dueAt: now + lo + Math.floor(random() * (hi - lo)) }
-  }
-  save(me, s)
-}
-
-/** The Profile switch. Off clears the queue (skipped, never sent); on does not backfill. */
-export function setCountMe(me: string, on: boolean): void {
-  const s = loadStats(me)
-  s.optOut = !on
-  if (!on) {
-    for (const k of KINDS) if (s.queued[k]) { delete s.queued[k]; s.done[k] = 'skipped' }
-  }
+  const [lo, hi] = STAT_DELAY_MS
+  s.queued[kind] = { dueAt: now + lo + Math.floor(random() * (hi - lo)) }
   save(me, s)
 }
 
 /** Kinds whose time has come, oldest first. Gives up (dropped) on any past STAT_GIVE_UP_MS. */
 export function takeDue(me: string, now = Date.now()): StatKind[] {
   const s = loadStats(me)
-  if (s.optOut) return []
   let changed = false
   const due: { k: StatKind; at: number }[] = []
   for (const k of KINDS) {
@@ -132,7 +110,7 @@ export function takeDue(me: string, now = Date.now()): StatKind[] {
 export function noteToSend(me: string, kind: StatKind, now = Date.now()): { event: NostrEvent; relays: string[] } | null {
   const s = loadStats(me)
   const q = s.queued[kind]
-  if (!q || s.optOut) return null
+  if (!q) return null
   if (!q.event) {
     q.event = buildStatNote(kind, now)
     save(me, s)

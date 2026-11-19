@@ -3,7 +3,7 @@
 
 import { beforeEach, describe, expect, it } from 'vitest'
 import { getPublicKey, verifyEvent } from 'nostr-tools/pure'
-import { buildStatNote, dayStart, loadStats, noteToSend, queueStat, recordDelivery, setCountMe, takeDue } from './usageStats'
+import { buildStatNote, dayStart, loadStats, noteToSend, queueStat, recordDelivery, takeDue } from './usageStats'
 import {
   COUNT_RELAYS, PROD_TAG_PREFIX, STAT_DELAY_MS, STAT_GIVE_UP_MS, STAT_NOTE_KIND, STAT_TAG_PREFIX, TEST_TAG_PREFIX, statTag,
 } from '../config/stats'
@@ -150,23 +150,5 @@ describe('the queue', () => {
   it('is sealed under the chat key, not stored in the clear', () => {
     queueStat(ME, 'identity_created', T0)
     expect(localStorage.getItem(`caravel.stats.v1.${ME}`)).not.toContain('identity_created')
-  })
-})
-
-describe('"Count me anonymously"', () => {
-  it('is on by default', () => {
-    expect(loadStats(ME).optOut).toBe(false)
-  })
-
-  it('switching it off clears the queue; nothing is sent, and switching back on does not backfill', () => {
-    queueStat(ME, 'identity_created', T0)
-    setCountMe(ME, false)
-    expect(takeDue(ME, T0 + HI)).toEqual([])
-    expect(loadStats(ME).done.identity_created).toBe('skipped')
-    queueStat(ME, 'wallet_connected', T0)          // happens while off: skipped too
-    expect(loadStats(ME).done.wallet_connected).toBe('skipped')
-    setCountMe(ME, true)
-    queueStat(ME, 'wallet_connected', T0 + 1)
-    expect(takeDue(ME, T0 + HI * 2)).toEqual([])
   })
 })

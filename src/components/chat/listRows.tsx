@@ -108,38 +108,6 @@ export function NavRow({ title, hint, onOpen, first = false }: { title: string; 
   )
 }
 
-/**
- * A row with an on/off switch: its title where the label column starts, a quiet hint under it, the
- * switch at the end. The whole row toggles; it is a `switch` for assistive tech.
- */
-export function SwitchRow({ title, hint, on, onChange, first = false }: {
-  title: string; hint?: string; on: boolean; onChange: (on: boolean) => void; first?: boolean
-}) {
-  return (
-    <div
-      role="switch" aria-checked={on} aria-label={title} tabIndex={0}
-      onClick={() => onChange(!on)}
-      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onChange(!on) } }}
-      className="cv-quiet-btn"
-      style={rowBase(first, true)}
-    >
-      <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
-        <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>{title}</span>
-        {hint && <span style={{ fontSize: 11.5, lineHeight: 1.4, color: 'var(--text-muted-dim)' }}>{hint}</span>}
-      </span>
-      <span aria-hidden="true" style={{
-        position: 'relative', flexShrink: 0, width: 34, height: 20, borderRadius: 999,
-        background: on ? 'var(--accent-400)' : 'var(--border-strong)', transition: 'background 0.15s',
-      }}>
-        <span style={{
-          position: 'absolute', top: 2, left: on ? 16 : 2, width: 16, height: 16, borderRadius: 999,
-          background: '#FFFFFF', boxShadow: 'var(--e1)', transition: 'left 0.15s',
-        }} />
-      </span>
-    </div>
-  )
-}
-
 /** The card's foot: one small, quiet text action (Disconnect). */
 export function QuietFootAction({ children, onClick }: { children: ReactNode; onClick: () => void }) {
   return (

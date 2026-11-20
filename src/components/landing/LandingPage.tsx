@@ -184,7 +184,7 @@ export default function LandingPage() {
       {/* ── Hero: copy left, the chat window right; stacks when narrow ── */}
       <section id="top" className="cv-lp-wrap cv-lp-hero">
         <div style={{ flex: '1 1 420px', minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
-          <h1 className="cv-lp-h1">The vessel for a new era of private exchange.</h1>
+          <h1 className="cv-lp-h1">A vessel for a new era of private exchange.</h1>
           <p style={{ margin: '24px 0 0', maxWidth: 460, fontSize: 20, lineHeight: 1.5, fontWeight: 500, color: 'var(--text-body-dim)' }}>
             Private messages and private payments, in one conversation.
           </p>

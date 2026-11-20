@@ -1,6 +1,6 @@
 # Caravel
 
-**The vessel for a new era of private exchange.**
+**A vessel for a new era of private exchange.**
 
 Caravel puts private messages over Nostr and private payments on the Tari Ootle in one
 conversation. It runs in your browser, and it never holds your funds or your wallet keys.

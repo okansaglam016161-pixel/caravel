@@ -3,7 +3,8 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import {
-  checkSession, withTimeout, detectSapient, getAccounts, getViewAccess, requestAccounts, requestViewAccess, shortAddress, subscribeSapient,
+  checkSession, withTimeout, detectSapient, getAccounts, getViewAccess, findProviders, detectProviders, withPhoneTimeouts,
+  phoneTimeoutFor, canSendPrivately, canConfirmPayments, PHONE_UNREACHABLE, requestAccounts, requestViewAccess, shortAddress, subscribeSapient,
   toSapientError, networkLabel, isMainnet, type ProviderHost, type TariProvider,
   TARI_RESOURCE, formatBalance, getPrivateTariBalance, getPublicTariBalance,
 } from './provider'
@@ -172,5 +173,84 @@ describe('TARI balances', () => {
     expect(formatBalance({ amount: 1_234_567_000_000n, divisibility: 6 })).toBe('1,234,567')
     expect(formatBalance({ amount: 123_456_789n, divisibility: 8 })).toBe('1.234567')   // floored past 6
     expect(formatBalance({ amount: 9_007_199_254_740_993_000_000n, divisibility: 6 })).toBe('9,007,199,254,740,993')
+  })
+})
+
+describe('the three routes to a wallet', () => {
+  const ext = { isTariWallet: true, request: async () => null } as TariProvider                       // no `transport`
+  const wc = { isTariWallet: true, transport: 'walletconnect', isAvailable: true, request: async () => null } as TariProvider
+  const stub = { isTariWallet: true, transport: null, isAvailable: false, request: async () => null } as TariProvider
+  const emb = { isTariWallet: true, transport: 'embedded', isAvailable: true, request: async () => null } as TariProvider
+  const at = (o: Partial<ProviderHost>) => Object.assign(new EventTarget(), o) as ProviderHost
+
+  it('extension installed, connector with WalletConnect: both routes; window.tari stays the extension', () => {
+    expect(findProviders(at({ tari: ext, tariUniverse: wc }))).toEqual({ extension: ext, phone: wc, embedded: null })
+  })
+
+  it('no extension, connector with WalletConnect: the phone only (the connector holds window.tari too)', () => {
+    expect(findProviders(at({ tari: wc, tariUniverse: wc }))).toEqual({ extension: null, phone: wc, embedded: null })
+  })
+
+  it('a connector that reaches nothing is not a wallet: "missing", not "connect"', () => {
+    expect(findProviders(at({ tari: stub, tariUniverse: stub }))).toEqual({ extension: null, phone: null, embedded: null })
+  })
+
+  it('inside Tari Universe: the embedding wallet', () => {
+    expect(findProviders(at({ tari: emb, tariUniverse: emb })).embedded).toBe(emb)
+  })
+
+  it('detection resolves at once once the connector has announced itself', async () => {
+    expect(await detectProviders(at({ tari: ext, tariUniverse: wc }), 5_000)).toEqual({ extension: ext, phone: wc, embedded: null })
+  })
+
+  it('an extension alone does not stop the wait: the phone option arrives with the connector', async () => {
+    const host = at({ tari: ext })
+    const found = detectProviders(host, 5_000)
+    host.tariUniverse = wc
+    host.dispatchEvent(new Event('tari#initialized'))
+    expect(await found).toEqual({ extension: ext, phone: wc, embedded: null })
+  })
+
+  it('no connector at all (blocked): after the wait, the extension alone', async () => {
+    expect((await detectProviders(at({ tari: ext }), 30)).extension).toBe(ext)
+  })
+})
+
+describe('phone calls never wait forever', () => {
+  it('approvals get longer than reads; claims in between', () => {
+    expect(phoneTimeoutFor('tari_requestAccounts')).toBeGreaterThan(phoneTimeoutFor('tari_claimPrivatePayment'))
+    expect(phoneTimeoutFor('tari_claimPrivatePayment')).toBeGreaterThan(phoneTimeoutFor('tari_getBalances'))
+    expect(phoneTimeoutFor('tari_submitTransactionRequest')).toBe(phoneTimeoutFor('tari_requestAccounts'))
+  })
+
+  it('a call the phone never answers becomes an "unreachable" error with a plain message', async () => {
+    vi.useFakeTimers()
+    try {
+      const silent = { isTariWallet: true, transport: 'walletconnect', request: () => new Promise<never>(() => {}) } as TariProvider
+      const p = withPhoneTimeouts(silent)
+      const call = expect(p.request({ method: 'tari_getBalances' })).rejects.toMatchObject({ kind: 'unreachable', message: PHONE_UNREACHABLE })
+      await vi.advanceTimersByTimeAsync(phoneTimeoutFor('tari_getBalances'))
+      await call
+    } finally { vi.useRealTimers() }
+  })
+
+  it('answers and events pass straight through', async () => {
+    const seen: string[] = []
+    const fast = { isTariWallet: true, transport: 'walletconnect', request: async () => 'ok', on: (e: string) => { seen.push(e); return () => undefined } } as unknown as TariProvider
+    const p = withPhoneTimeouts(fast)
+    expect(await p.request({ method: 'tari_getBalances' })).toBe('ok')
+    p.on?.('disconnect', (() => undefined) as never)
+    expect(seen).toEqual(['disconnect'])
+    expect(p.transport).toBe('walletconnect')
+  })
+})
+
+describe('capabilities', () => {
+  it('unknown (null) lets the wallet answer; an explicit false switches the feature off', () => {
+    expect(canSendPrivately(null)).toBe(true)
+    expect(canSendPrivately({ transactionRequests: true, privateSpend: true, walletAddress: true })).toBe(true)
+    expect(canSendPrivately({ privateSpend: false })).toBe(false)
+    expect(canConfirmPayments({ privateBalanceView: false })).toBe(false)
+    expect(canConfirmPayments({})).toBe(true)
   })
 })

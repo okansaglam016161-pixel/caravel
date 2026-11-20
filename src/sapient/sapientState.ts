@@ -13,13 +13,22 @@
 // component address; view access reveals the confidential position. It is lost on disconnect, an
 // account switch and a network switch, so every one of those resets it to `unknown`.
 
+import type { Transport } from './provider'
+
 export type SapientStatus = 'detecting' | 'missing' | 'disconnected' | 'connecting' | 'connected' | 'locked'
+
+/** Which ways of reaching a wallet this page has (sapient/provider.findProviders). */
+export interface WalletOptions { extension: boolean; phone: boolean; embedded: boolean }
 
 /** `off` = not granted (declined, or never asked this session). `requesting` = a popup is open. */
 export type ViewAccess = 'unknown' | 'off' | 'requesting' | 'granted'
 
 export interface SapientState {
   status: SapientStatus
+  /** The wallet route in use (or about to be): the extension, the phone, or Tari Universe. */
+  transport: Transport | null
+  /** The routes available on this page. */
+  options: WalletOptions
   /** Sapient's network. Readable without a connection, so known even while disconnected. */
   network: string | null
   /** The connected account's on-chain component (`component_…`). */
@@ -33,12 +42,14 @@ export interface SapientState {
 }
 
 export const SAPIENT_INITIAL: SapientState = {
-  status: 'detecting', network: null, componentAddress: null, walletAddress: null,
+  status: 'detecting', transport: null, options: { extension: false, phone: false, embedded: false }, network: null, componentAddress: null, walletAddress: null,
   capabilities: null, viewAccess: 'unknown', error: null,
 }
 
 export type SapientAction =
-  | { type: 'detected'; present: boolean }
+  | { type: 'detected'; options: WalletOptions }
+  /** The route in use changed (chosen, restored, or Universe). */
+  | { type: 'transport'; transport: Transport | null }
   | { type: 'network'; network: string }
   | { type: 'connect-start' }
   | { type: 'connect-failed'; error: string }
@@ -58,8 +69,12 @@ const DISCONNECTED = (s: SapientState): SapientState => ({
 
 export function sapientReducer(s: SapientState, a: SapientAction): SapientState {
   switch (a.type) {
-    case 'detected':
-      return { ...s, status: a.present ? 'disconnected' : 'missing' }
+    case 'detected': {
+      const any = a.options.extension || a.options.phone || a.options.embedded
+      return { ...s, options: a.options, status: any ? 'disconnected' : 'missing' }
+    }
+    case 'transport':
+      return { ...s, transport: a.transport }
     case 'network':
       return { ...s, network: a.network }
     case 'connect-start':

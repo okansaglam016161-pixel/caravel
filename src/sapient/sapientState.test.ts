@@ -5,12 +5,15 @@ import { SAPIENT_INITIAL, sapientReducer, type SapientAction, type SapientState 
 
 const run = (actions: SapientAction[], from: SapientState = SAPIENT_INITIAL) => actions.reduce(sapientReducer, from)
 
+const EXT = { extension: true, phone: false, embedded: false }
+const NONE = { extension: false, phone: false, embedded: false }
+
 const A = 'component_' + 'a'.repeat(64)
 const B = 'component_' + 'b'.repeat(64)
 const ADDR = 'otl_1' + 'x'.repeat(80)
 
 const connected = () => run([
-  { type: 'detected', present: true },
+  { type: 'detected', options: EXT },
   { type: 'network', network: 'mainnet' },
   { type: 'connect-start' },
   { type: 'connected', componentAddress: A, walletAddress: ADDR, capabilities: { privateScan: true } },
@@ -19,12 +22,12 @@ const connected = () => run([
 
 describe('detection', () => {
   it('missing when there is no provider, disconnected when there is', () => {
-    expect(run([{ type: 'detected', present: false }]).status).toBe('missing')
-    expect(run([{ type: 'detected', present: true }]).status).toBe('disconnected')
+    expect(run([{ type: 'detected', options: NONE }]).status).toBe('missing')
+    expect(run([{ type: 'detected', options: EXT }]).status).toBe('disconnected')
   })
 
   it('keeps the network while disconnected — Sapient answers it without a connection', () => {
-    expect(run([{ type: 'detected', present: true }, { type: 'network', network: 'esmeralda' }]).network).toBe('esmeralda')
+    expect(run([{ type: 'detected', options: EXT }, { type: 'network', network: 'esmeralda' }]).network).toBe('esmeralda')
   })
 })
 
@@ -35,12 +38,12 @@ describe('connecting', () => {
   })
 
   it('a failed connect is back to disconnected, saying why', () => {
-    const s = run([{ type: 'detected', present: true }, { type: 'connect-start' }, { type: 'connect-failed', error: 'Connection declined in Sapient.' }])
+    const s = run([{ type: 'detected', options: EXT }, { type: 'connect-start' }, { type: 'connect-failed', error: 'Connection declined in Sapient.' }])
     expect(s).toMatchObject({ status: 'disconnected', error: 'Connection declined in Sapient.', walletAddress: null })
   })
 
   it('the next attempt clears the old error', () => {
-    const s = run([{ type: 'detected', present: true }, { type: 'connect-failed', error: 'x' }, { type: 'connect-start' }])
+    const s = run([{ type: 'detected', options: EXT }, { type: 'connect-failed', error: 'x' }, { type: 'connect-start' }])
     expect(s.error).toBeNull()
   })
 })
@@ -78,17 +81,17 @@ describe('locked (Sapient sends no event — SapientContext checks)', () => {
   })
 
   it('a reload while locked goes from disconnected to locked', () => {
-    expect(run([{ type: 'detected', present: true }, { type: 'locked' }]).status).toBe('locked')
+    expect(run([{ type: 'detected', options: EXT }, { type: 'locked' }]).status).toBe('locked')
   })
 
   it('the grant is read while locked (tari_getViewAccess needs no unlock), so it never shows as "Off" by mistake', () => {
-    const s = run([{ type: 'detected', present: true }, { type: 'locked' }, { type: 'view', viewAccess: 'granted' }])
+    const s = run([{ type: 'detected', options: EXT }, { type: 'locked' }, { type: 'view', viewAccess: 'granted' }])
     expect(s).toMatchObject({ status: 'locked', viewAccess: 'granted', walletAddress: null })
   })
 
   it('locked never overrides missing or a connect in progress; an empty accountsChanged still ends it', () => {
-    expect(run([{ type: 'detected', present: false }, { type: 'locked' }]).status).toBe('missing')
-    expect(run([{ type: 'detected', present: true }, { type: 'connect-start' }, { type: 'locked' }]).status).toBe('connecting')
+    expect(run([{ type: 'detected', options: NONE }, { type: 'locked' }]).status).toBe('missing')
+    expect(run([{ type: 'detected', options: EXT }, { type: 'connect-start' }, { type: 'locked' }]).status).toBe('connecting')
     expect(run([{ type: 'locked' }, { type: 'accounts-changed', accounts: [] }], connected()).status).toBe('disconnected')
     expect(run([{ type: 'unlocked' }], connected()).status).toBe('connected')
   })
@@ -107,7 +110,25 @@ describe('disconnect and view access', () => {
   })
 
   it('disconnect does nothing to a missing wallet', () => {
-    const missing = run([{ type: 'detected', present: false }])
+    const missing = run([{ type: 'detected', options: NONE }])
     expect(run([{ type: 'disconnected' }], missing).status).toBe('missing')
+  })
+})
+
+describe('routes to a wallet (extension, phone, Universe)', () => {
+  it('any route means "disconnected" (connectable); none means "missing"', () => {
+    expect(run([{ type: 'detected', options: { extension: false, phone: true, embedded: false } }]).status).toBe('disconnected')
+    expect(run([{ type: 'detected', options: { extension: false, phone: false, embedded: true } }]).status).toBe('disconnected')
+    expect(run([{ type: 'detected', options: NONE }]).status).toBe('missing')
+  })
+
+  it('records the options and the route in use, which a disconnect keeps', () => {
+    const s = run([
+      { type: 'detected', options: { extension: true, phone: true, embedded: false } },
+      { type: 'transport', transport: 'phone' },
+    ])
+    expect(s.options).toEqual({ extension: true, phone: true, embedded: false })
+    expect(s.transport).toBe('phone')
+    expect(run([{ type: 'disconnected' }], s).transport).toBe('phone')
   })
 })

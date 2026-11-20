@@ -16,21 +16,124 @@ export type SapientNetwork = 'mainnet' | 'esmeralda' | 'igor'
 export interface TariProvider {
   isTariWallet?: boolean
   info?: { name?: string; rdns?: string; embedded?: boolean }
+  /**
+   * Set only by tari-connector.js (public/vendor/tari): "embedded" inside Tari Universe,
+   * "walletconnect" for Sapient for Android, null when it can reach no wallet. The Sapient
+   * extension's own provider has no `transport` at all, which is how the two are told apart.
+   */
+  transport?: string | null
+  /** tari-connector.js: true when its calls can reach a wallet. */
+  isAvailable?: boolean
   request(args: { method: string; params?: unknown }): Promise<unknown>
   /** Subscribe; Sapient returns an unsubscribe function. */
-  on?(event: 'accountsChanged' | 'networkChanged', handler: (payload: never) => void): (() => void) | void
+  on?(event: 'accountsChanged' | 'networkChanged' | 'disconnect', handler: (payload: never) => void): (() => void) | void
 }
 
 declare global {
   interface Window {
     /** Injected by Sapient (or another Tari wallet) at document_start. */
     tari?: TariProvider
+    /** tari-connector.js's own provider, always present once it has loaded. */
+    tariUniverse?: TariProvider
   }
 }
 
 /** What detection looks at: a window, or a test's stand-in for one. */
 export interface ProviderHost extends EventTarget {
   tari?: TariProvider
+  tariUniverse?: TariProvider
+}
+
+// ── The three ways to reach a wallet ─────────────────────────────────────────
+//
+//   extension  the Sapient browser extension's `window.tari` (no `transport`): today's path
+//   phone      Sapient for Android over WalletConnect: tari-connector.js's provider with
+//              transport "walletconnect" (public/wc-config.js opts in). Reachable even when the
+//              extension is installed, through `window.tariUniverse`.
+//   embedded   inside the Tari Universe web wallet: the connector's provider, transport "embedded"
+//
+// tari-connector.js never displaces an installed extension's `window.tari`; inside Universe the
+// embedding wallet takes it. A connector that can reach nothing (transport null) is not a wallet.
+
+export type Transport = 'extension' | 'phone' | 'embedded'
+
+export interface WalletProviders {
+  extension: TariProvider | null
+  phone: TariProvider | null
+  embedded: TariProvider | null
+}
+
+export function findProviders(host: ProviderHost): WalletProviders {
+  const t = host.tari
+  const u = host.tariUniverse
+  const embedded = t?.transport === 'embedded' ? t : u?.transport === 'embedded' ? u : null
+  const extension = t && t.transport === undefined ? t : null
+  const phone = u?.transport === 'walletconnect' && u.isAvailable !== false ? u
+    : t?.transport === 'walletconnect' && t.isAvailable !== false ? t : null
+  return { extension, phone, embedded }
+}
+
+export const anyProvider = (w: WalletProviders) => !!(w.extension || w.phone || w.embedded)
+
+/**
+ * The providers, once something is there: at once when the extension injected at document_start or
+ * the connector already ran (it loads before the app), else the first `tari#initialized` within
+ * `timeoutMs`, else whatever is present then (possibly nothing).
+ */
+export function detectProviders(host: ProviderHost, timeoutMs = DETECT_TIMEOUT_MS): Promise<WalletProviders> {
+  // Done once the connector has announced itself (window.tariUniverse): only then is the phone
+  // option known. An extension alone is not enough to stop waiting, or the phone would go missing
+  // whenever the app ran before the connector.
+  if (host.tariUniverse) return Promise.resolve(findProviders(host))
+  return new Promise(resolve => {
+    const onInit = () => { clearTimeout(timer); resolve(findProviders(host)) }
+    const timer = setTimeout(() => {
+      host.removeEventListener('tari#initialized', onInit)
+      resolve(findProviders(host))
+    }, timeoutMs)
+    host.addEventListener('tari#initialized', onInit, { once: true })
+  })
+}
+
+// ── Phone calls: never wait forever ──────────────────────────────────────────
+//
+// Over WalletConnect every call except tari_getAccounts / tari_getNetwork (answered from the
+// session) is a round trip to the phone, which may be asleep or have Sapient closed. Each call
+// gets a limit; past it the caller sees an `unreachable` error and can say so plainly. Calls that
+// wait for the person to approve on the phone get longer.
+
+const PHONE_SLOW_MS = 180_000   // approvals: connect, view access, submit (which also waits for the chain)
+const PHONE_CLAIM_MS = 90_000   // claims and output reads touch the chain
+const PHONE_DEFAULT_MS = 30_000
+const PHONE_SLOW = new Set(['tari_requestAccounts', 'tari_requestViewAccess', 'tari_submitTransactionRequest'])
+const PHONE_CLAIM = new Set(['tari_claimPrivatePayment', 'tari_getShieldedOutputs'])
+
+export function phoneTimeoutFor(method: string): number {
+  return PHONE_SLOW.has(method) ? PHONE_SLOW_MS : PHONE_CLAIM.has(method) ? PHONE_CLAIM_MS : PHONE_DEFAULT_MS
+}
+
+export const PHONE_UNREACHABLE = 'Sapient on your phone didn\u2019t answer. Open Sapient on your phone and try again.'
+
+/** The phone provider, with a time limit on every call. Events pass straight through. */
+export function withPhoneTimeouts(p: TariProvider): TariProvider {
+  return {
+    isTariWallet: p.isTariWallet,
+    info: p.info,
+    transport: p.transport,
+    isAvailable: p.isAvailable,
+    request(args) {
+      return withTimeout(p.request(args), phoneTimeoutFor(args.method), undefined, 'unreachable', PHONE_UNREACHABLE)
+    },
+    on: typeof p.on === 'function' ? p.on.bind(p) : undefined,
+  }
+}
+
+/** Capabilities say what the account can do; unknown (null) means let the wallet answer. */
+export function canSendPrivately(caps: Record<string, unknown> | null): boolean {
+  return !caps || (caps.transactionRequests !== false && caps.privateSpend !== false && caps.walletAddress !== false)
+}
+export function canConfirmPayments(caps: Record<string, unknown> | null): boolean {
+  return !caps || caps.privateBalanceView !== false
 }
 
 /** The Chrome Web Store listing (tari-wallet README). */
@@ -67,7 +170,7 @@ export function detectSapient(host: ProviderHost, timeoutMs = DETECT_TIMEOUT_MS)
  *   wallet    the wallet or the chain refused, with its own reason (-32603 and the rest)
  */
 export class SapientError extends Error {
-  readonly kind: 'declined' | 'locked' | 'wallet'
+  readonly kind: 'declined' | 'locked' | 'wallet' | 'unreachable'
   readonly code: number | null
   constructor(kind: SapientError['kind'], message: string, code: number | null) {
     super(message)
@@ -157,9 +260,11 @@ export async function checkSession(p: TariProvider): Promise<SessionCheck> {
 }
 
 /** Reject after `ms` — a wallet call must never hang the caller for good. */
-export function withTimeout<T>(promise: Promise<T>, ms: number, what = 'Sapient did not answer'): Promise<T> {
+export function withTimeout<T>(
+  promise: Promise<T>, ms: number, what = 'Sapient did not answer', kind: SapientError['kind'] = 'wallet', message?: string,
+): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const t = setTimeout(() => reject(new SapientError('wallet', `${what} in time.`, null)), ms)
+    const t = setTimeout(() => reject(new SapientError(kind, message ?? `${what} in time.`, null)), ms)
     promise.then(v => { clearTimeout(t); resolve(v) }, e => { clearTimeout(t); reject(e) })
   })
 }
@@ -219,6 +324,8 @@ export interface SapientEvents {
   /** `[]` when the wallet locks, the site is disconnected, or just before a network switch. */
   accountsChanged: (accounts: string[]) => void
   networkChanged: (network: string) => void
+  /** The phone (WalletConnect) ended the session. */
+  disconnect?: () => void
 }
 
 /**
@@ -232,6 +339,7 @@ export function subscribeSapient(p: TariProvider, host: ProviderHost, handlers: 
     const offs = [
       p.on('accountsChanged', accounts as (payload: never) => void),
       p.on('networkChanged', network as (payload: never) => void),
+      ...(handlers.disconnect ? [p.on('disconnect', (() => handlers.disconnect?.()) as (payload: never) => void)] : []),
     ]
     return () => { for (const off of offs) if (typeof off === 'function') off() }
   }

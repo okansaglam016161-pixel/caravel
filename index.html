@@ -9,6 +9,12 @@
     <link rel="manifest" href="/site.webmanifest" />
     <meta name="theme-color" content="#378ADD" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Tari wallet connector (pinned copy, see public/vendor/tari/README.md): Tari Universe and
+         Sapient for Android over WalletConnect. Its settings load first. An installed Sapient
+         extension keeps window.tari regardless. FIRST IN <head>, so these deferred scripts run before
+         the app's module script, which Vite inserts further down the head. -->
+    <script src="/wc-config.js" defer></script>
+    <script src="/vendor/tari/tari-connector.js" defer></script>
     <title>Caravel</title>
 
     <!-- Link preview. og:image and twitter:image MUST be absolute: scrapers do not resolve

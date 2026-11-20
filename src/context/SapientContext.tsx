@@ -30,6 +30,20 @@
 // never treated as a disconnect: the session check decides what happened. The toolbar icon unlocks
 // with no reconnect at all, which is why the screens mention it too.
 //
+// ── THREE ROUTES TO A WALLET ─────────────────────────────────────────────────
+//
+// The Sapient extension (today's path, unchanged), Sapient for Android over WalletConnect, and the
+// Tari Universe web wallet when Caravel runs inside it (sapient/provider.findProviders). Inside
+// Universe its wallet is used. Otherwise the person picks extension or phone in the chooser; the
+// choice is remembered on this device (CHOICE_KEY), so a reload restores the same route quietly.
+//
+// THE PHONE IS NEVER POLLED. Over WalletConnect only tari_getAccounts / tari_getNetwork are
+// answered locally (from the session); every other call is a round trip to the phone. So the phone
+// path has no 5-second session check: it follows the wallet's events, re-reads the LOCAL session on
+// focus, and every call it does make is time-limited (provider.withPhoneTimeouts). A locked or
+// sleeping phone surfaces as a message and a Retry, never a hang. Lock detection there is only what
+// a call reports.
+//
 // ── STALE ANSWERS ────────────────────────────────────────────────────────────
 //
 // Every reset (disconnect, accounts → [], a switch, a new connect) bumps `genRef`, and async work
@@ -38,16 +52,25 @@
 
 import { createContext, useCallback, useContext, useEffect, useReducer, useRef, useState, type ReactNode } from 'react'
 import {
-  SapientError, checkSession, detectSapient, disconnectSapient, getCapabilities, getNetwork, getViewAccess, getWalletAddress,
-  requestAccounts, requestViewAccess, subscribeSapient, toSapientError, type TariProvider,
+  SapientError, anyProvider, checkSession, detectProviders, disconnectSapient, getAccounts, getCapabilities, getNetwork, getViewAccess,
+  getWalletAddress, requestAccounts, requestViewAccess, subscribeSapient, toSapientError, withPhoneTimeouts,
+  type TariProvider, type Transport, type WalletProviders,
 } from '../sapient/provider'
 import { SAPIENT_INITIAL, sapientReducer, type SapientState } from '../sapient/sapientState'
 
 export interface SapientCtx extends SapientState {
   /** The injected provider, once detected — for the payments step. Null while detecting or missing. */
   provider: TariProvider | null
-  /** Connect (Sapient's popup), then ask for view access. Never throws; failures land in `error`. */
-  connect: () => Promise<void>
+  /**
+   * Connect through `transport` (default: the one in use, or the only one available), then ask for
+   * view access. Extension: Sapient's popup. Phone: the QR / "Open Sapient", then approval on the
+   * phone. Never throws; failures land in `error`.
+   */
+  connect: (transport?: Transport) => Promise<void>
+  /** The wallet chooser (extension or phone). `openChooser` connects directly when there is no choice. */
+  chooserOpen: boolean
+  openChooser: () => void
+  closeChooser: () => void
   /** Forget this site in Sapient and reset. */
   disconnect: () => Promise<void>
   /** Ask for view access (Sapient's popup). For the Grant button. */
@@ -73,6 +96,25 @@ export function useSapient(): SapientCtx {
 /** How often the session is re-checked while a connection exists or might (Sapient sends no lock events). */
 const SESSION_CHECK_MS = 5000
 
+/** The route the person last connected with, on this device: 'extension' | 'phone'. Not sensitive. */
+const CHOICE_KEY = 'caravel.wallet.transport'
+function loadChoice(): Transport | null {
+  try { const v = localStorage.getItem(CHOICE_KEY); return v === 'extension' || v === 'phone' ? v : null } catch { return null }
+}
+function saveChoice(t: Transport | null) {
+  try { if (t === 'extension' || t === 'phone') localStorage.setItem(CHOICE_KEY, t); else localStorage.removeItem(CHOICE_KEY) } catch { /* ignore */ }
+}
+
+/** The route to start with: Universe when inside it, then the remembered choice, then the extension, then the phone. */
+function initialTransport(w: WalletProviders): Transport | null {
+  if (w.embedded) return 'embedded'
+  const chosen = loadChoice()
+  if (chosen && w[chosen]) return chosen
+  if (w.extension) return 'extension'
+  if (w.phone) return 'phone'
+  return null
+}
+
 function connectError(e: unknown): string {
   const err = toSapientError(e)
   if (err.kind === 'declined') return 'Connection declined in Sapient.'
@@ -84,7 +126,11 @@ export function SapientProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(sapientReducer, SAPIENT_INITIAL)
   const [provider, setProvider] = useState<TariProvider | null>(null)
   const [unlocking, setUnlocking] = useState(false)
+  const [chooserOpen, setChooserOpen] = useState(false)
   const providerRef = useRef<TariProvider | null>(null)
+  const providersRef = useRef<WalletProviders>({ extension: null, phone: null, embedded: null })
+  const transportRef = useRef<Transport | null>(null)
+  const unsubscribeRef = useRef<(() => void) | null>(null)
   const genRef = useRef(0)
   const unlockingRef = useRef(false)
   // The latest state, for the event handlers (registered once, so their closure would be stale).
@@ -125,70 +171,108 @@ export function SapientProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
-  // Detection, events, and the quiet restore — once.
-  useEffect(() => {
-    let cancelled = false
-    let unsubscribe: (() => void) | null = null
-
-    void detectSapient(window).then(async p => {
-      if (cancelled) return
-      providerRef.current = p
-      setProvider(p)
-      dispatch({ type: 'detected', present: p !== null })
-      if (!p) return
-
-      unsubscribe = subscribeSapient(p, window, {
-        accountsChanged: accounts => {
-          const prev = stateRef.current
-          if (accounts.length === 0) {
-            // Locked, disconnected from Sapient's side, or about to switch network.
-            genRef.current++
-            dispatch({ type: 'accounts-changed', accounts })
-            return
-          }
-          if (prev.status === 'connected' && accounts[0] !== prev.componentAddress) {
-            // An account switch inside Sapient: re-read, and ask for view access again (it was dropped).
-            const gen = ++genRef.current
-            dispatch({ type: 'accounts-changed', accounts })
-            void loadAccount(p, accounts[0], gen).then(ok => { if (ok) void ensureView(p, gen, true) }).catch(() => undefined)
-            return
-          }
-          if (prev.status === 'disconnected') {
-            // Connected from elsewhere (another tab of this site): pick it up quietly, no popup.
-            const gen = ++genRef.current
-            void loadAccount(p, accounts[0], gen).then(ok => { if (ok) void ensureView(p, gen, false) }).catch(() => undefined)
-          }
-        },
-        networkChanged: network => {
-          dispatch({ type: 'network', network })
-          // Sapient disconnects other sites on a switch (an empty accountsChanged comes first). If this
-          // one is somehow still connected, its grant did not survive: check it, without a popup.
-          if (stateRef.current.status === 'connected') void ensureView(p, genRef.current, false)
-        },
-      })
-
-      await refreshNetwork(p)
-      try {
-        const session = await checkSession(p)
-        if (cancelled) return
-        if (session.s === 'locked') {
-          // Locked on load: the grant is still readable (tari_getViewAccess needs no unlock), so
-          // read it rather than show "Off" for a site that has it.
-          dispatch({ type: 'locked' })
-          void ensureView(p, genRef.current, false)
+  /** Subscribe to the active provider's events (re-done whenever the route changes). */
+  const subscribe = useCallback((p: TariProvider) => {
+    unsubscribeRef.current?.()
+    unsubscribeRef.current = subscribeSapient(p, window, {
+      accountsChanged: accounts => {
+        const prev = stateRef.current
+        if (accounts.length === 0) {
+          // Locked, disconnected from Sapient's side, or about to switch network.
+          genRef.current++
+          dispatch({ type: 'accounts-changed', accounts })
           return
         }
-        if (session.s !== 'unlocked') return
-        const gen = ++genRef.current
-        if (await loadAccount(p, session.account, gen)) await ensureView(p, gen, false)
-      } catch { /* stay disconnected; the session check tries again */ }
+        if (prev.status === 'connected' && accounts[0] !== prev.componentAddress) {
+          // An account switch inside Sapient: re-read, and ask for view access again (it was dropped).
+          const gen = ++genRef.current
+          dispatch({ type: 'accounts-changed', accounts })
+          void loadAccount(p, accounts[0], gen).then(ok => { if (ok) void ensureView(p, gen, true) }).catch(() => undefined)
+          return
+        }
+        if (prev.status === 'disconnected') {
+          // Connected from elsewhere (another tab of this site): pick it up quietly, no popup.
+          const gen = ++genRef.current
+          void loadAccount(p, accounts[0], gen).then(ok => { if (ok) void ensureView(p, gen, false) }).catch(() => undefined)
+        }
+      },
+      networkChanged: network => {
+        dispatch({ type: 'network', network })
+        // Sapient disconnects other sites on a switch (an empty accountsChanged comes first). If this
+        // one is somehow still connected, its grant did not survive: check it, without a popup.
+        if (stateRef.current.status === 'connected') void ensureView(p, genRef.current, false)
+      },
+      disconnect: () => {
+        // The phone ended the session (removed this site, or the session expired).
+        genRef.current++
+        dispatch({ type: 'disconnected' })
+      },
     })
+  }, [loadAccount, ensureView])
 
-    return () => { cancelled = true; unsubscribe?.() }
+  /** Make `t` the route in use: its provider (time-limited on the phone), its events. */
+  const activate = useCallback((t: Transport | null): TariProvider | null => {
+    const raw = t ? providersRef.current[t] : null
+    const p = raw && t === 'phone' ? withPhoneTimeouts(raw) : raw
+    transportRef.current = t
+    providerRef.current = p
+    setProvider(p)
+    dispatch({ type: 'transport', transport: t })
+    if (p) subscribe(p)
+    else { unsubscribeRef.current?.(); unsubscribeRef.current = null }
+    return p
+  }, [subscribe])
+
+  /** The quiet restore for a route. Never prompts, never pairs a phone. */
+  const restore = useCallback(async (p: TariProvider, t: Transport, isCancelled: () => boolean) => {
+    await refreshNetwork(p)
+    try {
+      if (t === 'phone') {
+        // Local answers only: [] when there is no WalletConnect session (no QR, no round trip).
+        const accounts = await getAccounts(p)
+        if (isCancelled() || accounts.length === 0) return
+        const gen = ++genRef.current
+        if (await loadAccount(p, accounts[0], gen)) await ensureView(p, gen, false)
+        return
+      }
+      const session = await checkSession(p)
+      if (isCancelled()) return
+      if (session.s === 'locked') {
+        // Locked on load: the grant is still readable (tari_getViewAccess needs no unlock), so
+        // read it rather than show "Off" for a site that has it.
+        dispatch({ type: 'locked' })
+        void ensureView(p, genRef.current, false)
+        return
+      }
+      if (session.s !== 'unlocked') return
+      const gen = ++genRef.current
+      if (await loadAccount(p, session.account, gen)) await ensureView(p, gen, false)
+    } catch (e) {
+      if (toSapientError(e).kind === 'locked') dispatch({ type: 'locked' })
+      /* otherwise stay disconnected; the next check or a Connect tries again */
+    }
   }, [refreshNetwork, loadAccount, ensureView])
 
-  const connect = useCallback(async () => {
-    const p = providerRef.current
+  // Detection and the quiet restore — once.
+  useEffect(() => {
+    let cancelled = false
+    void detectProviders(window).then(async found => {
+      if (cancelled) return
+      providersRef.current = found
+      dispatch({ type: 'detected', options: { extension: !!found.extension, phone: !!found.phone, embedded: !!found.embedded } })
+      if (!anyProvider(found)) return
+      const t = initialTransport(found)
+      const p = activate(t)
+      if (p && t) await restore(p, t, () => cancelled)
+    })
+    return () => { cancelled = true; unsubscribeRef.current?.(); unsubscribeRef.current = null }
+  }, [activate, restore])
+
+  const connect = useCallback(async (want?: Transport) => {
+    setChooserOpen(false)
+    const t = want ?? transportRef.current ?? initialTransport(providersRef.current)
+    if (!t || !providersRef.current[t]) return
+    const p = t === transportRef.current && providerRef.current ? providerRef.current : activate(t)
     if (!p) return
     const gen = ++genRef.current
     dispatch({ type: 'connect-start' })
@@ -199,15 +283,26 @@ export function SapientProvider({ children }: { children: ReactNode }) {
       // Re-read: the connect popup can sit open while the person changes network.
       await refreshNetwork(p)
       if (!(await loadAccount(p, accounts[0], gen))) return
+      if (t !== 'embedded') saveChoice(t)
       await ensureView(p, gen, true)
     } catch (e) {
       if (gen === genRef.current) dispatch({ type: 'connect-failed', error: connectError(e) })
     }
-  }, [refreshNetwork, loadAccount, ensureView])
+  }, [activate, refreshNetwork, loadAccount, ensureView])
+
+  /** The chooser when there is a choice (extension and phone); otherwise straight to the one route. */
+  const openChooser = useCallback(() => {
+    const w = providersRef.current
+    if (w.embedded) { void connect('embedded'); return }
+    if (w.phone) { setChooserOpen(true); return }
+    if (w.extension) void connect('extension')
+  }, [connect])
+  const closeChooser = useCallback(() => setChooserOpen(false), [])
 
   const disconnect = useCallback(async () => {
     genRef.current++
     dispatch({ type: 'disconnected' })
+    saveChoice(null)
     const p = providerRef.current
     if (p) await disconnectSapient(p).catch(() => undefined)
   }, [])
@@ -217,6 +312,25 @@ export function SapientProvider({ children }: { children: ReactNode }) {
     const p = providerRef.current
     const before = stateRef.current
     if (!p || before.status === 'detecting' || before.status === 'missing' || before.status === 'connecting') return
+    if (transportRef.current === 'phone') {
+      // The local session first (no round trip). Locked: one time-limited call to see if it unlocked.
+      let accounts: string[]
+      try { accounts = await getAccounts(p) } catch { return }
+      const cur = stateRef.current
+      if (accounts.length === 0) {
+        if (cur.status === 'connected' || cur.status === 'locked') { genRef.current++; dispatch({ type: 'disconnected' }) }
+        return
+      }
+      if (cur.status === 'locked') {
+        try { await getViewAccess(p); dispatch({ type: 'unlocked' }); void ensureView(p, genRef.current, false) } catch { /* still locked or asleep */ }
+        return
+      }
+      if (cur.componentAddress !== accounts[0] || cur.status !== 'connected') {
+        const gen = ++genRef.current
+        try { if (await loadAccount(p, accounts[0], gen)) await ensureView(p, gen, false) } catch { /* next time */ }
+      }
+      return
+    }
     let r
     try { r = await checkSession(p) } catch { return }
     const cur = stateRef.current
@@ -254,6 +368,9 @@ export function SapientProvider({ children }: { children: ReactNode }) {
   const unlock = useCallback(async () => {
     const p = providerRef.current
     if (!p || stateRef.current.status !== 'locked' || unlockingRef.current) return
+    // The phone has no unlock window to open from here: the person unlocks Sapient on the phone, and
+    // this checks again.
+    if (transportRef.current === 'phone') { await refresh(); return }
     unlockingRef.current = true
     setUnlocking(true)
     try {
@@ -273,20 +390,21 @@ export function SapientProvider({ children }: { children: ReactNode }) {
     }
   }, [refreshNetwork, loadAccount, ensureView, refresh])
 
-  // The session check: on an interval, and whenever the page comes back into view.
+  // The session check: on an interval (never for the phone: see the header), and whenever the page
+  // comes back into view.
   useEffect(() => {
     if (!provider) return
-    const iv = setInterval(() => { void refresh() }, SESSION_CHECK_MS)
+    const iv = state.transport === 'phone' ? null : setInterval(() => { void refresh() }, SESSION_CHECK_MS)
     const onFocus = () => { void refresh() }
     const onVisible = () => { if (document.visibilityState === 'visible') void refresh() }
     window.addEventListener('focus', onFocus)
     document.addEventListener('visibilitychange', onVisible)
     return () => {
-      clearInterval(iv)
+      if (iv) clearInterval(iv)
       window.removeEventListener('focus', onFocus)
       document.removeEventListener('visibilitychange', onVisible)
     }
-  }, [provider, refresh])
+  }, [provider, refresh, state.transport])
 
   const grantViewAccess = useCallback(async () => {
     const p = providerRef.current
@@ -295,7 +413,7 @@ export function SapientProvider({ children }: { children: ReactNode }) {
   }, [ensureView])
 
   return (
-    <Ctx.Provider value={{ ...state, provider, connect, disconnect, grantViewAccess, refresh, reportLocked, unlock, unlocking }}>
+    <Ctx.Provider value={{ ...state, provider, connect, disconnect, grantViewAccess, refresh, reportLocked, unlock, unlocking, chooserOpen, openChooser, closeChooser }}>
       {children}
     </Ctx.Provider>
   )

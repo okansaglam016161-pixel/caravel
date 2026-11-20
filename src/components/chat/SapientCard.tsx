@@ -47,26 +47,28 @@ export default function SapientCard({ hideStatusWhenConnected = false, extraRows
           {status === 'missing' && (
             <a href={SAPIENT_INSTALL_URL} target="_blank" rel="noopener noreferrer" title="Sapient runs in Chrome, Brave or Edge" style={{ ...linkBtn, textDecoration: 'none' }}>Install</a>
           )}
-          {status === 'disconnected' && <button onClick={() => void sapient.connect()} style={linkBtn}>Connect</button>}
+          {status === 'disconnected' && <button onClick={() => sapient.openChooser()} style={linkBtn}>Connect</button>}
         </FactRow>
       </ListCard>
     )
   }
 
+  const onPhone = sapient.transport === 'phone'
   const showStatus = status === 'locked' || !hideStatusWhenConnected
   return (
     <ListCard mt={mt}>
       {showStatus && (
         <FactRow first label="Status"
-          note={status === 'locked' ? 'Or click the Sapient icon in your browser toolbar.' : undefined}>
+          note={status === 'locked' ? (onPhone ? 'Unlock Sapient on your phone, then Check.' : 'Or click the Sapient icon in your browser toolbar.') : undefined}>
           <span>{sapientStatusText(status)}</span>
           {status === 'locked' && (sapient.unlocking
             ? <span style={{ color: 'var(--text-muted-dim)' }}>Unlock in Sapient…</span>
-            : <button onClick={() => void sapient.unlock()} style={linkBtn}>Unlock</button>)}
+            : <button onClick={() => void sapient.unlock()} style={linkBtn}>{onPhone ? 'Check' : 'Unlock'}</button>)}
         </FactRow>
       )}
       <CopyRow first={!showStatus} label="Address" value={sapient.walletAddress}
-        missing={status === 'locked' ? 'Unlock Sapient to see' : 'Reading account…'} />
+        missing={status === 'locked' ? (onPhone ? 'Unlock Sapient on your phone to see' : 'Unlock Sapient to see') : 'Reading account…'} />
+      <FactRow label="Wallet">{onPhone ? 'Sapient on your phone' : sapient.transport === 'embedded' ? 'Tari Universe' : 'Sapient extension'}</FactRow>
       <FactRow label="Network">{networkLabel(sapient.network)}</FactRow>
       {extraRows}
       <FactRow label="View access">

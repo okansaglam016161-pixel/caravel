@@ -64,6 +64,13 @@ describe('claimView — what the card says', () => {
     expect(claimView(ref(U1), undefined, 'error', { ...READY, status: 'locked' })).toEqual({ s: 'needs-sapient', why: 'unlock' })
   })
 
+  it('an account that cannot read private payments says so, and is never claimed', () => {
+    const noView = { ...READY, capabilities: { privateBalanceView: false } }
+    expect(claimView(ref(U1), undefined, undefined, noView)).toEqual({ s: 'needs-sapient', why: 'capability' })
+    expect(claimReady(noView, ref(U1))).toBe(false)
+    expect(claimReady({ ...READY, capabilities: null }, ref(U1))).toBe(true)   // unknown: let the wallet answer
+  })
+
   it('ready and nothing stored: queued to claim', () => {
     expect(claimView(ref(U1), undefined, undefined, READY)).toEqual({ s: 'claiming' })
     expect(claimReady(READY, ref(U1))).toBe(true)

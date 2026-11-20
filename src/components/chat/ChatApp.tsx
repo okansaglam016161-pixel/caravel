@@ -16,7 +16,7 @@ import { loadNicknames, setNickname, MAX_NICKNAME_LEN, type NicknameMap } from '
 import { loadAddressSent, markAddressSent, clearAddressSent, type AddressSentMap } from '../../messaging/addressSentStore'
 import { useSapient } from '../../context/SapientContext'
 import { asSendResult, assertPayableAddress, insufficientPrivateBalance, makePaymentNonce, parseTari, readRequest, sendPrivately, shield, type RequestPhase } from '../../sapient/payments'
-import { getPrivateTariBalance, networkLabel, toSapientError, SAPIENT_INSTALL_URL } from '../../sapient/provider'
+import { canSendPrivately, getPrivateTariBalance, networkLabel, toSapientError, SAPIENT_INSTALL_URL } from '../../sapient/provider'
 import { addOutbox, loadOutbox, removeOutbox, updateOutbox, type OutboxEntry } from '../../messaging/paymentOutbox'
 import { claimView, type ClaimView } from '../../messaging/paymentClaims'
 import { usePaymentClaimer } from '../../hooks/usePaymentClaimer'
@@ -340,8 +340,10 @@ function SentPaymentCard({ message, lid, flashed }: { message: CaravelMessage; l
  * cannot be confirmed — and none of them credits anybody without that match. Every state short of
  * verified has a small Retry (re-check Sapient, claim again).
  */
-function ReceivedPaymentCard({ message, lid, flashed, disputed, view, onRetry, onUnlock }: {
+function ReceivedPaymentCard({ message, lid, flashed, disputed, view, onRetry, onUnlock, onPhone }: {
   message: CaravelMessage; lid?: string; flashed?: boolean; disputed?: boolean; view: ClaimView; onRetry: () => void; onUnlock: () => void
+  /** Sapient is the phone (WalletConnect): say so, and point there. */
+  onPhone: boolean
 }) {
   let state: PayCardState
   switch (view.s) {
@@ -360,7 +362,9 @@ function ReceivedPaymentCard({ message, lid, flashed, disputed, view, onRetry, o
       state = { dir: 'RECEIVED', masked: true, tone: 'danger', retry: onRetry, status: 'Couldn’t confirm this payment.' }
       break
     case 'error':
-      state = { dir: 'RECEIVED', masked: true, tone: 'dim', retry: onRetry, status: 'Couldn’t reach Sapient — trying again shortly.' }
+      state = { dir: 'RECEIVED', masked: true, tone: 'dim', retry: onRetry, status: onPhone
+        ? 'Couldn’t reach Sapient on your phone. Open it there, then Retry.'
+        : 'Couldn’t reach Sapient, trying again shortly.' }
       break
     case 'claiming':
       state = { dir: 'RECEIVED', masked: true, tone: 'dim', spin: true, retry: onRetry, status: 'Confirming with Sapient…' }
@@ -374,7 +378,8 @@ function ReceivedPaymentCard({ message, lid, flashed, disputed, view, onRetry, o
         // Locked: the way forward is Sapient's unlock window, not another claim attempt.
         ...(view.why === 'unlock' ? { retry: onUnlock, retryLabel: 'Unlock' } : { retry: onRetry }),
         status: view.why === 'install' ? 'Install Sapient to confirm this payment.'
-          : view.why === 'unlock' ? 'Unlock Sapient to confirm this payment (or use the Sapient icon in your toolbar).'
+          : view.why === 'unlock' ? (onPhone ? 'Unlock Sapient on your phone to confirm this payment.' : 'Unlock Sapient to confirm this payment (or use the Sapient icon in your toolbar).')
+          : view.why === 'capability' ? 'This Sapient account can’t confirm private payments.'
           : view.why === 'view' ? 'Grant view access in Sapient to confirm this payment.'
           : view.why === 'network' ? `Sent on ${networkLabel(view.network ?? null)} — switch Sapient to confirm.`
           : 'Connect Sapient to confirm this payment.',
@@ -384,12 +389,12 @@ function ReceivedPaymentCard({ message, lid, flashed, disputed, view, onRetry, o
   return <PaymentCard sent={false} state={state} timestamp={message.timestamp} plaintext={message.plaintext} lid={lid} flashed={flashed} />
 }
 
-function PaymentMessageCard({ message, lid, flashed, disputed, view, onRetry, onUnlock }: {
-  message: CaravelMessage; lid?: string; flashed?: boolean; disputed?: boolean; view: ClaimView | null; onRetry: () => void; onUnlock: () => void
+function PaymentMessageCard({ message, lid, flashed, disputed, view, onRetry, onUnlock, onPhone }: {
+  message: CaravelMessage; lid?: string; flashed?: boolean; disputed?: boolean; view: ClaimView | null; onRetry: () => void; onUnlock: () => void; onPhone: boolean
 }) {
   return message.direction === 'sent' || !view
     ? <SentPaymentCard message={message} lid={lid} flashed={flashed} />
-    : <ReceivedPaymentCard message={message} lid={lid} flashed={flashed} disputed={disputed} view={view} onRetry={onRetry} onUnlock={onUnlock} />
+    : <ReceivedPaymentCard message={message} lid={lid} flashed={flashed} disputed={disputed} view={view} onRetry={onRetry} onUnlock={onUnlock} onPhone={onPhone} />
 }
 
 // ── Component ────────────────────────────────────────────────────────────────────
@@ -1261,8 +1266,11 @@ export default function ChatApp() {
   function sapientGate(): string | null {
     if (sapient.status === 'missing') return 'Install Sapient to send payments.'
     if (sapient.status === 'detecting') return 'Looking for Sapient…'
-    if (sapient.status === 'locked') return 'Sapient is locked. Unlock it to send payments (or use the Sapient icon in your toolbar).'
-    if (sapient.status !== 'connected') return 'Connect your wallet (Sapient) to send payments — or unlock it if it is locked.'
+    if (sapient.status === 'locked') return sapient.transport === 'phone'
+      ? 'Sapient on your phone is locked. Unlock it there to send payments.'
+      : 'Sapient is locked. Unlock it to send payments (or use the Sapient icon in your toolbar).'
+    if (sapient.status !== 'connected') return 'Connect your wallet (Sapient) to send payments.'
+    if (!canSendPrivately(sapient.capabilities)) return 'This Sapient account can’t send private payments.'
     return null
   }
 
@@ -1298,11 +1306,15 @@ export default function ChatApp() {
     }
   }
 
+  const onPhone = sapient.transport === 'phone'
   const PHASE_TEXT: Record<RequestPhase, string> = {
-    approve: 'Approve the payment in Sapient…',
+    approve: onPhone ? 'Approve the payment in Sapient on your phone…' : 'Approve the payment in Sapient…',
     submitting: 'Submitting…',
     finalizing: 'Waiting for the network to finalize (up to a minute)…',
   }
+  /** Status checks over the phone are round trips: slower there. */
+  const pollMs = onPhone ? 1500 : undefined
+  const PHONE_WAIT = 'Waiting for Sapient on your phone. Open it to approve…'
 
   /**
    * Send the chat message that carries a finished payment, and clear its outbox entry. The money has
@@ -1384,6 +1396,8 @@ export default function ChatApp() {
       const result = await sendPrivately(p, { recipient: recipientAddr, amount, nonce: entry.nonce }, {
         onRequest: id => { requestId = id; updateOutbox(nostrPubkeyHex, entry.id, { requestId: id }) },
         onPhase: phase => { if (phase !== 'approve') submitted = true; setPayProgress(PHASE_TEXT[phase]) },
+        onUnanswered: () => setPayProgress(PHONE_WAIT),
+        pollMs,
       })
       const res = { transactionId: result.transactionId, recipientSubstateId: result.recipientSubstateId }
       updateOutbox(nostrPubkeyHex, entry.id, { result: res })
@@ -1414,7 +1428,11 @@ export default function ChatApp() {
       } else if (sErr.kind === 'declined') {
         removeOutbox(nostrPubkeyHex, entry.id)
         setPayError('Payment cancelled in Sapient.', true)
-      } else if (submitted && /time(d)? ?out/i.test(sErr.message)) {
+      } else if (sErr.kind === 'unreachable' && !submitted) {
+        // The phone went quiet before approving. The request still exists there: if it is approved
+        // later, the outbox (kept) sends the message the next time Caravel reaches the phone.
+        setPayError('Sapient on your phone didn’t answer. If you approve the payment there later, Caravel sends your message the next time it reaches your phone.', false)
+      } else if (submitted && (sErr.kind === 'unreachable' || /time(d)? ?out/i.test(sErr.message))) {
         // Submitted, then no verdict in time: it may still land. Keep the outbox entry — the next
         // unlock asks Sapient how it ended — and do not invite a second payment.
         setPayAlert({ kind: 'timeout', txId: requestId ?? entry.id, amountTari: amountShown })
@@ -1436,10 +1454,12 @@ export default function ChatApp() {
     if (!offer || !sapient.provider) return
     setPayError(null)
     setPayBusy(true)
-    setPayProgress('Approve making it private in Sapient…')
+    setPayProgress(onPhone ? 'Approve making it private in Sapient on your phone…' : 'Approve making it private in Sapient…')
     try {
       await shield(sapient.provider, offer.shortfall, {
-        onPhase: phase => setPayProgress(phase === 'approve' ? 'Approve making it private in Sapient…' : 'Making it private…'),
+        onPhase: phase => setPayProgress(phase === 'approve' ? (onPhone ? 'Approve making it private in Sapient on your phone…' : 'Approve making it private in Sapient…') : 'Making it private…'),
+        onUnanswered: () => setPayProgress(PHONE_WAIT),
+        pollMs,
       })
       setShieldOffer(null)
       setPrivateBal(undefined)   // re-read on the next attempt
@@ -2214,7 +2234,7 @@ export default function ChatApp() {
                   view={m.direction !== 'received' ? null
                     : m.payment.nonce ? claimView(m.payment, claims[m.payment.utxoId], claimBusy[m.payment.utxoId], sapient)
                     : { s: 'unconfirmed' }}
-                  onRetry={() => retryClaim(m.payment!.utxoId)} onUnlock={() => void sapient.unlock()} />
+                  onRetry={() => retryClaim(m.payment!.utxoId)} onUnlock={() => void sapient.unlock()} onPhone={sapient.transport === 'phone'} />
                 /* Encrypted image (images M4): resolves itself — cache first, then the host. */
                 if (m.media) return <MediaMessageCard key={m.id} message={m} lid={m.logicalId} flashed={!!m.logicalId && flashedId === m.logicalId} />
                 const flight = flightFor(m, editFlights)
@@ -2454,7 +2474,7 @@ export default function ChatApp() {
                         <span style={{ flex: 1, minWidth: 0 }}>{gate}</span>
                         {sapient.status === 'missing'
                           ? <a href={SAPIENT_INSTALL_URL} target="_blank" rel="noopener noreferrer" title="Sapient runs in Chrome, Brave or Edge" style={{ flexShrink: 0, fontWeight: 600, color: 'var(--accent-ink)' }}>Install</a>
-                          : sapient.status === 'disconnected' ? <button onClick={() => void sapient.connect()} style={{ flexShrink: 0, padding: 0, border: 'none', background: 'transparent', cursor: 'pointer', fontSize: 12, fontWeight: 600, fontFamily: 'inherit', color: 'var(--accent-ink)' }}>Connect wallet</button>
+                          : sapient.status === 'disconnected' ? <button onClick={() => sapient.openChooser()} style={{ flexShrink: 0, padding: 0, border: 'none', background: 'transparent', cursor: 'pointer', fontSize: 12, fontWeight: 600, fontFamily: 'inherit', color: 'var(--accent-ink)' }}>Connect wallet</button>
                           : sapient.status === 'locked' && <button onClick={() => void sapient.unlock()} disabled={sapient.unlocking} style={{ flexShrink: 0, padding: 0, border: 'none', background: 'transparent', cursor: sapient.unlocking ? 'default' : 'pointer', fontSize: 12, fontWeight: 600, fontFamily: 'inherit', color: 'var(--accent-ink)' }}>{sapient.unlocking ? 'Unlock in Sapient…' : 'Unlock'}</button>}
                       </div>
                     )

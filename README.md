@@ -19,23 +19,27 @@ replies, reactions and edits. Images are encrypted on your device (AES-256-GCM) 
 uploaded to Blossom servers. Your history is kept on your device, encrypted with a key that lives
 inside your identity.
 
-**Payments.** Payments go through [Sapient](https://chromewebstore.google.com/detail/tari-ootle-wallet/demkeckolenopkgnfbnpflkpbbdhpgkl),
-the Tari browser wallet. In a one-to-one chat, you send confidential TARI on the Ootle: Sapient
+**Payments.** Payments go through Sapient, the Tari wallet: the
+[browser extension](https://chromewebstore.google.com/detail/tari-ootle-wallet/demkeckolenopkgnfbnpflkpbbdhpgkl),
+or Sapient for Android connected with a QR code over WalletConnect. Caravel also works inside the
+Tari Universe web wallet. In a one-to-one chat, you send confidential TARI on the Ootle: Sapient
 asks you to approve the transfer, and the amount is hidden on chain. Caravel then tells the
 recipient, in an encrypted message, which output is theirs and attaches a one-time code. The
 recipient's Caravel claims the payment through their own Sapient and marks it as received only if
 the payment's note carries that code. Payments to an address on a different network than your
-wallet's are refused.
+wallet's are refused. Phone connections go through the WalletConnect relay, which sees your IP
+address and timing, not your messages.
 
 ## Getting started
 
 1. Use a desktop browser: Chrome, Brave or Edge.
 2. Install [Sapient](https://chromewebstore.google.com/detail/tari-ootle-wallet/demkeckolenopkgnfbnpflkpbbdhpgkl)
-   and set up your wallet there.
+   in your browser, or use Sapient for Android, and set up your wallet there.
 3. Open [caravellabs.net](https://caravellabs.net), choose **Launch Caravel** and create your chat
    identity. Write down the 12 words and pick a chat password.
-4. Connect Sapient from the wallet button at the top of the chat list, and grant view access so
-   Caravel can confirm payments you receive.
+4. Connect Sapient from the wallet button at the top of the chat list: choose the extension, or
+   Sapient for Android and scan the QR code with your phone. Grant view access so Caravel can
+   confirm payments you receive.
 5. Start a conversation by pasting someone's `npub`. Share your own npub (in Profile) so people can
    reach you. Your wallet address is shared with a contact automatically when you message them.
 

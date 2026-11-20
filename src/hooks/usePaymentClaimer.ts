@@ -69,6 +69,9 @@ export function usePaymentClaimer(me: string | null, messages: readonly CaravelM
   useEffect(() => {
     const p = sapient.provider
     if (!me || !p || runningRef.current || cooling) return
+    // The phone answers each claim itself: only while this tab is in view, so a background tab never
+    // queues requests on a phone (a visibility change re-runs this).
+    if (sapient.transport === 'phone' && document.visibilityState !== 'visible') return
     const todo = candidates.filter(ref => !claims[ref.utxoId] && !busy[ref.utxoId] && claimReady(sapient, ref))
     if (todo.length === 0) return
 
@@ -116,6 +119,13 @@ export function usePaymentClaimer(me: string | null, messages: readonly CaravelM
       setTick(t => t + 1)   // anything that arrived during the pass
     })()
   }, [me, sapient, candidates, claims, busy, messages, tick, cooling])
+
+  // Back in view (the phone only claims while the tab is visible): look again.
+  useEffect(() => {
+    const onVisible = () => { if (document.visibilityState === 'visible') setTick(t => t + 1) }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => document.removeEventListener('visibilitychange', onVisible)
+  }, [])
 
   /**
    * The card's Retry, on any payment not verified yet: re-check the Sapient session, forget any

@@ -4,10 +4,10 @@
 
 import { describe, expect, it } from 'vitest'
 import {
-  assertPayableAddress, claimPayment, insufficientPrivateBalance, makePaymentNonce, memoMatches,
+  MAX_UNANSWERED_POLLS, assertPayableAddress, claimPayment, insufficientPrivateBalance, makePaymentNonce, memoMatches,
   parseSubstateId, parseTari, paymentMemo, readMemo, readRequest, runTransactionRequest, sendPrivately, shield,
 } from './payments'
-import { TARI_RESOURCE, type TariProvider } from './provider'
+import { SapientError, TARI_RESOURCE, type TariProvider } from './provider'
 
 const RES = '01'.repeat(32)
 const COMMIT = 'ab'.repeat(32)
@@ -236,5 +236,40 @@ describe('claimPayment', () => {
     expect(await claimPayment(nf.p, ref, new Set())).toEqual({ s: 'not-found' })
     const locked = scripted({ tari_claimPrivatePayment: { code: 4100, message: 'Wallet is locked.' } })
     await expect(claimPayment(locked.p, ref, new Set())).rejects.toMatchObject({ kind: 'locked' })
+  })
+})
+
+describe('a phone that stops answering', () => {
+  const silent = () => { throw new SapientError('unreachable', 'Sapient on your phone didn\u2019t answer.', null) }
+
+  it('an unanswered status check is not an answer: polling goes on, and the approval still lands', async () => {
+    let n = 0
+    const p: TariProvider = {
+      async request({ method }) {
+        if (method === 'tari_createTransactionRequest') return { requestId: 'r1' }
+        if (method === 'tari_getTransactionRequest') { n++; if (n <= 3) silent(); return { status: 'submitted', result: { transactionId: 't', recipientSubstateId: 'u' } } }
+        return null
+      },
+    }
+    let told = 0
+    const r = await runTransactionRequest<{ transactionId: string }>(p, { kind: 'shield' }, { sleep: noSleep, onUnanswered: () => { told++ } })
+    expect(r.transactionId).toBe('t')
+    expect(told).toBe(3)
+  })
+
+  it('past MAX_UNANSWERED_POLLS in a row, the wait ends with the unreachable error', async () => {
+    const p: TariProvider = {
+      async request({ method }) {
+        if (method === 'tari_createTransactionRequest') return { requestId: 'r1' }
+        return silent()
+      },
+    }
+    await expect(runTransactionRequest(p, { kind: 'shield' }, { sleep: noSleep })).rejects.toMatchObject({ kind: 'unreachable' })
+    expect(MAX_UNANSWERED_POLLS).toBeGreaterThan(1)
+  })
+
+  it('after a reload, an unanswered request is "waiting", never "gone" (the outbox keeps it)', async () => {
+    const p: TariProvider = { async request() { return silent() } }
+    expect(await readRequest(p, 'r1')).toEqual({ s: 'waiting' })
   })
 })

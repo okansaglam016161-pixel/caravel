@@ -107,6 +107,11 @@ export interface RequestHooks {
   /** The request exists — persist its id (the outbox) before anything else can go wrong. */
   onRequest?: (requestId: string) => void
   onPhase?: (phase: RequestPhase) => void
+  /**
+   * A status check went unanswered (the phone: Sapient asleep or closed). Polling goes on; this
+   * lets the screen say "open Sapient on your phone". Called once per silent check.
+   */
+  onUnanswered?: () => void
   /** Test seam. */
   sleep?: (ms: number) => Promise<void>
   pollMs?: number
@@ -137,15 +142,31 @@ export async function runTransactionRequest<T>(p: TariProvider, op: Record<strin
   return pollAndSubmit<T>(p, requestId, hooks, sleep, pollMs)
 }
 
+/**
+ * How many status checks in a row may go unanswered (a phone that is asleep, or has Sapient closed)
+ * before the wait ends. Each one already took the phone's time limit, so this is minutes, not seconds.
+ */
+export const MAX_UNANSWERED_POLLS = 10
+
 /** Poll a request to its end, submitting it (once) when the person approves it. */
 async function pollAndSubmit<T>(
   p: TariProvider, requestId: string, hooks: RequestHooks, sleep: (ms: number) => Promise<void>, pollMs: number,
 ): Promise<T> {
   hooks.onPhase?.('approve')
   let submitted = false
+  let unanswered = 0
   for (;;) {
     await sleep(pollMs)
-    const s = await sapientRequest<RequestStatus>(p, 'tari_getTransactionRequest', { requestId })
+    let s: RequestStatus | null
+    try {
+      s = await sapientRequest<RequestStatus>(p, 'tari_getTransactionRequest', { requestId })
+      unanswered = 0
+    } catch (e) {
+      // Unanswered is not an answer: the request lives on in the wallet. Keep waiting, a while.
+      if (toSapientError(e).kind !== 'unreachable' || ++unanswered > MAX_UNANSWERED_POLLS) throw e
+      hooks.onUnanswered?.()
+      continue
+    }
     switch (s?.status) {
       case 'pending':
         continue
@@ -193,7 +214,8 @@ export async function readRequest(p: TariProvider, requestId: string): Promise<R
     r = await sapientRequest<RequestStatus>(p, 'tari_getTransactionRequest', { requestId })
   } catch (e) {
     // Locked or unreachable is not "gone": leave it for the next attempt. Anything else is.
-    if (toSapientError(e).kind === 'locked') return { s: 'waiting' }
+    const kind = toSapientError(e).kind
+    if (kind === 'locked' || kind === 'unreachable') return { s: 'waiting' }
     return { s: 'gone' }
   }
   switch (r?.status) {

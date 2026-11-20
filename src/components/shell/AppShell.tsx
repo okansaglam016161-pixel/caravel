@@ -10,6 +10,7 @@ import ProfilePanel from '../chat/ProfilePanel'
 import ServiceNav, { type Service } from './ServiceNav'
 import { useChat } from '../../context/ChatContext'
 import { useUsageStats } from '../../hooks/useUsageStats'
+import ConnectChooser from '../chat/ConnectChooser'
 
 /** Hidden panes keep their state and their effects; they just stop taking space. */
 function Pane({ show, children }: { show: boolean; children: React.ReactNode }) {
@@ -32,6 +33,9 @@ export default function AppShell() {
 
       {/* Chat brings its own sidebar beside the spine. */}
       <Pane show={service === 'chat'}><ChatApp /></Pane>
+
+      {/* "Connect a wallet" (extension or phone), opened by every Connect button. */}
+      <ConnectChooser />
 
       {profileOpen && (
         <ProfilePanel onClose={() => setProfileOpen(false)} />

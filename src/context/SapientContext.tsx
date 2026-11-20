@@ -263,7 +263,10 @@ export function SapientProvider({ children }: { children: ReactNode }) {
       if (!anyProvider(found)) return
       const t = initialTransport(found)
       const p = activate(t)
-      if (p && t) await restore(p, t, () => cancelled)
+      // The phone route is restored only on a device that connected a phone before: any call through
+      // the connector (even the locally answered ones) first downloads its ~0.5 MB WalletConnect
+      // add-on, which a visitor who never chose the phone should not pay for.
+      if (p && t && (t !== 'phone' || loadChoice() === 'phone')) await restore(p, t, () => cancelled)
     })
     return () => { cancelled = true; unsubscribeRef.current?.(); unsubscribeRef.current = null }
   }, [activate, restore])

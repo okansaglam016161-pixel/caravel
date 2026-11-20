@@ -2,6 +2,7 @@
 // The claiming itself runs in hooks/usePaymentClaimer; the Sapient calls are sapient/payments.
 
 import type { CaravelMessage, PaymentRef } from './types'
+import { canConfirmPayments } from '../sapient/provider'
 import type { ContactMap } from './contactStore'
 import type { StoredClaim } from './paymentClaimStore'
 
@@ -14,7 +15,7 @@ export type ClaimView =
   /** The last attempt could not reach Sapient (not a lock) — tried again shortly, or by Retry. */
   | { s: 'error' }
   /** Sapient cannot confirm it right now, and why — the card says what to do. */
-  | { s: 'needs-sapient'; why: 'install' | 'connect' | 'unlock' | 'view' | 'network'; network?: string }
+  | { s: 'needs-sapient'; why: 'install' | 'connect' | 'unlock' | 'view' | 'network' | 'capability'; network?: string }
 
 /** What the claimer is doing with one payment right now (memory only). */
 export type ClaimBusy = 'claiming' | 'retrying' | 'error'
@@ -24,10 +25,13 @@ export interface SapientReadiness {
   status: 'detecting' | 'missing' | 'disconnected' | 'connecting' | 'connected' | 'locked'
   network: string | null
   viewAccess: 'unknown' | 'off' | 'requesting' | 'granted'
+  /** tari_getCapabilities; null = not known (the wallet is left to answer). */
+  capabilities?: Record<string, unknown> | null
 }
 
 export function claimReady(s: SapientReadiness, ref: Pick<PaymentRef, 'network'>): boolean {
   return s.status === 'connected' && s.viewAccess === 'granted' && s.network === ref.network
+    && canConfirmPayments(s.capabilities ?? null)
 }
 
 /**
@@ -46,6 +50,8 @@ export function claimView(
   if (s.status !== 'connected') return { s: 'needs-sapient', why: 'connect' }
   if (s.network !== ref.network) return { s: 'needs-sapient', why: 'network', network: ref.network }
   if (s.viewAccess !== 'granted') return { s: 'needs-sapient', why: 'view' }
+  // An account that cannot read private payments (e.g. one run through a node daemon) says so.
+  if (!canConfirmPayments(s.capabilities ?? null)) return { s: 'needs-sapient', why: 'capability' }
   if (busy === 'error') return { s: 'error' }
   return { s: 'claiming' }
 }

@@ -60,7 +60,8 @@ function BalanceText({ view, locked }: { view: BalanceView; locked: boolean }) {
 const shown = (b: RawBalance): BalanceView => ({ s: 'ok', text: formatBalance(b) })
 
 export default function WalletConnectBar() {
-  const { status, network, walletAddress, viewAccess, error, provider, connect, unlock, unlocking } = useSapient()
+  const { status, network, walletAddress, viewAccess, error, provider, openChooser, unlock, unlocking, transport } = useSapient()
+  const onPhone = transport === 'phone'
   const [menuOpen, setMenuOpen] = useState(false)
   const [privateBalance, setPrivateBalance] = useState<BalanceView>({ s: 'loading' })
   const [publicBalance, setPublicBalance] = useState<BalanceView>({ s: 'loading' })
@@ -123,7 +124,7 @@ export default function WalletConnectBar() {
     // opens Sapient's unlock window (SapientContext.unlock); its unlock is noticed within seconds.
     pill = (
       <button onClick={() => void unlock()} disabled={unlocking} className="cv-quiet-btn"
-        title="Opens Sapient to unlock. Or click the Sapient icon in your browser toolbar."
+        title={onPhone ? 'Unlock Sapient on your phone, then click to check again.' : 'Opens Sapient to unlock. Or click the Sapient icon in your browser toolbar.'}
         style={{ ...ROW, cursor: unlocking ? 'default' : 'pointer' }}>
         <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="var(--warn)" strokeWidth={2} strokeLinecap="round" style={{ flexShrink: 0 }}><rect x={5} y={11} width={14} height={9} rx={2} /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></svg>
         <span style={{ flex: 1, textAlign: 'left', fontWeight: 600 }}>{unlocking ? 'Unlock in Sapient…' : 'Sapient is locked'}</span>
@@ -137,6 +138,7 @@ export default function WalletConnectBar() {
         <WalletGlyph />
         <span style={{ flex: 1, minWidth: 0, textAlign: 'left', fontFamily: MONO, fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {walletAddress ? shortAddress(walletAddress) : 'Reading account…'}
+          {onPhone && <span style={{ marginLeft: 8, fontFamily: 'inherit', fontSize: 10.5, fontWeight: 600, color: 'var(--text-muted-dim)' }}>phone</span>}
         </span>
         <NetworkChip network={network} />
         <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="var(--text-muted-dim)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, transform: menuOpen ? 'rotate(180deg)' : undefined }}><path d="M6 9l6 6 6-6" /></svg>
@@ -144,7 +146,7 @@ export default function WalletConnectBar() {
     )
   } else {
     pill = (
-      <button onClick={() => void connect()} className="cv-quiet-btn" style={{ ...ROW, cursor: 'pointer' }}>
+      <button onClick={() => openChooser()} className="cv-quiet-btn" style={{ ...ROW, cursor: 'pointer' }}>
         <WalletGlyph /><span style={{ flex: 1, textAlign: 'left', fontWeight: 600 }}>Connect wallet</span>
         <span style={{ fontSize: 11, color: 'var(--text-muted-dim)' }}>Sapient</span>
       </button>
@@ -161,7 +163,7 @@ export default function WalletConnectBar() {
         <div style={{ fontSize: 11.5, color: 'var(--text-muted-dim)', marginTop: 6, lineHeight: 1.45 }}>
           {unlocking
             ? 'Unlock, then approve the connection (and view access) in Sapient’s window.'
-            : 'Or unlock from the Sapient icon in your browser toolbar.'}
+            : onPhone ? 'Unlock Sapient on your phone, then click above to check again.' : 'Or unlock from the Sapient icon in your browser toolbar.'}
         </div>
       )}
 
